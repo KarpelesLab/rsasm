@@ -81,6 +81,10 @@ impl Architecture for Sparc {
         }
     }
 
+    fn word_bytes(&self) -> u8 {
+        4
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         if pcrel {
             reloc::pcrel(size)

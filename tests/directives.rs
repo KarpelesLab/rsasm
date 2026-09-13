@@ -267,3 +267,20 @@ fn error_and_warning_directives() {
     assert!(!asm.diags.has_errors());
     assert!(asm.diags.render(&asm.sm, false).contains("careful"));
 }
+
+#[test]
+fn word_takes_its_width_from_the_target() {
+    // x86 keeps the 16-bit word of the 8086.
+    assert_eq!(text(".word 1").len(), 2);
+    // The fixed-width synonyms do not depend on the target at all.
+    assert_eq!(text(".half 1").len(), 2);
+    assert_eq!(text(".dword 1").len(), 8);
+    assert_eq!(text(".xword 1").len(), 8);
+}
+
+#[test]
+#[cfg(feature = "sparc")]
+fn word_is_four_bytes_on_sparc() {
+    // Measured against llvm-mc, which agrees with GNU as here.
+    assert_eq!(text_for("sparc", ".word 1"), vec![0, 0, 0, 1]);
+}

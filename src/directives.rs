@@ -46,9 +46,18 @@ impl Assembler {
 
             // ---- data -----------------------------------------------------
             ".byte" => self.dir_data(&mut cur, 1, span),
-            ".short" | ".hword" | ".word" | ".2byte" => self.dir_data(&mut cur, 2, span),
+            ".short" | ".hword" | ".half" | ".2byte" => self.dir_data(&mut cur, 2, span),
+            // `.word` is the one data directive whose width depends on the
+            // target, so it asks the backend rather than assuming x86.
+            ".word" => {
+                let w = self.arch.word_bytes();
+                self.dir_data(&mut cur, w, span)
+            }
             ".int" | ".long" | ".4byte" => self.dir_data(&mut cur, 4, span),
-            ".quad" | ".8byte" => self.dir_data(&mut cur, 8, span),
+            // `.dword` (MIPS, RISC-V) and `.xword` (AArch64, SPARC V9) both
+            // mean eight bytes; accepting them everywhere is harmless, since
+            // neither has a different meaning on any other target.
+            ".quad" | ".8byte" | ".dword" | ".xword" => self.dir_data(&mut cur, 8, span),
             ".ascii" => self.dir_ascii(&mut cur, false, span),
             ".asciz" | ".string" | ".asciiz" => self.dir_ascii(&mut cur, true, span),
             ".sleb128" => self.dir_leb(&mut cur, true, span),

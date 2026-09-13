@@ -192,6 +192,17 @@ pub trait Architecture {
         None
     }
 
+    /// Width of `.word` in bytes.
+    ///
+    /// Not derivable from anything else: it is an assembler convention per
+    /// target rather than a property of the instruction set. x86 keeps the
+    /// 16-bit word of its 8086 origins, and so — less obviously — does
+    /// PowerPC, while ARM, AArch64, RISC-V, MIPS and SPARC use 4. The default
+    /// is 2 because that is the value for x86 and for every 8-bit target.
+    fn word_bytes(&self) -> u8 {
+        2
+    }
+
     /// Padding for `.align` in an executable section: real no-ops where the
     /// architecture has them, so padding stays executable.
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8>;
