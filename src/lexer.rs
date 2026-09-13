@@ -19,6 +19,45 @@ pub enum Dialect {
     Gas,
     /// NASM: `;` comments, no statement separator, bare `directives`.
     Nasm,
+    /// Motorola, as spoken by vasm, Devpac and ASM-One and understood by GNU
+    /// as in `--mri` mode: `$7fff` hex, `%1010` binary, `@17` octal, `;`
+    /// comments and `*` comments in the first column, `dc.w`-style directives
+    /// without a dot, and a label is anything that starts in the first column.
+    Motorola,
+    /// Renesas vendor assemblers (CA78K0 and its successors): `;` comments,
+    /// `0FFH` radix suffixes, and bare `CSEG`/`DB`/`ORG` directives. `$` is not
+    /// a hex prefix here: it is the location counter, and on 78K0 an
+    /// operand's relative-addressing sigil.
+    Renesas,
+}
+
+impl Dialect {
+    pub fn from_name(name: &str) -> Option<Dialect> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "gas" | "gnu" | "att" => Dialect::Gas,
+            "nasm" => Dialect::Nasm,
+            "motorola" | "mot" | "vasm" | "devpac" | "mri" => Dialect::Motorola,
+            "renesas" | "ca78k0" | "nec" => Dialect::Renesas,
+            _ => return None,
+        })
+    }
+
+    /// Whether directives are spelled without a leading dot, so a bare word
+    /// has to be looked up before it can be called an instruction.
+    pub fn dotless_directives(self) -> bool {
+        !matches!(self, Dialect::Gas)
+    }
+
+    /// `$` on its own is the location counter (and `$$` the section start).
+    pub fn dollar_is_here(self) -> bool {
+        matches!(self, Dialect::Nasm | Dialect::Renesas)
+    }
+
+    /// `*` in operand position is the location counter, as in `dc.l *`. It is
+    /// still multiplication between two operands.
+    pub fn star_is_here(self) -> bool {
+        matches!(self, Dialect::Motorola)
+    }
 }
 
 /// Lexical rules in force for the next token.
@@ -50,6 +89,12 @@ pub struct LexConfig {
     pub char_multi: bool,
     /// A bare leading `0` introduces an octal literal (GAS).
     pub octal_leading_zero: bool,
+    /// Single-character radix prefixes, such as Motorola's `$7fff`.
+    ///
+    /// A prefix only counts when a digit of its radix follows, which is what
+    /// keeps `%` a register sigil or modulo operator and `$` a punctuation
+    /// mark wherever they are not starting a number.
+    pub number_prefixes: Vec<(char, u32)>,
 }
 
 impl LexConfig {
@@ -65,6 +110,7 @@ impl LexConfig {
                 local_label_refs: true,
                 char_multi: false,
                 octal_leading_zero: true,
+                number_prefixes: vec![],
             },
             Dialect::Nasm => LexConfig {
                 dialect: d,
@@ -76,6 +122,32 @@ impl LexConfig {
                 local_label_refs: false,
                 char_multi: true,
                 octal_leading_zero: false,
+                number_prefixes: vec![],
+            },
+            // Checked against vasm and GNU as --mri, which agree on every rule.
+            Dialect::Motorola => LexConfig {
+                dialect: d,
+                line_comment: vec![";"],
+                line_start_comment: vec!["*"],
+                block_comment: false,
+                stmt_sep: vec![],
+                radix_suffix: false,
+                local_label_refs: false,
+                char_multi: true,
+                octal_leading_zero: false,
+                number_prefixes: vec![('$', 16), ('%', 2), ('@', 8)],
+            },
+            Dialect::Renesas => LexConfig {
+                dialect: d,
+                line_comment: vec![";"],
+                line_start_comment: vec![],
+                block_comment: false,
+                stmt_sep: vec![],
+                radix_suffix: true,
+                local_label_refs: false,
+                char_multi: true,
+                octal_leading_zero: false,
+                number_prefixes: vec![],
             },
         }
     }
@@ -419,6 +491,11 @@ impl<'a> Lexer<'a> {
             return self.lex_number(start, spaced, interner, diags);
         }
 
+        // `$7fff`, `%1010`, `@17`, where the dialect has them.
+        if let Some(tok) = self.lex_prefixed_number(start, spaced, diags) {
+            return tok;
+        }
+
         if is_ident_start(c) || (c == b'.' && is_ident_cont(self.peek_at(1))) {
             // Identifiers may contain non-ASCII characters, so advance by
             // whole characters and never leave `pos` inside one.
@@ -489,6 +566,65 @@ impl<'a> Lexer<'a> {
             span: self.span_from(start),
             preceded_by_space: spaced,
         }
+    }
+
+    /// A number written with a single-character radix prefix.
+    ///
+    /// Returns `None`, consuming nothing, unless the dialect has the prefix
+    /// *and* a digit of that radix follows it. `%d0` and `$label` therefore
+    /// fall through to be lexed as punctuation followed by a name.
+    fn lex_prefixed_number(
+        &mut self,
+        start: usize,
+        spaced: bool,
+        diags: &mut DiagBag,
+    ) -> Option<Token> {
+        let c = self.peek() as char;
+        let radix = self
+            .config
+            .number_prefixes
+            .iter()
+            .find(|(p, _)| *p == c)
+            .map(|(_, r)| *r)?;
+        if !(self.peek_at(1) as char).is_digit(radix) {
+            return None;
+        }
+        self.pos += 1;
+        let digits_start = self.pos;
+        while !self.at_end() && (self.peek().is_ascii_alphanumeric() || self.peek() == b'_') {
+            self.pos += 1;
+        }
+        let run = &self.src[digits_start..self.pos];
+        let span = self.span_from(start);
+        let mk = |kind| Token {
+            kind,
+            span,
+            preceded_by_space: spaced,
+        };
+        let mut value: u64 = 0;
+        for ch in run.chars().filter(|ch| *ch != '_') {
+            let Some(d) = ch.to_digit(radix) else {
+                diags.error(
+                    span,
+                    format!(
+                        "invalid digit `{ch}` for base-{radix} literal `{}`",
+                        &self.src[start..self.pos]
+                    ),
+                );
+                return Some(mk(TokKind::Int(0)));
+            };
+            match value
+                .checked_mul(radix as u64)
+                .and_then(|v| v.checked_add(d as u64))
+            {
+                Some(v) => value = v,
+                None => {
+                    diags.error(span, "integer literal out of range for 64 bits");
+                    return Some(mk(TokKind::Int(0)));
+                }
+            }
+        }
+        Some(mk(TokKind::Int(value)))
     }
 
     fn lex_number(

@@ -17,7 +17,8 @@ options:
   -a, --arch <name>  target architecture (default: the host, if supported)
   -f, --format <fmt> output format: elf (default) or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
-  -d, --dialect <d>  source dialect: gas (default) or nasm
+  -d, --dialect <d>  source dialect: gas, nasm, motorola or renesas
+                     (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)
       --base <addr>  base address for `bin` output (default 0)
@@ -36,6 +37,8 @@ struct Args {
     defines: Vec<(String, String)>,
     hex: bool,
     color: bool,
+    /// Whether `-d` was given; otherwise the architecture picks.
+    dialect_given: bool,
 }
 
 fn main() -> ExitCode {
@@ -68,6 +71,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         defines: Vec::new(),
         hex: false,
         color: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        dialect_given: false,
     };
     let mut i = 0;
     // A value may be written `-o x`, `-ox` or `--out=x`.
@@ -106,11 +110,10 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             }
             "-d" | "--dialect" => {
                 let v = next(&mut i, arg)?;
-                a.options.dialect = match v.as_str() {
-                    "gas" => Dialect::Gas,
-                    "nasm" => Dialect::Nasm,
-                    _ => return Err(format!("unknown dialect `{v}`")),
-                };
+                a.options.dialect = Dialect::from_name(&v).ok_or_else(|| {
+                    format!("unknown dialect `{v}`; expected gas, nasm, motorola or renesas")
+                })?;
+                a.dialect_given = true;
             }
             "-I" => a
                 .options
@@ -173,7 +176,11 @@ fn run(args: Args) -> Result<ExitCode, String> {
             .ok_or_else(|| "this build has no architecture backends enabled".to_string())?,
     };
 
-    let mut asm = Assembler::new(arch, args.options.clone());
+    let mut options = args.options.clone();
+    if !args.dialect_given {
+        options.dialect = arch.default_dialect();
+    }
+    let mut asm = Assembler::new(arch, options);
 
     // `-D` definitions are assembled as `.set` before the real input, so they
     // behave exactly like a definition at the top of the first file.

@@ -20,6 +20,7 @@ pub mod arch;
 pub mod assembler;
 pub mod cursor;
 pub mod diag;
+pub mod dialect;
 pub mod directives;
 pub mod expr;
 pub mod intern;

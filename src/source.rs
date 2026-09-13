@@ -197,6 +197,14 @@ impl SourceMap {
         f.contains(pos).then_some(f)
     }
 
+    /// The global position of the start of the line containing `pos`.
+    pub fn line_start_of(&self, pos: u32) -> u32 {
+        match self.lookup(pos) {
+            Some(f) => f.line_starts[f.line_index(pos)],
+            None => pos,
+        }
+    }
+
     /// The text covered by `span`. Empty if the span is dummy or malformed.
     pub fn span_text(&self, span: Span) -> &str {
         let Some(f) = self.lookup(span.lo) else {

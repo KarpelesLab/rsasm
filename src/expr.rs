@@ -519,6 +519,8 @@ pub struct ExprParser<'a> {
     /// In NASM, `$` is the location counter; in GAS it introduces an immediate
     /// and must not be consumed here.
     pub dollar_is_here: bool,
+    /// In Motorola source `*` in operand position is the location counter.
+    pub star_is_here: bool,
 }
 
 impl<'a> ExprParser<'a> {
@@ -609,6 +611,12 @@ impl<'a> ExprParser<'a> {
                 Some(self.arena.alloc(ExprKind::LocalRef(n, dir), tok.span))
             }
             TokKind::Punct(Punct::Dot) => {
+                cur.advance();
+                Some(self.arena.alloc(ExprKind::Here, tok.span))
+            }
+            // Only reachable in operand position: a `*` between two operands
+            // was already taken as multiplication by the binary-operator loop.
+            TokKind::Punct(Punct::Star) if self.star_is_here => {
                 cur.advance();
                 Some(self.arena.alloc(ExprKind::Here, tok.span))
             }
@@ -747,6 +755,7 @@ mod tests {
                 interner: &mut interner,
                 diags: &mut diags,
                 dollar_is_here: false,
+                star_is_here: false,
             };
             p.parse(&mut cur)
         };

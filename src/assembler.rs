@@ -4,6 +4,7 @@
 use crate::arch::{ArchState, Architecture, AsmCtx, InsnRequest, Syntax};
 use crate::cursor::Cursor;
 use crate::diag::{DiagBag, Diagnostic};
+use crate::dialect;
 use crate::expr::{self, EvalCtx, EvalError, ExprArena, ExprKind, ExprRef, Value};
 use crate::intern::{Interner, Name};
 use crate::lexer::{Dialect, LexConfig, LitPool, LocalDir, Punct};
@@ -111,6 +112,8 @@ pub struct Assembler {
     macro_depth: u32,
     /// Set by `.exitm`; unwinds the innermost expansion.
     exiting_macro: bool,
+    /// Set by a vendor `END`: nothing after it in the source is assembled.
+    pub(crate) end_of_source: bool,
 }
 
 impl Assembler {
@@ -147,6 +150,7 @@ impl Assembler {
             macro_counter: 0,
             macro_depth: 0,
             exiting_macro: false,
+            end_of_source: false,
         };
         asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
         asm
@@ -306,6 +310,7 @@ impl Assembler {
             let c = self.arch.comments();
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
+            self.arch.tune_lexer(&mut config);
         }
         // The parser borrows the source map; statements are collected first so
         // the rest of the assembler can take `&mut self` freely.
@@ -374,7 +379,7 @@ impl Assembler {
                     }
                     None => {
                         if self.try_expand_macro(stmt) {
-                            if self.exiting_macro || self.diags.saturated() {
+                            if self.exiting_macro || self.end_of_source || self.diags.saturated() {
                                 return;
                             }
                             continue;
@@ -384,15 +389,27 @@ impl Assembler {
             }
 
             self.process(stmt);
-            if self.exiting_macro || self.diags.saturated() {
+            if self.exiting_macro || self.end_of_source || self.diags.saturated() {
                 return;
             }
         }
     }
 
+    /// The directive a statement names, in GNU as spelling.
+    ///
+    /// In a vendor dialect a block keyword arrives as a bare word the parser
+    /// could not tell from an instruction; it is translated here, so the
+    /// statement walker only ever has to know one spelling.
     fn directive_name(&self, stmt: &Statement) -> Option<&str> {
         match &stmt.body {
-            Some(Body::Directive { name, .. }) => Some(self.interner.get(*name)),
+            Some(Body::Directive { name, .. }) => {
+                let text = self.interner.get(*name);
+                let bare = text.strip_prefix('.').unwrap_or(text);
+                Some(dialect::block_keyword(self.options.dialect, bare).unwrap_or(text))
+            }
+            Some(Body::Insn { mnemonic, .. }) => {
+                dialect::block_keyword(self.options.dialect, self.interner.get(*mnemonic))
+            }
             _ => None,
         }
     }
@@ -433,7 +450,11 @@ impl Assembler {
                     depth -= 1;
                     if depth == 0 {
                         let body = if i > from {
-                            let lo = statements[from].span.lo;
+                            // From the start of the first body *line*, not its
+                            // first token: in Motorola source the indentation
+                            // is what makes `dc.b` an instruction rather than
+                            // a label, and the body is re-lexed on expansion.
+                            let lo = self.sm.line_start_of(statements[from].span.lo);
                             let hi = statements[i - 1].span.hi;
                             self.sm.span_text(Span::new(lo, hi)).to_string()
                         } else {
@@ -467,7 +488,15 @@ impl Assembler {
 
     fn define_macro(&mut self, stmt: &Statement, statements: &[Statement], from: usize) -> usize {
         let header = self.arg_text(stmt);
-        let (name_text, params_text) = macros::split_macro_header(&header);
+        let (mut name_text, params_text) = macros::split_macro_header(&header);
+        // Devpac writes `name macro`, with the name where a label goes.
+        let label_name;
+        if name_text.is_empty()
+            && let [LabelDef::Named(n, _)] = stmt.labels.as_slice()
+        {
+            label_name = self.interner.get(*n).to_string();
+            name_text = &label_name;
+        }
         let Some((body, next)) = self.capture_block(
             statements,
             from,
@@ -617,7 +646,8 @@ impl Assembler {
         };
         self.macro_counter += 1;
         let counter = self.macro_counter;
-        let text = macros::substitute(&def.body, &bindings, counter);
+        let positional = self.options.dialect.dotless_directives();
+        let text = macros::substitute_with(&def.body, &bindings, counter, positional);
         let name = self.interner.get(def.name).to_string();
         self.expand(&format!("macro {name}"), text, span);
         true
@@ -634,6 +664,19 @@ impl Assembler {
             def.params.iter().map(|p| (p.name.clone(), None)).collect();
 
         let pieces = macros::split_args(args);
+
+        // A vendor-dialect macro declared without parameters takes any number
+        // of arguments, referred to by position as `\1`, `\2` and so on.
+        if def.params.is_empty() && self.options.dialect.dotless_directives() {
+            return Some(
+                pieces
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| ((i + 1).to_string(), (*p).to_string()))
+                    .collect(),
+            );
+        }
+
         let mut positional = 0usize;
         for (i, piece) in pieces.iter().enumerate() {
             // A `:vararg` parameter swallows the rest of the line verbatim,
@@ -787,21 +830,34 @@ impl Assembler {
         // While a conditional is false, only the directives that can end it
         // are looked at.
         if !self.cond_active() {
-            if let Some(Body::Directive { name, .. }) = &stmt.body {
-                let text = self.interner.get(*name);
-                if matches!(
-                    text,
-                    ".if"
-                        | ".ifdef"
-                        | ".ifndef"
-                        | ".ifeq"
-                        | ".ifne"
-                        | ".else"
-                        | ".elseif"
-                        | ".endif"
-                ) {
-                    self.directive(stmt, *name);
+            match &stmt.body {
+                Some(Body::Directive { name, .. }) => {
+                    let text = self.interner.get(*name);
+                    if matches!(
+                        text,
+                        ".if"
+                            | ".ifdef"
+                            | ".ifndef"
+                            | ".ifeq"
+                            | ".ifne"
+                            | ".else"
+                            | ".elseif"
+                            | ".endif"
+                    ) {
+                        self.directive(stmt, *name);
+                    }
                 }
+                // A vendor `ELSE`/`ENDIF` is a bare word, and has to be seen
+                // here too or a false branch could never end.
+                Some(Body::Insn { mnemonic, .. }) => {
+                    let word = self.interner.get(*mnemonic);
+                    if dialect::is_conditional(self.options.dialect, word)
+                        && let Some(alias) = dialect::lookup(self.options.dialect, word)
+                    {
+                        self.run_alias(stmt, alias);
+                    }
+                }
+                _ => {}
             }
             return;
         }
@@ -812,7 +868,15 @@ impl Assembler {
 
         // `.` refers to where the statement starts, so the anonymous label
         // standing in for it has to exist before anything is emitted.
-        if stmt.toks.iter().any(|t| t.is_punct(Punct::Dot)) {
+        // Every spelling of the location counter the dialect has counts, not
+        // just `.`: Motorola writes `*` and Renesas `$`. A `*` that turns out
+        // to be multiplication only costs an unused label.
+        let d = self.options.dialect;
+        if stmt.toks.iter().any(|t| {
+            t.is_punct(Punct::Dot)
+                || (d.star_is_here() && t.is_punct(Punct::Star))
+                || (d.dollar_is_here() && t.is_punct(Punct::Dollar))
+        }) {
             self.here_sym = Some(self.anon_label(stmt.span));
         }
         let mark = self.exprs.len();
@@ -823,7 +887,14 @@ impl Assembler {
                 let _ = span;
                 self.directive(stmt, *name);
             }
-            Some(Body::Insn { mnemonic, span }) => self.instruction(stmt, *mnemonic, *span),
+            Some(Body::Insn { mnemonic, span }) => {
+                // A bare word may be a vendor directive before it is an
+                // instruction; see `dialect::lookup`.
+                match dialect::lookup(self.options.dialect, self.interner.get(*mnemonic)) {
+                    Some(alias) => self.run_alias(stmt, alias),
+                    None => self.instruction(stmt, *mnemonic, *span),
+                }
+            }
             Some(Body::Assign { name, span }) => {
                 let mut cur = stmt.arg_cursor();
                 if let Some(e) = self.parse_expr(&mut cur) {
@@ -895,7 +966,8 @@ impl Assembler {
             arena: &mut self.exprs,
             interner: &mut self.interner,
             diags: &mut self.diags,
-            dollar_is_here: self.options.dialect == Dialect::Nasm,
+            dollar_is_here: self.options.dialect.dollar_is_here(),
+            star_is_here: self.options.dialect.star_is_here(),
         };
         p.parse(cur)
     }
@@ -1064,8 +1136,10 @@ impl Assembler {
             pool,
             symbols,
             arch_state,
+            options,
             ..
         } = self;
+        let dialect = options.dialect;
         let mut cx = AsmCtx {
             interner,
             exprs,
@@ -1073,9 +1147,15 @@ impl Assembler {
             pool,
             symbols,
             state: arch_state,
+            dialect,
         };
         let variants = arch.assemble(&mut cx, &req);
         let Some(variants) = variants else { return };
+        // Motorola syntax aligns code as well as data; see `motorola_align`.
+        if self.options.dialect == Dialect::Motorola {
+            let unit = self.arch.align_unit();
+            self.align_to(unit, stmt.span);
+        }
         if self.check_nobits(stmt.span) {
             return;
         }

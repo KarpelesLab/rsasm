@@ -146,14 +146,31 @@ struct Builder {
 
 impl Builder {
     fn build(&self, toks: Vec<Token>, interner: &mut Interner, diags: &mut DiagBag) -> Statement {
-        let span = toks
+        let stmt_span = toks
             .first()
             .zip(toks.last())
             .map(|(a, b)| a.span.to(b.span))
             .unwrap_or(Span::DUMMY);
+        let span = stmt_span;
 
         let mut i = 0usize;
         let mut labels = Vec::new();
+
+        // In Motorola source anything that starts in the first column is a
+        // label, colon or not, and an instruction has to be indented to be one.
+        // vasm and GNU as --mri both assemble `rts` written in column 0 to no
+        // code at all: it defines a label called `rts`.
+        if self.dialect == Dialect::Motorola
+            && let Some(t) = toks.first()
+            && let TokKind::Ident(n) = t.kind
+            && !t.preceded_by_space
+        {
+            labels.push(LabelDef::Named(n, t.span));
+            i = 1;
+            if toks.get(i).map(|t| t.kind) == Some(TokKind::Punct(Punct::Colon)) {
+                i += 1;
+            }
+        }
 
         // Leading labels. A label is an identifier or a plain integer followed
         // by `:`; several may share a line with a statement.
@@ -176,6 +193,40 @@ impl Builder {
             }
         }
 
+        // `NAME equ value`, the vendor spelling of `.set NAME, value`. The name
+        // may already have been taken as a label — by a colon, or by starting
+        // in the first column — in which case it is the name being defined
+        // rather than a place.
+        if let Some(word) = toks.get(i).and_then(|t| t.ident())
+            && self.is_equate_word(interner.get(word))
+            && let [LabelDef::Named(name, name_span)] = labels.as_slice()
+        {
+            let (name, span) = (*name, *name_span);
+            return Statement {
+                labels: Vec::new(),
+                body: Some(Body::Assign { name, span }),
+                args: i + 1,
+                toks,
+                span: stmt_span,
+            };
+        }
+        if labels.is_empty()
+            && let (Some(name), Some(word)) = (
+                toks.first().and_then(|t| t.ident()),
+                toks.get(1).and_then(|t| t.ident()),
+            )
+            && self.is_equate_word(interner.get(word))
+        {
+            let span = toks[0].span;
+            return Statement {
+                labels,
+                body: Some(Body::Assign { name, span }),
+                args: 2,
+                toks,
+                span: stmt_span,
+            };
+        }
+
         let body = self.classify(&toks, &mut i, interner, diags);
         Statement {
             labels,
@@ -183,6 +234,21 @@ impl Builder {
             toks,
             args: i,
             span,
+        }
+    }
+
+    /// The vendor keyword for defining a symbol, in dialects that have one.
+    ///
+    /// `set` is only taken where it cannot be an instruction: the Z80 has a
+    /// `set 3, a` and is assembled in the NASM dialect, so NASM gets `equ`
+    /// alone, which is also all NASM itself has.
+    fn is_equate_word(&self, word: &str) -> bool {
+        match self.dialect {
+            Dialect::Gas => false,
+            Dialect::Nasm => word.eq_ignore_ascii_case("equ"),
+            Dialect::Motorola | Dialect::Renesas => {
+                word.eq_ignore_ascii_case("equ") || word.eq_ignore_ascii_case("set")
+            }
         }
     }
 
@@ -228,6 +294,11 @@ impl Builder {
                 // NASM directives are bare words; the assembler resolves them
                 // against its directive table and falls back to an instruction.
                 Dialect::Nasm => false,
+                // Bare words are resolved the same way. A dotted spelling is a
+                // directive too: Renesas's newer assemblers write `.DB` and
+                // `.CSEG`, and a Motorola `.local` label never reaches here,
+                // because a first-column word has already been taken as one.
+                Dialect::Motorola | Dialect::Renesas => text.starts_with('.') && text.len() > 1,
             };
             let folded = text
                 .bytes()

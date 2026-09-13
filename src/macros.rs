@@ -51,6 +51,22 @@ impl MacroDef {
 /// matters: macro bodies contain string literals, and `"a\nb"` must survive
 /// unless the caller really did name a parameter `n`.
 pub fn substitute(body: &str, bindings: &[(String, String)], counter: u64) -> String {
+    substitute_with(body, bindings, counter, false)
+}
+
+/// [`substitute`], optionally also replacing the positional `\1` to `\9`
+/// that Motorola and Renesas macros use for their arguments.
+///
+/// Positional references are off for GNU as macros, where `\1` inside a
+/// string is an octal escape for byte 1 and must survive expansion untouched.
+/// A positional reference to an argument that was not passed expands to
+/// nothing, as it does in Devpac.
+pub fn substitute_with(
+    body: &str,
+    bindings: &[(String, String)],
+    counter: u64,
+    positional: bool,
+) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
     while let Some(i) = rest.find('\\') {
@@ -69,6 +85,13 @@ pub fn substitute(body: &str, bindings: &[(String, String)], counter: u64) -> St
             }
             Some('@') => {
                 out.push_str(&counter.to_string());
+                rest = &after[1..];
+            }
+            Some(d) if positional && d.is_ascii_digit() && d != '0' => {
+                let name = d.to_string();
+                if let Some((_, value)) = bindings.iter().find(|(p, _)| *p == name) {
+                    out.push_str(value);
+                }
                 rest = &after[1..];
             }
             Some('(') if after.starts_with("()") => {
@@ -289,6 +312,19 @@ mod tests {
         // a `\n` that ends a string really is substituted.
         let s = substitute(r#".ascii "a\n""#, &b(&[("n", "Z")]), 0);
         assert_eq!(s, r#".ascii "aZ""#);
+    }
+
+    #[test]
+    fn positional_arguments_are_opt_in() {
+        let args = b(&[("1", "d0"), ("2", "d1")]);
+        assert_eq!(
+            substitute_with(r" move.l \1,\2", &args, 0, true),
+            " move.l d0,d1"
+        );
+        // A missing argument expands to nothing.
+        assert_eq!(substitute_with(r" dc.b \3", &args, 0, true), " dc.b ");
+        // Off for GNU as, where `\1` in a string is an octal escape.
+        assert_eq!(substitute(r#".ascii "\1""#, &args, 0), r#".ascii "\1""#);
     }
 
     #[test]

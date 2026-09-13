@@ -152,6 +152,9 @@ pub struct AsmCtx<'a> {
     /// Read-only: backends resolve named constants, never define them.
     pub symbols: &'a SymbolTable,
     pub state: &'a mut ArchState,
+    /// The source dialect, which decides operand spelling as much as lexing:
+    /// the same m68k register is `%d0` to GNU as and `d0` in Motorola source.
+    pub dialect: crate::lexer::Dialect,
 }
 
 impl AsmCtx<'_> {
@@ -161,7 +164,8 @@ impl AsmCtx<'_> {
             interner: self.interner,
             diags: self.diags,
             // `$` is an immediate marker in AT&T, not the location counter.
-            dollar_is_here: false,
+            dollar_is_here: self.dialect.dollar_is_here(),
+            star_is_here: self.dialect.star_is_here(),
         }
     }
 
@@ -219,6 +223,29 @@ pub trait Architecture {
     fn comments(&self) -> CommentSyntax {
         CommentSyntax::HASH
     }
+
+    /// The alignment unit instructions and multi-byte data need, in bytes.
+    ///
+    /// The 68000 raises an address error on a word or long at an odd address,
+    /// so its unit is 2. Dialects that align automatically — Motorola does,
+    /// GNU as does not — use this to decide how far; everyone else needs 1.
+    fn align_unit(&self) -> u64 {
+        1
+    }
+
+    /// The dialect a source is assumed to be in when none is named.
+    ///
+    /// Amiga and Atari m68k source is overwhelmingly Motorola syntax, and
+    /// nobody has written 78K0 source in anything but Renesas's own; for those
+    /// targets defaulting to GNU as would reject the source people have.
+    fn default_dialect(&self) -> crate::lexer::Dialect {
+        crate::lexer::Dialect::Gas
+    }
+
+    /// Adjusts GNU-dialect lexing beyond comment characters, for targets whose
+    /// GNU as port differs: RL78's accepts `10H`, m68k's comments with `|`.
+    /// Only called for the GNU dialect; the vendor dialects are fixed.
+    fn tune_lexer(&self, _cfg: &mut crate::lexer::LexConfig) {}
 
     /// Width of `.word` in bytes.
     ///

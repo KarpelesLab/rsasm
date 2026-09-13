@@ -17,7 +17,25 @@ fn main() {
         eprintln!("unknown architecture `{name}`");
         std::process::exit(2);
     };
-    let mut asm = Assembler::new(arch, Options::default());
+    // An optional second argument names the dialect; otherwise the
+    // architecture's usual one, as the command-line tool does.
+    let dialect = match std::env::args().nth(2) {
+        Some(d) => match rsasm::lexer::Dialect::from_name(&d) {
+            Some(d) => d,
+            None => {
+                eprintln!("unknown dialect `{d}`");
+                std::process::exit(2);
+            }
+        },
+        None => arch.default_dialect(),
+    };
+    let mut asm = Assembler::new(
+        arch,
+        Options {
+            dialect,
+            ..Options::default()
+        },
+    );
     asm.assemble_str("<stdin>", &src);
     let ok = asm.finish();
     if !ok || asm.diags.has_errors() {

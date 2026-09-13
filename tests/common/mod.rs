@@ -97,3 +97,61 @@ pub fn assemble(src: &str) -> Assembler {
 pub fn assemble_flat(src: &str, base: u64) -> Assembler {
     assemble_flat_for("x86-64", src, base)
 }
+
+// ---- dialects ---------------------------------------------------------------
+
+fn dialect_options(dialect: rsasm::lexer::Dialect) -> Options {
+    Options {
+        dialect,
+        ..Options::default()
+    }
+}
+
+/// Assembles `src` for `arch` in `dialect`.
+pub fn assemble_dialect(arch: &str, dialect: rsasm::lexer::Dialect, src: &str) -> Assembler {
+    let a = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
+    let mut asm = Assembler::new(a, dialect_options(dialect));
+    asm.assemble_str("test.s", src);
+    asm.finish();
+    asm
+}
+
+/// Flat-binary counterpart of [`assemble_dialect`].
+pub fn assemble_flat_dialect(
+    arch: &str,
+    dialect: rsasm::lexer::Dialect,
+    src: &str,
+    base: u64,
+) -> Assembler {
+    let a = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
+    let options = Options {
+        relocatable: false,
+        base_addr: base,
+        ..dialect_options(dialect)
+    };
+    let mut asm = Assembler::new(a, options);
+    asm.assemble_str("test.s", src);
+    asm.finish();
+    asm
+}
+
+/// The first section's bytes, panicking with the diagnostics on failure.
+pub fn text_dialect(arch: &str, dialect: rsasm::lexer::Dialect, src: &str) -> Vec<u8> {
+    let asm = assemble_flat_dialect(arch, dialect, src, 0);
+    assert!(
+        !asm.diags.has_errors(),
+        "assembly failed for `{arch}`:\n{}\nsource:\n{src}",
+        asm.diags.render(&asm.sm, false)
+    );
+    asm.section_bytes(SectionId(0))
+}
+
+/// The rendered diagnostics, panicking if assembly succeeded.
+pub fn errors_dialect(arch: &str, dialect: rsasm::lexer::Dialect, src: &str) -> String {
+    let asm = assemble_dialect(arch, dialect, src);
+    assert!(
+        asm.diags.has_errors(),
+        "expected an error, but assembly succeeded:\n{src}"
+    );
+    asm.diags.render(&asm.sm, false)
+}

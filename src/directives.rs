@@ -8,7 +8,7 @@ use crate::assembler::{Assembler, Cond};
 use crate::cursor::Cursor;
 use crate::expr::ExprRef;
 use crate::intern::Name;
-use crate::lexer::{Punct, TokKind};
+use crate::lexer::{Dialect, Punct, TokKind};
 use crate::parser::Statement;
 use crate::section::{FragKind, Fragment, SectionFlags, SectionKind};
 use crate::source::Span;
@@ -18,8 +18,21 @@ use std::path::PathBuf;
 impl Assembler {
     pub(crate) fn directive(&mut self, stmt: &Statement, name: Name) {
         let text = self.interner.get(name).to_string();
-        let mut cur = stmt.arg_cursor();
         let span = stmt.span;
+
+        // Renesas's newer assemblers dot their directives (`.DB`, `.CSEG`).
+        // Those are the vendor table's words, and take priority over a GNU as
+        // directive of the same name, which would read their arguments wrongly.
+        if matches!(self.options.dialect, Dialect::Motorola | Dialect::Renesas)
+            && let Some(bare) = text.strip_prefix('.')
+            && let Some(alias) = crate::dialect::lookup(self.options.dialect, bare)
+            && !matches!(alias, crate::dialect::Alias::Gas(_))
+        {
+            self.run_alias(stmt, alias);
+            return;
+        }
+
+        let mut cur = stmt.arg_cursor();
 
         let handled = match text.as_str() {
             // ---- sections -------------------------------------------------
@@ -173,8 +186,10 @@ impl Assembler {
             pool,
             symbols,
             arch_state,
+            options,
             ..
         } = self;
+        let dialect = options.dialect;
         let mut cx = crate::arch::AsmCtx {
             interner,
             exprs,
@@ -182,6 +197,7 @@ impl Assembler {
             pool,
             symbols,
             state: arch_state,
+            dialect,
         };
         if arch.directive(&mut cx, &text, &mut cur) {
             self.expect_end(&mut cur);
