@@ -617,3 +617,12 @@ fn data_relocations_use_riscv_numbers() {
     assert_eq!(a.data_reloc(4, true), Some(57));
     assert_eq!(a.data_reloc(1, false), None);
 }
+
+/// Measured against `llvm-mc -triple=riscv64`.
+#[test]
+fn word_is_four_bytes_on_riscv() {
+    assert_eq!(
+        hex(&text_for("riscv64", ".word 0x11223344\n")),
+        "44 33 22 11"
+    );
+}

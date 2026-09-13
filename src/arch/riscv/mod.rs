@@ -113,6 +113,10 @@ impl Architecture for Riscv {
         243 // EM_RISCV
     }
 
+    fn word_bytes(&self) -> u8 {
+        4
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
     }
