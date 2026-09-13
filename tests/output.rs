@@ -8,7 +8,11 @@ use common::*;
 use rsasm::output;
 
 fn elf(src: &str) -> Vec<u8> {
-    let asm = assemble(src);
+    elf_for("x86-64", src)
+}
+
+fn elf_for(arch: &str, src: &str) -> Vec<u8> {
+    let asm = assemble_for(arch, src);
     assert!(
         !asm.diags.has_errors(),
         "{}",
@@ -193,4 +197,110 @@ fn empty_input_produces_a_valid_object() {
     // Even with nothing in it, the tables are present and consistent.
     let secs = sections_of(&b);
     assert!(secs.iter().any(|s| s.0 == ".symtab"));
+}
+
+// ---- ELF32 ---------------------------------------------------------------
+//
+// The 32-bit class is exercised through the i386 backend, which is the only
+// 32-bit target the crate is guaranteed to have.
+
+#[test]
+fn elf32_header_matches_the_class() {
+    let b = elf_for("i386", "nop\n");
+    assert_eq!(&b[..4], b"\x7fELF");
+    assert_eq!(b[4], 1, "ELFCLASS32");
+    assert_eq!(u16::from_le_bytes([b[0x10], b[0x11]]), 1, "ET_REL");
+    assert_eq!(u16::from_le_bytes([b[0x12], b[0x13]]), 3, "EM_386");
+    // ELF32 headers are smaller, and e_shoff is 32 bits at a different offset.
+    assert_eq!(u16::from_le_bytes([b[0x28], b[0x29]]), 52, "e_ehsize");
+    assert_eq!(u16::from_le_bytes([b[0x2e], b[0x2f]]), 40, "e_shentsize");
+    let shoff = u32at(&b, 0x20) as usize;
+    let shnum = u16::from_le_bytes([b[0x30], b[0x31]]) as usize;
+    assert_eq!(shoff + shnum * 40, b.len(), "section headers end the file");
+}
+
+#[test]
+fn elf32_symbols_use_the_32_bit_field_order() {
+    // Elf32_Sym puts value and size before info/other/shndx, which Elf64_Sym
+    // does not. Getting that wrong still produces a parseable file, so check
+    // it directly rather than trusting the shape.
+    let b = elf_for("i386", ".globl f\n.type f, @function\nf: nop\n.size f, 1\n");
+    let shoff = u32at(&b, 0x20) as usize;
+    let shnum = u16::from_le_bytes([b[0x30], b[0x31]]) as usize;
+    let shstrndx = u16::from_le_bytes([b[0x32], b[0x33]]) as usize;
+    let strtab_off = u32at(&b, shoff + shstrndx * 40 + 0x10) as usize;
+
+    let mut symtab = None;
+    for i in 0..shnum {
+        let sh = shoff + i * 40;
+        let name_off = strtab_off + u32at(&b, sh) as usize;
+        let end = b[name_off..].iter().position(|&c| c == 0).unwrap() + name_off;
+        if &b[name_off..end] == b".symtab" {
+            symtab = Some((u32at(&b, sh + 0x10) as usize, u32at(&b, sh + 0x14) as usize));
+        }
+    }
+    let (off, size) = symtab.expect("no .symtab");
+    assert_eq!(size % 16, 0, "Elf32_Sym is 16 bytes");
+    // The last symbol is the global `f`: a one-byte function at offset 0.
+    let last = off + size - 16;
+    assert_eq!(u32at(&b, last + 4), 0, "st_value");
+    assert_eq!(u32at(&b, last + 8), 1, "st_size");
+    assert_eq!(b[last + 12], (1 << 4) | 2, "STB_GLOBAL | STT_FUNC");
+}
+
+#[test]
+fn i386_relocations_use_rel_and_carry_the_addend_in_the_field() {
+    // i386 is a REL psABI: there is no addend field in the relocation, so the
+    // addend has to reach the linker inside the instruction itself.
+    let asm = assemble_for("i386", ".long sym + 0x1234\n");
+    assert_eq!(asm.relocs.len(), 1);
+    assert_eq!(asm.relocs[0].addend, 0x1234);
+    assert_eq!(section(&asm, ".text"), 0x1234u32.to_le_bytes());
+
+    let b = elf_for("i386", ".long sym + 0x1234\n");
+    let secs = sections_of32(&b);
+    // SHT_REL = 9, and the entries are 8 bytes rather than 12.
+    let rel = secs
+        .iter()
+        .find(|s| s.0 == ".rel.text")
+        .expect("no .rel.text");
+    assert_eq!(rel.1, 9, "SHT_REL");
+    assert_eq!(rel.3, 8, "one 8-byte Elf32_Rel");
+}
+
+#[test]
+fn x86_64_still_uses_rela_with_a_clean_field() {
+    // The counterpart: a RELA target leaves the field alone, which is what
+    // keeps rsasm byte-identical to GNU as here.
+    let asm = assemble("call printf@PLT\n");
+    assert_eq!(asm.relocs[0].addend, -4);
+    assert_eq!(&section(&asm, ".text")[1..5], &[0, 0, 0, 0]);
+}
+
+#[test]
+fn a_target_narrower_than_elf_allows_is_refused_clearly() {
+    let asm = assemble_for("z80", "");
+    let e = output::elf::build(&asm).expect_err("z80 has no ELF class");
+    assert!(e.to_string().contains("-f bin"), "{e}");
+}
+
+/// Section headers as (name, type, flags, size), for the 32-bit layout.
+fn sections_of32(b: &[u8]) -> Vec<(String, u32, u32, u32)> {
+    let shoff = u32at(b, 0x20) as usize;
+    let shnum = u16::from_le_bytes([b[0x30], b[0x31]]) as usize;
+    let shstrndx = u16::from_le_bytes([b[0x32], b[0x33]]) as usize;
+    let strtab_off = u32at(b, shoff + shstrndx * 40 + 0x10) as usize;
+    (0..shnum)
+        .map(|i| {
+            let sh = shoff + i * 40;
+            let name_off = strtab_off + u32at(b, sh) as usize;
+            let end = b[name_off..].iter().position(|&c| c == 0).unwrap() + name_off;
+            (
+                String::from_utf8_lossy(&b[name_off..end]).into_owned(),
+                u32at(b, sh + 4),
+                u32at(b, sh + 8),
+                u32at(b, sh + 0x14),
+            )
+        })
+        .collect()
 }

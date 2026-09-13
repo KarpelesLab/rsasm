@@ -49,7 +49,7 @@ relax, relocate, write — and there is one real architecture behind it.
 
 - x86-64, in both AT&T and Intel syntax, switchable mid-file
 - `.code16` / `.code32` / `.code64`
-- ELF64 relocatable objects and flat binaries
+- ELF relocatable objects, 32- and 64-bit, and flat binaries
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - diagnostics with source snippets, and assembly that continues past the
   first error
@@ -57,10 +57,17 @@ relax, relocate, write — and there is one real architecture behind it.
 **Not yet**
 
 - macros (`.macro` / `.rept` / `.irp`)
-- other architectures — the seam they plug into is described below
 - the NASM dialect (its lexing rules are in place; its directives are not)
-- ELF32, Mach-O, PE/COFF
+- Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
+
+**Known wrong**
+
+- The i386 backend emits x86-64 relocation numbers. `R_386_PC32` and
+  `R_386_PLT32` happen to share their values with the x86-64 ones, so branches
+  and calls are right, but `R_386_32` is 1 where `R_X86_64_32` is 10 — so a
+  32-bit object containing an absolute reference to a symbol will confuse a
+  linker. 64-bit output is unaffected.
 
 ## Usage
 

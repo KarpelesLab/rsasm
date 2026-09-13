@@ -1,8 +1,13 @@
-//! ELF64 relocatable object output.
+//! ELF relocatable object output, 32- and 64-bit.
 //!
 //! Only `ET_REL` is produced: rsasm is an assembler, so linking is somebody
-//! else's job. ELF32 is not implemented yet, and the writer says so rather
-//! than emitting something a linker would misread.
+//! else's job.
+//!
+//! The class follows the target's pointer width, and it changes more than the
+//! field widths: `Elf32_Sym` orders its members differently from `Elf64_Sym`,
+//! and `r_info` packs the symbol index into 24 bits rather than 32. The
+//! relocation *format* also varies by architecture rather than by class —
+//! see [`uses_rela`].
 
 use super::OutputError;
 use crate::assembler::Assembler;
@@ -11,6 +16,7 @@ use crate::symbol::{Binding, SymType, SymbolId, SymbolValue, Visibility};
 use std::collections::HashMap;
 
 const EI_NIDENT: usize = 16;
+const ELFCLASS32: u8 = 1;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ELFDATA2MSB: u8 = 2;
@@ -22,6 +28,7 @@ const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
 const SHT_STRTAB: u32 = 3;
 const SHT_RELA: u32 = 4;
+const SHT_REL: u32 = 9;
 const SHT_NOBITS: u32 = 8;
 const SHT_NOTE: u32 = 7;
 
@@ -47,10 +54,70 @@ const STT_SECTION: u8 = 3;
 const STT_FILE: u8 = 4;
 const STT_TLS: u8 = 6;
 
-const SYM_SIZE: u64 = 24;
-const RELA_SIZE: u64 = 24;
-const SHDR_SIZE: u64 = 64;
-const EHDR_SIZE: u64 = 64;
+/// Which ELF class is being written. Everything whose width or layout differs
+/// between the two goes through here rather than through a scattering of
+/// `if is_64` tests.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Class {
+    Elf32,
+    Elf64,
+}
+
+impl Class {
+    fn ehdr_size(self) -> u64 {
+        match self {
+            Class::Elf32 => 52,
+            Class::Elf64 => 64,
+        }
+    }
+
+    fn shdr_size(self) -> u64 {
+        match self {
+            Class::Elf32 => 40,
+            Class::Elf64 => 64,
+        }
+    }
+
+    fn sym_size(self) -> u64 {
+        match self {
+            Class::Elf32 => 16,
+            Class::Elf64 => 24,
+        }
+    }
+
+    fn rel_size(self, rela: bool) -> u64 {
+        match (self, rela) {
+            (Class::Elf32, false) => 8,
+            (Class::Elf32, true) => 12,
+            (Class::Elf64, false) => 16,
+            (Class::Elf64, true) => 24,
+        }
+    }
+
+    /// Alignment the tables want. 32-bit ELF only needs word alignment.
+    fn table_align(self) -> u64 {
+        match self {
+            Class::Elf32 => 4,
+            Class::Elf64 => 8,
+        }
+    }
+}
+
+/// Whether this machine's psABI carries relocation addends in the relocation
+/// entry (`RELA`) or in the field being relocated (`REL`).
+///
+/// This is a property of the ABI, not of the ELF class: i386, ARM and MIPS use
+/// `REL` while PowerPC, SPARC, RISC-V, AArch64 and x86-64 use `RELA`. It is
+/// keyed on the machine number because that is exactly what the psABI is
+/// specified against.
+pub fn uses_rela(machine: u16) -> bool {
+    !matches!(
+        machine,
+        3   // EM_386
+        | 40  // EM_ARM
+        | 8 // EM_MIPS
+    )
+}
 
 /// A growable string table with deduplication of whole strings.
 #[derive(Default)]
@@ -87,6 +154,7 @@ impl StrTab {
 struct Buf {
     out: Vec<u8>,
     big_endian: bool,
+    class: Class,
 }
 
 impl Buf {
@@ -114,8 +182,19 @@ impl Buf {
             self.out.extend_from_slice(&v.to_le_bytes());
         }
     }
-    fn i64(&mut self, v: i64) {
-        self.u64(v as u64);
+    /// An address, offset or size: 32 bits wide in ELF32, 64 in ELF64.
+    fn addr(&mut self, v: u64) {
+        match self.class {
+            Class::Elf32 => self.u32(v as u32),
+            Class::Elf64 => self.u64(v),
+        }
+    }
+
+    fn saddr(&mut self, v: i64) {
+        match self.class {
+            Class::Elf32 => self.u32(v as u32),
+            Class::Elf64 => self.u64(v as u64),
+        }
     }
     fn pad_to(&mut self, align: u64) {
         while !(self.out.len() as u64).is_multiple_of(align) {
@@ -154,11 +233,18 @@ struct OutSym {
 }
 
 pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
-    if asm.arch.pointer_bytes(&asm.arch_state) != 8 {
-        return Err(OutputError::Unsupported(
-            "ELF32 output is not implemented yet; only 64-bit targets can be written as ELF".into(),
-        ));
-    }
+    let class = match asm.arch.pointer_bytes(&asm.arch_state) {
+        8 => Class::Elf64,
+        4 => Class::Elf32,
+        n => {
+            return Err(OutputError::Unsupported(format!(
+                "ELF has no class for a {}-bit target; use `-f bin` instead",
+                n as u32 * 8
+            )));
+        }
+    };
+    let rela = uses_rela(asm.arch.elf_machine());
+    let rel_size = class.rel_size(rela);
 
     let mut shstrtab = StrTab::new();
     let mut strtab = StrTab::new();
@@ -224,21 +310,25 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             continue;
         }
         let target = sec_index[&sid];
-        let name = format!(".rela{}", asm.interner.get(asm.section(sid).name));
+        let name = format!(
+            "{}{}",
+            if rela { ".rela" } else { ".rel" },
+            asm.interner.get(asm.section(sid).name)
+        );
         let idx = shdrs.len() as u16;
         rela_for.push((sid, idx));
         shdrs.push(Shdr {
             name: shstrtab.add(&name),
-            ty: SHT_RELA,
+            ty: if rela { SHT_RELA } else { SHT_REL },
             flags: 0,
             addr: 0,
             offset: 0,
-            size: list.len() as u64 * RELA_SIZE,
+            size: list.len() as u64 * rel_size,
             // Patched below once the symtab index is known.
             link: 0,
             info: target as u32,
-            addralign: 8,
-            entsize: RELA_SIZE,
+            addralign: class.table_align(),
+            entsize: rel_size,
         });
     }
 
@@ -249,11 +339,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         flags: 0,
         addr: 0,
         offset: 0,
-        size: (syms.len() as u64 + 1) * SYM_SIZE,
+        size: (syms.len() as u64 + 1) * class.sym_size(),
         link: 0, // patched: .strtab
         info: first_global + 1,
-        addralign: 8,
-        entsize: SYM_SIZE,
+        addralign: class.table_align(),
+        entsize: class.sym_size(),
     });
     let strtab_idx = shdrs.len() as u16;
     shdrs.push(Shdr {
@@ -292,8 +382,9 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     let mut buf = Buf {
         out: Vec::new(),
         big_endian,
+        class,
     };
-    buf.out.resize(EHDR_SIZE as usize, 0);
+    buf.out.resize(class.ehdr_size() as usize, 0);
 
     for &sid in &emitted {
         let i = sec_index[&sid] as usize;
@@ -315,29 +406,52 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
 
     for (sid, idx) in &rela_for {
-        buf.pad_to(8);
+        buf.pad_to(class.table_align());
         shdrs[*idx as usize].offset = buf.len();
         for r in &relocs_by_section[sid] {
             let sym = sym_index.get(&r.symbol).copied().unwrap_or(0);
-            buf.u64(r.offset);
-            buf.u64(((sym as u64) << 32) | r.kind as u64);
-            buf.i64(r.addend);
+            buf.addr(r.offset);
+            match class {
+                // ELF32 packs the symbol index into the top 24 bits and the
+                // type into the low 8, not the 32/32 split ELF64 uses.
+                Class::Elf32 => buf.u32((sym << 8) | (r.kind & 0xff)),
+                Class::Elf64 => buf.u64(((sym as u64) << 32) | r.kind as u64),
+            }
+            // Under REL the addend lives in the field instead; the layout pass
+            // has already written it there.
+            if rela {
+                buf.saddr(r.addend);
+            }
         }
     }
 
-    buf.pad_to(8);
+    buf.pad_to(class.table_align());
     shdrs[symtab_idx as usize].offset = buf.len();
     // The reserved null symbol.
-    for _ in 0..SYM_SIZE {
+    for _ in 0..class.sym_size() {
         buf.u8(0);
     }
     for s in &syms {
-        buf.u32(s.name);
-        buf.u8(s.info);
-        buf.u8(s.other);
-        buf.u16(s.shndx);
-        buf.u64(s.value);
-        buf.u64(s.size);
+        // Elf32_Sym and Elf64_Sym do not merely differ in width: the value and
+        // size move ahead of info/other/shndx in the 32-bit form.
+        match class {
+            Class::Elf32 => {
+                buf.u32(s.name);
+                buf.u32(s.value as u32);
+                buf.u32(s.size as u32);
+                buf.u8(s.info);
+                buf.u8(s.other);
+                buf.u16(s.shndx);
+            }
+            Class::Elf64 => {
+                buf.u32(s.name);
+                buf.u8(s.info);
+                buf.u8(s.other);
+                buf.u16(s.shndx);
+                buf.u64(s.value);
+                buf.u64(s.size);
+            }
+        }
     }
 
     shdrs[strtab_idx as usize].offset = buf.len();
@@ -348,46 +462,50 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     shdrs[shstrtab_idx as usize].size = shstrtab.bytes.len() as u64;
     buf.out.extend_from_slice(&shstrtab.bytes);
 
-    buf.pad_to(8);
+    buf.pad_to(class.table_align());
     let shoff = buf.len();
     for sh in &shdrs {
         buf.u32(sh.name);
         buf.u32(sh.ty);
-        buf.u64(sh.flags);
-        buf.u64(sh.addr);
-        buf.u64(sh.offset);
-        buf.u64(sh.size);
+        buf.addr(sh.flags);
+        buf.addr(sh.addr);
+        buf.addr(sh.offset);
+        buf.addr(sh.size);
         buf.u32(sh.link);
         buf.u32(sh.info);
-        buf.u64(sh.addralign);
-        buf.u64(sh.entsize);
+        buf.addr(sh.addralign);
+        buf.addr(sh.entsize);
     }
 
     // ---- header -----------------------------------------------------------
     let mut hdr = Buf {
         out: Vec::new(),
         big_endian,
+        class,
     };
     let mut ident = [0u8; EI_NIDENT];
     ident[0..4].copy_from_slice(b"\x7fELF");
-    ident[4] = ELFCLASS64;
+    ident[4] = match class {
+        Class::Elf32 => ELFCLASS32,
+        Class::Elf64 => ELFCLASS64,
+    };
     ident[5] = if big_endian { ELFDATA2MSB } else { ELFDATA2LSB };
     ident[6] = EV_CURRENT;
     hdr.out.extend_from_slice(&ident);
     hdr.u16(ET_REL);
     hdr.u16(asm.arch.elf_machine());
     hdr.u32(EV_CURRENT as u32);
-    hdr.u64(0); // e_entry
-    hdr.u64(0); // e_phoff
-    hdr.u64(shoff);
+    hdr.addr(0); // e_entry
+    hdr.addr(0); // e_phoff
+    hdr.addr(shoff);
     hdr.u32(0); // e_flags
-    hdr.u16(EHDR_SIZE as u16);
+    hdr.u16(class.ehdr_size() as u16);
     hdr.u16(0); // e_phentsize
     hdr.u16(0); // e_phnum
-    hdr.u16(SHDR_SIZE as u16);
+    hdr.u16(class.shdr_size() as u16);
     hdr.u16(shdrs.len() as u16);
     hdr.u16(shstrtab_idx);
-    buf.out[..EHDR_SIZE as usize].copy_from_slice(&hdr.out);
+    buf.out[..class.ehdr_size() as usize].copy_from_slice(&hdr.out);
 
     Ok(buf.out)
 }
