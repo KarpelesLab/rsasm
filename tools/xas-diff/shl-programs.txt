@@ -252,3 +252,105 @@ far:    nop
         nop
 tbl:    .long   0x11112222
         .long   0x33334444
+=== a longword load two bytes past a boundary reaches 1020 bytes from pc+2
+        nop
+        mov.l   lit, r0
+        .space  1016
+lit:    .long   7
+=== a longword load two bytes past a boundary reaches the very next word
+        nop
+        mov.l   lit, r0
+lit:    .long   1
+=== at 2 pc from two bytes past a boundary
+        nop
+        mov.l   @(2,pc), r0
+        .long   5
+=== a word literal at the far end of reach
+        mov.w   lit, r0
+        .space  508
+lit:    .word   7
+=== a load at an odd address takes GNU as's base
+        .byte   1, 2, 3
+        mova    lit, r0
+        .align  2
+lit:    .long   1
+=== long data raises the section alignment, so the tail is padded
+        .long   1
+        nop
+=== unaligned data spellings
+        .byte   1
+        .ualong 2
+        .uaword 3
+        .4byte  4
+        .2byte  5
+        .8byte  6
+        .uaquad 7
+=== a branch sized in order stays short when an alignment absorbed the growth
+        bt      far
+        nop
+back:   nop
+        .space  246
+        .align  3
+        nop
+        nop
+        bf      back
+far:    nop
+=== an earlier load and an alignment between keep a backward bf short
+        mova    P1, r0
+        .space  2
+        mova    P2, r0
+        bt      C0
+        nop
+        nop
+C1:     nop
+        .space  240
+        mov.l   P0, r9
+        mov.l   P2, r0
+        .align  3
+        bf      C1
+C0:     bf      C1
+P0:     .long   0x506e4f97
+P1:     .long   0x8f444987
+P2:     .long   0x440c7ef3
+=== padding ahead of a long that the final layout does not need still sizes branches
+        bf/s    C0
+        mov     r1, r2
+        bt/s    C0
+        mov     r1, r2
+        mov     r3, r4
+        .long   94
+        .space  200
+W0:     .word   0x7a5b
+        bt/s    C1
+        mov     r1, r2
+        bt/s    C0
+        mov     r1, r2
+        bra     C1
+        nop
+        .space  10
+        .long   96
+        bf      C0
+        bf      C1
+        mov     r3, r4
+        .align  2
+P0:     .long   0x77826199
+P1:     .long   0xf2518742
+C0:
+C1:
+=== growth before an alignment is not assumed to carry a label past it
+        bt      far
+        bt      x
+        .space  256
+        .align  3
+x:      nop
+        .space  300
+far:    nop
+=== a branch that growth carried past its target beyond an alignment keeps its size
+far:    nop
+        .space  300
+        .rept   66
+        bt      far
+        .endr
+        bf      y
+        .align  2
+y:      nop

@@ -131,6 +131,16 @@ pub struct FixupKind {
     /// Narrower bounds than the field's width allows, where a reference
     /// assembler picks a form by a range that is not a power of two.
     pub limits: Option<(i64, i64)>,
+    /// For a PC-relative field, the PC it is measured from, `here + adjust`,
+    /// is first rounded down to a multiple of this. `1` means no rounding.
+    ///
+    /// SuperH's `mov.l label,rn` and Thumb's literal loads clear the low two
+    /// bits of the PC, so the base depends on which boundary the instruction
+    /// itself sits on. Rounding a base to `n` leaves the value congruent to
+    /// the target modulo `n`, so `value_align` then tests the target. Such a
+    /// field cannot be relocated, since no relocation rounds its base, so it
+    /// is meant for fields with no `reloc`.
+    pub pc_align: u8,
 }
 
 impl FixupKind {
@@ -146,6 +156,7 @@ impl FixupKind {
             encoding: FieldEncoding::Whole,
             bias_reloc_addend: true,
             limits: None,
+            pc_align: 1,
         }
     }
 
@@ -186,6 +197,13 @@ impl FixupKind {
     /// Accepts only values from `lo` to `hi`, within what the field holds.
     pub fn with_limits(mut self, lo: i64, hi: i64) -> FixupKind {
         self.limits = Some((lo, hi));
+        self
+    }
+
+    /// Rounds the PC this field is measured from down to a multiple of
+    /// `align`; see [`FixupKind::pc_align`].
+    pub fn with_pc_align(mut self, align: u8) -> FixupKind {
+        self.pc_align = align.max(1);
         self
     }
 

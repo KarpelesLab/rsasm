@@ -92,9 +92,29 @@ impl Assembler {
         }
 
         self.assign_addresses();
+        self.report_misaligned_data();
         self.apply_fixups();
         self.materialize();
         !self.diags.has_errors()
+    }
+
+    /// Refuses data that had to be padded to reach its boundary; see
+    /// [`Architecture::aligns_data`](crate::arch::Architecture::aligns_data).
+    fn report_misaligned_data(&mut self) {
+        for &(si, fi) in &self.align_tests {
+            let f = &self.sections[si.0 as usize].frags[fi as usize];
+            if let FragKind::Align { align, pad, .. } = f.kind
+                && pad != 0
+            {
+                self.diags.error(
+                    f.span,
+                    format!(
+                        "misaligned data: the value does not start at a multiple of {align} bytes; \
+                         `.{align}byte` places one without aligning it"
+                    ),
+                );
+            }
+        }
     }
 
     /// Rounds each section's end up to its alignment, on targets whose GNU as
@@ -259,6 +279,9 @@ impl Assembler {
         if self.arch.relaxation_may_shrink() {
             return self.repick(history);
         }
+        if self.arch.relaxes_in_order() {
+            return self.grow_in_order();
+        }
         let mut changed = false;
         for si in 0..self.sections.len() {
             for fi in 0..self.sections[si].frags.len() {
@@ -354,6 +377,133 @@ impl Assembler {
             }
         }
         changed
+    }
+
+    /// Grows fragments walking each section in order, the way GNU as's
+    /// generic `relax_frag` does. Fragments behind the one being sized are
+    /// already at this pass's addresses. A label ahead of it moves by the
+    /// growth so far (GNU's `stretch`) only if no alignment or `.org` lies in
+    /// between, since one might absorb it; past one, the label keeps its
+    /// last-pass address, and a branch that the growth has carried beyond
+    /// such a label keeps its size for this pass.
+    ///
+    /// A candidate is weighed at the addresses the current one has, as GNU
+    /// as reads its relaxation table: the table's reach already allows for
+    /// the longer form's extra instructions.
+    ///
+    /// Alignment padding is recomputed on the way; `.org`, `.space` and
+    /// LEB128 sizes wait for the next full pass.
+    fn grow_in_order(&mut self) -> bool {
+        let mut changed = false;
+        for si in 0..self.sections.len() {
+            // GNU's regions: each alignment and `.org` ends one.
+            let mut regions = Vec::with_capacity(self.sections[si].frags.len() + 1);
+            let mut region = 0u32;
+            for f in &self.sections[si].frags {
+                regions.push(region);
+                if matches!(f.kind, FragKind::Align { .. } | FragKind::Org { .. }) {
+                    region += 1;
+                }
+            }
+            regions.push(region);
+
+            let mut off: u64 = 0;
+            for fi in 0..self.sections[si].frags.len() {
+                let old_off = self.sections[si].frags[fi].offset;
+                self.sections[si].frags[fi].offset = off;
+                let stretch = off as i64 - old_off as i64;
+                let size = match &self.sections[si].frags[fi].kind {
+                    FragKind::Bytes { variants, chosen } if variants.len() > 1 => {
+                        let (n, mut pick) = (variants.len(), *chosen);
+                        if pick + 1 < n && !self.fits_in_order(si, fi, pick, stretch, &regions) {
+                            pick = (pick + 1..n)
+                                .find(|&k| self.fits_in_order(si, fi, k, stretch, &regions))
+                                .unwrap_or(n - 1);
+                            changed = true;
+                        }
+                        if let FragKind::Bytes { variants, chosen } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *chosen = pick;
+                            variants[pick].bytes.len() as u64
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    FragKind::Align { .. } => {
+                        let task = self.task_for(si, fi);
+                        let (pad, _) = self.compute_size(si, off, task);
+                        if let FragKind::Align { pad: slot, .. } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *slot = pad;
+                        }
+                        pad
+                    }
+                    _ => self.sections[si].frags[fi].size(),
+                };
+                off = off.saturating_add(size);
+            }
+            if self.sections[si].size != off {
+                self.sections[si].size = off;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Whether every fixup of candidate `k` of a fragment is in range for
+    /// [`Self::grow_in_order`], which has moved everything up to the fragment
+    /// by `stretch` bytes this pass. `regions` numbers each fragment's region.
+    fn fits_in_order(
+        &mut self,
+        si: usize,
+        fi: usize,
+        k: usize,
+        stretch: i64,
+        regions: &[u32],
+    ) -> bool {
+        let id = SectionId(si as u32);
+        let frag_off = self.sections[si].frags[fi].offset;
+        let fixups: Vec<(u32, ExprRef, FixupKind)> = match &self.sections[si].frags[fi].kind {
+            FragKind::Bytes { variants, .. } => variants[k]
+                .fixups
+                .iter()
+                .map(|f| (f.offset, f.expr, f.kind))
+                .collect(),
+            _ => return true,
+        };
+        let here = self.section(id).addr as i64 + frag_off as i64;
+        for (off, e, kind) in fixups {
+            let Some(mut value) = self.fixup_value(e, &kind, id, frag_off + off as u64) else {
+                return false;
+            };
+            // A label ahead, in the fragments this pass has yet to reach.
+            let ahead = match self.eval(e) {
+                Ok(v) if kind.pcrel && stretch != 0 => {
+                    v.plus.and_then(|p| match self.symbols.get(p).value {
+                        SymbolValue::Label { section, frag }
+                            if section == id && frag as usize > fi =>
+                        {
+                            Some((frag as usize, self.resolve_value(v)?))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
+            if let Some((frag, target)) = ahead {
+                if stretch < 0 || regions[frag] == regions[fi] {
+                    value += stretch;
+                } else if target < here {
+                    return true;
+                }
+            }
+            if !kind.fits(value as i128) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Whether every fixup of candidate `k` of a fragment is in range, with
@@ -505,6 +655,7 @@ impl Assembler {
             }
             let target = self.resolve_value(v)?;
             let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
+            let here = here & !(kind.pc_align.max(1) as i64 - 1);
             return Some(target - here);
         }
         // The distance between two labels in one section is fixed no matter
@@ -790,6 +941,11 @@ fn range_message(kind: &FixupKind, v: i64) -> String {
     let what = if kind.pcrel { "offset" } else { "value" };
     let align = kind.value_align as i128;
     if align > 1 && (v as i128) % align != 0 {
+        // Measured from a base rounded to the same boundary, the value is off
+        // it exactly when the target is, and the number itself means little.
+        if kind.pcrel && kind.pc_align as i128 >= align {
+            return format!("the target is not on a {align}-byte boundary");
+        }
         return format!("{what} {v} is not a multiple of {align}");
     }
     let (lo, hi) = kind.range();

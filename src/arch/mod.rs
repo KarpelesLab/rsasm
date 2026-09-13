@@ -295,6 +295,32 @@ pub trait Architecture {
         false
     }
 
+    /// Whether `.short`, `.word`, `.int`, `.long` and `.quad` must each start
+    /// on a boundary of their own width.
+    ///
+    /// SuperH's GNU as raises the section's alignment to the data's width,
+    /// pads up to the boundary, and refuses the data as misaligned if that
+    /// took any padding; the padding still moves everything after it while
+    /// branches are sized. `.2byte`, `.4byte` and `.8byte` stay unaligned,
+    /// and so do the SuperH spellings `.uaword`, `.ualong` and `.uaquad`,
+    /// which a target returning true also accepts.
+    fn aligns_data(&self) -> bool {
+        false
+    }
+
+    /// Whether sizes are chosen walking each section in order, as GNU as's
+    /// generic `relax_frag` chooses them, rather than all at once from the
+    /// previous pass's addresses.
+    ///
+    /// Both only grow, but they can settle on different layouts: a branch
+    /// that was out of reach at the previous pass's addresses, and is back in
+    /// reach once an alignment has absorbed an earlier branch's growth, stays
+    /// short when sized in order and grows when not. SuperH's GNU as works
+    /// this way. [`Architecture::relaxation_may_shrink`] takes precedence.
+    fn relaxes_in_order(&self) -> bool {
+        false
+    }
+
     /// Whether a plain number as a PC-relative target (`call 0x1000`) is an
     /// absolute address, which relocatable output must relocate against no
     /// symbol, rather than an offset into the current section.
@@ -350,6 +376,14 @@ pub trait Architecture {
     /// first; layout picks among them. Returns `None` after reporting a
     /// diagnostic.
     fn assemble(&self, cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>) -> Option<Vec<Variant>>;
+
+    /// Whether an instruction's operands refer to the instruction's own
+    /// address without spelling it `.`, so that [`Architecture::assemble`]
+    /// may build [`ExprKind::Here`](crate::expr::ExprKind::Here) nodes for
+    /// it. SuperH's `@(8,pc)` means `. + 8`.
+    fn operands_use_location(&self, _interner: &Interner, _operands: &[Token]) -> bool {
+        false
+    }
 
     /// Handles an architecture-specific directive such as `.code64`. Returns
     /// false if the name is not one of this backend's directives.

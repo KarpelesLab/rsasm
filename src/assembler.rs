@@ -120,6 +120,9 @@ pub struct Assembler {
     /// section after that fragment, and still at an offset past `pc`, move
     /// by `shift` bytes. Fields: section, fragment index, `pc`, `shift`.
     pub(crate) relax_shift: Option<(SectionId, u32, u64, i64)>,
+    /// The alignment fragments put ahead of data that must already be
+    /// aligned, which are errors if they pad; see `Assembler::align_data`.
+    pub(crate) align_tests: Vec<(SectionId, u32)>,
     /// CC-RH data values written without `#` that were not constants when
     /// read, to be refused at the end if they are labels; see
     /// `Assembler::cc_data`.
@@ -168,6 +171,7 @@ impl Assembler {
             exiting_macro: false,
             end_of_source: false,
             relax_shift: None,
+            align_tests: Vec::new(),
             cc_bare_labels: Vec::new(),
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),
@@ -1091,7 +1095,11 @@ impl Assembler {
             t.is_punct(Punct::Dot)
                 || (d.star_is_here() && t.is_punct(Punct::Star))
                 || (d.dollar_is_here() && t.is_punct(Punct::Dollar))
-        }) {
+        }) || (matches!(stmt.body, Some(Body::Insn { .. }))
+            && self
+                .arch
+                .operands_use_location(&self.interner, stmt.arg_cursor().rest()))
+        {
             self.here_sym = Some(self.anon_label(stmt.span));
         }
         let mark = self.exprs.len();
