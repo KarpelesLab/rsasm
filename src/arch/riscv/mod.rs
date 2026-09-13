@@ -1,34 +1,87 @@
 //! RISC-V, RV32 and RV64. `EM_RISCV`.
 //!
-//! Placeholder. The backend is registered so that `.arch` and `--arch` can
-//! name it and report something useful, but it assembles nothing yet.
+//! The backend assembles RV32I/RV64I with the M, A, F, D and C extensions, in
+//! the GNU as dialect, and expands the pseudo-instructions that most RISC-V
+//! source is actually written in.
+//!
+//! Two things shape the code more than anything else.
+//!
+//! *Immediates are scattered.* Almost no field is contiguous, so the word is
+//! built with the immediate zeroed and the placement lives in a scatter
+//! function (see [`encode`]) that runs whether the value is known now or
+//! arrives from the linker.
+//!
+//! *The C extension is a rewrite, not a set of new mnemonics.* Source says
+//! `add a0, a0, a1`; the assembler emits two bytes because a compressed form
+//! of exactly that instruction exists. [`compress`] does that as a peephole
+//! over finished words, and branches — whose displacement is not known until
+//! layout runs — instead offer both widths as relaxation candidates.
+
+pub mod asm;
+pub mod compress;
+pub mod encode;
+pub mod insn;
+pub mod matint;
+pub mod operand;
+pub mod pseudo;
+pub mod reg;
+pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::cursor::Cursor;
+use crate::lexer::TokKind;
 use crate::section::Variant;
+use asm::Asm;
+use insn::Kind;
+use operand::Operands;
+use pseudo::Handled;
 
 pub const NAMES: &[&str] = &["riscv32", "riscv64"];
 
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
-    let canonical = match name {
-        "riscv32" => "riscv32",
-        "riscv64" => "riscv64",
-        "rv32" | "rv64" | "riscv" => "riscv32",
+    let xlen = match name {
+        "riscv32" | "rv32" | "rv32i" | "rv32g" | "rv32gc" => 32,
+        "riscv64" | "rv64" | "rv64i" | "rv64g" | "rv64gc" | "riscv" => 64,
         _ => return None,
     };
-    Some(Box::new(Stub { name: canonical }))
+    Some(Box::new(Riscv { xlen }))
 }
 
-struct Stub {
-    name: &'static str,
+pub struct Riscv {
+    xlen: u8,
 }
 
-impl Architecture for Stub {
+/// `ArchState::features` bit 0 says whether the C extension may shorten what
+/// is emitted.
+///
+/// `.option push` / `.option pop` need a stack, and `ArchState` has no field
+/// for one, so the word doubles as it: each push shifts everything left and
+/// copies the current setting into bit 0, each pop shifts right. A single set
+/// bit above the deepest level marks the bottom, which is how an unmatched
+/// pop is noticed.
+const RVC: u64 = 1;
+const STACK_BOTTOM: u64 = 2;
+
+/// How many `.option push` levels are open.
+fn option_depth(features: u64) -> u32 {
+    (63 - features.leading_zeros()).saturating_sub(1)
+}
+
+fn rvc_enabled(state: &ArchState) -> bool {
+    state.features & RVC != 0
+}
+
+impl Architecture for Riscv {
     fn name(&self) -> &'static str {
-        self.name
+        if self.xlen == 64 {
+            "riscv64"
+        } else {
+            "riscv32"
+        }
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &["rv32", "rv64", "riscv"]
+        &["rv32", "rv64", "riscv", "rv32gc", "rv64gc"]
     }
 
     fn endian(&self) -> Endian {
@@ -36,39 +89,112 @@ impl Architecture for Stub {
     }
 
     fn pointer_bytes(&self, _state: &ArchState) -> u8 {
-        8
+        self.xlen / 8
     }
 
     fn initial_state(&self) -> ArchState {
         ArchState {
-            bits: 64,
+            bits: self.xlen,
             syntax: Syntax::Att,
-            features: 0,
+            // `rv32gc` / `rv64gc` is what toolchains default to, so compressed
+            // instructions are on unless `.option norvc` turns them off.
+            features: STACK_BOTTOM | RVC,
             intel_register_prefix: false,
         }
     }
 
-    fn supports_syntax(&self, _syntax: Syntax) -> bool {
-        true
+    fn supports_syntax(&self, syntax: Syntax) -> bool {
+        // There is only one RISC-V operand syntax; Intel mode is meaningless
+        // here, so it is not offered.
+        syntax == Syntax::Att
     }
 
     fn elf_machine(&self) -> u16 {
-        243
+        243 // EM_RISCV
     }
 
-    fn data_reloc(&self, _size: u8, _pcrel: bool) -> Option<u32> {
-        None
+    fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
+        reloc::data(size, pcrel)
+    }
+
+    fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
+        // `call foo@plt` is accepted for compatibility; it only renames the
+        // relocation on the `auipc`/`jalr` pair.
+        (name == "plt" && size == 8 && pcrel).then_some(reloc::CALL_PLT)
     }
 
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
-        vec![0; len as usize]
+        encode::nop_bytes(len as usize)
     }
 
-    fn assemble(&self, cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>) -> Option<Vec<Variant>> {
-        cx.error(
-            insn.span,
-            format!("the `{}` backend is not implemented yet", self.name),
-        );
-        None
+    fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
+        let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
+        let rvc = rvc_enabled(cx.state);
+        let cur = req.cursor();
+        let ops = Operands::parse(&cur, req.span);
+        let mut a = Asm::new(cx, self.xlen, rvc, req.span);
+
+        match pseudo::expand(&mut a, &mnemonic, &ops) {
+            Handled::Done => return Some(a.finish()),
+            Handled::Failed => return None,
+            Handled::No => {}
+        }
+
+        let (base, ordering) = split_ordering(&mnemonic);
+        let Some(def) = insn::lookup(base) else {
+            a.error(
+                req.mnemonic_span,
+                format!("unknown instruction `{mnemonic}`"),
+            );
+            return None;
+        };
+        a.encode_def(def, base, &ops, ordering)?;
+        Some(a.finish())
     }
+
+    fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        if name != ".option" {
+            return false;
+        }
+        let tok = cur.peek();
+        cur.set_pos(cur.all().len());
+        let TokKind::Ident(n) = tok.kind else {
+            cx.error(tok.span, "`.option` needs a name");
+            return true;
+        };
+        let word = cx.name(n).to_ascii_lowercase();
+        let features = cx.state.features;
+        match word.as_str() {
+            "rvc" => cx.state.features |= RVC,
+            "norvc" => cx.state.features &= !RVC,
+            "push" if option_depth(features) >= 62 => {
+                cx.error(tok.span, "`.option push` nested more than 62 deep");
+            }
+            "push" => cx.state.features = (features << 1) | (features & RVC),
+            "pop" if option_depth(features) == 0 => {
+                cx.error(tok.span, "`.option pop` with no `.option push`");
+            }
+            "pop" => cx.state.features = features >> 1,
+            // Linker relaxation and PIC change no bytes here, and `.option
+            // arch` carries an extension list this backend does not track.
+            "relax" | "norelax" | "pic" | "nopic" | "arch" => {}
+            _ => cx.error(tok.span, format!("unknown `.option {word}`")),
+        }
+        true
+    }
+}
+
+/// Splits the `.aq` / `.rl` ordering suffix off an atomic mnemonic.
+///
+/// The suffix is part of the mnemonic rather than an operand, and it sets two
+/// bits that sit immediately below the `funct5` already in the base word.
+fn split_ordering(mnemonic: &str) -> (&str, u32) {
+    for (suffix, bits) in [(".aqrl", 3u32), (".aq", 2), (".rl", 1)] {
+        if let Some(base) = mnemonic.strip_suffix(suffix)
+            && insn::lookup(base).is_some_and(|d| matches!(d.kind, Kind::Amo | Kind::AmoLoad))
+        {
+            return (base, bits << 25);
+        }
+    }
+    (mnemonic, 0)
 }
