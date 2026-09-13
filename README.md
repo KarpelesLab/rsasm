@@ -42,33 +42,75 @@ Prebuilt binaries for Linux, macOS and Windows are attached to each
 
 ## Status
 
-Early. The pipeline is complete end to end — lex, parse, encode, lay out,
-relax, relocate, write — and there is one real architecture behind it.
+Early, but broad. The pipeline is complete end to end — lex, parse, encode,
+lay out, relax, relocate, write — with eight backends behind it.
+
+### Architectures
+
+Every encoding claimed below is checked byte for byte against an independent
+assembler, not against rsasm's own idea of the manual. See
+[Verification](#verification).
+
+| Target | Names | Checked against | Cases |
+|---|---|---|---|
+| x86-64, i386, i8086 | `x86-64` `i386` `i8086` | GNU as | 118 |
+| AArch64 | `aarch64` | llvm-mc | 475 |
+| ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 361 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 485 |
+| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1044 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
+| Z80, 6502, 8080 | `z80` `6502` `i8080` | opcode tables | — |
+
+The 8-bit targets have no llvm-mc support to check against, so they are
+verified differently: tests walk the complete opcode space and assert that
+exactly the documented encodings exist, and the Z80 tables were additionally
+cross-checked against an independent disassembler (690 of 690 documented
+sequences). They are for flat binaries; ELF has no class for a 16-bit target.
+
+### Everything else
 
 **Working**
 
-- x86-64, in both AT&T and Intel syntax, switchable mid-file
-- `.code16` / `.code32` / `.code64`
-- ELF relocatable objects, 32- and 64-bit, and flat binaries
+- AT&T and Intel syntax on x86, switchable mid-file; `.code16`/`.code32`/`.code64`
+- ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
+  and flat binaries
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
-- diagnostics with source snippets, and assembly that continues past the
-  first error
+- each target's own comment syntax, so ARM's `@`, AArch64's `//` and SPARC's
+  `!` work, and `#` stays an immediate prefix where it is one
+- diagnostics with source snippets that name the real limit, and assembly that
+  continues past the first error
 
 **Not yet**
 
+- x86 SIMD: MMX, SSE, AVX and AVX-512 (in progress)
 - the NASM dialect (its lexing rules are in place; its directives are not)
 - Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
+- ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
+- AArch64: most of NEON, SVE
+- PowerPC: AltiVec/VSX
+- 6502: the conventional `lda #$12` spelling, which needs `$`-prefixed hex
 
 **Known wrong**
 
+These produce incorrect output rather than an error, which is why they are
+listed separately.
+
 - The i386 backend emits x86-64 relocation numbers. `R_386_PC32` and
   `R_386_PLT32` happen to share their values with the x86-64 ones, so branches
-  and calls are right, but `R_386_32` is 1 where `R_X86_64_32` is 10 — so a
-  32-bit object containing an absolute reference to a symbol will confuse a
-  linker. 64-bit output is unaffected.
+  and calls are right, but `R_386_32` is 1 where `R_X86_64_32` is 10, so a
+  32-bit object with an absolute symbol reference will confuse a linker.
+- RISC-V `la` of an external symbol emits only `R_RISCV_PCREL_HI20`, without
+  its paired `LO12` relocation.
+- In flat binaries only (relocatable output is correct): AArch64 `adrp`, and
+  PowerPC `@ha`/`@l` on a label, are resolved without the page or split
+  arithmetic they need.
+- A mid-file `.arch` switch to a target with different comment characters does
+  not re-lex the rest of that file, though it does apply to anything included
+  or expanded after the switch.
 
 ## Usage
 
@@ -87,33 +129,43 @@ rsasm [options] <input.s>...
       --list-arch    list the architectures this build supports
 ```
 
-Architectures are cargo features, all on by default:
+Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
+`riscv`, `powerpc`, `mips`, `sparc` and `retro`:
 
 ```console
-$ cargo build --no-default-features --features x86
+$ cargo build --no-default-features --features x86,aarch64
 ```
 
-## Compatibility with GNU as
+## Verification
 
-Where rsasm and GNU as both accept a program, they are meant to produce the
-same bytes. `tools/gas-diff/run.sh` assembles a corpus with both and compares
-`.text`; it currently reports 118 of 118 matching, and the expected encodings
-in `tests/x86_encoding.rs` came from those runs.
+Two differential harnesses assemble the same source with rsasm and with an
+independent assembler, and compare the bytes:
 
-One deliberate difference: alignment padding in executable sections uses a
-different mix of multi-byte no-ops. GNU as picks its sequence by `-mtune`, so
-the bytes differ between GNU as versions too; only the total length is fixed.
+- `tools/gas-diff/run.sh` against GNU as, for x86. 118 of 118 match.
+- `tools/mc-diff/run.sh` against llvm-mc, which can assemble every other
+  target. 3,210 of 3,210 match across thirteen target variants.
+
+Both run in CI. The expected bytes in the hermetic tests under `tests/` were
+taken from these runs rather than written by hand: a test that only checks
+rsasm against rsasm can never find a wrong encoding.
+
+Where rsasm and the reference legitimately differ, the corpus says so rather
+than dropping the case. The standing example is alignment padding in
+executable sections, where GNU as picks its no-op sequence by `-mtune`; only
+the total length is fixed.
 
 ## Design
 
 The interesting problems in an assembler are mostly about *when* things are
 known, and the design is shaped around that.
 
-**Lexing is pull-based, and its configuration is mutable.** `;` separates
-statements in GAS and starts a comment in NASM. `1b` is a reference to a local
-label in GAS and the binary constant `2` in NASM. A directive halfway down the
-file can change which of those is true, so the lexer asks its configuration
-again for every token rather than tokenizing the file up front.
+**Lexing depends on the target, not just the dialect.** `;` separates
+statements in GAS and starts a comment in NASM; `1b` is a local-label reference
+in GAS and the binary constant `2` in NASM. Within GAS, `#` is a comment on x86
+but the immediate prefix on ARM, AArch64 and SPARC, where it is a comment only
+in the first column — which is also what C preprocessor line markers look like.
+So each backend supplies its comment syntax, and the lexer is configured from
+it when a file is read.
 
 **The parser stops at the statement level.** It finds labels, directives and
 mnemonics; it does not look inside operands. `disp(base,index,scale)` and
@@ -160,12 +212,26 @@ candidate encodings with their fixups. It never touches sections, symbols or
 addresses — those belong to the core, which is why two backends can write into
 the same file. `.arch` switches between them at any point.
 
+Fixed-width encodings rarely have a contiguous displacement field, so a fixup
+can carry a function that scatters the value through the instruction word,
+together with the field's real width and alignment. That is what lets a 26-bit
+AArch64 branch offset be range-checked as 26 bits rather than as the 4 bytes
+it lives in.
+
+A few conventions really are per target and have trait methods with defaults:
+`comments` (which characters start one) and `word_bytes` (how wide `.word` is —
+2 on x86 and PowerPC, 4 on the other RISC targets).
+
+Add a corpus under `tools/mc-diff/` for the new target and take the hermetic
+tests' expected bytes from its runs.
+
 ## Building
 
 ```console
 $ cargo build --release
 $ cargo test
 $ tools/gas-diff/run.sh     # needs binutils
+$ tools/mc-diff/run.sh      # needs llvm-mc and llvm-objcopy
 ```
 
 ## License
