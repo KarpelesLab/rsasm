@@ -1,5 +1,10 @@
 # rsasm
 
+[![CI](https://github.com/KarpelesLab/rsasm/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/rsasm/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/rsasm.svg)](https://crates.io/crates/rsasm)
+[![docs.rs](https://img.shields.io/docsrs/rsasm)](https://docs.rs/rsasm)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 An assembler written in Rust, aiming at three things at once: accept the asm
 text people actually have, target many CPUs, and let one source file emit code
 for more than one of them.
