@@ -217,12 +217,13 @@ jobs:
           llvm-mc --version | tee /dev/stderr | grep -q "LLVM version 22\." \
             || { echo "::error::llvm-mc is not LLVM 22"; exit 1; }
 
-      # The output goes to a file rather than `$(...)`: under `set -e` a
-      # failing command substitution exits before its output is printed,
-      # which hid exactly the diff needed to debug a failure.
+      # The output goes to a file and is printed before the status is acted
+      # on. Actions runs these scripts under `bash -e`, so each one turns
+      # that off first: otherwise a failing harness exits the step before
+      # its log is printed, hiding exactly the diff needed to debug it.
       - name: tools/mc-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/mc-diff/run.sh > mc-diff.log 2>&1
           status=$?
           cat mc-diff.log
@@ -281,7 +282,7 @@ jobs:
       # prints it, and a run that compared nothing is a failure, not a pass.
       - name: tools/xas-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/xas-diff/run.sh > xas-diff.log 2>&1
           status=$?
           cat xas-diff.log
@@ -296,7 +297,7 @@ jobs:
       # they match what a linker computes.
       - name: tools/flat-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/flat-diff/run.sh > flat-diff.log 2>&1
           status=$?
           cat flat-diff.log
@@ -308,7 +309,7 @@ jobs:
       # reference: the host's GNU as, llvm-mc or a cross GNU as.
       - name: tools/multiarch-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/multiarch-diff/run.sh > multiarch-diff.log 2>&1
           status=$?
           cat multiarch-diff.log
