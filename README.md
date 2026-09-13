@@ -99,10 +99,6 @@ sequences). They are for flat binaries; ELF has no class for a 16-bit target.
 These produce incorrect output rather than an error, which is why they are
 listed separately.
 
-- The i386 backend emits x86-64 relocation numbers. `R_386_PC32` and
-  `R_386_PLT32` happen to share their values with the x86-64 ones, so branches
-  and calls are right, but `R_386_32` is 1 where `R_X86_64_32` is 10, so a
-  32-bit object with an absolute symbol reference will confuse a linker.
 - RISC-V `la` of an external symbol emits only `R_RISCV_PCREL_HI20`, without
   its paired `LO12` relocation.
 - In flat binaries only (relocatable output is correct): AArch64 `adrp`, and

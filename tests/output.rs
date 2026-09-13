@@ -306,3 +306,46 @@ fn sections_of32(b: &[u8]) -> Vec<(String, u32, u32, u32)> {
         })
         .collect()
 }
+
+#[test]
+fn i386_objects_use_i386_relocation_numbers() {
+    // They used to carry x86-64 numbers. PC32 and PLT32 happen to coincide,
+    // so calls looked fine, but R_386_32 is 1 where R_X86_64_32 is 10, and a
+    // 32-bit object with an absolute symbol reference crashed `ld`.
+    // Numbers checked against `as --32`.
+    let asm = assemble_for(
+        "i386",
+        "movl $sym, %eax\ncall fn\ncall fn@PLT\n.word sym\n.byte sym\n",
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    // R_386_32, R_386_PC32 (a plain 32-bit call is not routed through the
+    // PLT), R_386_PLT32, R_386_16, R_386_8.
+    assert_eq!(kinds, vec![1, 2, 4, 20, 22]);
+}
+
+#[test]
+fn i386_has_no_64_bit_relocation() {
+    let e = errors_for("i386", ".quad sym\n");
+    assert!(e.contains("no relocation exists"), "{e}");
+}
+
+#[test]
+fn code32_inside_an_x86_64_object_keeps_x86_64_numbering_and_class() {
+    // Numbering follows the object and a plain call follows the mode, both
+    // checked against `as --64`: the 64-bit call goes through the PLT, the
+    // `.code32` one is PC-relative, and both are R_X86_64_*.
+    let src = "call fn\n.code32\nmovl $sym, %eax\ncall fn\n.long sym\n";
+    let asm = assemble_for("x86-64", src);
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    // R_X86_64_PLT32, R_X86_64_32, R_X86_64_PC32, R_X86_64_32.
+    assert_eq!(kinds, vec![4, 10, 2, 10]);
+    // And the file is still ELF64: ending in `.code32` must not turn an
+    // x86-64 object into an x32 one.
+    let b = output::elf::build(&asm).expect("ELF output");
+    assert_eq!(b[4], 2, "ELFCLASS64");
+}

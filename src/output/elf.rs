@@ -233,7 +233,11 @@ struct OutSym {
 }
 
 pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
-    let class = match asm.arch.pointer_bytes(&asm.arch_state) {
+    // The class belongs to the object, not to whatever mode the file ended
+    // in: an x86-64 file whose last stretch is `.code32` is still an ELF64
+    // object, and writing ELF32 with EM_X86_64 would instead claim the x32
+    // ABI. A target's initial state is its object class.
+    let class = match asm.arch.pointer_bytes(&asm.arch.initial_state()) {
         8 => Class::Elf64,
         4 => Class::Elf32,
         n => {

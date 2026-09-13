@@ -1,47 +1,140 @@
-//! ELF relocation types for x86-64 (`R_X86_64_*`).
+//! ELF relocation types for the two x86 psABIs.
+//!
+//! Two independent things decide a relocation, and they are easy to conflate:
+//!
+//! - **The numbering follows the object.** i386 and x86-64 number their
+//!   relocations differently, and a `.code32` stretch inside an x86-64 object
+//!   still uses `R_X86_64_*`, because the object is ELF64. That is [`Abi`].
+//! - **Some choices follow the mode.** A plain `call` gets `PLT32` in 64-bit
+//!   mode but `PC32` in 32-bit mode — even inside an x86-64 object — so those
+//!   decisions look at the current `bits` instead.
+//!
+//! Both were checked against GNU as. The numbering agrees between the ABIs
+//! only by coincidence for `PC32` (2) and `PLT32` (4); the absolute sizes
+//! differ, which is why using one table for both produced i386 objects that a
+//! linker could not make sense of.
 
-pub const NONE: u32 = 0;
-pub const ABS64: u32 = 1;
-pub const PC32: u32 = 2;
-pub const GOT32: u32 = 3;
-pub const PLT32: u32 = 4;
-pub const GOTPCREL: u32 = 9;
-pub const ABS32: u32 = 10;
-pub const ABS32S: u32 = 11;
-pub const ABS16: u32 = 12;
-pub const PC16: u32 = 13;
-pub const ABS8: u32 = 14;
-pub const PC8: u32 = 15;
-pub const PC64: u32 = 24;
-
-/// The absolute relocation for an `n`-byte field.
-pub fn abs(n: u8) -> Option<u32> {
-    Some(match n {
-        1 => ABS8,
-        2 => ABS16,
-        4 => ABS32,
-        8 => ABS64,
-        _ => return None,
-    })
+/// Which psABI's relocation numbering an object uses.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Abi {
+    I386,
+    X86_64,
 }
 
-/// The PC-relative relocation for an `n`-byte field.
-pub fn pcrel(n: u8) -> Option<u32> {
-    Some(match n {
-        1 => PC8,
-        2 => PC16,
-        4 => PC32,
-        8 => PC64,
-        _ => return None,
-    })
+mod x86_64 {
+    pub const ABS64: u32 = 1;
+    pub const PC32: u32 = 2;
+    pub const GOT32: u32 = 3;
+    pub const PLT32: u32 = 4;
+    pub const GOTPCREL: u32 = 9;
+    pub const ABS32: u32 = 10;
+    pub const ABS32S: u32 = 11;
+    pub const ABS16: u32 = 12;
+    pub const PC16: u32 = 13;
+    pub const ABS8: u32 = 14;
+    pub const PC8: u32 = 15;
+    pub const PC64: u32 = 24;
 }
 
-/// Maps a source-level `@` modifier to a relocation type.
-pub fn from_modifier(name: &str, size: u8, pcrel_field: bool) -> Option<u32> {
-    Some(match name {
-        "plt" => PLT32,
-        "gotpcrel" => GOTPCREL,
-        "got" => GOT32,
-        _ => return if pcrel_field { pcrel(size) } else { abs(size) },
-    })
+mod i386 {
+    pub const ABS32: u32 = 1;
+    pub const PC32: u32 = 2;
+    pub const GOT32: u32 = 3;
+    pub const PLT32: u32 = 4;
+    pub const ABS16: u32 = 20;
+    pub const PC16: u32 = 21;
+    pub const ABS8: u32 = 22;
+    pub const PC8: u32 = 23;
+}
+
+impl Abi {
+    /// The ABI of an object whose default mode is `bits` — the same thing
+    /// `elf_machine` keys on, so the two can never disagree.
+    pub fn for_object_bits(bits: u8) -> Abi {
+        if bits == 64 { Abi::X86_64 } else { Abi::I386 }
+    }
+
+    /// The absolute relocation for an `n`-byte field.
+    pub fn abs(self, n: u8) -> Option<u32> {
+        Some(match (self, n) {
+            (Abi::X86_64, 1) => x86_64::ABS8,
+            (Abi::X86_64, 2) => x86_64::ABS16,
+            (Abi::X86_64, 4) => x86_64::ABS32,
+            (Abi::X86_64, 8) => x86_64::ABS64,
+            (Abi::I386, 1) => i386::ABS8,
+            (Abi::I386, 2) => i386::ABS16,
+            (Abi::I386, 4) => i386::ABS32,
+            // i386 has no 64-bit relocation; a `.quad` of a symbol there is an
+            // error rather than something to approximate.
+            _ => return None,
+        })
+    }
+
+    /// The PC-relative relocation for an `n`-byte field.
+    pub fn pcrel(self, n: u8) -> Option<u32> {
+        Some(match (self, n) {
+            (Abi::X86_64, 1) => x86_64::PC8,
+            (Abi::X86_64, 2) => x86_64::PC16,
+            (Abi::X86_64, 4) => x86_64::PC32,
+            (Abi::X86_64, 8) => x86_64::PC64,
+            (Abi::I386, 1) => i386::PC8,
+            (Abi::I386, 2) => i386::PC16,
+            (Abi::I386, 4) => i386::PC32,
+            _ => return None,
+        })
+    }
+
+    /// A 32-bit field the CPU sign-extends to 64 bits, as a 64-bit-mode
+    /// displacement or `mov $sym, %rax` immediate is. Only x86-64 has a
+    /// distinct relocation for it; i386 has nothing to sign-extend into.
+    pub fn abs32_signed(self) -> u32 {
+        match self {
+            Abi::X86_64 => x86_64::ABS32S,
+            Abi::I386 => i386::ABS32,
+        }
+    }
+
+    pub fn plt32(self) -> u32 {
+        match self {
+            Abi::X86_64 => x86_64::PLT32,
+            Abi::I386 => i386::PLT32,
+        }
+    }
+
+    pub fn got32(self) -> u32 {
+        match self {
+            Abi::X86_64 => x86_64::GOT32,
+            Abi::I386 => i386::GOT32,
+        }
+    }
+
+    /// `@GOTPCREL` is RIP-relative, so it only exists on x86-64.
+    pub fn gotpcrel(self) -> Option<u32> {
+        match self {
+            Abi::X86_64 => Some(x86_64::GOTPCREL),
+            Abi::I386 => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_two_abis_agree_only_where_the_psabis_do() {
+        // Coincidence, not design: these two share a number.
+        assert_eq!(Abi::I386.pcrel(4), Abi::X86_64.pcrel(4));
+        assert_eq!(Abi::I386.plt32(), Abi::X86_64.plt32());
+        // And this is the difference that broke i386 objects.
+        assert_eq!(Abi::I386.abs(4), Some(1));
+        assert_eq!(Abi::X86_64.abs(4), Some(10));
+    }
+
+    #[test]
+    fn i386_has_no_64_bit_or_rip_relative_relocations() {
+        assert_eq!(Abi::I386.abs(8), None);
+        assert_eq!(Abi::I386.pcrel(8), None);
+        assert_eq!(Abi::I386.gotpcrel(), None);
+    }
 }

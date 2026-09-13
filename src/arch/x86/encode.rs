@@ -171,15 +171,25 @@ fn len_bits(vlen: u16) -> u8 {
     }
 }
 
+/// What an encoding depends on besides the instruction: the current mode, and
+/// the relocation numbering of the object being written. They differ for a
+/// `.code32` stretch inside an x86-64 object.
+#[derive(Copy, Clone, Debug)]
+pub struct Target {
+    pub bits: u8,
+    pub abi: reloc::Abi,
+}
+
 pub fn encode(
     cx: &mut AsmCtx<'_>,
-    bits: u8,
+    target: Target,
     def: &Def,
     ops: &[Operand],
     prefixes: Prefixes,
     rounding: Option<(RoundCtl, Span)>,
     span: Span,
 ) -> Option<Variant> {
+    let Target { bits, abi } = target;
     if bits == 64 && def.flags & NO64 != 0 {
         cx.error(span, "this instruction is not encodable in 64-bit mode");
         return None;
@@ -506,11 +516,11 @@ pub fn encode(
                 // signed rather than let it wrap.
                 let sign_extended = def.opsize == 64 && width == 4 && def.enc == Enc::Legacy;
                 let r = if def.flags & IMM64 != 0 {
-                    reloc::ABS64
+                    abi.abs(8).unwrap_or(0)
                 } else if sign_extended {
-                    reloc::ABS32S
+                    abi.abs32_signed()
                 } else {
-                    reloc::abs(width).unwrap_or(0)
+                    abi.abs(width).unwrap_or(0)
                 };
                 let mut kind = FixupKind::data(width).with_reloc(r);
                 kind.signed = sign_extended;
@@ -539,9 +549,13 @@ pub fn encode(
     if let Some((offset, e, dspan, rip_relative)) = disp_fixup {
         let trailing = (bytes.len() - offset - 4) as i8;
         let kind = if rip_relative {
-            FixupKind::pcrel(4, trailing + 4).with_reloc(reloc::PC32)
+            FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
+        } else if bits == 64 {
+            // A 64-bit-mode displacement is sign-extended to the address
+            // width, so the linker has to range-check it as signed.
+            FixupKind::data(4).with_reloc(abi.abs32_signed())
         } else {
-            FixupKind::data(4).with_reloc(reloc::ABS32S)
+            FixupKind::data(4).with_reloc(abi.abs(4).unwrap_or(0))
         };
         fixups.push(Fixup {
             offset: offset as u32,
@@ -555,7 +569,14 @@ pub fn encode(
     if let Some((e, width)) = roles.rel {
         let offset = bytes.len() as u32;
         bytes.extend(std::iter::repeat_n(0u8, width as usize));
-        let reloc = if width == 4 { reloc::PLT32 } else { 0 };
+        // GNU as routes a plain 64-bit-mode call through the PLT but leaves a
+        // 32-bit-mode one PC-relative, and that follows the mode rather than
+        // the object: `.code32` inside an x86-64 object gets `R_X86_64_PC32`.
+        let reloc = match width {
+            4 if bits == 64 => abi.plt32(),
+            4 => abi.pcrel(4).unwrap_or(0),
+            _ => 0,
+        };
         fixups.push(Fixup {
             offset,
             expr: e,

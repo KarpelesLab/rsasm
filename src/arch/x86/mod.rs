@@ -74,18 +74,19 @@ impl Architecture for X86 {
     }
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
+        let abi = reloc::Abi::for_object_bits(self.bits);
         if pcrel {
-            reloc::pcrel(size)
+            abi.pcrel(size)
         } else {
-            reloc::abs(size)
+            abi.abs(size)
         }
     }
 
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
         match name {
-            "plt" => Some(reloc::PLT32),
-            "gotpcrel" => Some(reloc::GOTPCREL),
-            "got" => Some(reloc::GOT32),
+            "plt" => Some(reloc::Abi::for_object_bits(self.bits).plt32()),
+            "gotpcrel" => reloc::Abi::for_object_bits(self.bits).gotpcrel(),
+            "got" => Some(reloc::Abi::for_object_bits(self.bits).got32()),
             _ => {
                 let _ = (size, pcrel);
                 None
@@ -99,7 +100,8 @@ impl Architecture for X86 {
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
-        assemble_inner(cx, req, &mnemonic, Prefixes::default(), 0)
+        let abi = reloc::Abi::for_object_bits(self.bits);
+        assemble_inner(cx, req, &mnemonic, Prefixes::default(), abi, 0)
     }
 
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
@@ -157,6 +159,7 @@ fn assemble_inner(
     req: &InsnRequest<'_>,
     mnemonic: &str,
     mut prefixes: Prefixes,
+    abi: reloc::Abi,
     depth: u32,
 ) -> Option<Vec<Variant>> {
     if depth > 4 {
@@ -198,7 +201,7 @@ fn assemble_inner(
             operands: cur.rest(),
             span: req.span,
         };
-        return assemble_inner(cx, &sub, &next_text, prefixes, depth + 1);
+        return assemble_inner(cx, &sub, &next_text, prefixes, abi, depth + 1);
     }
 
     let syntax = cx.state.syntax;
@@ -285,12 +288,25 @@ fn assemble_inner(
     let mut variants = Vec::with_capacity(chosen.len());
     for def in &chosen {
         variants.push(encode::encode(
-            cx, bits, def, &ops, prefixes, rounding, req.span,
+            cx,
+            encode::Target { bits, abi },
+            def,
+            &ops,
+            prefixes,
+            rounding,
+            req.span,
         )?);
     }
 
     if !is_rel && chosen[0].enc == Enc::Vex {
-        prefer_shorter_vex(cx, bits, &matches, &ops, prefixes, &mut variants[0]);
+        prefer_shorter_vex(
+            cx,
+            encode::Target { bits, abi },
+            &matches,
+            &ops,
+            prefixes,
+            &mut variants[0],
+        );
     }
     Some(variants)
 }
@@ -339,7 +355,7 @@ fn prefer_evex_when_required<'d>(
 /// `vaddps` for the same reason. GNU as does not, and rsasm follows GNU as.
 fn prefer_shorter_vex(
     cx: &mut AsmCtx<'_>,
-    bits: u8,
+    target: encode::Target,
     matches: &[&Def],
     ops: &[Operand],
     prefixes: Prefixes,
@@ -361,7 +377,7 @@ fn prefer_shorter_vex(
         // An alternative that cannot be encoded is simply not a candidate, so
         // whatever it would have reported is discarded.
         let mark = cx.diags.len();
-        let v = encode::encode(cx, bits, alt, ops, prefixes, None, Span::DUMMY);
+        let v = encode::encode(cx, target, alt, ops, prefixes, None, Span::DUMMY);
         truncate_diags(cx, mark);
         if let Some(v) = v
             && v.bytes.len() < best.bytes.len()
