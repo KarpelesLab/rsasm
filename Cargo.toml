@@ -21,7 +21,7 @@ all-features = true
 # One feature per CPU architecture backend. All are enabled by default; build
 # with --no-default-features --features <arch> for a slimmer binary. The core
 # must keep building with every one of them off, which CI checks.
-default = ["x86", "aarch64", "arm", "riscv", "powerpc", "mips", "sparc", "retro"]
+default = ["x86", "aarch64", "arm", "riscv", "powerpc", "mips", "sparc", "retro", "m68k", "v850", "rl78", "rx", "superh", "k78"]
 x86 = []
 aarch64 = []
 arm = []
@@ -30,6 +30,12 @@ powerpc = []
 mips = []
 sparc = []
 retro = []
+m68k = []
+v850 = []
+rl78 = []
+rx = []
+superh = []
+k78 = []
 
 [lib]
 name = "rsasm"

@@ -38,6 +38,24 @@ pub mod sparc;
 #[cfg(feature = "retro")]
 pub mod retro;
 
+#[cfg(feature = "m68k")]
+pub mod m68k;
+
+#[cfg(feature = "v850")]
+pub mod v850;
+
+#[cfg(feature = "rl78")]
+pub mod rl78;
+
+#[cfg(feature = "rx")]
+pub mod rx;
+
+#[cfg(feature = "superh")]
+pub mod superh;
+
+#[cfg(feature = "k78")]
+pub mod k78;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Endian {
     Little,
@@ -309,6 +327,30 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     if let Some(a) = retro::lookup(&lower) {
         return Some(a);
     }
+    #[cfg(feature = "m68k")]
+    if let Some(a) = m68k::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "v850")]
+    if let Some(a) = v850::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "rl78")]
+    if let Some(a) = rl78::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "rx")]
+    if let Some(a) = rx::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "superh")]
+    if let Some(a) = superh::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "k78")]
+    if let Some(a) = k78::lookup(&lower) {
+        return Some(a);
+    }
     let _ = lower;
     None
 }
@@ -335,6 +377,18 @@ pub fn available() -> Vec<&'static str> {
     v.extend_from_slice(sparc::NAMES);
     #[cfg(feature = "retro")]
     v.extend_from_slice(retro::NAMES);
+    #[cfg(feature = "m68k")]
+    v.extend_from_slice(m68k::NAMES);
+    #[cfg(feature = "v850")]
+    v.extend_from_slice(v850::NAMES);
+    #[cfg(feature = "rl78")]
+    v.extend_from_slice(rl78::NAMES);
+    #[cfg(feature = "rx")]
+    v.extend_from_slice(rx::NAMES);
+    #[cfg(feature = "superh")]
+    v.extend_from_slice(superh::NAMES);
+    #[cfg(feature = "k78")]
+    v.extend_from_slice(k78::NAMES);
     v
 }
 
