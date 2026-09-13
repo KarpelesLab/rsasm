@@ -346,6 +346,62 @@ fn a_relaxed_branch_can_push_an_earlier_one_out_of_reach() {
 }
 
 #[test]
+fn branches_are_sized_in_order_as_gnu_as_sizes_them() {
+    // The `bt` grows by four bytes, which the `.align 3` takes back. Sized
+    // in order, the `bf` sees `back` already moved and stays short at -256;
+    // sized from the previous pass it would have grown.
+    let b = text_for(
+        "sh",
+        "bt far\nnop\nback: nop\n.space 246\n.align 3\nnop\nnop\nbf back\nfar: nop",
+    );
+    assert_eq!(b.len(), 264);
+    assert_eq!(hex(&b[..8]), "8b 01 a0 80 00 09 00 09");
+    assert_eq!(hex(&b[b.len() - 8..]), "00 09 00 09 8b 80 00 09");
+    // Past an alignment, a label is not assumed to have moved with the
+    // growth before it, so `bt x` stays short.
+    let b = text_for(
+        "sh",
+        "bt far\nbt x\n.space 256\n.align 3\nx: nop\n.space 300\nfar: nop",
+    );
+    assert_eq!(b.len(), 568);
+    assert_eq!(hex(&b[..8]), "8b 01 a1 18 00 09 89 7f");
+    // And a branch that the growth has carried past such a label keeps its
+    // size for the pass, so this `bf` stays short too.
+    let b = text_for(
+        "sh",
+        "far: nop\n.space 300\n.rept 66\nbt far\n.endr\nbf y\n.align 2\ny: nop",
+    );
+    assert_eq!(b.len(), 704);
+    assert_eq!(hex(&b[302..308]), "8b 01 af 66 00 09");
+    assert_eq!(hex(&b[b.len() - 8..]), "00 09 8b ff 00 09 00 09");
+}
+
+#[test]
+fn padding_ahead_of_a_long_counts_while_branches_are_sized() {
+    // In the first layout the `.long` needs two bytes of padding, which GNU
+    // as inserts before refusing it; the first `bf/s` grows past a limit
+    // that only the padding put it over, and a branch never shrinks back.
+    // In the final layout the padding is gone and nothing is misaligned.
+    let b = text_for(
+        "sh",
+        "bf/s C0\nmov r1, r2\nbt/s C0\nmov r1, r2\nmov r3, r4\n.long 94\n.space 200\n\
+         .word 0x7a5b\nbt/s C1\nmov r1, r2\nbt/s C0\nmov r1, r2\nbra C1\nnop\n.space 10\n\
+         .long 96\nbf C0\nbf C1\nmov r3, r4\n.align 2\n.long 0x77826199\n.long 0xf2518742\n\
+         C0:\nC1:",
+    );
+    assert_eq!(b.len(), 260);
+    assert_eq!(
+        hex(&b[..16]),
+        "89 00 a0 7f 62 13 8d 7d 62 13 64 33 00 00 00 5e"
+    );
+    assert_eq!(
+        hex(&b[b.len() - 40..]),
+        "62 13 8d 11 62 13 a0 0f 00 09 00 00 00 00 00 00 00 00 00 00 \
+         00 00 00 60 8b 06 8b 05 64 33 00 09 77 82 61 99 f2 51 87 42"
+    );
+}
+
+#[test]
 fn a_branch_beyond_even_the_relaxed_form_is_an_error() {
     let e = errors_for("sh", "bt far\n.space 5000\nfar: nop");
     assert!(e.contains("out of range"), "{e}");
@@ -426,13 +482,21 @@ fn at_disp_pc_is_an_offset_from_the_instruction() {
     be("mov.l @(1024,pc), r2", "d2 ff");
     be("mov.w @(514,pc), r2", "92 ff");
     be("mova @(8,pc), r0", "c7 01");
+    // `@(n,pc)` is the address `. + n`, checked as a label there would be:
+    // sh-elf-as says "pcrel too far" for the first two.
     let e = errors_for("sh", "mov.l @(1028,pc), r2");
-    assert!(e.contains("4 to 1024"), "{e}");
+    assert!(e.contains("offset 1024 is out of range (0 to 1020)"), "{e}");
     let e = errors_for("sh", "mov.w @(516,pc), r2");
-    assert!(e.contains("4 to 514"), "{e}");
-    // `. + 8` from address 2 is not on a four-byte boundary.
+    assert!(e.contains("offset 512 is out of range (0 to 510)"), "{e}");
+    // `. + 8` from address 2 is not on a four-byte boundary ("offset to
+    // unaligned destination"), and the message says so rather than quoting
+    // a distance from somewhere else; `. + 2` is on one.
     let e = errors_for("sh", "nop\nmov.l @(8,pc), r2");
-    assert!(e.contains("not a multiple of 4"), "{e}");
+    assert!(
+        e.contains("the target is not on a 4-byte boundary") && !e.contains("offset"),
+        "{e}"
+    );
+    be("nop\nmov.l @(2,pc), r0", "00 09 d0 00");
 }
 
 #[test]
@@ -451,18 +515,98 @@ fn at_label_pc_is_the_deprecated_spelling_of_label() {
 
 #[test]
 fn a_misaligned_literal_is_an_error_not_a_rounding() {
-    let e = errors_for("sh", "mov.l lit, r1\nnop\n.byte 0\nlit: .long 1");
-    assert!(e.contains("not a multiple of 4"), "{e}");
-    let e = errors_for("sh", "nop\nmov.l lit, r1\n.byte 0\nlit: .long 1");
-    assert!(e.contains("not a multiple of 4"), "{e}");
+    // `.4byte`, since a `.long` there would be refused as misaligned data
+    // first. sh-elf-as: "offset to unaligned destination", from either
+    // boundary.
+    let e = errors_for("sh", "mov.l lit, r1\nnop\n.byte 0\nlit: .4byte 1");
+    assert!(e.contains("not on a 4-byte boundary"), "{e}");
+    let e = errors_for("sh", "nop\nmov.l lit, r1\n.byte 0\nlit: .4byte 1");
+    assert!(e.contains("not on a 4-byte boundary"), "{e}");
+}
+
+#[test]
+fn a_literal_before_the_load_is_out_of_range() {
+    // The fields are unsigned. sh-elf-as: "negative offset" and "pcrel too
+    // far" for `mov.l` and `mova`, "pcrel too far" for `mov.w`.
+    let e = errors_for("sh", ".align 2\nlit: .long 1\nmov.l lit, r1");
+    assert!(e.contains("offset -8 is out of range (0 to 1020)"), "{e}");
+    let e = errors_for("sh", ".align 2\nlit: .long 1\nnop\nmova lit, r0");
+    assert!(e.contains("offset -8 is out of range (0 to 1020)"), "{e}");
+    let e = errors_for("sh", ".align 1\nlit: .word 1\nmov.w lit, r1");
+    assert!(e.contains("offset -6 is out of range (0 to 510)"), "{e}");
+    // The nearest literal a load two bytes past a boundary can have is the
+    // very next word, at a displacement of zero.
+    be(
+        "nop\nmov.l lit, r0\nlit: .long 1",
+        "00 09 d0 00 00 00 00 01",
+    );
 }
 
 #[test]
 fn a_literal_out_of_reach_names_the_limit() {
+    // One error each, as sh-elf-as gives ("pcrel too far").
     let e = errors_for("sh", "mov.l lit, r0\nnop\n.space 1024\nlit: .long 7");
-    assert!(e.contains("out of range"), "{e}");
+    assert!(e.contains("offset 1024 is out of range (0 to 1020)"), "{e}");
+    assert_eq!(e.matches("error").count(), 1, "{e}");
     let e = errors_for("sh", "mov.w lit, r0\n.space 514\nlit: .word 7");
-    assert!(e.contains("out of range"), "{e}");
+    assert!(e.contains("offset 512 is out of range (0 to 510)"), "{e}");
+    assert_eq!(e.matches("error").count(), 1, "{e}");
+}
+
+#[test]
+fn a_load_from_an_undefined_symbol_is_reported_once() {
+    let e = errors_for("sh", "mov.l undefined_symbol, r0");
+    assert_eq!(e.matches("error").count(), 1, "{e}");
+}
+
+#[test]
+fn a_load_at_an_odd_address_takes_gnu_as_base() {
+    // An instruction at an odd address can never run; sh-elf-as still
+    // assembles it, measuring from (PC + 5) & ~3, and so does rsasm.
+    be(
+        ".byte 1, 2, 3\nmova lit, r0\n.align 2\nlit: .long 1",
+        "01 02 03 c7 00 00 00 09 00 00 00 01",
+    );
+}
+
+// ---- data alignment -------------------------------------------------------------
+
+#[test]
+fn word_and_long_data_must_start_on_their_own_boundary() {
+    // sh-elf-as: "misaligned data", in any section.
+    for src in [
+        "nop\n.byte 1\n.word 2",
+        ".byte 1\n.short 2",
+        "nop\n.long 1",
+        ".byte 1\n.int 2",
+        ".data\n.byte 1\n.quad 2",
+    ] {
+        let e = errors_for("sh", src);
+        assert!(e.contains("misaligned data"), "{src}: {e}");
+    }
+    // `.2byte`, `.4byte`, `.8byte` and the `.ua` spellings are unaligned.
+    be(
+        ".byte 1\n.ualong 2\n.uaword 3\n.4byte 4\n.2byte 5\n.8byte 6\n.uaquad 7",
+        "01 00 00 00 02 00 03 00 00 00 04 00 05 00 00 00 00 00 00 00 06 00 00 00 00 00 00 00 07",
+    );
+}
+
+#[test]
+fn aligned_data_raises_the_section_alignment() {
+    // sh-elf-as marks `.text` 2 and `.data` 4 here, and pads the code
+    // section's tail to its alignment.
+    be(".long 1\nnop", "00 00 00 01 00 09 00 09");
+    le(".long 1\nnop", "01 00 00 00 09 00 09 00");
+    let asm = assemble_for("sh", ".data\n.long 1\n.text\n.word 1\nnop");
+    assert!(!asm.diags.has_errors());
+    let align = |name: &str| {
+        asm.sections
+            .iter()
+            .find(|s| asm.interner.get(s.name) == name)
+            .map(|s| s.align)
+    };
+    assert_eq!(align(".text"), Some(2));
+    assert_eq!(align(".data"), Some(4));
 }
 
 // ---- byte order ---------------------------------------------------------------

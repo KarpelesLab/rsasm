@@ -33,9 +33,11 @@ use crate::arch::{
     ArchState, Architecture, AsmCtx, CommentSyntax, Endian, FlatModifier, InsnRequest, Syntax,
 };
 use crate::cursor::Cursor;
-use crate::lexer::{Punct, TokKind};
+use crate::intern::Interner;
+use crate::lexer::{Punct, TokKind, Token};
 use crate::section::Variant;
 use operand::OperandParser;
+use reg::{Ctl, Reg};
 
 pub const NAMES: &[&str] = &["sh", "shl"];
 
@@ -147,6 +149,17 @@ impl Architecture for SuperH {
         1
     }
 
+    /// `sh-elf-as` sizes branches with GNU as's generic relaxation.
+    fn relaxes_in_order(&self) -> bool {
+        true
+    }
+
+    /// `sh-elf-as` refuses a `.word` or `.long` off its own boundary
+    /// ("misaligned data"), though not a `.2byte` or `.4byte`.
+    fn aligns_data(&self) -> bool {
+        true
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
     }
@@ -172,6 +185,14 @@ impl Architecture for SuperH {
             out.extend_from_slice(&self.endian.bytes(0x0009, 2));
         }
         out
+    }
+
+    /// `@(8,pc)` is `. + 8`, so any operand naming `pc` may need `.`.
+    fn operands_use_location(&self, interner: &Interner, operands: &[Token]) -> bool {
+        operands.iter().any(|t| match t.kind {
+            TokKind::Ident(n) => reg::lookup(interner.get(n)) == Some(Reg::Ctl(Ctl::Pc)),
+            _ => false,
+        })
     }
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {

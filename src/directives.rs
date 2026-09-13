@@ -74,22 +74,32 @@ impl Assembler {
             }
 
             // ---- data -----------------------------------------------------
-            ".byte" => self.dir_data(&mut cur, 1, span),
-            ".short" | ".hword" | ".half" | ".2byte" => self.dir_data(&mut cur, 2, span),
+            // The `.Nbyte` spellings are never aligned, even on a target whose
+            // other data directives are; see `Architecture::aligns_data`.
+            ".byte" => self.dir_data(&mut cur, 1, span, false),
+            ".short" | ".hword" | ".half" => self.dir_data(&mut cur, 2, span, true),
+            ".2byte" => self.dir_data(&mut cur, 2, span, false),
             // `.word` is the one data directive whose width depends on the
             // target, so it asks the backend rather than assuming x86.
             ".word" => {
                 let w = self.arch.word_bytes();
-                self.dir_data(&mut cur, w, span)
+                self.dir_data(&mut cur, w, span, true)
             }
             // `.3byte` is the RL78 and RX ports' 24-bit address; like
             // `.dword` below, it means nothing else anywhere.
-            ".3byte" => self.dir_data(&mut cur, 3, span),
-            ".int" | ".long" | ".4byte" => self.dir_data(&mut cur, 4, span),
+            ".3byte" => self.dir_data(&mut cur, 3, span, false),
+            ".int" | ".long" => self.dir_data(&mut cur, 4, span, true),
+            ".4byte" => self.dir_data(&mut cur, 4, span, false),
             // `.dword` (MIPS, RISC-V) and `.xword` (AArch64, SPARC V9) both
             // mean eight bytes; accepting them everywhere is harmless, since
             // neither has a different meaning on any other target.
-            ".quad" | ".8byte" | ".dword" | ".xword" => self.dir_data(&mut cur, 8, span),
+            ".quad" => self.dir_data(&mut cur, 8, span, true),
+            ".8byte" | ".dword" | ".xword" => self.dir_data(&mut cur, 8, span, false),
+            // SuperH's GNU as names its unaligned `.word`, `.long` and
+            // `.quad` these; they mean nothing to a target that aligns no data.
+            ".uaword" if self.arch.aligns_data() => self.dir_data(&mut cur, 2, span, false),
+            ".ualong" if self.arch.aligns_data() => self.dir_data(&mut cur, 4, span, false),
+            ".uaquad" if self.arch.aligns_data() => self.dir_data(&mut cur, 8, span, false),
             ".ascii" => self.dir_ascii(&mut cur, false, span),
             ".asciz" | ".string" | ".asciiz" => self.dir_ascii(&mut cur, true, span),
             ".sleb128" => self.dir_leb(&mut cur, true, span),
@@ -311,9 +321,14 @@ impl Assembler {
 
     // ---- data -------------------------------------------------------------
 
-    fn dir_data(&mut self, cur: &mut Cursor<'_>, size: u8, span: Span) -> bool {
+    /// A data directive of `size`-byte values. `aligned` marks the ones that
+    /// start on their own boundary where the target asks for that.
+    fn dir_data(&mut self, cur: &mut Cursor<'_>, size: u8, span: Span, aligned: bool) -> bool {
         if cur.at_end() {
             return true;
+        }
+        if aligned && self.arch.aligns_data() {
+            self.align_data(size as u64, span);
         }
         loop {
             let Some(e) = self.parse_expr(cur) else {
@@ -325,6 +340,23 @@ impl Assembler {
             }
         }
         true
+    }
+
+    /// Pads to a `size`-byte boundary ahead of data that must start on one,
+    /// and remembers the padding so that layout can refuse any it needed; see
+    /// [`Architecture::aligns_data`](crate::arch::Architecture::aligns_data).
+    fn align_data(&mut self, size: u64, span: Span) {
+        let frag = self.cur_section().push(Fragment::new(
+            FragKind::Align {
+                align: size,
+                fill: vec![0],
+                max_skip: None,
+                pad: 0,
+            },
+            span,
+        ));
+        self.align_tests.push((self.cur, frag));
+        self.section_mut(self.cur).align = self.section(self.cur).align.max(size);
     }
 
     /// Emits `size` bytes for `e`, as literal bytes when it already folds to a

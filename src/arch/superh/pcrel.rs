@@ -14,6 +14,12 @@
 //! depends on whether the instruction itself sits on a four-byte boundary.
 //! See [`load`].
 //!
+//! # Odd distances
+//!
+//! GNU as halves an odd branch or `mov.w` distance and drops the remainder,
+//! which only code or data at an odd address can produce. Those are refused
+//! here instead, since the instruction would not reach the label it names.
+//!
 //! # Delay slots
 //!
 //! Nothing here moves an instruction into a delay slot or fills one: the
@@ -116,32 +122,26 @@ fn pending(v: Value, kind: FixupKind) -> Pending {
 
 // ---- PC-relative loads ------------------------------------------------------
 
-/// A PC-relative fixup for an unsigned field: the data loads only reach
-/// forward.
-fn unsigned_pcrel(adjust: i8) -> FixupKind {
-    FixupKind {
-        signed: false,
-        ..FixupKind::pcrel(2, adjust)
-    }
+/// `mov.w`: eight bits of words from PC + 4, so 0 to 510 bytes forward.
+fn word_load_fixup() -> FixupKind {
+    FixupKind::pcrel(2, 4)
+        .with_field(10, 2)
+        .with_limits(0, 255 * 2)
+        .scatter(disp8_by2)
 }
 
-/// Keeps the word as it is: for fixups that exist only for their checks.
-fn unchanged(word: u64, _: i64) -> u64 {
-    word
-}
-
-/// A fixup that is satisfied only when the instruction's own address is
-/// congruent to `residue` modulo 4.
+/// `mov.l` / `mova`: eight bits of longs from (PC + 4) & ~3, so 0 to 1020
+/// bytes forward, to a target on a four-byte boundary.
 ///
-/// The expression is the absolute number `residue`, so the PC-relative value
-/// the layout pass computes is `residue - here`, and requiring it to be a
-/// multiple of four is exactly the test. It writes nothing.
-fn pc_alignment_check(cx: &mut AsmCtx<'_>, residue: u8, span: Span) -> Pending {
-    Pending {
-        expr: cx.exprs.int(residue as u64, span),
-        kind: FixupKind::pcrel(2, 0).with_field(64, 4).scatter(unchanged),
-        span,
-    }
+/// The base is written as (PC + 5) & ~3, which is the same address for any
+/// instruction on a two-byte boundary. It differs only for one at an odd
+/// address, which can never run, and there it is the base GNU as uses.
+fn long_load_fixup() -> FixupKind {
+    FixupKind::pcrel(2, 5)
+        .with_pc_align(4)
+        .with_field(11, 4)
+        .with_limits(0, 255 * 4)
+        .scatter(disp8_by4)
 }
 
 /// `mov.w label,rn`, `mov.l label,rn` and `mova label,r0`, in either
@@ -149,6 +149,15 @@ fn pc_alignment_check(cx: &mut AsmCtx<'_>, residue: u8, span: Span) -> Pending {
 ///
 /// `word` already holds the register. `scale` is the operand size, which is
 /// also what the eight-bit field counts in.
+///
+/// The fields are unsigned, so a literal before the instruction is out of
+/// range, as it is to GNU as. The longword loads measure from PC + 4 with
+/// its low two bits cleared, so where the instruction sits on a two-byte
+/// boundary the base is only two bytes on; either way the literal itself
+/// must be on a four-byte boundary. GNU as's own checks come to the same
+/// thing: it measures from PC + 4, refuses a literal off a four-byte
+/// boundary or more than two bytes back, and stores the distance plus two
+/// divided by four.
 pub fn load(
     cx: &mut AsmCtx<'_>,
     mnemonic: &str,
@@ -160,10 +169,19 @@ pub fn load(
 ) -> Option<Vec<Variant>> {
     let target = match kind {
         Kind::Addr(v) => v,
-        Kind::PcDisp(v) => {
-            if let Some(n) = cx.constant(v.expr) {
-                return load_displacement(cx, mnemonic, word, scale, n, v.span, endian);
+        // A constant `n` is the address `. + n`, which GNU as range-checks
+        // exactly as it would a label there. `operands_use_location` is what
+        // has the core give `.` a label for this spelling.
+        Kind::PcDisp(v) if cx.constant(v.expr).is_some() => {
+            let here = cx.exprs.alloc(ExprKind::Here, v.span);
+            Value {
+                expr: cx
+                    .exprs
+                    .alloc(ExprKind::Binary(BinOp::Add, here, v.expr), v.span),
+                span: v.span,
             }
+        }
+        Kind::PcDisp(v) => {
             // GNU as still reads `@(label,pc)` as plain `label`, warning that
             // the spelling is deprecated; `@(expr,pc)` with a computed `expr`
             // means `. + expr`, which is only supported for constants here.
@@ -187,140 +205,13 @@ pub fn load(
             return None;
         }
     };
-
-    if scale == 2 {
-        // `mov.w`: the base is PC + 4 unrounded, so a word literal anywhere
-        // on a two-byte boundary within 510 bytes forward is reachable.
-        //
-        // The field is unsigned, but the fixup's range check cannot express
-        // a lower bound of zero: a literal *before* the instruction is not
-        // diagnosed by the layout pass.
-        let mut w = Words::new(endian);
-        w.push(
-            word,
-            [pending(
-                target,
-                unsigned_pcrel(4).with_field(9, 2).scatter(disp8_by2),
-            )],
-        );
-        return Some(vec![w.finish()]);
-    }
-
-    // `mov.l` / `mova`: the base is (PC + 4) & ~3. The target must itself be
-    // on a four-byte boundary, and the distance from the rounded base is then
-    // a multiple of four whichever boundary the instruction is on. A fixup
-    // is given only `target - (here + adjust)`, never `here`, so the two
-    // cases are two variants with the same bytes, each checking its own
-    // assumption about the instruction's address:
-    //
-    //  - on a four-byte boundary, the base is here + 4;
-    //  - two bytes past one, the base is here + 2.
-    //
-    // Layout keeps the first whose checks pass. As with `mov.w`, a negative
-    // distance is not caught.
-    //
-    // Layout never goes back to an earlier variant, but the instruction can
-    // move by two bytes after a choice is made: a `bt/s` before it that
-    // relaxes grows by two. So the pair is offered several times over, and
-    // each such move steps on to the next copy instead of failing.
-    let field = |adjust: i8| unsigned_pcrel(adjust).with_field(10, 4).scatter(disp8_by4);
-    let mut variants = Vec::with_capacity(2 * LOAD_ROUNDS + 1);
-    for _ in 0..LOAD_ROUNDS {
-        let mut aligned = Words::new(endian);
-        let check = pc_alignment_check(cx, 0, span);
-        aligned.push(word, [pending(target, field(4)), check]);
-        variants.push(aligned.finish());
-        let mut offset = Words::new(endian);
-        let check = pc_alignment_check(cx, 2, span);
-        offset.push(word, [pending(target, field(2)), check]);
-        variants.push(offset.finish());
-    }
-    // Reached only when every pair failed, so this variant never stands in
-    // the output; it exists for its diagnostics, which the pairs' checks
-    // would state in terms of whichever boundary they assumed.
-    //
-    // The first fixup measures from PC + 2. Relative to that, a reachable
-    // literal is at most 1022 bytes away from an instruction on a four-byte
-    // boundary and 1020 from one two bytes past it, and an unreachable one
-    // at least 1026 or 1024: an unsigned 10-bit field's limit of 1023 falls
-    // between the two in both cases, so an unreachable literal is reported
-    // as out of range. The other two fixups fail for a literal off a
-    // four-byte boundary, one for each position the instruction can have,
-    // so exactly one of them reports it. An unreachable literal on a
-    // boundary also trips one of them; the range error comes first.
-    let mut last = Words::new(endian);
-    last.push(
-        word,
-        [
-            pending(
-                target,
-                unsigned_pcrel(2).with_field(10, 2).scatter(unchanged),
-            ),
-            pending(
-                target,
-                unsigned_pcrel(0).with_field(64, 4).scatter(unchanged),
-            ),
-            pending(
-                target,
-                unsigned_pcrel(2).with_field(64, 4).scatter(unchanged),
-            ),
-        ],
-    );
-    variants.push(last.finish());
-    Some(variants)
-}
-
-/// How many times a longword load offers its pair of variants: enough for
-/// that many delayed branches between it and the last alignment directive to
-/// relax. Each costs a layout pass only when a target is misaligned or
-/// unresolved, which is an error anyway.
-const LOAD_ROUNDS: usize = 3;
-
-/// `@(n,pc)` with a constant `n`, which GNU as reads as the address `. + n`.
-fn load_displacement(
-    cx: &mut AsmCtx<'_>,
-    mnemonic: &str,
-    word: u16,
-    scale: u8,
-    n: i64,
-    span: Span,
-    endian: Endian,
-) -> Option<Vec<Variant>> {
-    if n % 2 != 0 {
-        cx.error(
-            span,
-            format!("PC-relative displacement {n} is odd; instructions and data are word-aligned"),
-        );
-        return None;
-    }
+    let fixup = if scale == 2 {
+        word_load_fixup()
+    } else {
+        long_load_fixup()
+    };
     let mut w = Words::new(endian);
-    if scale == 2 {
-        // From PC + 4: 0 to 255 words.
-        if !(4..=514).contains(&n) {
-            cx.error(
-                span,
-                format!("PC-relative displacement {n} is out of range for `{mnemonic}` (4 to 514)"),
-            );
-            return None;
-        }
-        w.push(word | ((n - 4) / 2) as u16, []);
-        return Some(vec![w.finish()]);
-    }
-    // From (PC + 4) & ~3: the target `. + n` is on a four-byte boundary only
-    // if `n` and the instruction's address agree modulo 4, which leaves
-    // `n - 4` or `n - 2` as the distance and `(n - 2) / 4` as the field in
-    // both cases. Which case applies is known only at layout, so it is
-    // checked there.
-    let (lo, hi) = if n % 4 == 0 { (4, 1024) } else { (2, 1022) };
-    if !(lo..=hi).contains(&n) {
-        cx.error(
-            span,
-            format!("PC-relative displacement {n} is out of range for `{mnemonic}` ({lo} to {hi})"),
-        );
-        return None;
-    }
-    let check = pc_alignment_check(cx, (n & 3) as u8, span);
-    w.push(word | ((n - 2) >> 2) as u16, [check]);
+    w.push(word, [pending(target, fixup)]);
     Some(vec![w.finish()])
 }
 

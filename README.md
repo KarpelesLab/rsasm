@@ -61,7 +61,7 @@ assembler, not against rsasm's own idea of the manual. See
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
 | m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
-| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1248 |
+| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1272 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 604 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 523 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 548 |
@@ -279,7 +279,7 @@ independent assembler, and compare the bytes:
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
   and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
   source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds
-  the references from checksum-pinned sources. 3,727 of 3,727 match across
+  the references from checksum-pinned sources. 3,759 of 3,759 match across
   twelve variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
