@@ -293,10 +293,12 @@ fn control_instructions_include_files() {
     let bin = dir.join("data.bin");
     std::fs::write(&inc, " .DB 0x11\n").unwrap();
     std::fs::write(&bin, [0xaa, 0xbb]).unwrap();
+    // A quoted file name takes escapes, so a Windows path's backslashes are
+    // doubled.
     let src = format!(
         " $INCLUDE ({})\n $BINCLUDE \"{}\"\n",
         inc.display(),
-        bin.display()
+        bin.display().to_string().replace('\\', "\\\\")
     );
     let got = ccrl(&src);
     std::fs::remove_dir_all(&dir).unwrap();

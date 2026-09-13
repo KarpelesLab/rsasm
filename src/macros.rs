@@ -173,26 +173,33 @@ pub fn substitute_words(
         }
         let mut chars = line.char_indices().peekable();
         while let Some((i, c)) = chars.next() {
+            // A parameter named inside single quotes is still substituted.
+            let quoted_param = if c == '\'' && quoted {
+                line[i + 1..].find('\'').and_then(|close| {
+                    bindings
+                        .iter()
+                        .find(|(p, _)| *p == line[i + 1..i + 1 + close])
+                        .map(|(_, value)| (close, value))
+                })
+            } else {
+                None
+            };
+            if let Some((close, value)) = quoted_param {
+                out.push('\'');
+                out.push_str(value);
+                out.push('\'');
+                // Skip past the closing quote.
+                for (j, _) in chars.by_ref() {
+                    if j == i + 1 + close {
+                        break;
+                    }
+                }
+                continue;
+            }
             match c {
                 ';' => {
                     out.push_str(&line[i..]);
                     break;
-                }
-                '\'' if quoted
-                    && let Some(close) = line[i + 1..].find('\'')
-                    && let Some((_, value)) = bindings
-                        .iter()
-                        .find(|(p, _)| *p == line[i + 1..i + 1 + close]) =>
-                {
-                    out.push('\'');
-                    out.push_str(value);
-                    out.push('\'');
-                    // Skip past the closing quote.
-                    for (j, _) in chars.by_ref() {
-                        if j == i + 1 + close {
-                            break;
-                        }
-                    }
                 }
                 '"' | '\'' => {
                     // Copy the literal through its closing quote, skipping
