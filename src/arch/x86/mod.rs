@@ -12,8 +12,8 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{DEF64, Def, NOTACC, Op};
-use operand::{Operand, OperandKind, OperandParser};
+use insn::{DEF64, Def, Enc, NOTACC, Op};
+use operand::{Operand, OperandKind, OperandParser, RoundCtl};
 
 pub const NAMES: &[&str] = &["x86-64", "i386", "i8086"];
 
@@ -240,6 +240,20 @@ fn assemble_inner(
         ops.reverse();
     }
 
+    // `{rn-sae}` occupies an operand slot in the source but encodes as bits in
+    // the EVEX prefix, so it is lifted out before the operands are matched.
+    let mut rounding: Option<(RoundCtl, Span)> = None;
+    for o in &ops {
+        if let Some(ctl) = o.rounding() {
+            if rounding.is_some() {
+                cx.error(o.span, "only one rounding-control decorator is allowed");
+                return None;
+            }
+            rounding = Some((ctl, o.span));
+        }
+    }
+    ops.retain(|o| o.rounding().is_none());
+
     let matches = select(cx, bits, resolved.defs, &resolved, &ops);
     if matches.is_empty() {
         report_no_match(cx, req, mnemonic, resolved.defs, &ops);
@@ -247,6 +261,7 @@ fn assemble_inner(
     }
 
     let matches = prefer_default_size(bits, matches, &ops);
+    let matches = prefer_evex_when_required(matches, &ops, rounding.is_some());
 
     // A relative branch gets one variant per displacement width, smallest
     // first, so the layout pass can shorten it once addresses are known.
@@ -268,10 +283,103 @@ fn assemble_inner(
     };
 
     let mut variants = Vec::with_capacity(chosen.len());
-    for def in chosen {
-        variants.push(encode::encode(cx, bits, def, &ops, prefixes, req.span)?);
+    for def in &chosen {
+        variants.push(encode::encode(
+            cx, bits, def, &ops, prefixes, rounding, req.span,
+        )?);
+    }
+
+    if !is_rel && chosen[0].enc == Enc::Vex {
+        prefer_shorter_vex(cx, bits, &matches, &ops, prefixes, &mut variants[0]);
     }
     Some(variants)
+}
+
+/// Narrows the candidates to EVEX forms when the operands need one.
+///
+/// Where AVX and AVX-512 both define an instruction, the VEX row comes first
+/// and wins for plain operands, as it does in both reference assemblers. But
+/// `xmm16`, a writemask, a broadcast or a rounding mode can only be carried by
+/// EVEX; the VEX row still *matches* those operands by class, so it is set
+/// aside here rather than left to fail during encoding.
+///
+/// When no EVEX form matched, the list is left alone, so the encoder can
+/// explain what went wrong with the form that was closest.
+fn prefer_evex_when_required<'d>(
+    matches: Vec<&'d Def>,
+    ops: &[Operand],
+    rounding: bool,
+) -> Vec<&'d Def> {
+    let high = |r: &reg::Reg| r.needs_evex_ext();
+    let needs_evex = rounding
+        || ops.iter().any(|o| {
+            !o.decor.is_empty()
+                || match &o.kind {
+                    OperandKind::Reg(r) => high(r),
+                    OperandKind::Mem(m) => m.index.as_ref().is_some_and(high),
+                    _ => false,
+                }
+        });
+    if !needs_evex || !matches.iter().any(|d| d.enc == Enc::Evex) {
+        return matches;
+    }
+    matches.into_iter().filter(|d| d.enc == Enc::Evex).collect()
+}
+
+/// Swaps in a later VEX form when it encodes shorter than the preferred one.
+///
+/// A register-to-register `vmovaps` can be written with the load opcode or the
+/// store opcode, and the two put the source register in different ModRM
+/// fields. When the source is `xmm8`-`xmm15` and the destination is not, only
+/// the store opcode lets the extension bit ride in `R`, which the two-byte VEX
+/// prefix has, rather than `B`, which it does not. GNU as and llvm-mc both
+/// make that choice, so rsasm does too.
+///
+/// llvm-mc also swaps the two sources of a commutative operation such as
+/// `vaddps` for the same reason. GNU as does not, and rsasm follows GNU as.
+fn prefer_shorter_vex(
+    cx: &mut AsmCtx<'_>,
+    bits: u8,
+    matches: &[&Def],
+    ops: &[Operand],
+    prefixes: Prefixes,
+    best: &mut Variant,
+) {
+    // Only register operands can land in either field; with memory involved
+    // the forms are not interchangeable.
+    if !ops
+        .iter()
+        .all(|o| o.reg().is_some() || matches!(o.kind, OperandKind::Imm(_)))
+    {
+        return;
+    }
+    let first = matches[0];
+    for alt in matches.iter().skip(1) {
+        if alt.enc != Enc::Vex || alt.vlen != first.vlen {
+            continue;
+        }
+        // An alternative that cannot be encoded is simply not a candidate, so
+        // whatever it would have reported is discarded.
+        let mark = cx.diags.len();
+        let v = encode::encode(cx, bits, alt, ops, prefixes, None, Span::DUMMY);
+        truncate_diags(cx, mark);
+        if let Some(v) = v
+            && v.bytes.len() < best.bytes.len()
+        {
+            *best = v;
+        }
+    }
+}
+
+/// Drops every diagnostic recorded after the first `len`.
+fn truncate_diags(cx: &mut AsmCtx<'_>, len: usize) {
+    if cx.diags.len() <= len {
+        return;
+    }
+    let kept: Vec<_> = cx.diags.take().into_iter().take(len).collect();
+    for d in kept {
+        cx.diags.emit(d);
+    }
 }
 
 /// What a mnemonic resolved to, including any width implied by an AT&T suffix.
@@ -281,6 +389,9 @@ struct Resolved {
     opsize: Option<u8>,
     /// Required width of the r/m operand, for `movzbl`-style double suffixes.
     rm_width: Option<u8>,
+    /// Rows to try, unconstrained, when nothing in `defs` matched. See the
+    /// note on `movq` in `resolve_mnemonic`.
+    fallback: &'static [Def],
 }
 
 fn suffix_width(c: u8) -> Option<u8> {
@@ -294,6 +405,23 @@ fn suffix_width(c: u8) -> Option<u8> {
 }
 
 fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
+    // `movq` names two instructions in AT&T syntax: `mov` with a `q` suffix,
+    // and the MMX/SSE quadword move. The GPR reading is tried first, as GNU as
+    // does, and the vector rows only if it matched nothing. Intel syntax has no
+    // size suffixes, so there `movq` is only the vector instruction and the
+    // ordinary exact lookup below handles it.
+    if syntax == Syntax::Att
+        && mnemonic == "movq"
+        && let (Some(defs), Some(vector)) = (insn::lookup("mov"), insn::lookup("movq"))
+    {
+        return Some(Resolved {
+            defs,
+            opsize: Some(64),
+            rm_width: None,
+            fallback: vector,
+        });
+    }
+
     // An exact table entry always wins, so the string instruction `movsb` is
     // never mistaken for `movs` with a `b` suffix.
     if let Some(defs) = insn::lookup(mnemonic) {
@@ -301,6 +429,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
             defs,
             opsize: None,
             rm_width: None,
+            fallback: &[],
         });
     }
     if syntax != Syntax::Att {
@@ -327,6 +456,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
                 defs,
                 opsize: Some(dst * 8),
                 rm_width: Some(src),
+                fallback: &[],
             });
         }
     }
@@ -343,6 +473,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
         defs,
         opsize: Some(w * 8),
         rm_width: None,
+        fallback: &[],
     })
 }
 
@@ -391,6 +522,19 @@ fn select<'d>(
         for def in defs {
             if def.ops.len() == ops.len()
                 && def.opsize == 0
+                && def
+                    .ops
+                    .iter()
+                    .zip(ops)
+                    .all(|(p, o)| op_matches(cx, bits, def, p, o))
+            {
+                out.push(def);
+            }
+        }
+    }
+    if out.is_empty() {
+        for def in resolved.fallback {
+            if def.ops.len() == ops.len()
                 && def
                     .ops
                     .iter()
@@ -462,6 +606,35 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             };
             cx.constant(*e) == Some(1)
         }
+        Op::V(k) | Op::Nds(k) | Op::Is4(k) => o.reg().is_some_and(|r| k.accepts(r)),
+        Op::Vm(k, msz) => match &o.kind {
+            OperandKind::Reg(r) => k.accepts(*r),
+            OperandKind::Mem(_) => {
+                // Under `{1toN}` an Intel size keyword names the element being
+                // broadcast, not the vector.
+                let w = if o.decor.broadcast.is_some() {
+                    match def.tuple {
+                        insn::Tuple::Hv => 4,
+                        _ if def.vex_w() => 8,
+                        _ => 4,
+                    }
+                } else if msz == 0 {
+                    k.width()
+                } else {
+                    msz
+                };
+                o.size_hint.is_none_or(|h| h == w)
+            }
+            _ => false,
+        },
+        // A vector index must be of the class this row expects, since that is
+        // what tells a 128-bit gather from a 256-bit one with the same
+        // destination. A GPR index or none at all is let through so the
+        // encoder can say what is missing.
+        Op::Vsib(k) => match &o.kind {
+            OperandKind::Mem(m) => m.index.is_none_or(|i| !i.is_vector() || k.accepts(i)),
+            _ => false,
+        },
         Op::Fixed(name) => o.reg() == reg::lookup(name),
         Op::Rel(_) => encode::rel_expr(o).is_some(),
         Op::IndirectRm(w) => {

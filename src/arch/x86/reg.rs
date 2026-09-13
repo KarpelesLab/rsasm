@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RegClass {
     /// General purpose, addressed through ModRM/SIB.
     Gpr,
@@ -13,6 +13,12 @@ pub enum RegClass {
     /// The `rip` pseudo-register, only valid as a memory base.
     Rip,
     Xmm,
+    /// AVX 256-bit vector registers.
+    Ymm,
+    /// AVX-512 512-bit vector registers.
+    Zmm,
+    /// AVX-512 opmask registers `k0`-`k7`.
+    Mask,
     Mmx,
     Control,
     Debug,
@@ -23,7 +29,7 @@ pub enum RegClass {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Reg {
     pub class: RegClass,
-    /// Encoding number, 0-15.
+    /// Encoding number: 0-15 for most classes, 0-31 for `xmm`/`ymm`/`zmm`.
     pub num: u8,
     /// Width in bytes.
     pub size: u8,
@@ -37,14 +43,36 @@ impl Reg {
         matches!(self.class, RegClass::Gpr | RegClass::GprHigh)
     }
 
+    /// True for `xmm`/`ymm`/`zmm`, the three classes that share one register
+    /// file and one set of encoding extension bits.
+    pub fn is_vector(&self) -> bool {
+        matches!(self.class, RegClass::Xmm | RegClass::Ymm | RegClass::Zmm)
+    }
+
     /// True if the register number needs the extension bit in REX.
+    ///
+    /// `xmm16`-`xmm31` answer true as well, but REX cannot reach them: only
+    /// EVEX has the fourth and fifth bits. The encoder rejects them before it
+    /// gets as far as building a REX byte.
     pub fn needs_rex_ext(&self) -> bool {
         self.num >= 8
     }
 
-    /// x86 forbids `rsp`/`esp` as a SIB index.
+    /// True for the upper half of the EVEX register file, which needs the
+    /// `R'`/`V'`/`X` bits that only EVEX supplies.
+    pub fn needs_evex_ext(&self) -> bool {
+        self.num >= 16
+    }
+
+    /// x86 forbids `rsp`/`esp` as a SIB index. A vector register is legal
+    /// there only in the VSIB form used by gather and scatter, which the
+    /// encoder checks separately.
     pub fn valid_index(&self) -> bool {
-        self.class == RegClass::Gpr && !(self.num == 4 && self.size >= 4)
+        match self.class {
+            RegClass::Gpr => !(self.num == 4 && self.size >= 4),
+            RegClass::Xmm | RegClass::Ymm | RegClass::Zmm => true,
+            _ => false,
+        }
     }
 }
 
@@ -114,47 +142,88 @@ static REGS: &[Entry] = &{
         e("fs", Segment, 4, 2, false), e("gs", Segment, 5, 2, false),
         // Instruction pointer, usable only as a memory base.
         e("rip", Rip, 0, 8, false), e("eip", Rip, 0, 4, false),
-        // SSE
-        e("xmm0", Xmm, 0, 16, false), e("xmm1", Xmm, 1, 16, false),
-        e("xmm2", Xmm, 2, 16, false), e("xmm3", Xmm, 3, 16, false),
-        e("xmm4", Xmm, 4, 16, false), e("xmm5", Xmm, 5, 16, false),
-        e("xmm6", Xmm, 6, 16, false), e("xmm7", Xmm, 7, 16, false),
-        e("xmm8", Xmm, 8, 16, false), e("xmm9", Xmm, 9, 16, false),
-        e("xmm10", Xmm, 10, 16, false), e("xmm11", Xmm, 11, 16, false),
-        e("xmm12", Xmm, 12, 16, false), e("xmm13", Xmm, 13, 16, false),
-        e("xmm14", Xmm, 14, 16, false), e("xmm15", Xmm, 15, 16, false),
+        // MMX. The eight registers alias the x87 stack, which is why `emms`
+        // exists and why they are numbered 0-7 with no extension bits.
+        e("mm0", Mmx, 0, 8, false), e("mm1", Mmx, 1, 8, false),
+        e("mm2", Mmx, 2, 8, false), e("mm3", Mmx, 3, 8, false),
+        e("mm4", Mmx, 4, 8, false), e("mm5", Mmx, 5, 8, false),
+        e("mm6", Mmx, 6, 8, false), e("mm7", Mmx, 7, 8, false),
+        // AVX-512 opmask registers. `k0` is a real register everywhere except
+        // in a `{k}` writemask decorator, where it means "no masking".
+        e("k0", Mask, 0, 8, false), e("k1", Mask, 1, 8, false),
+        e("k2", Mask, 2, 8, false), e("k3", Mask, 3, 8, false),
+        e("k4", Mask, 4, 8, false), e("k5", Mask, 5, 8, false),
+        e("k6", Mask, 6, 8, false), e("k7", Mask, 7, 8, false),
+        // xmm0-31, ymm0-31 and zmm0-31 are added by `tables()`: 96 rows of
+        // one shape each, which reads better generated than tabulated.
     ]
 };
 
-fn index() -> &'static HashMap<&'static str, Reg> {
-    static INDEX: OnceLock<HashMap<&'static str, Reg>> = OnceLock::new();
-    INDEX.get_or_init(|| {
-        REGS.iter()
-            .map(|e| {
-                (
-                    e.name,
+/// The three vector classes, with their name stem and width in bytes.
+const VECTOR_FAMILIES: [(&str, RegClass, u8); 3] = [
+    ("xmm", RegClass::Xmm, 16),
+    ("ymm", RegClass::Ymm, 32),
+    ("zmm", RegClass::Zmm, 64),
+];
+
+struct Tables {
+    by_name: HashMap<&'static str, Reg>,
+    /// Reverse map for diagnostics, keyed by everything `Reg` encodes.
+    by_reg: HashMap<(RegClass, u8, u8), &'static str>,
+}
+
+fn tables() -> &'static Tables {
+    static TABLES: OnceLock<Tables> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let mut by_name = HashMap::new();
+        let mut by_reg = HashMap::new();
+        let mut add = |name: &'static str, r: Reg| {
+            by_name.insert(name, r);
+            by_reg.entry((r.class, r.num, r.size)).or_insert(name);
+        };
+        for e in REGS {
+            add(
+                e.name,
+                Reg {
+                    class: e.class,
+                    num: e.num,
+                    size: e.size,
+                    rex_required: e.rex_required,
+                },
+            );
+        }
+        for (stem, class, size) in VECTOR_FAMILIES {
+            for num in 0..32u8 {
+                // Leaked so the rest of the backend can pass `&'static str`
+                // names around; there are 96 of them and they live as long as
+                // the process anyway.
+                let name: &'static str = Box::leak(format!("{stem}{num}").into_boxed_str());
+                add(
+                    name,
                     Reg {
-                        class: e.class,
-                        num: e.num,
-                        size: e.size,
-                        rex_required: e.rex_required,
+                        class,
+                        num,
+                        size,
+                        rex_required: false,
                     },
-                )
-            })
-            .collect()
+                );
+            }
+        }
+        Tables { by_name, by_reg }
     })
 }
 
 /// Looks up a register by its lowercase name.
 pub fn lookup(name: &str) -> Option<Reg> {
-    index().get(name).copied()
+    tables().by_name.get(name).copied()
 }
 
 /// The canonical name of a register, for diagnostics.
 pub fn name_of(r: Reg) -> &'static str {
-    REGS.iter()
-        .find(|e| e.class == r.class && e.num == r.num && e.size == r.size)
-        .map(|e| e.name)
+    tables()
+        .by_reg
+        .get(&(r.class, r.num, r.size))
+        .copied()
         .unwrap_or("?")
 }
 
@@ -205,8 +274,22 @@ mod tests {
 
     #[test]
     fn names_round_trip() {
-        for n in ["rax", "r13d", "sil", "ah", "xmm7", "gs"] {
+        for n in [
+            "rax", "r13d", "sil", "ah", "xmm7", "gs", "mm3", "k5", "ymm12", "zmm31",
+        ] {
             assert_eq!(name_of(lookup(n).unwrap()), n);
         }
+    }
+
+    #[test]
+    fn vector_classes_are_distinct_but_share_numbers() {
+        assert_eq!(lookup("xmm31").unwrap().num, 31);
+        assert_eq!(lookup("ymm31").unwrap().class, RegClass::Ymm);
+        assert_eq!(lookup("zmm0").unwrap().size, 64);
+        assert!(lookup("zmm16").unwrap().needs_evex_ext());
+        assert!(!lookup("zmm15").unwrap().needs_evex_ext());
+        assert!(lookup("xmm32").is_none());
+        assert!(lookup("k8").is_none());
+        assert!(lookup("mm8").is_none());
     }
 }
