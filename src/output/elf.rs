@@ -563,18 +563,31 @@ fn collect_symbols(
 ) -> (Vec<OutSym>, u32) {
     let mut locals = Vec::new();
     let mut globals = Vec::new();
+    // Relocations normally name a local label's section instead, but some
+    // have to name the label itself (see `RelocSymbol`), and those labels
+    // have to be written even when the assembler made them up.
+    let named: std::collections::HashSet<SymbolId> =
+        asm.relocs.iter().filter_map(|r| r.symbol).collect();
+    let mut temps = 0;
 
     for (id, sym) in asm.symbols.iter() {
-        // Numeric local labels and the anonymous labels standing in for `.`
-        // are assembler bookkeeping; they never reach the object file.
-        if sym.local_number.is_some() {
-            continue;
-        }
         let raw = asm.interner.get(sym.name);
-        let is_synthetic = raw.contains('\u{0}');
-        if is_synthetic && sym.ty != SymType::Section {
-            continue;
-        }
+        let is_synthetic = raw.contains('\u{0}') && sym.ty != SymType::Section;
+        // Numeric local labels, the anonymous labels standing in for `.` and
+        // the ones behind a RISC-V `la` are assembler bookkeeping; they reach
+        // the object file only when a relocation names them, under a name in
+        // llvm-mc's style.
+        let temp_name;
+        let raw = if sym.local_number.is_some() || is_synthetic {
+            if !named.contains(&id) {
+                continue;
+            }
+            temp_name = format!(".Ltmp{temps}");
+            temps += 1;
+            temp_name.as_str()
+        } else {
+            raw
+        };
         if !sym.is_defined() && !sym.used {
             continue;
         }

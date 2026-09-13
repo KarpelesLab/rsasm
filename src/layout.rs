@@ -12,7 +12,7 @@
 
 use crate::assembler::{Assembler, Relocation};
 use crate::expr::{ExprKind, ExprRef, Value};
-use crate::section::{FixupKind, FragKind, Fragment, SectionId, SectionKind};
+use crate::section::{FixupKind, FragKind, Fragment, RelocSymbol, SectionId, SectionKind};
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId, SymbolValue};
 use std::collections::HashMap;
@@ -487,6 +487,9 @@ impl Assembler {
         section: SectionId,
         at: u64,
     ) -> Option<i64> {
+        if kind.always_reloc {
+            return None;
+        }
         let v = self.eval(e).ok()?;
         // Within one section the two section bases cancel, so a PC-relative
         // reference resolves even in relocatable output. Across sections it
@@ -568,6 +571,29 @@ impl Assembler {
                                 kind.write(endian, dst, v);
                             }
                         }
+                        // The label is made only now, once it is certain to
+                        // be needed, so a resolved `la` leaves no trace in the
+                        // symbol table. Without a linker this half says
+                        // nothing: the other half of the pair has the same
+                        // expression, and has already said why it failed.
+                        None if kind.reloc_symbol == RelocSymbol::FragmentStart => {
+                            if !self.options.relocatable {
+                                continue;
+                            }
+                            debug_assert_eq!(
+                                off as i64 + kind.adjust as i64,
+                                0,
+                                "a fragment-start relocation must measure from the fragment's start"
+                            );
+                            let label = self.fragment_label(id, fi as u32, span);
+                            relocs.push(Relocation {
+                                section: id,
+                                offset: at,
+                                symbol: Some(label),
+                                addend: 0,
+                                kind: kind.reloc,
+                            });
+                        }
                         None => {
                             if let Some(mut r) = self.build_relocation(e, &kind, id, at, span) {
                                 if self.arch.addend_in_field(r.kind, rela) && r.addend != 0 {
@@ -648,6 +674,13 @@ impl Assembler {
                 return None;
             }
         };
+        if !self.options.relocatable && kind.always_reloc {
+            self.diags.error(
+                span,
+                "this reference is resolved by the linker, which a flat binary does not have",
+            );
+            return None;
+        }
         if !self.options.relocatable {
             let name = target.map_or_else(String::new, |t| self.display_name(t));
             self.diags.error(span, format!("undefined symbol `{name}`"));
@@ -685,7 +718,10 @@ impl Assembler {
         // linkers expect and what keeps local labels out of the symbol table.
         let symbol = target.map(|target| {
             let sym = self.symbols.get(target);
-            if sym.binding == Binding::Local && matches!(sym.value, SymbolValue::Label { .. }) {
+            if sym.binding == Binding::Local
+                && matches!(sym.value, SymbolValue::Label { .. })
+                && kind.reloc_symbol == RelocSymbol::Section
+            {
                 let sec = self.symbol_section(target).expect("label has a section");
                 addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
                 self.section_symbol(sec)
@@ -712,6 +748,21 @@ impl Assembler {
             ExprKind::Binary(_, a, b) => self.find_modifier(*a).or_else(|| self.find_modifier(*b)),
             _ => None,
         }
+    }
+
+    /// A new local label at the start of fragment `frag`, for a relocation
+    /// that has to name that position; see [`RelocSymbol::FragmentStart`].
+    ///
+    /// Its name cannot be spelled in source, like the labels behind `1:`, and
+    /// the ELF writer gives it a printable one.
+    fn fragment_label(&mut self, section: SectionId, frag: u32, span: Span) -> SymbolId {
+        let n = self.symbols.len();
+        let name = self.interner.intern(&format!(".L\u{0}frag.{n}"));
+        let id = self.symbols.intern(name, span);
+        let sym = self.symbols.get_mut(id);
+        sym.value = SymbolValue::Label { section, frag };
+        sym.def_span = span;
+        id
     }
 
     /// The symbol standing for a whole section, created on first use.

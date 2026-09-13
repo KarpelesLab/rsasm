@@ -1,0 +1,72 @@
+=== la and lla of an external symbol relocate both halves
+        la      a0, ext
+        lla     a1, ext+4
+        la      a2, ext-8
+
+=== la of labels near and far
+        la      a0, value
+        lla     a1, here
+here:   ret
+        .data
+        .word   0
+value:  .word   1
+
+=== la of a plain number is li, in 32 bits
+        la      a0, 0x80000000
+        lla     a1, -0x800
+        la      a2, 0xfffff000
+
+=== loads and stores through a symbol
+        lb      a0, ext
+        lhu     a1, ext
+        lw      a2, ext+4
+        sb      a0, ext, t0
+        sw      a1, ext, t1
+        flw     fa0, ext, t2
+        fld     fa1, value, a3
+        fsd     fa1, value, a4
+        .data
+value:  .dword  0
+
+=== lga loads the slot at 32 bits
+        lga     a0, ext
+        lga     a1, local
+local:  nop
+
+=== option pic
+        .option push
+        .option pic
+        la      a0, ext
+        la      a1, 1f
+        la      a2, 0x10
+        .option pop
+        la      a3, ext
+1:      ret
+
+=== call, tail and jump
+        call    ext
+        tail    ext
+        jump    ext, t0
+        call    local
+        jump    local, t1
+local:  ret
+
+=== pcrel_hi and pcrel_lo name the auipc label
+1:      auipc   a0, %pcrel_hi(ext)
+        addi    a0, a0, %pcrel_lo(1b)
+        sw      a1, %pcrel_lo(1b)(a0)
+bar:    auipc   a2, %pcrel_hi(ext+4)
+        lw      a2, %pcrel_lo(bar)(a2)
+
+=== the pair label follows a branch that grew
+        bnez    a0, far
+        .space  300
+far:    lla     a0, ext
+        sw      a1, ext, t0
+
+=== data relocations
+        .data
+        .word   ext
+        .word   ext+4
+        .word   value
+value:  .word   0
