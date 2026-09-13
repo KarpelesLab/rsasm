@@ -9,6 +9,9 @@
 mod common;
 use common::*;
 
+use rsasm::assembler::Assembler;
+use rsasm::symbol::{Binding, SymType, SymbolValue};
+
 #[track_caller]
 fn enc64(src: &str, want: &str) {
     let got = hex(&text_for("riscv64", src));
@@ -344,8 +347,9 @@ fn relocation_modifiers_select_relocation_types() {
     );
     assert!(!asm.diags.has_errors());
     let kinds: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
-    // R_RISCV_HI20, R_RISCV_LO12_I, R_RISCV_LO12_S, R_RISCV_CALL.
-    assert_eq!(kinds, vec![(0, 26), (4, 27), (8, 28), (12, 18)]);
+    // R_RISCV_HI20, R_RISCV_LO12_I, R_RISCV_LO12_S, R_RISCV_CALL_PLT: llvm-mc
+    // writes the PLT form for a `call` with or without `@plt`.
+    assert_eq!(kinds, vec![(0, 26), (4, 27), (8, 28), (12, 19)]);
 
     let asm = assemble_for("riscv64", "call sym@plt\nj sym\nbeqz a0, sym\n");
     assert!(!asm.diags.has_errors());
@@ -372,6 +376,188 @@ fn branches_to_labels() {
     );
     // `c.jal` exists only on RV32.
     enc32("jal target\nnop\ntarget:\nret", "11 20 01 00 82 80");
+}
+
+// ---- `auipc` pairs ------------------------------------------------------------
+
+/// Each relocation as `(offset, type, target, addend)`. A target is a symbol's
+/// name, a section's name for its section symbol, or `@0x10` for a local label
+/// at that offset, which is how a relocation that has to name a label rather
+/// than an address shows up.
+fn relocs_of(asm: &Assembler) -> Vec<(u64, u32, String, i64)> {
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    asm.relocs
+        .iter()
+        .map(|r| {
+            let target = r.symbol.map_or_else(String::new, |id| {
+                let s = asm.symbols.get(id);
+                match s.value {
+                    SymbolValue::Label { section, frag }
+                        if s.binding == Binding::Local && s.ty != SymType::Section =>
+                    {
+                        let sec = asm.section(section);
+                        let off = sec.frags.get(frag as usize).map_or(sec.size, |f| f.offset);
+                        format!("@{off:#x}")
+                    }
+                    _ => asm.interner.get(s.name).to_string(),
+                }
+            });
+            (r.offset, r.kind, target, r.addend)
+        })
+        .collect()
+}
+
+fn rel(offset: u64, kind: u32, target: &str, addend: i64) -> (u64, u32, String, i64) {
+    (offset, kind, target.to_string(), addend)
+}
+
+// R_RISCV_* numbers, for the tables below.
+const CALL_PLT: u32 = 19;
+const GOT_HI20: u32 = 20;
+const PCREL_HI20: u32 = 23;
+const PCREL_LO12_I: u32 = 24;
+const PCREL_LO12_S: u32 = 25;
+
+/// Both halves of each pair are relocated, and the low half names a label at
+/// its `auipc`, as the psABI requires: lld looks the `auipc` up by that
+/// symbol's value. Bytes and relocations are llvm-mc's.
+#[test]
+fn auipc_pairs_relocate_both_halves() {
+    let src = "la a0, ext\nlla a1, ext+4\nlw a2, ext\nsd a3, ext, t0\nfld fa0, ext, t1\n\
+               lga a4, ext\ncall ext\ntail ext\njump ext, t2\n\
+               1: auipc a5, %pcrel_hi(ext)\naddi a5, a5, %pcrel_lo(1b)\n";
+    enc64(
+        src,
+        "17 05 00 00 13 05 05 00 97 05 00 00 93 85 05 00 17 06 00 00 03 26 06 00 \
+         97 02 00 00 23 b0 d2 00 17 03 00 00 07 35 03 00 17 07 00 00 03 37 07 00 \
+         97 00 00 00 e7 80 00 00 17 03 00 00 67 00 03 00 97 03 00 00 67 80 03 00 \
+         97 07 00 00 93 87 07 00",
+    );
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x00, PCREL_HI20, "ext", 0),
+            rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            rel(0x08, PCREL_HI20, "ext", 4),
+            rel(0x0c, PCREL_LO12_I, "@0x8", 0),
+            rel(0x10, PCREL_HI20, "ext", 0),
+            rel(0x14, PCREL_LO12_I, "@0x10", 0),
+            rel(0x18, PCREL_HI20, "ext", 0),
+            rel(0x1c, PCREL_LO12_S, "@0x18", 0),
+            rel(0x20, PCREL_HI20, "ext", 0),
+            rel(0x24, PCREL_LO12_I, "@0x20", 0),
+            rel(0x28, GOT_HI20, "ext", 0),
+            rel(0x2c, PCREL_LO12_I, "@0x28", 0),
+            rel(0x30, CALL_PLT, "ext", 0),
+            rel(0x38, CALL_PLT, "ext", 0),
+            rel(0x40, CALL_PLT, "ext", 0),
+            rel(0x48, PCREL_HI20, "ext", 0),
+            rel(0x4c, PCREL_LO12_I, "@0x48", 0),
+        ]
+    );
+}
+
+/// `lga`, and `la` under `.option pic`, go through the GOT even for a label
+/// in the same section, and load the slot at the target's word size; `lla`
+/// never does. A same-section `lw`/`sw` of a label resolves. llvm-mc's bytes
+/// and relocations.
+#[test]
+fn got_loads_and_option_pic() {
+    let src = "lga a0, ext\n.option push\n.option pic\nla a1, ext\nla a2, local\n\
+               lla a3, ext\n.option pop\nla a4, ext\n\
+               local:\nlw a5, local\nsw a5, local, t0\n";
+    enc32(
+        src,
+        "17 05 00 00 03 25 05 00 97 05 00 00 83 a5 05 00 17 06 00 00 03 26 06 00 \
+         97 06 00 00 93 86 06 00 17 07 00 00 13 07 07 00 97 07 00 00 83 a7 07 00 \
+         97 02 00 00 23 ac f2 fe",
+    );
+    assert_eq!(
+        relocs_of(&assemble_for("riscv32", src)),
+        vec![
+            rel(0x00, GOT_HI20, "ext", 0),
+            rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            rel(0x08, GOT_HI20, "ext", 0),
+            rel(0x0c, PCREL_LO12_I, "@0x8", 0),
+            // The GOT slot belongs to `local` itself, not to `.text+0x28`.
+            rel(0x10, GOT_HI20, "@0x28", 0),
+            rel(0x14, PCREL_LO12_I, "@0x10", 0),
+            rel(0x18, PCREL_HI20, "ext", 0),
+            rel(0x1c, PCREL_LO12_I, "@0x18", 0),
+            rel(0x20, PCREL_HI20, "ext", 0),
+            rel(0x24, PCREL_LO12_I, "@0x20", 0),
+        ]
+    );
+}
+
+/// A resolved pair leaves nothing for the linker, and no label behind.
+#[test]
+fn resolved_pairs_need_no_relocation() {
+    let asm = assemble_for(
+        "riscv64",
+        "la a0, x\nlw a1, x\nsw a1, x, t0\njump x, t1\nx: ret\n",
+    );
+    assert_eq!(relocs_of(&asm), vec![]);
+    let b = rsasm::output::elf::build(&asm).expect("ELF output");
+    assert!(!b.windows(5).any(|w| w == b".Ltmp"));
+}
+
+/// The labels a relocation names are written to the symbol table.
+#[test]
+fn pair_labels_reach_the_symbol_table() {
+    let asm = assemble_for("riscv64", "la a0, ext\n");
+    let b = rsasm::output::elf::build(&asm).expect("ELF output");
+    assert!(b.windows(7).any(|w| w == b".Ltmp0\0"));
+}
+
+/// An address that is a plain number is loaded as `li` would load it, even
+/// under `.option pic`, as llvm-mc does.
+#[test]
+fn load_address_of_a_number_is_li() {
+    enc32(
+        ".equ K, 0x1234\nlla a0, 0x1000\nla a1, K\nlla a0, -0x800",
+        "05 65 85 65 93 85 45 23 13 05 00 80",
+    );
+    enc64(
+        ".option pic\nla a0, 0x1000\nlla a1, 0x20",
+        "05 65 93 05 00 02",
+    );
+}
+
+/// Without a linker, a pair resolves across sections exactly as within one,
+/// while a GOT slot or a hand-written `%pcrel_lo` has nothing to resolve
+/// against and is refused rather than filled in wrong.
+#[test]
+fn pairs_in_flat_binaries() {
+    // The same-section case, with llvm-mc's bytes from the test above: where
+    // the section is placed does not change a PC-relative distance.
+    let asm = assemble_flat_for(
+        "riscv32",
+        "local:\nlw a5, local\nsw a5, local, t0\n",
+        0x1000,
+    );
+    assert!(!asm.diags.has_errors());
+    assert_eq!(
+        hex(&asm.section_bytes(rsasm::section::SectionId(0))),
+        "97 07 00 00 83 a7 07 00 97 02 00 00 23 ac f2 fe"
+    );
+    let asm = assemble_flat_for("riscv64", "la a0, d\nlw a1, d\n.data\nd: .word 1\n", 0);
+    assert!(!asm.diags.has_errors());
+    assert!(asm.relocs.is_empty());
+
+    for src in [
+        "lga a0, x\nx: ret",
+        ".option pic\nla a0, x\nx: ret",
+        "1: auipc a0, %pcrel_hi(x)\naddi a0, a0, %pcrel_lo(1b)\nx: ret",
+    ] {
+        let asm = assemble_flat_for("riscv64", src, 0);
+        let e = asm.diags.render(&asm.sm, false);
+        assert!(e.contains("linker"), "`{src}` should be refused:\n{e}");
+    }
 }
 
 /// Checks a relaxed branch by its first and last bytes; the padding between
@@ -469,7 +655,10 @@ fn operand_shape_errors() {
     rejects("riscv64", "add a0, a1", "3 operand");
     rejects("riscv64", "add a0, a1, fa2", "integer register");
     rejects("riscv64", "fadd.s fa0, fa1, a2", "floating-point register");
-    rejects("riscv64", "lw a0, a1", "offset(reg)");
+    // `lw a0, a1` is not here: like llvm-mc, that loads from a symbol `a1`.
+    rejects("riscv64", "lw a0, 4", "offset(reg)");
+    rejects("riscv64", "lga a0, 4", "needs a symbol");
+    rejects("riscv64", "la a0, %hi(sym)", "relocation modifier");
     rejects("riscv64", "lw a0, 4(fa1)", "integer register");
     rejects("riscv64", "lui a0, %lo(sym)", "low half");
     rejects("riscv64", "addi a0, a0, %hi(sym)", "12-bit");
@@ -488,6 +677,12 @@ fn operand_shape_errors() {
         ".option push\n.option pop\n.option pop",
         "no `.option push`",
     );
+    rejects(
+        "riscv64",
+        &".option push\n".repeat(31),
+        "nested more than 30 deep",
+    );
+    assert!(try_text_for("riscv64", &".option push\n".repeat(30)).is_ok());
 }
 
 /// Every one of these is wrong in some way. The only requirement is that the
@@ -548,6 +743,19 @@ const MALFORMED: &[&str] = &[
     "li a0, sym",
     "la",
     "la a0",
+    "la a0, a1, a2",
+    "lga a0",
+    "lga a0, %lo(x)",
+    "lw a0, %hi(x)",
+    "sw a0, x",
+    "sw a0, x, 5",
+    "sw a0, 4(a1), t0",
+    "flw fa0, x",
+    "flw fa0, x, fa1",
+    "jump",
+    "jump x",
+    "jump x, fa0",
+    "jump 4(a0), t0",
     "lr.w",
     "lr.w a0",
     "sc.w a0, a1",

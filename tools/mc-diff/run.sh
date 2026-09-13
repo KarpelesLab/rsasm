@@ -11,7 +11,9 @@
 #
 # Corpora live in tools/mc-diff/<arch>.txt, one instruction per line, and
 # optionally tools/mc-diff/<arch>-programs.txt, multi-line snippets separated
-# by `=== <name>` lines.
+# by `=== <name>` lines. Snippets in tools/mc-diff/<arch>-relocs.txt are
+# compared as whole objects: the .text bytes and every relocation, read
+# through relocs.awk.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -36,6 +38,7 @@ sparcv9|sparcv9|sparcv9|
 
 command -v llvm-mc >/dev/null || { echo "llvm-mc not found; skipping" >&2; exit 0; }
 command -v llvm-objcopy >/dev/null || { echo "llvm-objcopy not found; skipping" >&2; exit 0; }
+command -v llvm-readobj >/dev/null || { echo "llvm-readobj not found; skipping" >&2; exit 0; }
 # The corpora are verified against a specific LLVM, and other versions really do
 # answer differently (see README.md). Say which one this run is using, so a
 # difference can be told apart from version drift at a glance.
@@ -44,8 +47,9 @@ case "$(llvm-mc --version)" in
   *"LLVM version 22."*) ;;
   *) echo "warning: the corpora were verified against LLVM 22; expect version drift" >&2 ;;
 esac
-cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump || exit 1
+cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump --bin rsasm || exit 1
 hexdump="$root/target/debug/examples/hexdump"
+rsasm="$root/target/debug/rsasm"
 
 pass=0
 fail=0
@@ -78,9 +82,64 @@ compare() { # arch, rsasm_arch, triple, flags, name, source
   fi
 }
 
+# What two objects have to agree on: the .text bytes, then each relocation in
+# the form relocs.awk writes, which reads a symbol the way a linker would.
+canon() { # object
+  llvm-objcopy -O binary --only-section=.text "$1" "$1.bin" 2>/dev/null
+  xxd -p "$1.bin" | tr -d '\n'
+  echo
+  llvm-readobj --symbols "$1" > "$1.syms"
+  llvm-readobj --relocs --expand-relocs "$1" | awk -f "$here/relocs.awk" "$1.syms" -
+}
+
+compare_object() { # arch, rsasm_arch, triple, flags, name, source
+  local arch=$1 rs=$2 triple=$3 flags=$4 name=$5 src=$6 m r d
+  d=$(mktemp -d)
+  printf '%s\n' "$src" > "$d/in.s"
+  if llvm-mc -triple="$triple" $flags -filetype=obj -o "$d/m.o" "$d/in.s" 2> "$d/err"; then
+    m=$(canon "$d/m.o")
+  else
+    m="MC-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
+  fi
+  if "$rsasm" -a "$rs" -o "$d/r.o" "$d/in.s" 2> "$d/err"; then
+    r=$(canon "$d/r.o")
+  else
+    r="RSASM-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+  if [ "$m" = "$r" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "### [$arch] $name (object)"
+    printf '%s\n' "$src" | sed 's/^/    /'
+    echo "  llvm-mc:"
+    printf '%s\n' "$m" | sed 's/^/    /'
+    echo "  rsasm:"
+    printf '%s\n' "$r" | sed 's/^/    /'
+  fi
+}
+
+# Runs `compare` or `compare_object` over each `=== name` snippet of a file.
+snippets() { # file, compare function, arch, rsasm_arch, triple, flags
+  local file=$1 fn=$2 snippet="" name="" line
+  shift 2
+  while IFS= read -r line; do
+    case "$line" in
+      "==="*)
+        [ -n "$snippet" ] && "$fn" "$@" "$name" "$snippet"
+        snippet=""; name="${line#=== }" ;;
+      *) snippet="$snippet$line
+" ;;
+    esac
+  done < "$file"
+  [ -n "$snippet" ] && "$fn" "$@" "$name" "$snippet"
+  return 0
+}
+
 run_arch() { # arch, rsasm_arch, triple, flags
   local arch=$1 rs=$2 triple=$3 flags=$4
-  local lines="$here/$arch.txt" progs="$here/$arch-programs.txt"
+  local lines="$here/$arch.txt" progs="$here/$arch-programs.txt" objs="$here/$arch-relocs.txt"
   local before=$((pass + fail))
 
   if [ -f "$lines" ]; then
@@ -91,19 +150,8 @@ run_arch() { # arch, rsasm_arch, triple, flags
     done < "$lines"
   fi
 
-  if [ -f "$progs" ]; then
-    local snippet="" name=""
-    while IFS= read -r line; do
-      case "$line" in
-        "==="*)
-          [ -n "$snippet" ] && compare "$arch" "$rs" "$triple" "$flags" "$name" "$snippet"
-          snippet=""; name="${line#=== }" ;;
-        *) snippet="$snippet$line
-" ;;
-      esac
-    done < "$progs"
-    [ -n "$snippet" ] && compare "$arch" "$rs" "$triple" "$flags" "$name" "$snippet"
-  fi
+  [ -f "$progs" ] && snippets "$progs" compare "$arch" "$rs" "$triple" "$flags"
+  [ -f "$objs" ] && snippets "$objs" compare_object "$arch" "$rs" "$triple" "$flags"
 
   local n=$((pass + fail - before))
   [ "$n" -gt 0 ] && echo "[$arch] $n cases"
@@ -117,7 +165,7 @@ while IFS='|' read -r arch rs triple flags; do
     case " $wanted " in *" $arch "*) ;; *) continue ;; esac
   fi
   # Skip architectures that have no corpus yet.
-  [ -f "$here/$arch.txt" ] || [ -f "$here/$arch-programs.txt" ] || continue
+  [ -f "$here/$arch.txt" ] || [ -f "$here/$arch-programs.txt" ] || [ -f "$here/$arch-relocs.txt" ] || continue
   run_arch "$arch" "$rs" "$triple" "$flags"
 done <<< "$ARCHES"
 

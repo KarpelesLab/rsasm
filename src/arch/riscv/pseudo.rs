@@ -10,9 +10,8 @@
 use super::asm::Asm;
 use super::encode;
 use super::matint;
-use super::operand::Operands;
+use super::operand::{Imm, Operands};
 use super::reg::{self, Reg};
-use super::reloc;
 
 // Base words the expansions build on.
 const ADDI: u32 = 0x0000_0013;
@@ -32,8 +31,10 @@ const BGE: u32 = 0x0000_5063;
 const BLTU: u32 = 0x0000_6063;
 const BGEU: u32 = 0x0000_7063;
 const JALR: u32 = 0x0000_0067;
-const AUIPC: u32 = 0x0000_0017;
+pub(super) const AUIPC: u32 = 0x0000_0017;
 const LUI: u32 = 0x0000_0037;
+const LW: u32 = 0x0000_2003;
+const LD: u32 = 0x0000_3003;
 const CSRRW: u32 = 0x0000_1073;
 const CSRRS: u32 = 0x0000_2073;
 const CSRRC: u32 = 0x0000_3073;
@@ -76,8 +77,10 @@ enum P {
     /// `call` and, when the flag is set, `tail`, which links into `x0` and
     /// scratches `t1` instead of `ra`.
     Call(bool),
+    /// `jump target, tmp`: a `tail` through a register of the source's choosing.
+    JumpFar,
     Li,
-    LoadAddress,
+    LoadAddress(Addr),
     /// `fmv`, `fneg` and `fabs`, all of which are a sign-injection with the
     /// source used twice.
     FloatSign(u32),
@@ -91,6 +94,17 @@ enum P {
     ReadCounter(u32),
     /// RV64-only spellings, which are worth their own diagnostic.
     Rv64(&'static P),
+}
+
+/// Which address the `la` family loads.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Addr {
+    /// `la`: the symbol's own address, or its GOT slot's under `.option pic`.
+    La,
+    /// `lla`: the symbol's own address, always.
+    Lla,
+    /// `lga`: the GOT slot's, always.
+    Lga,
 }
 
 fn classify(name: &str) -> Option<P> {
@@ -120,8 +134,11 @@ fn classify(name: &str) -> Option<P> {
         "jr" => P::JumpReg,
         "call" => P::Call(false),
         "tail" => P::Call(true),
+        "jump" => P::JumpFar,
         "li" => P::Li,
-        "la" | "lla" => P::LoadAddress,
+        "la" => P::LoadAddress(Addr::La),
+        "lla" => P::LoadAddress(Addr::Lla),
+        "lga" => P::LoadAddress(Addr::Lga),
         "fmv.s" => P::FloatSign(FSGNJ_S),
         "fneg.s" => P::FloatSign(FSGNJN_S),
         "fabs.s" => P::FloatSign(FSGNJX_S),
@@ -226,14 +243,24 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
                     (reg::RA, ops.imm(a.cx, 0)?)
                 }
             };
+            a.no_modifier(&target, "a call target")?;
             // The pair is patched as one field, because the linker's
-            // `R_RISCV_CALL` covers both halves as well.
+            // `R_RISCV_CALL_PLT` covers both halves as well.
             let auipc = encode::rd(AUIPC, link.bits());
             let jump = encode::rs1(
                 encode::rd(JALR, if tail { 0 } else { link.bits() }),
                 link.bits(),
             );
-            a.auipc_pair(auipc, jump, &target, encode::kind_pair(reloc::CALL));
+            a.call_pair(auipc, jump, &target);
+        }
+        P::JumpFar => {
+            ops.arity(a.cx, name, &[2])?;
+            let target = ops.imm(a.cx, 0)?;
+            let tmp = ops.xreg(a.cx, 1)?;
+            a.no_modifier(&target, "a jump target")?;
+            let auipc = encode::rd(AUIPC, tmp.bits());
+            let jump = encode::rs1(JALR, tmp.bits());
+            a.call_pair(auipc, jump, &target);
         }
         P::Li => {
             ops.arity(a.cx, name, &[2])?;
@@ -247,25 +274,52 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
                 a.error(imm.span, "`li` needs a value known at assembly time");
                 return None;
             };
-            let v = if a.rv64() {
-                v
-            } else {
-                // On RV32 the constant is 32 bits, written either way round.
-                if !(-(1i64 << 31)..(1i64 << 32)).contains(&v) {
-                    a.error(imm.span, format!("value {v} does not fit in 32 bits"));
-                    return None;
-                }
-                v as i32 as i64
-            };
+            let v = xlen_value(a, &imm, v)?;
             load_immediate(a, rd, v);
         }
-        P::LoadAddress => {
+        P::LoadAddress(addr) => {
             ops.arity(a.cx, name, &[2])?;
             let rd = ops.xreg(a.cx, 0)?;
             let target = ops.imm(a.cx, 1)?;
+            a.no_modifier(&target, "an address to load")?;
+            let got = match addr {
+                Addr::La => super::pic_enabled(a.cx.state),
+                Addr::Lla => false,
+                Addr::Lga => true,
+            };
+            // An address that is a plain number needs no PC-relative
+            // arithmetic, and llvm-mc loads it as `li` would, even under
+            // `.option pic`. Only `lga` insists on a GOT slot.
+            if let Some(v) = a.cx.constant(target.expr) {
+                if addr == Addr::Lga {
+                    a.error(target.span, "`lga` needs a symbol, not a number");
+                    return None;
+                }
+                let v = xlen_value(a, &target, v)?;
+                load_immediate(a, rd, v);
+                return Some(());
+            }
             let auipc = encode::rd(AUIPC, rd.bits());
-            let addi = encode::rs1(encode::rd(ADDI, rd.bits()), rd.bits());
-            a.auipc_pair(auipc, addi, &target, encode::kind_pair(reloc::PCREL_HI20));
+            if got {
+                let load = if a.rv64() { LD } else { LW };
+                let load = encode::rs1(encode::rd(load, rd.bits()), rd.bits());
+                a.auipc_split(
+                    auipc,
+                    load,
+                    &target,
+                    encode::kind_got_hi20(),
+                    encode::kind_got_lo12(),
+                );
+            } else {
+                let addi = encode::rs1(encode::rd(ADDI, rd.bits()), rd.bits());
+                a.auipc_split(
+                    auipc,
+                    addi,
+                    &target,
+                    encode::kind_hi20(true),
+                    encode::kind_pair_lo12(false),
+                );
+            }
         }
         P::FloatSign(base) => {
             ops.arity(a.cx, name, &[2])?;
@@ -302,6 +356,18 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
         }
     }
     Some(())
+}
+
+/// A constant for `li`, which on RV32 is 32 bits written either way round.
+fn xlen_value(a: &mut Asm<'_, '_>, imm: &Imm, v: i64) -> Option<i64> {
+    if a.rv64() {
+        return Some(v);
+    }
+    if !(-(1i64 << 31)..(1i64 << 32)).contains(&v) {
+        a.error(imm.span, format!("value {v} does not fit in 32 bits"));
+        return None;
+    }
+    Some(v as i32 as i64)
 }
 
 /// Emits the sequence that puts `v` in `rd`.

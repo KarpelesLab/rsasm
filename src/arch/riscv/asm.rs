@@ -5,6 +5,7 @@ use super::encode::{self, Buf, Fix, Insn};
 use super::insn;
 use super::insn::{Def, Kind, RM, RV64};
 use super::operand::{Imm, Mem, Modifier, Operands};
+use super::pseudo::AUIPC;
 use super::reg::{self, Reg};
 use crate::arch::AsmCtx;
 use crate::section::{FixupKind, Variant};
@@ -159,7 +160,7 @@ impl<'c, 'a> Asm<'c, 'a> {
         Some(Insn::full(word).with_fix(imm.expr, kind, imm.span))
     }
 
-    fn no_modifier(&mut self, imm: &Imm, what: &str) -> Option<()> {
+    pub fn no_modifier(&mut self, imm: &Imm, what: &str) -> Option<()> {
         if imm.modifier.is_some() {
             self.error(imm.span, format!("{what} cannot use a relocation modifier"));
             return None;
@@ -217,18 +218,62 @@ impl<'c, 'a> Asm<'c, 'a> {
         Some(())
     }
 
-    /// The `auipc`/`jalr` pair behind `call` and `tail`, or the `auipc`/`addi`
-    /// pair behind `la`.
-    pub fn auipc_pair(&mut self, first: u32, second: u32, target: &Imm, kind: FixupKind) {
+    /// The `auipc`/`jalr` pair behind `call`, `tail` and `jump`.
+    pub fn call_pair(&mut self, first: u32, second: u32, target: &Imm) {
         self.emit_pair(
             first,
             second,
             Fix {
                 expr: target.expr,
-                kind,
+                kind: encode::kind_call(),
                 span: target.span,
             },
         );
+    }
+
+    /// An `auipc` and the instruction that takes the low half of the same
+    /// address from it, as `la`, `lga` and `lw a0, sym` expand to. Unlike
+    /// `call`'s pair, each half has a relocation of its own.
+    pub fn auipc_split(
+        &mut self,
+        auipc: u32,
+        second: u32,
+        target: &Imm,
+        hi: FixupKind,
+        lo: FixupKind,
+    ) {
+        // The low half's relocation names a label at the `auipc`, which the
+        // core puts at the start of the fragment.
+        debug_assert!(
+            self.out.is_empty(),
+            "an `auipc` pair must start its fragment"
+        );
+        self.emit_fixed(Insn::full(auipc).with_fix(target.expr, hi, target.span));
+        self.emit_fixed(Insn::full(second).with_fix(target.expr, lo, target.span));
+    }
+
+    /// `lw a0, sym` and `sw a0, sym, t0`: an access to a symbol's address
+    /// through an `auipc` into `base`, which a load can share with its
+    /// destination but a store or a floating-point load cannot.
+    ///
+    /// llvm-mc takes this form only for a symbol, refusing a plain number
+    /// where the `(reg)` was left off, and so does this.
+    fn symbol_access(&mut self, word: u32, base: Reg, target: &Imm, store: bool) -> Option<()> {
+        self.no_modifier(target, "a symbol address")?;
+        if self.cx.constant(target.expr).is_some() {
+            self.error(target.span, "expected an address of the form `offset(reg)`");
+            return None;
+        }
+        let auipc = encode::rd(AUIPC, base.bits());
+        let second = encode::rs1(word, base.bits());
+        self.auipc_split(
+            auipc,
+            second,
+            target,
+            encode::kind_hi20(true),
+            encode::kind_pair_lo12(store),
+        );
+        Some(())
     }
 
     /// `op rd, rs1, rs2`, for pseudo-instructions that expand to one.
@@ -309,15 +354,9 @@ impl<'c, 'a> Asm<'c, 'a> {
         let want: &[usize] = match def.kind {
             Kind::Nullary => &[0],
             Kind::Fence => &[0, 2],
-            Kind::U
-            | Kind::F2
-            | Kind::FToX
-            | Kind::XToF
-            | Kind::Load
-            | Kind::Store
-            | Kind::FLoad
-            | Kind::FStore
-            | Kind::AmoLoad => &[2],
+            Kind::U | Kind::F2 | Kind::FToX | Kind::XToF | Kind::Load | Kind::AmoLoad => &[2],
+            // The third operand is the scratch register of the symbol form.
+            Kind::Store | Kind::FLoad | Kind::FStore => &[2, 3],
             Kind::Jal => &[1, 2],
             Kind::Jalr => &[1, 2, 3],
             Kind::F4 => &[4],
@@ -373,6 +412,23 @@ impl<'c, 'a> Asm<'c, 'a> {
                 } else {
                     ops.freg(self.cx, 0)?
                 };
+                // `lw a0, sym` loads through its own destination; `flw` needs
+                // an integer register to hold the address instead.
+                let symbol_form = if def.kind == Kind::Load {
+                    !ops.ends_in_group(1)
+                } else {
+                    count == 3
+                };
+                if symbol_form {
+                    let via = if def.kind == Kind::Load {
+                        rd
+                    } else {
+                        ops.xreg(self.cx, 2)?
+                    };
+                    let target = ops.imm(self.cx, 1)?;
+                    let w = encode::rd(base, rd.bits());
+                    return self.symbol_access(w, via, &target, false);
+                }
                 let mem = ops.mem(self.cx, 1)?;
                 let w = encode::rs1(encode::rd(base, rd.bits()), mem.base.bits());
                 let insn = self.mem_offset(w, &mem, false)?;
@@ -384,6 +440,12 @@ impl<'c, 'a> Asm<'c, 'a> {
                 } else {
                     ops.freg(self.cx, 0)?
                 };
+                if count == 3 {
+                    let target = ops.imm(self.cx, 1)?;
+                    let tmp = ops.xreg(self.cx, 2)?;
+                    let w = encode::rs2(base, rs2.bits());
+                    return self.symbol_access(w, tmp, &target, true);
+                }
                 let mem = ops.mem(self.cx, 1)?;
                 let w = encode::rs1(encode::rs2(base, rs2.bits()), mem.base.bits());
                 let insn = self.mem_offset(w, &mem, true)?;

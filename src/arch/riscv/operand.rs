@@ -190,6 +190,16 @@ impl<'t> Operands<'t> {
         Some(Mem { base, off, span })
     }
 
+    /// True when operand `i` ends in a parenthesised group, as `offset(reg)`
+    /// does, even when what is inside is not a register.
+    ///
+    /// `lw a0, sym` loads from a symbol, so a load has to tell that from an
+    /// address; one written `4(fa1)` is a mistaken address, and should be
+    /// reported as one rather than read as an expression.
+    pub fn ends_in_group(&self, i: usize) -> bool {
+        self.piece(i).and_then(split_paren).is_some()
+    }
+
     /// True when operand `i` looks like `something(reg)` rather than a plain
     /// expression, which is how `jalr rd, off(rs1)` is told from
     /// `jalr rd, rs1, off`.

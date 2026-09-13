@@ -4,9 +4,8 @@ pub const ABS32: u32 = 1;
 pub const ABS64: u32 = 2;
 pub const BRANCH: u32 = 16;
 pub const JAL: u32 = 17;
-/// Covers a whole `auipc`/`jalr` pair, so `call` needs only this one.
-pub const CALL: u32 = 18;
 pub const CALL_PLT: u32 = 19;
+pub const GOT_HI20: u32 = 20;
 pub const PCREL_HI20: u32 = 23;
 pub const PCREL_LO12_I: u32 = 24;
 pub const PCREL_LO12_S: u32 = 25;

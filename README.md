@@ -56,7 +56,7 @@ assembler, not against rsasm's own idea of the manual. See
 | x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1584 |
 | AArch64 | `aarch64` | llvm-mc | 475 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 361 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 485 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 518 |
 | PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1044 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
@@ -108,6 +108,10 @@ but 18 forms where both manuals show MAME to be wrong.
 - ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
 - AArch64: most of NEON, SVE
 - PowerPC: AltiVec/VSX
+- RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
+  as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
+  `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
+  `%tls_*` and `%got_pcrel_hi` modifiers
 - 6502: the conventional `lda #$12` spelling, which needs `$`-prefixed hex
 
 **Known wrong**
@@ -115,8 +119,10 @@ but 18 forms where both manuals show MAME to be wrong.
 These produce incorrect output rather than an error, which is why they are
 listed separately.
 
-- RISC-V `la` of an external symbol emits only `R_RISCV_PCREL_HI20`, without
-  its paired `LO12` relocation.
+- A PC-relative reference to a weak symbol defined in the same section is
+  resolved at assembly time. GNU as and llvm-mc leave it to the linker, which
+  may choose another definition. (llvm-mc on RISC-V leaves references to
+  global symbols to the linker too; rsasm resolves those as well.)
 - In flat binaries only (relocatable output is correct): AArch64 `adrp`, and
   PowerPC `@ha`/`@l` on a label, are resolved without the page or split
   arithmetic they need.
@@ -265,7 +271,9 @@ independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against the host's GNU as, for x86. 844 of 844 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
-  supports. 3,944 of 3,944 match across fourteen target variants.
+  supports. 3,977 of 3,977 match across fourteen target variants. For RISC-V
+  it also compares whole objects, relocations included, since `la` and its
+  relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
   and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
   source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds

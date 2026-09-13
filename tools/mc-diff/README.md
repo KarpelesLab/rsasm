@@ -19,6 +19,33 @@ lines, for anything that needs labels, branch relaxation or directives.
 The `<arch>` key and its llvm triple are listed in the `ARCHES` table at the
 top of `run.sh`.
 
+## Comparing relocations
+
+Bytes alone cannot catch a missing or misdirected relocation: an unresolved
+field is zero either way. Snippets in `<arch>-relocs.txt`, in the same
+`=== <name>` format, are assembled into objects by both assemblers and compared
+on the `.text` bytes and on every relocation in every section — type, offset,
+target and addend — as `relocs.awk` prints them from `llvm-readobj`.
+
+Targets are compared by what the linker makes of them. llvm-mc on RISC-V
+relocates against a local label where GNU as and rsasm use the label's section
+plus an offset, and linkers read those alike, so both print as
+`.text+0x40`. The exception is a relocation the linker looks the symbol up
+for: `R_RISCV_PCREL_LO12_*` names the `auipc` holding the high half, and lld
+finds it by the symbol's value, ignoring the addend, while a GOT entry belongs
+to a symbol. For those the symbol has to be a label, and prints as
+`@.text+0x40` with the addend apart.
+
+The RISC-V corpora cover `auipc` pairs. They leave out, for now, where rsasm
+and llvm-mc 22 still write different (valid) relocations:
+
+- A conditional branch to an undefined symbol: llvm-mc inverts it around a
+  `jal` with `R_RISCV_JAL`; rsasm keeps the branch with `R_RISCV_BRANCH`.
+- `.word sym - .`: llvm-mc writes an `R_RISCV_ADD32`/`R_RISCV_SUB32` pair,
+  rsasm one `R_RISCV_32_PCREL`.
+- A PC-relative reference to a global or weak symbol in the same section,
+  which llvm-mc relocates and rsasm resolves (see README.md, "Known wrong").
+
 ## The oracle is pinned to LLVM 22
 
 llvm-mc's answers change between releases, so the version is part of the

@@ -131,6 +131,39 @@ pub struct FixupKind {
     /// Narrower bounds than the field's width allows, where a reference
     /// assembler picks a form by a range that is not a power of two.
     pub limits: Option<(i64, i64)>,
+    /// Which symbol the relocation names, when there is one.
+    pub reloc_symbol: RelocSymbol,
+    /// Never fill the field in here, even where the value is known: only the
+    /// linker can. A RISC-V GOT reference means the address of a GOT slot,
+    /// not of the symbol, however close the symbol is. In a flat binary such
+    /// a field is an error.
+    pub always_reloc: bool,
+}
+
+/// The symbol a relocation is written against.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum RelocSymbol {
+    /// The symbol in the expression, except that a local label is replaced
+    /// by its section plus an offset, which is what linkers expect and what
+    /// keeps local labels out of the symbol table.
+    #[default]
+    Section,
+    /// The symbol in the expression, even a local label, which is then
+    /// written to the symbol table. For relocations whose linker looks the
+    /// symbol itself up, rather than just its address: RISC-V's
+    /// `R_RISCV_PCREL_LO12_I` names the `auipc` that carries the high half,
+    /// and lld finds that `auipc` by the symbol's value alone, ignoring an
+    /// addend.
+    Symbol,
+    /// A label at the start of the fixup's own fragment, with no addend,
+    /// while the value (where it resolves) is still the expression's. This
+    /// is `Symbol` for a label the source never wrote: the low half of a
+    /// RISC-V `la` names the `auipc` the same expansion emitted first.
+    ///
+    /// Such a fixup is taken to be the second of a pair on one expression,
+    /// so where the first cannot be resolved without a linker it reports
+    /// nothing itself, rather than repeat the diagnostic.
+    FragmentStart,
 }
 
 impl FixupKind {
@@ -146,6 +179,8 @@ impl FixupKind {
             encoding: FieldEncoding::Whole,
             bias_reloc_addend: true,
             limits: None,
+            reloc_symbol: RelocSymbol::Section,
+            always_reloc: false,
         }
     }
 
@@ -186,6 +221,19 @@ impl FixupKind {
     /// Accepts only values from `lo` to `hi`, within what the field holds.
     pub fn with_limits(mut self, lo: i64, hi: i64) -> FixupKind {
         self.limits = Some((lo, hi));
+        self
+    }
+
+    /// Chooses the symbol the relocation names; see [`RelocSymbol`].
+    pub fn with_reloc_symbol(mut self, sym: RelocSymbol) -> FixupKind {
+        self.reloc_symbol = sym;
+        self
+    }
+
+    /// Leaves the field to the linker even when its value is known; see
+    /// [`FixupKind::always_reloc`].
+    pub fn linker_only(mut self) -> FixupKind {
+        self.always_reloc = true;
         self
     }
 

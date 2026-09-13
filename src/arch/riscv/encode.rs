@@ -8,7 +8,7 @@
 
 use super::reloc;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, RelocSymbol, Variant};
 use crate::source::Span;
 
 // ---- field placement ------------------------------------------------------
@@ -115,12 +115,11 @@ pub fn cb_imm(word: u64, v: i64) -> u64 {
         | ((v >> 5) & 1) << 2
 }
 
-/// An `auipc` followed by an I-type instruction, patched as one field.
+/// An `auipc` followed by a `jalr`, patched as one field.
 ///
-/// `call` and `la` split a PC-relative address across two instruction words.
-/// The linker's `R_RISCV_CALL` covers both, and doing the same here keeps the
-/// pair to a single fixup — which matters because the low half's relocation
-/// would otherwise have to name a label this backend cannot create.
+/// `call` splits a PC-relative address across two instruction words, and the
+/// linker's `R_RISCV_CALL_PLT` covers both, so the pair is a single fixup here
+/// too.
 pub fn auipc_pair(word: u64, v: i64) -> u64 {
     let auipc = word & 0xffff_ffff;
     let second = word >> 32;
@@ -164,20 +163,61 @@ pub fn kind_hi20(pcrel: bool) -> FixupKind {
 
 /// `%pcrel_lo(label)`, which names the `auipc` that carries the high half.
 ///
-/// Only the linker can pair the two halves up, so this is correct in
-/// relocatable output — where a label always leaves a relocation — but not in
-/// a flat binary, where the field would be filled from the label's own
-/// address. `la` and `call` avoid the problem by patching both halves at once.
+/// Only the linker can pair the two halves up, so the field is always left to
+/// it, and the relocation names the label itself: lld finds the `auipc` from
+/// the symbol's value and ignores an addend, so the usual section-plus-offset
+/// would point it at the start of the section. A flat binary has no linker,
+/// and this is an error there.
 pub fn kind_lo12(store: bool) -> FixupKind {
-    if store {
-        FixupKind::data(4)
-            .with_reloc(reloc::PCREL_LO12_S)
-            .scatter(lo12_s)
+    let (reloc, f): (u32, fn(u64, i64) -> u64) = if store {
+        (reloc::PCREL_LO12_S, lo12_s)
     } else {
-        FixupKind::data(4)
-            .with_reloc(reloc::PCREL_LO12_I)
-            .scatter(lo12_i)
-    }
+        (reloc::PCREL_LO12_I, lo12_i)
+    };
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .scatter(f)
+        .with_reloc_symbol(RelocSymbol::Symbol)
+        .linker_only()
+}
+
+/// The low half of an `auipc` pair a pseudo-instruction expanded to, such as
+/// `la a0, sym` or `lw a0, sym`, in the word after the `auipc`.
+///
+/// The value is measured from the `auipc` four bytes back, so wherever the
+/// high half resolves this one does too, and together they form the whole
+/// offset. Where it cannot, the relocation names a label at the `auipc`, as
+/// the psABI requires and as llvm-mc writes it; the expansion is its own
+/// fragment, so the `auipc` starts it.
+pub fn kind_pair_lo12(store: bool) -> FixupKind {
+    let (reloc, f): (u32, fn(u64, i64) -> u64) = if store {
+        (reloc::PCREL_LO12_S, lo12_s)
+    } else {
+        (reloc::PCREL_LO12_I, lo12_i)
+    };
+    FixupKind::pcrel(4, -4)
+        .with_reloc(reloc)
+        .scatter(f)
+        .with_reloc_symbol(RelocSymbol::FragmentStart)
+}
+
+/// The `auipc` of `lga` (or `la` under `.option pic`), which addresses the
+/// symbol's GOT slot.
+///
+/// The slot is the linker's to place, so the field is never resolved here,
+/// even for a label in the same section, and the relocation names the symbol
+/// itself: a GOT entry belongs to a symbol, not to an offset into a section.
+pub fn kind_got_hi20() -> FixupKind {
+    FixupKind::data(4)
+        .with_reloc(reloc::GOT_HI20)
+        .scatter(hi20)
+        .with_reloc_symbol(RelocSymbol::Symbol)
+        .linker_only()
+}
+
+/// The load from the GOT slot that [`kind_got_hi20`] addressed.
+pub fn kind_got_lo12() -> FixupKind {
+    kind_pair_lo12(false).linker_only()
 }
 
 /// `%lo(sym)`, which takes the low 12 bits of an absolute address and so has
@@ -219,10 +259,13 @@ pub fn kind_cj() -> FixupKind {
 }
 
 /// The `auipc`/`jalr` pair of `call`, patched as one eight-byte field.
-pub fn kind_pair(reloc: u32) -> FixupKind {
+///
+/// llvm-mc 22 writes `R_RISCV_CALL_PLT` whether or not the source said
+/// `@plt`; the psABI has deprecated the plain `R_RISCV_CALL`.
+pub fn kind_call() -> FixupKind {
     FixupKind::pcrel(8, 0)
         .with_field(32, 1)
-        .with_reloc(reloc)
+        .with_reloc(reloc::CALL_PLT)
         .scatter(auipc_pair)
 }
 
@@ -293,7 +336,7 @@ impl Buf {
         }
     }
 
-    /// Two words covered by a single fixup, as `call` and `la` need.
+    /// Two words covered by a single fixup, as `call` needs.
     pub fn push_pair(&mut self, first: u32, second: u32, fix: Fix) {
         let at = self.bytes.len() as u32;
         self.bytes.extend_from_slice(&first.to_le_bytes());

@@ -52,23 +52,31 @@ pub struct Riscv {
 }
 
 /// `ArchState::features` bit 0 says whether the C extension may shorten what
-/// is emitted.
+/// is emitted, and bit 1 whether `la` goes through the GOT.
 ///
 /// `.option push` / `.option pop` need a stack, and `ArchState` has no field
-/// for one, so the word doubles as it: each push shifts everything left and
-/// copies the current setting into bit 0, each pop shifts right. A single set
-/// bit above the deepest level marks the bottom, which is how an unmatched
-/// pop is noticed.
+/// for one, so the word doubles as it: each push shifts everything left by a
+/// level and copies the current settings into the bottom one, each pop shifts
+/// right. A single set bit above the deepest level marks the bottom, which is
+/// how an unmatched pop is noticed.
 const RVC: u64 = 1;
-const STACK_BOTTOM: u64 = 2;
+const PIC: u64 = 2;
+const LEVEL: u64 = RVC | PIC;
+const LEVEL_BITS: u32 = 2;
+const STACK_BOTTOM: u64 = 1 << LEVEL_BITS;
 
 /// How many `.option push` levels are open.
 fn option_depth(features: u64) -> u32 {
-    (63 - features.leading_zeros()).saturating_sub(1)
+    ((63 - features.leading_zeros()) / LEVEL_BITS).saturating_sub(1)
 }
 
 fn rvc_enabled(state: &ArchState) -> bool {
     state.features & RVC != 0
+}
+
+/// Whether `.option pic` is in effect.
+pub(super) fn pic_enabled(state: &ArchState) -> bool {
+    state.features & PIC != 0
 }
 
 impl Architecture for Riscv {
@@ -184,17 +192,20 @@ impl Architecture for Riscv {
         match word.as_str() {
             "rvc" => cx.state.features |= RVC,
             "norvc" => cx.state.features &= !RVC,
-            "push" if option_depth(features) >= 62 => {
-                cx.error(tok.span, "`.option push` nested more than 62 deep");
+            "pic" => cx.state.features |= PIC,
+            "nopic" => cx.state.features &= !PIC,
+            "push" if option_depth(features) >= 30 => {
+                cx.error(tok.span, "`.option push` nested more than 30 deep");
             }
-            "push" => cx.state.features = (features << 1) | (features & RVC),
+            "push" => cx.state.features = (features << LEVEL_BITS) | (features & LEVEL),
             "pop" if option_depth(features) == 0 => {
                 cx.error(tok.span, "`.option pop` with no `.option push`");
             }
-            "pop" => cx.state.features = features >> 1,
-            // Linker relaxation and PIC change no bytes here, and `.option
+            "pop" => cx.state.features = features >> LEVEL_BITS,
+            // Linker relaxation is not implemented, so objects come out as
+            // llvm-mc writes them without it (see README.md), and `.option
             // arch` carries an extension list this backend does not track.
-            "relax" | "norelax" | "pic" | "nopic" | "arch" => {}
+            "relax" | "norelax" | "arch" => {}
             _ => cx.error(tok.span, format!("unknown `.option {word}`")),
         }
         true
