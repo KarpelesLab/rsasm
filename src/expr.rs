@@ -591,6 +591,15 @@ impl<'a> ExprParser<'a> {
                 cur.advance();
                 Some(self.arena.alloc(ExprKind::Int(v), tok.span))
             }
+            // The lexer leaves malformed numbers unreported because only the
+            // consumer can tell whether they are errors. In an expression they
+            // are.
+            TokKind::BadNumber(text) => {
+                cur.advance();
+                let msg = crate::lexer::explain_bad_number(self.interner.get(text));
+                self.diags.error(tok.span, msg);
+                None
+            }
             TokKind::Ident(n) => {
                 cur.advance();
                 Some(self.arena.alloc(ExprKind::Sym(n), tok.span))
@@ -641,6 +650,7 @@ fn describe(_cur: &Cursor<'_>, k: TokKind) -> String {
         TokKind::Eof | TokKind::Eol => "end of statement".into(),
         TokKind::Punct(p) => format!("`{}`", p.as_str()),
         TokKind::Str(_) => "a string literal".into(),
+        TokKind::BadNumber(_) => "a malformed number".into(),
         _ => "this token".into(),
     }
 }

@@ -810,3 +810,24 @@ fn extended_registers_do_not_exist_outside_64_bit_mode() {
         assert!(e.contains("only available in 64-bit mode"), "{src}: {e}");
     }
 }
+
+#[test]
+fn a_broadcast_count_must_match_the_operand_exactly() {
+    // The lexer used to report `1to8` as a malformed number, and the x86
+    // parser withdrew the error and read the count back out of the message
+    // text; when that failed it fell back to a length check that could not
+    // tell `{1to7}` from `{1to8}`. The count now arrives as a token.
+    let e = errors("vaddpd (%rax){1to7}, %zmm2, %zmm3\n");
+    assert!(e.contains("broadcasts as `{1to8}`"), "{e}");
+    let e = errors("vaddps (%rax){1to8}, %zmm2, %zmm3\n");
+    assert!(e.contains("broadcasts as `{1to16}`"), "{e}");
+}
+
+#[test]
+fn a_broadcast_spelling_outside_a_decorator_is_still_a_bad_number() {
+    let e = errors("movq $1to16, %rax\n");
+    assert!(
+        e.contains("invalid digit `t` for base-10 literal `1to16`"),
+        "{e}"
+    );
+}

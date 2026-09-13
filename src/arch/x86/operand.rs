@@ -12,7 +12,6 @@
 use super::reg::{self, Reg, RegClass};
 use crate::arch::{AsmCtx, Syntax};
 use crate::cursor::Cursor;
-use crate::diag::Severity;
 use crate::expr::{ExprKind, ExprRef};
 use crate::lexer::{Punct, TokKind, Token};
 use crate::source::Span;
@@ -288,20 +287,14 @@ impl OperandParser<'_, '_> {
     }
 
     fn one_decorator(&mut self, cur: &mut Cursor<'_>, decor: &mut Decor, open: Span) -> Option<()> {
-        // `{1toN}`. The lexer scans `1to16` as a malformed integer literal and
-        // reports it, so the complaint is withdrawn here: inside a decorator
-        // it is not a number at all.
-        if let TokKind::Int(_) = cur.peek().kind {
+        // `{1toN}`. It starts with a digit, so it reaches here as a
+        // `BadNumber` token carrying its text; inside a decorator that is not
+        // an error, it is the broadcast count.
+        if let TokKind::Int(_) | TokKind::BadNumber(_) = cur.peek().kind {
             let tok = cur.advance();
-            let count = match withdraw(self.cx, tok.span) {
-                // Nothing to withdraw means the lexer read a well-formed
-                // integer, and no well-formed integer is a broadcast.
-                Withdrawn::Nothing => {
-                    self.cx
-                        .error(tok.span, "expected `1toN` in a broadcast decorator");
-                    return None;
-                }
-                Withdrawn::Literal(text) => {
+            let count = match tok.kind {
+                TokKind::BadNumber(name) => {
+                    let text = self.cx.name(name).to_string();
                     match text.strip_prefix("1to").and_then(|n| n.parse::<u32>().ok()) {
                         Some(n) => Some(n),
                         None => {
@@ -315,7 +308,12 @@ impl OperandParser<'_, '_> {
                         }
                     }
                 }
-                Withdrawn::Unreadable => None,
+                // A well-formed integer is never a broadcast count.
+                _ => {
+                    self.cx
+                        .error(tok.span, "expected `1toN` in a broadcast decorator");
+                    return None;
+                }
             };
             if decor.broadcast.is_some() {
                 self.cx
@@ -856,54 +854,6 @@ fn note_addr_size(m: &mut Mem, r: Reg) {
     if r.class == RegClass::Gpr {
         m.addr_size = r.size;
     }
-}
-
-/// What [`withdraw`] found at a span.
-enum Withdrawn {
-    /// No error was recorded there: the token lexed cleanly.
-    Nothing,
-    /// An error was withdrawn and the literal it quoted recovered.
-    Literal(String),
-    /// An error was withdrawn but did not quote its literal.
-    Unreadable,
-}
-
-/// Retracts the lexer's complaint about a `{1toN}` count, and recovers the
-/// text it complained about.
-///
-/// `1to16` starts with a digit, so the shared lexer scans it as an integer
-/// literal and reports the `t` as an invalid digit before this backend sees
-/// the tokens. Inside a decorator it is not a number, so the complaint is
-/// withdrawn. The backend is handed only `Int(0)` and a span — `AsmCtx` has no
-/// source map — and the diagnostic, which quotes the literal in backticks, is
-/// the one place the written count survives, so it is read back from there.
-///
-/// This leans on the wording of a message in shared code, which is why
-/// `Unreadable` degrades to a length check rather than failing. The proper fix
-/// is for the lexer to hand an alphanumeric run that is not a number to the
-/// parser as an identifier; that is shared code this backend does not own.
-fn withdraw(cx: &mut AsmCtx<'_>, span: Span) -> Withdrawn {
-    let mut found = Withdrawn::Nothing;
-    let kept: Vec<_> = cx
-        .diags
-        .take()
-        .into_iter()
-        .filter(|d| {
-            if d.severity != Severity::Error || d.span != span {
-                return true;
-            }
-            let quoted = d.msg.rsplit('`').nth(1).map(str::to_owned);
-            found = match quoted {
-                Some(text) if !text.is_empty() => Withdrawn::Literal(text),
-                _ => Withdrawn::Unreadable,
-            };
-            false
-        })
-        .collect();
-    for d in kept {
-        cx.diags.emit(d);
-    }
-    found
 }
 
 /// Consumes tokens up to the next top-level `+`, `-` or `]`.

@@ -187,6 +187,34 @@ pub enum TokKind {
     Punct(Punct),
     /// `1f` / `2b` style reference to a numeric local label.
     LocalRef(u32, LocalDir),
+    /// A run that starts like a number but is not one, such as `1to16` or
+    /// `08`. Carries the text as written.
+    ///
+    /// The lexer does not report it, because it cannot tell whether it is an
+    /// error: `1to16` is a malformed literal in an expression and a perfectly
+    /// good broadcast count inside an AVX-512 `{1to16}` decorator. Whoever
+    /// consumes the token knows which; the expression parser reports it with
+    /// [`explain_bad_number`].
+    BadNumber(Name),
+}
+
+/// The diagnostic for a [`TokKind::BadNumber`] read where a number was
+/// expected: names the first character that is not a digit, and the base.
+pub fn explain_bad_number(text: &str) -> String {
+    let (radix, digits) = match text.get(..2).map(str::to_ascii_lowercase).as_deref() {
+        Some("0x") => (16, &text[2..]),
+        Some("0b") => (2, &text[2..]),
+        Some("0o") => (8, &text[2..]),
+        _ if text.len() > 1 && text.starts_with('0') => (8, &text[1..]),
+        _ => (10, text),
+    };
+    match digits
+        .chars()
+        .find(|c| *c != '_' && c.to_digit(radix).is_none())
+    {
+        Some(c) => format!("invalid digit `{c}` for base-{radix} literal `{text}`"),
+        None => format!("invalid integer literal `{text}`"),
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -467,7 +495,7 @@ impl<'a> Lexer<'a> {
         &mut self,
         start: usize,
         spaced: bool,
-        _interner: &mut Interner,
+        interner: &mut Interner,
         diags: &mut DiagBag,
     ) -> Token {
         let mk = |k: TokKind, this: &Self| Token {
@@ -577,13 +605,10 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             let Some(d) = c.to_digit(radix) else {
-                let span = self.span_from(start);
-                let text = self.src[start..self.pos].to_string();
-                diags.emit(Diagnostic::error(
-                    span,
-                    format!("invalid digit `{c}` for base-{radix} literal `{text}`"),
-                ));
-                return mk(TokKind::Int(0), self);
+                // Not reported here; see `TokKind::BadNumber`.
+                let _ = c;
+                let text = interner.intern(&self.src[start..self.pos]);
+                return mk(TokKind::BadNumber(text), self);
             };
             match value
                 .checked_mul(radix as u64)
@@ -994,6 +1019,35 @@ mod tests {
         let (k, h) = lex_all(".byte .", Dialect::Gas);
         assert_eq!(k[0], TokKind::Ident(h.interner.lookup(".byte").unwrap()));
         assert_eq!(k[1], TokKind::Punct(Punct::Dot));
+    }
+
+    #[test]
+    fn a_malformed_number_is_classified_not_reported() {
+        // `1to16` is an error in an expression but a broadcast count in an
+        // AVX-512 decorator, and the lexer cannot tell which it is looking at.
+        let (k, h) = lex_all("1to16 08", Dialect::Gas);
+        let TokKind::BadNumber(n) = k[0] else {
+            panic!("expected BadNumber, got {:?}", k[0])
+        };
+        assert_eq!(h.interner.get(n), "1to16");
+        assert!(matches!(k[1], TokKind::BadNumber(_)));
+        assert!(!h.diags.has_errors(), "the lexer must not judge it");
+    }
+
+    #[test]
+    fn a_bad_number_explanation_names_the_digit_and_base() {
+        assert_eq!(
+            explain_bad_number("1st"),
+            "invalid digit `s` for base-10 literal `1st`"
+        );
+        assert_eq!(
+            explain_bad_number("08"),
+            "invalid digit `8` for base-8 literal `08`"
+        );
+        assert_eq!(
+            explain_bad_number("0xfg"),
+            "invalid digit `g` for base-16 literal `0xfg`"
+        );
     }
 
     #[test]
