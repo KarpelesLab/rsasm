@@ -132,6 +132,33 @@ Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
 $ cargo build --no-default-features --features x86,aarch64
 ```
 
+## Dialects
+
+Source syntax is chosen with `-d`, or defaults to what each architecture's
+source is normally written in.
+
+| Dialect | Looks like | Default for |
+|---|---|---|
+| `gas` | `.byte 1`, `# comment`, `0x10` | most targets |
+| `motorola` | `dc.b 1`, `; comment`, `$10`, `%1010` | m68k |
+| `renesas` | `DB 1`, `; comment`, `10H` | 78K0 |
+| `nasm` | lexing only, so far | — |
+
+Motorola covers vasm, Devpac and ASM-One source and was checked against both
+vasm and GNU as `--mri`. Three rules in it catch people out:
+
+- **A word in the first column is a label**, with or without a colon, so
+  instructions have to be indented. `rts` written in column 0 assembles to no
+  code at all — in both reference assemblers, not just here.
+- **Word and long data, and instructions, are aligned to an even address.**
+  vasm on its own defaults leaves a `dc.w` after a `dc.b` at an odd address;
+  Devpac, GNU as and vasm's `-devpac` mode align it, and a 68000 faults on the
+  alternative. GNU as's own m68k syntax aligns nothing, so this is a property of
+  the dialect.
+- **Instructions are assembled as written.** vasm's default optimizer turns
+  `move.l #1,d0` into `moveq #1,d0`; rsasm, like GNU as, only chooses the
+  shortest encoding of the instruction you wrote.
+
 ## Verification
 
 Two differential harnesses assemble the same source with rsasm and with an
