@@ -337,11 +337,13 @@ impl Assembler {
         at: u64,
     ) -> Option<i64> {
         let v = self.eval(e).ok()?;
-        // A PC-relative reference only resolves locally when its target is in
-        // the same section, so that the two section bases cancel.
+        // Within one section the two section bases cancel, so a PC-relative
+        // reference resolves even in relocatable output. Across sections it
+        // resolves only once the sections have real addresses.
         if kind.pcrel {
-            if let Some(p) = v.plus
-                && self.symbol_section(p) != Some(section)
+            if self.options.relocatable
+                && v.plus
+                    .is_some_and(|p| self.symbol_section(p) != Some(section))
             {
                 return None;
             }

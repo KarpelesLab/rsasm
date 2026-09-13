@@ -150,6 +150,27 @@ fn flat_binary_places_sections_at_their_addresses() {
 }
 
 #[test]
+fn flat_binary_resolves_references_across_sections() {
+    // A PC-relative reference into another section cannot be resolved while
+    // the sections are still floating, but a flat image has real addresses,
+    // so it must not be deferred to a relocation that nobody will apply.
+    let asm = assemble_flat(
+        ".text\nleaq msg(%rip), %rsi\n.section .rodata\nmsg: .ascii \"hi\"\n",
+        0,
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert!(asm.relocs.is_empty(), "{:?}", asm.relocs);
+    let out = output::raw::build(&asm).unwrap();
+    // `lea` is 7 bytes, so the next instruction is at 7 and .rodata at 7 too.
+    assert_eq!(&out[..7], &[0x48, 0x8d, 0x35, 0x00, 0x00, 0x00, 0x00]);
+    assert_eq!(&out[7..], b"hi");
+}
+
+#[test]
 fn flat_binary_reports_undefined_symbols() {
     let arch = rsasm::arch::lookup("x86-64").unwrap();
     let options = rsasm::assembler::Options {
