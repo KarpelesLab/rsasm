@@ -26,6 +26,28 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `rl78` | `rl78` | `rl78-elf-as` |
 | `rx` | `rx` | `rx-elf-as` (code is in section `P`) |
 | `sh` / `shl` | `sh` / `shl` | `sh-elf-as` / `sh-elf-as -little` |
+| `rl78-ccrl` | `rl78`, CC-RL syntax | `rl78-elf-as`, on the GNU half of each pair |
+| `rh850-ccrh` | `rh850`, CC-RH syntax | `v850-elf-as -mv850e3v5`, likewise |
+
+## Vendor syntax no reference reads
+
+No Renesas assembler can be run here, so CC-RL and CC-RH source cannot be
+compared against the assembler it was written for. Their corpora,
+`<key>-pairs.txt`, hold pairs instead:
+
+```text
+=== what the pair shows
+	MOV	[DE], #1		; CC-RL, assembled by rsasm -d ccrl
+--- gnu
+	mov	[de+0], #1		; the same thing in GNU syntax, assembled by GNU as
+```
+
+The syntax rules come from the Renesas manuals, and the pairing — that the
+GNU half means what the manual says the vendor half means — is the claim each
+case makes; the bytes of both halves must then agree. A GNU half the
+reference refuses counts as a failure, never a match. The pairs are also
+the source of the expected bytes in `tests/rl78_ccrl.rs` and
+`tests/rh850_ccrh.rs`.
 
 ## Which m68k reference to trust
 

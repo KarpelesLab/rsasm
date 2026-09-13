@@ -29,6 +29,15 @@ pub enum Dialect {
     /// a hex prefix here: it is the location counter, and on 78K0 an
     /// operand's relative-addressing sigil.
     Renesas,
+    /// Renesas CC-RL, the assembler of the RL78 compiler package: dotted
+    /// `.DB`/`.CSEG` directives, `$IF`-style control instructions, both
+    /// `0x10` and `10H` numbers, and C escapes in quoted strings. See
+    /// [`crate::dialect`] for the manual it follows.
+    CcRl,
+    /// Renesas CC-RH, the assembler of the RH850 compiler package. The same
+    /// language family as CC-RL, with prefix-only numbers, a different
+    /// operator precedence and `!` as the bitwise NOT.
+    CcRh,
 }
 
 impl Dialect {
@@ -38,6 +47,8 @@ impl Dialect {
             "nasm" => Dialect::Nasm,
             "motorola" | "mot" | "vasm" | "devpac" | "mri" => Dialect::Motorola,
             "renesas" | "ca78k0" | "nec" => Dialect::Renesas,
+            "ccrl" | "cc-rl" => Dialect::CcRl,
+            "ccrh" | "cc-rh" => Dialect::CcRh,
             _ => return None,
         })
     }
@@ -45,7 +56,13 @@ impl Dialect {
     /// Whether directives are spelled without a leading dot, so a bare word
     /// has to be looked up before it can be called an instruction.
     pub fn dotless_directives(self) -> bool {
-        !matches!(self, Dialect::Gas)
+        matches!(self, Dialect::Nasm | Dialect::Motorola | Dialect::Renesas)
+    }
+
+    /// The CC-RL/CC-RH family, which shares its directives, control
+    /// instructions and macro language.
+    pub fn is_cc(self) -> bool {
+        matches!(self, Dialect::CcRl | Dialect::CcRh)
     }
 
     /// `$` on its own is the location counter (and `$$` the section start).
@@ -53,11 +70,19 @@ impl Dialect {
         matches!(self, Dialect::Nasm | Dialect::Renesas)
     }
 
-    /// Quotes inside a string are written twice (`'it''s'`), and a backslash
-    /// is an ordinary character. Devpac, vasm, GNU as `--mri` and the
-    /// Renesas manuals agree on both.
+    /// Quotes inside a string are written twice (`'it''s'`). Devpac, vasm,
+    /// GNU as `--mri` and the RA78K0 manual agree, and CC-RL says the same of
+    /// a double quote (R20UT3123EJ0115 §5.1.2 (2)(c), page 426).
     pub fn doubled_quotes(self) -> bool {
-        matches!(self, Dialect::Motorola | Dialect::Renesas)
+        matches!(self, Dialect::Motorola | Dialect::Renesas | Dialect::CcRl)
+    }
+
+    /// A backslash starts a C escape sequence in a quoted literal. The older
+    /// vendor syntaxes treat it as an ordinary character; CC-RL and CC-RH list
+    /// `\n`, `\xhh` and the rest (CC-RL Table 5.3, page 424; CC-RH Table 5.2,
+    /// R20UT3516EJ0113 page 382).
+    pub fn backslash_escapes(self) -> bool {
+        !matches!(self, Dialect::Motorola | Dialect::Renesas)
     }
 
     /// `*` in operand position is the location counter, as in `dc.l *`. It is
@@ -102,6 +127,9 @@ pub struct LexConfig {
     /// keeps `%` a register sigil or modulo operator and `$` a punctuation
     /// mark wherever they are not starting a number.
     pub number_prefixes: Vec<(char, u32)>,
+    /// `@` may start or continue an identifier, as the CC-RL and CC-RH symbol
+    /// rules allow (CC-RL §5.1.2 (3)(b), page 428; CC-RH §5.1.12, page 423).
+    pub at_in_idents: bool,
 }
 
 impl LexConfig {
@@ -118,6 +146,7 @@ impl LexConfig {
                 char_multi: false,
                 octal_leading_zero: true,
                 number_prefixes: vec![],
+                at_in_idents: false,
             },
             Dialect::Nasm => LexConfig {
                 dialect: d,
@@ -130,6 +159,7 @@ impl LexConfig {
                 char_multi: true,
                 octal_leading_zero: false,
                 number_prefixes: vec![],
+                at_in_idents: false,
             },
             // Checked against vasm and GNU as --mri, which agree on every rule.
             Dialect::Motorola => LexConfig {
@@ -143,6 +173,7 @@ impl LexConfig {
                 char_multi: true,
                 octal_leading_zero: false,
                 number_prefixes: vec![('$', 16), ('%', 2), ('@', 8)],
+                at_in_idents: false,
             },
             Dialect::Renesas => LexConfig {
                 dialect: d,
@@ -155,6 +186,42 @@ impl LexConfig {
                 char_multi: true,
                 octal_leading_zero: false,
                 number_prefixes: vec![],
+                at_in_idents: false,
+            },
+            // CC-RL: `;` comments, and `#` ones at the start of a line
+            // (§5.1.2 (6), page 429). A number takes a `0x`/`0b` prefix or an
+            // `H`/`B`/`O` suffix, and a leading `0` makes it octal (§5.1.2
+            // (2)(a), page 426). The manual has a program pick one notation
+            // with `-base_number`; rsasm reads both, so `0FFH` works and
+            // `010` is the default prefix notation's eight.
+            Dialect::CcRl => LexConfig {
+                dialect: d,
+                line_comment: vec![";"],
+                line_start_comment: vec!["#"],
+                block_comment: false,
+                stmt_sep: vec![],
+                radix_suffix: true,
+                local_label_refs: false,
+                char_multi: true,
+                octal_leading_zero: true,
+                number_prefixes: vec![],
+                at_in_idents: true,
+            },
+            // CC-RH: the same comments (§5.1.1 (5), page 383, and the `#` row
+            // of Table 5.1, page 379), and prefix notation only (§5.1.1
+            // (4)(a), page 381).
+            Dialect::CcRh => LexConfig {
+                dialect: d,
+                line_comment: vec![";"],
+                line_start_comment: vec!["#"],
+                block_comment: false,
+                stmt_sep: vec![],
+                radix_suffix: false,
+                local_label_refs: false,
+                char_multi: true,
+                octal_leading_zero: true,
+                number_prefixes: vec![],
+                at_in_idents: true,
             },
         }
     }
@@ -519,10 +586,12 @@ impl<'a> Lexer<'a> {
             return tok;
         }
 
-        if is_ident_start(c) || (c == b'.' && is_ident_cont(self.peek_at(1))) {
+        let at = self.config.at_in_idents;
+        let cont = |b: u8| is_ident_cont(b) || (at && b == b'@');
+        if is_ident_start(c) || (at && c == b'@') || (c == b'.' && cont(self.peek_at(1))) {
             // Identifiers may contain non-ASCII characters, so advance by
             // whole characters and never leave `pos` inside one.
-            while !self.at_end() && is_ident_cont(self.peek()) {
+            while !self.at_end() && cont(self.peek()) {
                 self.pos += self.char_len();
             }
             let text = &self.src[start..self.pos];
@@ -657,7 +726,7 @@ impl<'a> Lexer<'a> {
     /// hex. NASM reads a `0b` prefix before it looks for a suffix and rejects
     /// the same text, so it keeps prefix-first order.
     fn suffixed_literal_ahead(&self) -> bool {
-        if self.config.dialect != Dialect::Renesas {
+        if !matches!(self.config.dialect, Dialect::Renesas | Dialect::CcRl) {
             return false;
         }
         let mut p = self.pos;
@@ -824,7 +893,7 @@ impl<'a> Lexer<'a> {
                 }
                 break;
             }
-            if c == b'\\' && !self.config.dialect.doubled_quotes() {
+            if c == b'\\' && self.config.dialect.backslash_escapes() {
                 self.pos += 1;
                 self.read_escape(&mut buf, diags);
             } else {
@@ -862,7 +931,7 @@ impl<'a> Lexer<'a> {
                     }
                     break;
                 }
-                if self.peek() == b'\\' && !self.config.dialect.doubled_quotes() {
+                if self.peek() == b'\\' && self.config.dialect.backslash_escapes() {
                     self.pos += 1;
                     self.read_escape(&mut buf, diags);
                 } else {

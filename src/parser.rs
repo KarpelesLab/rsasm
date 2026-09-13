@@ -42,6 +42,11 @@ pub enum Body {
 pub struct Statement {
     pub labels: Vec<LabelDef>,
     pub body: Option<Body>,
+    /// A name written before a directive without a colon, in the CC-RL and
+    /// CC-RH dialects: the section name of `CODE .CSEG`, the macro name of
+    /// `ADMAC .MACRO`. It is not a label, so it defines nothing by itself;
+    /// the directive decides what it means, or that it is not allowed.
+    pub symbol: Option<(Name, Span)>,
     /// All tokens of the statement, excluding the terminator.
     pub toks: Vec<Token>,
     /// Index into `toks` of the first argument token.
@@ -205,6 +210,7 @@ impl Builder {
             return Statement {
                 labels: Vec::new(),
                 body: Some(Body::Assign { name, span }),
+                symbol: None,
                 args: i + 1,
                 toks,
                 span: stmt_span,
@@ -221,16 +227,56 @@ impl Builder {
             return Statement {
                 labels,
                 body: Some(Body::Assign { name, span }),
+                symbol: None,
                 args: 2,
                 toks,
                 span: stmt_span,
             };
         }
 
+        let mut symbol = None;
+        if self.dialect.is_cc() {
+            // A control instruction is `$` and a word, spaces allowed around
+            // the `$` (CC-RL §5.3, pages 539-555; CC-RH §5.3, pages 469-487).
+            // It becomes a directive named `$word`.
+            if let (Some(dollar), Some(word)) = (toks.get(i), toks.get(i + 1))
+                && dollar.is_punct(Punct::Dollar)
+                && let Some(n) = word.ident()
+            {
+                let name = interner.intern(&format!("${}", interner.get(n).to_ascii_lowercase()));
+                return Statement {
+                    labels,
+                    body: Some(Body::Directive {
+                        name,
+                        span: dollar.span.to(word.span),
+                    }),
+                    symbol: None,
+                    args: i + 2,
+                    toks,
+                    span: stmt_span,
+                };
+            }
+            // `NAME .DIRECTIVE`: a symbol field without a colon, which only
+            // the section and macro directives take (CC-RL §5.1.2 (3)(a),
+            // page 427). Section names may start with a dot (`.text .CSEG`),
+            // so the directive decides, not the name.
+            if let (Some(name_tok), Some(dir)) = (toks.get(i), toks.get(i + 1))
+                && let (Some(n), Some(d)) = (name_tok.ident(), dir.ident())
+                && matches!(
+                    interner.get(d).to_ascii_lowercase().as_str(),
+                    ".cseg" | ".dseg" | ".bseg" | ".macro" | ".vector" | ".dbit"
+                )
+            {
+                symbol = Some((n, name_tok.span));
+                i += 1;
+            }
+        }
+
         let body = self.classify(&toks, &mut i, interner, diags);
         Statement {
             labels,
             body,
+            symbol,
             toks,
             args: i,
             span,
@@ -248,6 +294,11 @@ impl Builder {
             Dialect::Nasm => word.eq_ignore_ascii_case("equ"),
             Dialect::Motorola | Dialect::Renesas => {
                 word.eq_ignore_ascii_case("equ") || word.eq_ignore_ascii_case("set")
+            }
+            // `NAME .EQU value` and `NAME .SET value` (CC-RL §5.2.3, pages
+            // 502-504; CC-RH §5.2.3, pages 435-436).
+            Dialect::CcRl | Dialect::CcRh => {
+                word.eq_ignore_ascii_case(".equ") || word.eq_ignore_ascii_case(".set")
             }
         }
     }
@@ -299,6 +350,10 @@ impl Builder {
                 // `.CSEG`, and a Motorola `.local` label never reaches here,
                 // because a first-column word has already been taken as one.
                 Dialect::Motorola | Dialect::Renesas => text.starts_with('.') && text.len() > 1,
+                // Every CC-RL and CC-RH directive is dotted and every bare word
+                // is an instruction or a macro call (CC-RL Table 5.13, page
+                // 484).
+                Dialect::CcRl | Dialect::CcRh => text.starts_with('.') && text.len() > 1,
             };
             let folded = text
                 .bytes()

@@ -134,6 +134,108 @@ pub fn substitute_with(
     out
 }
 
+/// Substitutes a CC-RL or CC-RH macro body, whose parameters are plain words.
+///
+/// A word is a run of the characters a symbol is made of — letters, digits,
+/// `@`, `_`, `.` and, after the first, `$` (CC-RL §5.1.2 (3)(b), page 428;
+/// CC-RH §5.1.12, page 423) — and one that names a parameter or a local
+/// symbol is replaced whole.
+/// `concat` joins two words and disappears, so `LAB?PAR` with `PAR` bound to
+/// `1` becomes `LAB1` (CC-RL §5.4.5, page 557; CC-RH §5.4.3, page 489). Both
+/// manuals leave string literals and comments alone, and so does this. A
+/// `.LOCAL` line has done its job once its names are bound, and is dropped.
+pub fn substitute_words(body: &str, bindings: &[(String, String)], concat: char) -> String {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || matches!(c, '@' | '_' | '.' | '$');
+    let mut out = String::with_capacity(body.len());
+    for (n, line) in body.split('\n').enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        if local_names(line).is_some() {
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            out.push_str(line);
+            continue;
+        }
+        let mut chars = line.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                ';' => {
+                    out.push_str(&line[i..]);
+                    break;
+                }
+                '"' | '\'' => {
+                    // Copy the literal through its closing quote, skipping
+                    // escaped characters.
+                    out.push(c);
+                    while let Some((_, d)) = chars.next() {
+                        out.push(d);
+                        if d == '\\' {
+                            if let Some((_, e)) = chars.next() {
+                                out.push(e);
+                            }
+                        } else if d == c {
+                            break;
+                        }
+                    }
+                }
+                _ if c == concat => {}
+                // A symbol cannot start with `$`, which is the relative
+                // addressing sigil of `BR $label`.
+                _ if is_word(c) && c != '$' => {
+                    let mut end = i + c.len_utf8();
+                    while let Some(&(j, d)) = chars.peek() {
+                        if !is_word(d) {
+                            break;
+                        }
+                        end = j + d.len_utf8();
+                        chars.next();
+                    }
+                    let word = &line[i..end];
+                    match bindings.iter().find(|(p, _)| p == word) {
+                        Some((_, value)) => out.push_str(value),
+                        None => out.push_str(word),
+                    }
+                }
+                _ => out.push(c),
+            }
+        }
+    }
+    out
+}
+
+/// The names every `.LOCAL` line of a CC-RL or CC-RH body declares.
+pub fn cc_locals(body: &str) -> Vec<String> {
+    body.lines().filter_map(local_names).flatten().collect()
+}
+
+/// The names on a `.LOCAL name, name` line, if that is what `line` is. A
+/// label may come first (CC-RL page 528).
+fn local_names(line: &str) -> Option<Vec<String>> {
+    let code = line.split(';').next().unwrap_or("");
+    let mut rest = code.trim_start();
+    if let Some(colon) = rest.find(':')
+        && rest[..colon]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "@_.$".contains(c))
+    {
+        rest = rest[colon + 1..].trim_start();
+    }
+    let (word, names) = rest.split_at(rest.find(char::is_whitespace).unwrap_or(rest.len()));
+    if !word.eq_ignore_ascii_case(".local") {
+        return None;
+    }
+    Some(
+        names
+            .split(',')
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect(),
+    )
+}
+
 fn is_param_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }

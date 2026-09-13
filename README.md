@@ -63,8 +63,8 @@ assembler, not against rsasm's own idea of the manual. See
 | m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1248 |
 | Renesas RX (RXv1) | `rx` | GNU as | 580 |
-| Renesas RL78 | `rl78` | GNU as | 499 |
-| NEC/Renesas V850 and RH850 | `v850` `rh850` | GNU as | 512 |
+| Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 523 |
+| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 548 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
 | Z80, 6502, 8080 | `z80` `6502` `i8080` | opcode tables | — |
 
@@ -96,8 +96,10 @@ but 18 forms where both manuals show MAME to be wrong.
 **Not yet**
 
 - the NASM dialect (its lexing rules are in place; its directives are not)
-- Renesas's own CC-RX, CC-RL and CC-RH source syntax; RX, RL78 and V850/RH850
-  take GNU as syntax, and the `renesas` dialect is CA78K0's
+- Renesas CC-RX source syntax; RX takes GNU as syntax
+- in CC-RL and CC-RH source: bit symbols, `$label`/`%label` gp- and
+  ep-relative references, `STARTOF`/`SIZEOF`, and CC-RL's `HIGH`/`LOWW` of a
+  relocatable label (all refused with the reason)
 - Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
 - ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
@@ -128,7 +130,8 @@ rsasm [options] <input.s>...
   -a, --arch <name>  target architecture (default: the host, if supported)
   -f, --format <fmt> output format: elf (default) or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
-  -d, --dialect <d>  source dialect: gas, nasm, motorola or renesas
+  -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
+                     ccrl (Renesas CC-RL) or ccrh (Renesas CC-RH)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
@@ -155,6 +158,8 @@ source is normally written in.
 | `gas` | `.byte 1`, `# comment`, `0x10` | most targets |
 | `motorola` | `dc.b 1`, `; comment`, `$10`, `%1010` | m68k |
 | `renesas` | `DB 'A',1`, `; comment`, `10H` | 78K0 |
+| `ccrl` | `.DB "A",1`, `$IF`, `0x10` or `10H` (Renesas CC-RL) | — |
+| `ccrh` | `.dw #label`, `$IF`, `0x10` (Renesas CC-RH) | — |
 | `nasm` | lexing only, so far | — |
 
 ```console
@@ -179,6 +184,46 @@ vasm and GNU as `--mri`. Three rules in it catch people out:
   `move.l #1,d0` into `moveq #1,d0`; rsasm, like GNU as, only chooses the
   shortest encoding of the instruction you wrote.
 
+### Renesas CC-RL and CC-RH
+
+`ccrl` and `ccrh` read source written for the assemblers of Renesas's RL78 and
+RH850 compiler packages. GNU as stays the default for those targets, because
+GNU-syntax source would not always be refused in the vendor dialects — it
+would sometimes mean something else — so the dialect has to be asked for:
+
+```console
+$ cat start.asm
+        .CSEG   TEXT
+_start: MOVW    SP, #LOWW(0xFFE00)
+        MOV     [HL], #0                ; CC-RL's shorthand for [HL+0]
+        BR      !!_main
+$ rsasm -a rl78 -d ccrl -o start.o start.asm
+```
+
+What is covered, from the *CC-RL Compiler User's Manual* (R20UT3123EJ0115)
+and the *CC-RH Compiler User's Manual* (R20UT3516EJ0113):
+
+- comments, both number notations (CC-RL), escapes in strings, `@` in symbols
+- each assembler's own operator precedence, 32-bit `>>`, and the `HIGH`,
+  `LOW`, `HIGHW`, `LOWW` and `HIGHW1` separators
+- `.CSEG`/`.DSEG`/`.SECTION` with their relocation attributes, default names
+  and alignments, `.ORG`, `.OFFSET`, `.ALIGN`, the `.DB` family, `.EQU` and a
+  redefinable `.SET`, `.PUBLIC`/`.EXTERN`/`.WEAK`
+- the `$IF`/`$IFDEF`/`$ELSEIFN` family, `$INCLUDE`, `$BINCLUDE`, and macros with
+  named parameters, `.LOCAL`, `?`/`~` concatenation, `.REPT` and `.IRP`
+- CC-RL's `[DE]`/`[HL]` zero-displacement shorthand
+- CC-RH's instruction expansions — `mov 0x10, r10` is a `movea`, `add
+  0x12345, r10` a load into `r1` — its `#label`/`!label` references, condition
+  suffixes (`setfgt`, `cmovz`, `cmpfeq.s`), `jr22`/`ld23.w`-style width
+  spellings, `push`/`pushm`, and byte-sized `prepare`/`dispose` frames
+
+No Renesas assembler can be run here, so rsasm's reading of the manuals is
+checked the only way it can be: each case in `tools/xas-diff/rl78-ccrl-pairs.txt`
+and `rh850-ccrh-pairs.txt` pairs vendor source with the GNU-syntax program it
+means, and `tools/xas-diff/run.sh` requires rsasm's bytes for the first to
+equal GNU as's for the second. Placement is the linker's: an `AT` attribute or
+`.ORG` names the section as the manual does, but the address is not recorded.
+
 ## Verification
 
 Three differential harnesses assemble the same source with rsasm and with an
@@ -188,8 +233,10 @@ independent assembler, and compare the bytes:
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
   supports. 3,944 of 3,944 match across fourteen target variants.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
-  and V850/RH850, and vasm for Motorola syntax. `tools/oracles/build.sh` builds
-  them from checksum-pinned sources. 3,643 of 3,643 match across nine variants.
+  and V850/RH850, and vasm for Motorola syntax, plus CC-RL and CC-RH source
+  paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds the
+  references from checksum-pinned sources. 3,703 of 3,703 match across eleven
+  variants.
 
 The first two run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks

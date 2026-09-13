@@ -114,6 +114,12 @@ pub struct Assembler {
     exiting_macro: bool,
     /// Set by a vendor `END`: nothing after it in the source is assembled.
     pub(crate) end_of_source: bool,
+    /// CC-RH data values written without `#` that were not constants when
+    /// read, to be refused at the end if they are labels; see
+    /// `Assembler::cc_data`.
+    pub(crate) cc_bare_labels: Vec<ExprRef>,
+    /// Numbers the symbols a CC-RL/CC-RH `.LOCAL` renames, across the module.
+    cc_local_counter: u64,
 }
 
 impl Assembler {
@@ -151,6 +157,8 @@ impl Assembler {
             macro_depth: 0,
             exiting_macro: false,
             end_of_source: false,
+            cc_bare_labels: Vec::new(),
+            cc_local_counter: 0,
         };
         asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
         asm
@@ -407,10 +415,22 @@ impl Assembler {
                 let bare = text.strip_prefix('.').unwrap_or(text);
                 Some(dialect::block_keyword(self.options.dialect, bare).unwrap_or(text))
             }
-            Some(Body::Insn { mnemonic, .. }) => {
+            Some(Body::Insn { mnemonic, .. }) if self.options.dialect.dotless_directives() => {
                 dialect::block_keyword(self.options.dialect, self.interner.get(*mnemonic))
             }
             _ => None,
+        }
+    }
+
+    /// The directives that open and close a macro body and a repeat block.
+    ///
+    /// CC-RL and CC-RH close all three with `.ENDM`, so each has to count the
+    /// others as nesting too.
+    fn block_delimiters(&self, repeat: bool) -> (&'static [&'static str], &'static [&'static str]) {
+        match (self.options.dialect.is_cc(), repeat) {
+            (true, _) => (&[".macro", ".rept", ".irp"], &[".endm"]),
+            (false, false) => (&[".macro"], &[".endm", ".endmacro"]),
+            (false, true) => (&[".rept", ".irp", ".irpc"], &[".endr"]),
         }
     }
 
@@ -488,22 +508,35 @@ impl Assembler {
 
     fn define_macro(&mut self, stmt: &Statement, statements: &[Statement], from: usize) -> usize {
         let header = self.arg_text(stmt);
-        let (mut name_text, params_text) = macros::split_macro_header(&header);
+        let (mut name_text, mut params_text) = macros::split_macro_header(&header);
+        let cc = self.options.dialect.is_cc();
         // Devpac writes `name macro`, with the name where a label goes.
-        let label_name;
-        if name_text.is_empty()
-            && let [LabelDef::Named(n, _)] = stmt.labels.as_slice()
-        {
-            label_name = self.interner.get(*n).to_string();
-            name_text = &label_name;
+        // CC-RL and CC-RH write `NAME .MACRO params`, with the name in the
+        // symbol field, and CC-RH allows the parameters in parentheses (CC-RL
+        // page 527, CC-RH page 460).
+        let label_name = match (cc, stmt.symbol, stmt.labels.as_slice()) {
+            (true, Some((n, _)), _) => Some(self.interner.get(n).to_string()),
+            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() => {
+                Some(self.interner.get(*n).to_string())
+            }
+            _ => None,
+        };
+        if cc {
+            name_text = "";
+            params_text = header.trim();
+            if let Some(inner) = params_text
+                .strip_prefix('(')
+                .and_then(|p| p.strip_suffix(')'))
+            {
+                params_text = inner;
+            }
         }
-        let Some((body, next)) = self.capture_block(
-            statements,
-            from,
-            &[".macro"],
-            &[".endm", ".endmacro"],
-            stmt.span,
-        ) else {
+        if let Some(n) = &label_name {
+            name_text = n;
+        }
+        let (opens, closes) = self.block_delimiters(false);
+        let Some((body, next)) = self.capture_block(statements, from, opens, closes, stmt.span)
+        else {
             return statements.len();
         };
         if name_text.is_empty() {
@@ -547,26 +580,33 @@ impl Assembler {
         from: usize,
     ) -> usize {
         let header = self.arg_text(stmt);
-        let Some((body, next)) = self.capture_block(
-            statements,
-            from,
-            &[".rept", ".irp", ".irpc"],
-            &[".endr"],
-            stmt.span,
-        ) else {
+        let (opens, closes) = self.block_delimiters(true);
+        let Some((body, next)) = self.capture_block(statements, from, opens, closes, stmt.span)
+        else {
             return statements.len();
         };
 
         // Each iteration is substituted separately and the results
         // concatenated, so the whole repeat becomes one expansion.
         let mut text = String::new();
+        let cc = self.options.dialect.is_cc();
         match kind {
             RepeatKind::Rept => {
-                let Some(count) = self.eval_text_count(&header, stmt.span) else {
+                let count = if cc {
+                    self.eval_count(stmt)
+                } else {
+                    self.eval_text_count(&header, stmt.span)
+                };
+                let Some(count) = count else {
                     return next;
                 };
                 for _ in 0..count {
-                    text.push_str(&body);
+                    if cc {
+                        let bindings = self.cc_local_bindings(&body, &[]);
+                        text.push_str(&self.cc_substitute(&body, &bindings));
+                    } else {
+                        text.push_str(&body);
+                    }
                     text.push('\n');
                 }
             }
@@ -590,8 +630,13 @@ impl Assembler {
                     raw.chars().map(|c| c.to_string()).collect()
                 };
                 for v in values {
-                    let bindings = [(var.to_string(), v)];
-                    text.push_str(&macros::substitute(&body, &bindings, self.macro_counter));
+                    let bindings = vec![(var.to_string(), v)];
+                    if cc {
+                        let bindings = self.cc_local_bindings(&body, &bindings);
+                        text.push_str(&self.cc_substitute(&body, &bindings));
+                    } else {
+                        text.push_str(&macros::substitute(&body, &bindings, self.macro_counter));
+                    }
                     text.push('\n');
                 }
             }
@@ -604,6 +649,58 @@ impl Assembler {
         };
         self.expand(label, text, stmt.span);
         next
+    }
+
+    /// A CC-RL/CC-RH `.REPT` count, which is an absolute expression rather
+    /// than a plain number (CC-RL page 529; CC-RH page 463).
+    fn eval_count(&mut self, stmt: &Statement) -> Option<i64> {
+        let mut cur = stmt.arg_cursor();
+        if cur.at_end() {
+            self.diags.error(stmt.span, "`.REPT` needs a count");
+            return None;
+        }
+        let e = self.parse_expr(&mut cur)?;
+        self.expect_end(&mut cur);
+        let n = self.eval_absolute(e, "`.REPT` count")?;
+        if n < 0 {
+            self.diags
+                .error(stmt.span, format!("`.REPT` count {n} is negative"));
+            return None;
+        }
+        Some(n)
+    }
+
+    /// Binds each name a CC-RL/CC-RH `.LOCAL` in `body` declares to a fresh
+    /// symbol name, after `params` (CC-RL page 528; CC-RH page 462). The
+    /// manuals' own generated names start with a dot, which keeps them out of
+    /// the way of user symbols; rsasm's do too.
+    fn cc_local_bindings(
+        &mut self,
+        body: &str,
+        params: &[(String, String)],
+    ) -> Vec<(String, String)> {
+        let mut out = params.to_vec();
+        for name in macros::cc_locals(body) {
+            if out.iter().any(|(p, _)| *p == name) {
+                continue;
+            }
+            let fresh = format!(".LL{:08X}", self.cc_local_counter);
+            self.cc_local_counter += 1;
+            out.push((name, fresh));
+        }
+        out
+    }
+
+    /// Substitutes a CC-RL/CC-RH macro body: whole-word parameters, and the
+    /// concatenation symbol, `?` for CC-RL (page 557) and `~` for CC-RH (page
+    /// 489).
+    fn cc_substitute(&self, body: &str, bindings: &[(String, String)]) -> String {
+        let concat = if self.options.dialect == Dialect::CcRl {
+            '?'
+        } else {
+            '~'
+        };
+        macros::substitute_words(body, bindings, concat)
     }
 
     fn eval_text_count(&mut self, text: &str, span: Span) -> Option<i64> {
@@ -647,7 +744,12 @@ impl Assembler {
         self.macro_counter += 1;
         let counter = self.macro_counter;
         let positional = self.options.dialect.dotless_directives();
-        let text = macros::substitute_with(&def.body, &bindings, counter, positional);
+        let text = if self.options.dialect.is_cc() {
+            let bindings = self.cc_local_bindings(&def.body, &bindings);
+            self.cc_substitute(&def.body, &bindings)
+        } else {
+            macros::substitute_with(&def.body, &bindings, counter, positional)
+        };
         let name = self.interner.get(def.name).to_string();
         self.expand(&format!("macro {name}"), text, span);
         true
@@ -664,6 +766,36 @@ impl Assembler {
             def.params.iter().map(|p| (p.name.clone(), None)).collect();
 
         let pieces = macros::split_args(args);
+
+        // CC-RL and CC-RH bind arguments by position only. CC-RH wants exactly
+        // as many as there are parameters (page 460); CC-RL warns about extra
+        // ones and leaves missing ones empty (page 527).
+        if self.options.dialect.is_cc() {
+            let name = self.interner.get(def.name).to_string();
+            let (want, got) = (def.params.len(), pieces.len());
+            if got != want {
+                let msg = format!("macro `{name}` takes {want} argument(s), but {got} were given");
+                if self.options.dialect == Dialect::CcRh {
+                    self.diags.error(span, msg);
+                    return None;
+                }
+                if got > want {
+                    self.diags.warning(span, msg);
+                }
+            }
+            return Some(
+                def.params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        (
+                            p.name.clone(),
+                            pieces.get(i).map_or_else(String::new, |s| s.to_string()),
+                        )
+                    })
+                    .collect(),
+            );
+        }
 
         // A vendor-dialect macro declared without parameters takes any number
         // of arguments, referred to by position as `\1`, `\2` and so on.
@@ -843,7 +975,9 @@ impl Assembler {
                             | ".else"
                             | ".elseif"
                             | ".endif"
-                    ) {
+                    ) || (self.options.dialect.is_cc()
+                        && dialect::is_conditional(self.options.dialect, text))
+                    {
                         self.directive(stmt, *name);
                     }
                 }
@@ -851,7 +985,8 @@ impl Assembler {
                 // here too or a false branch could never end.
                 Some(Body::Insn { mnemonic, .. }) => {
                     let word = self.interner.get(*mnemonic);
-                    if dialect::is_conditional(self.options.dialect, word)
+                    if !self.options.dialect.is_cc()
+                        && dialect::is_conditional(self.options.dialect, word)
                         && let Some(alias) = dialect::lookup(self.options.dialect, word)
                     {
                         self.run_alias(stmt, alias);
@@ -889,16 +1024,46 @@ impl Assembler {
             }
             Some(Body::Insn { mnemonic, span }) => {
                 // A bare word may be a vendor directive before it is an
-                // instruction; see `dialect::lookup`.
-                match dialect::lookup(self.options.dialect, self.interner.get(*mnemonic)) {
+                // instruction; see `dialect::lookup`. Not in CC-RL or CC-RH,
+                // whose directives are all dotted and whose `BT` is a branch.
+                let alias = if self.options.dialect.is_cc() {
+                    None
+                } else {
+                    dialect::lookup(self.options.dialect, self.interner.get(*mnemonic))
+                };
+                match alias {
                     Some(alias) => self.run_alias(stmt, alias),
                     None => self.instruction(stmt, *mnemonic, *span),
                 }
             }
             Some(Body::Assign { name, span }) => {
                 let mut cur = stmt.arg_cursor();
-                if let Some(e) = self.parse_expr(&mut cur) {
-                    self.set_symbol(*name, e, *span);
+                if let Some(mut e) = self.parse_expr(&mut cur) {
+                    // A CC-RL/CC-RH `.SET` takes an absolute expression of
+                    // symbols already defined (CC-RL page 504, Table 5.12 on
+                    // page 483; CC-RH page 435), so it is evaluated where it
+                    // stands; that is what lets `CNT .SET CNT + 1` count.
+                    let is_set = self.options.dialect.is_cc()
+                        && stmt.args >= 1
+                        && stmt.toks[stmt.args - 1]
+                            .ident()
+                            .is_some_and(|w| self.interner.get(w).eq_ignore_ascii_case(".set"));
+                    let value = if is_set {
+                        self.eval_absolute(e, "a `.SET` value")
+                            .map(|v| self.exprs.int(v as u64, self.exprs.span(e)))
+                    } else {
+                        Some(e)
+                    };
+                    if let Some(v) = value {
+                        e = v;
+                        self.set_symbol(*name, e, *span);
+                        // Only `.SET` names may be defined again (CC-RL page
+                        // 502; CC-RH page 436).
+                        if self.options.dialect.is_cc() && !is_set {
+                            let id = self.symbols.intern(*name, *span);
+                            self.symbols.get_mut(id).redefinable = false;
+                        }
+                    }
                 }
                 self.expect_end(&mut cur);
             }
@@ -919,11 +1084,38 @@ impl Assembler {
         self.here_sym = None;
     }
 
+    /// Replaces each reference this statement made to a symbol that already
+    /// has a constant value with that value.
+    ///
+    /// A CC-RL/CC-RH `.SET` symbol may be redefined, and every use means the
+    /// value it had there (CC-RL page 504; CC-RH page 435). Instruction
+    /// operands are otherwise evaluated once the whole file is read, when only
+    /// the last value is left.
+    fn bind_set_values(&mut self, mark: usize) {
+        for i in mark..self.exprs.len() {
+            let ExprKind::Sym(name) = self.exprs.nodes[i].kind else {
+                continue;
+            };
+            let Some(id) = self.symbols.lookup(name) else {
+                continue;
+            };
+            if let SymbolValue::Expr(e) = self.symbols.get(id).value
+                && let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs())
+            {
+                self.symbols.get_mut(id).used = true;
+                self.exprs.nodes[i].kind = ExprKind::Int(v as u64);
+            }
+        }
+    }
+
     /// Rewrites `.` and `1f`/`1b` nodes created by this statement into direct
     /// symbol references, now that the statement's position is known.
     fn bind_positional(&mut self, mark: usize) {
         if self.exprs.len() == mark {
             return;
+        }
+        if self.options.dialect.is_cc() {
+            self.bind_set_values(mark);
         }
         let Assembler {
             exprs,
@@ -968,6 +1160,7 @@ impl Assembler {
             diags: &mut self.diags,
             dollar_is_here: self.options.dialect.dollar_is_here(),
             star_is_here: self.options.dialect.star_is_here(),
+            dialect: self.options.dialect,
         };
         p.parse(cur)
     }
@@ -1056,7 +1249,7 @@ impl Assembler {
         }
     }
 
-    fn set_symbol(&mut self, name: Name, e: ExprRef, span: Span) {
+    pub(crate) fn set_symbol(&mut self, name: Name, e: ExprRef, span: Span) {
         let id = self.symbols.intern(name, span);
         let sym = self.symbols.get_mut(id);
         if sym.is_defined() && !sym.redefinable {

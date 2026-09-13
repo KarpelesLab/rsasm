@@ -9,7 +9,7 @@
 use crate::cursor::Cursor;
 use crate::diag::{DiagBag, Diagnostic};
 use crate::intern::{Interner, Name};
-use crate::lexer::{LocalDir, Punct, TokKind};
+use crate::lexer::{Dialect, LocalDir, Punct, TokKind};
 use crate::source::Span;
 use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
 
@@ -22,6 +22,33 @@ pub enum UnOp {
     Not,
     LogicalNot,
     Plus,
+    /// CC-RL and CC-RH `HIGH`: bits 8 to 15.
+    High,
+    /// `LOW`: bits 0 to 7.
+    Low,
+    /// `HIGHW`: bits 16 to 31.
+    HighW,
+    /// `LOWW`: bits 0 to 15.
+    LowW,
+    /// CC-RH `HIGHW1`: bits 16 to 31 plus bit 15, the high half that pairs
+    /// with a sign-extended `LOWW`.
+    HighW1,
+}
+
+impl UnOp {
+    fn symbol(self) -> &'static str {
+        match self {
+            UnOp::Neg => "-",
+            UnOp::Not => "~",
+            UnOp::LogicalNot => "!",
+            UnOp::Plus => "+",
+            UnOp::High => "HIGH",
+            UnOp::Low => "LOW",
+            UnOp::HighW => "HIGHW",
+            UnOp::LowW => "LOWW",
+            UnOp::HighW1 => "HIGHW1",
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -44,20 +71,40 @@ pub enum BinOp {
     Ge,
     LogicalAnd,
     LogicalOr,
+    /// CC-RL's `>>`: a logical shift of the value's 32 bits.
+    Shr32,
+    /// CC-RH's `>>`: an arithmetic shift of the value's 32 bits.
+    Sar32,
 }
 
 impl BinOp {
-    fn precedence(self) -> u8 {
+    fn precedence(self, dialect: Dialect) -> u8 {
         use BinOp::*;
-        match self {
-            LogicalOr => 1,
-            LogicalAnd => 2,
-            Or | Xor => 3,
-            And => 4,
-            Eq | Ne | Lt | Gt | Le | Ge => 5,
-            Shl | Shr => 6,
-            Add | Sub => 7,
-            Mul | Div | Rem => 8,
+        match dialect {
+            // CC-RL Table 5.5 (page 430) and CC-RH Table 5.4 (page 384). The
+            // two agree except on whether `+` binds tighter than `&`.
+            Dialect::CcRl | Dialect::CcRh => {
+                let additive_first = dialect == Dialect::CcRl;
+                match self {
+                    LogicalOr | LogicalAnd => 1,
+                    Eq | Ne | Lt | Gt | Le | Ge => 2,
+                    And | Or | Xor if additive_first => 3,
+                    Add | Sub if additive_first => 4,
+                    Add | Sub => 3,
+                    And | Or | Xor => 4,
+                    Mul | Div | Rem | Shl | Shr | Shr32 | Sar32 => 5,
+                }
+            }
+            _ => match self {
+                LogicalOr => 1,
+                LogicalAnd => 2,
+                Or | Xor => 3,
+                And => 4,
+                Eq | Ne | Lt | Gt | Le | Ge => 5,
+                Shl | Shr | Shr32 | Sar32 => 6,
+                Add | Sub => 7,
+                Mul | Div | Rem => 8,
+            },
         }
     }
 
@@ -66,7 +113,7 @@ impl BinOp {
         use BinOp::*;
         match self {
             Add => "+", Sub => "-", Mul => "*", Div => "/", Rem => "%",
-            Shl => "<<", Shr => ">>", And => "&", Or => "|", Xor => "^",
+            Shl => "<<", Shr | Shr32 | Sar32 => ">>", And => "&", Or => "|", Xor => "^",
             Eq => "==", Ne => "!=", Lt => "<", Gt => ">", Le => "<=", Ge => ">=",
             LogicalAnd => "&&", LogicalOr => "||",
         }
@@ -236,7 +283,7 @@ pub fn eval(arena: &ExprArena, r: ExprRef, cx: &mut dyn EvalCtx) -> Result<Value
                 }
                 return Err(EvalError::new(
                     span,
-                    "operand of unary operator must be an absolute value",
+                    format!("operand of `{}` must be an absolute value", op.symbol()),
                 ));
             };
             Ok(Value::abs(match op {
@@ -244,6 +291,13 @@ pub fn eval(arena: &ExprArena, r: ExprRef, cx: &mut dyn EvalCtx) -> Result<Value
                 UnOp::Not => !a,
                 UnOp::LogicalNot => (a == 0) as i64,
                 UnOp::Plus => a,
+                UnOp::High => (a >> 8) & 0xff,
+                UnOp::Low => a & 0xff,
+                UnOp::HighW => (a >> 16) & 0xffff,
+                UnOp::LowW => a & 0xffff,
+                // Wraps to 0 when the high half is 0xffff and bit 15 is set
+                // (CC-RH §5.1.8, page 416).
+                UnOp::HighW1 => (((a >> 16) & 0xffff) + ((a >> 15) & 1)) & 0xffff,
             }))
         }
         ExprKind::Binary(op, l, r2) => {
@@ -363,6 +417,24 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
                 0
             } else {
                 ((a as u64) >> b) as i64
+            }
+        }
+        // Both Renesas assemblers evaluate in 32 bits and give 0 for a count
+        // over 31 (CC-RL §5.1.8, page 456; CC-RH §5.1.6, page 408). CC-RH
+        // shifts the sign bit in, which as a 64-bit value is the sign-extended
+        // result.
+        Shr32 => {
+            if (b as u64) > 31 {
+                0
+            } else {
+                ((a as u32) >> b) as i64
+            }
+        }
+        Sar32 => {
+            if (b as u64) > 31 {
+                0
+            } else {
+                ((a as i32) >> b) as i64
             }
         }
         And => a & b,
@@ -521,6 +593,9 @@ pub struct ExprParser<'a> {
     pub dollar_is_here: bool,
     /// In Motorola source `*` in operand position is the location counter.
     pub star_is_here: bool,
+    /// Decides operator precedence and the dialect's own operators, such as
+    /// CC-RL's `HIGH` and `LOWW`.
+    pub dialect: Dialect,
 }
 
 impl<'a> ExprParser<'a> {
@@ -530,8 +605,8 @@ impl<'a> ExprParser<'a> {
 
     fn parse_bp(&mut self, cur: &mut Cursor<'_>, min_prec: u8) -> Option<ExprRef> {
         let mut lhs = self.parse_prefix(cur)?;
-        while let Some(op) = peek_binop(cur) {
-            let prec = op.precedence();
+        while let Some(op) = peek_binop(cur, self.dialect) {
+            let prec = op.precedence(self.dialect);
             if prec < min_prec {
                 break;
             }
@@ -570,13 +645,68 @@ impl<'a> ExprParser<'a> {
         self.interner.get(n).to_string()
     }
 
+    /// The CC-RL/CC-RH operator a word names, when it is followed by a term:
+    /// the byte and word separators (CC-RL §5.1.9-5.1.10, pages 458-466;
+    /// CC-RH §5.1.7-5.1.8, pages 410-416), which are reserved words and
+    /// apply to the one term after them, like any unary operator.
+    ///
+    /// The operators that only the Renesas linker can evaluate — `STARTOF`,
+    /// `SIZEOF`, the mirror-area `MIRHW`/`MIRLW`/`SMRLW`, and the bit-symbol
+    /// `DATAPOS`/`BITPOS` — are refused here with the reason, rather than
+    /// being read as a call to a symbol of that name. Returns `None` after
+    /// reporting one of those.
+    fn renesas_operator(&mut self, n: Name, span: Span) -> Option<Option<UnOp>> {
+        let word = self.interner.get(n).to_ascii_uppercase();
+        let op = match word.as_str() {
+            "HIGH" => UnOp::High,
+            "LOW" => UnOp::Low,
+            "HIGHW" => UnOp::HighW,
+            "LOWW" => UnOp::LowW,
+            "HIGHW1" if self.dialect == Dialect::CcRh => UnOp::HighW1,
+            "STARTOF" | "SIZEOF" => {
+                self.diags.error(
+                    span,
+                    format!(
+                        "`{word}` is evaluated by the Renesas optimizing linker, and no ELF \
+                         relocation can carry it; use a linker-defined symbol instead"
+                    ),
+                );
+                return None;
+            }
+            "MIRHW" | "MIRLW" | "SMRLW" if self.dialect == Dialect::CcRl => {
+                self.diags.error(
+                    span,
+                    format!(
+                        "`{word}` needs the device's mirror area, which only the Renesas \
+                         toolchain knows; it is not supported"
+                    ),
+                );
+                return None;
+            }
+            "DATAPOS" | "BITPOS" if self.dialect == Dialect::CcRl => {
+                self.diags.error(
+                    span,
+                    format!("`{word}` takes a bit symbol, and bit symbols are not supported"),
+                );
+                return None;
+            }
+            _ => return Some(None),
+        };
+        Some(Some(op))
+    }
+
     fn parse_prefix(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
         let tok = cur.peek();
         let unop = match tok.kind {
             TokKind::Punct(Punct::Minus) => Some(UnOp::Neg),
             TokKind::Punct(Punct::Tilde) => Some(UnOp::Not),
+            // CC-RH's `!` is the bitwise NOT (§5.1.4, page 394).
+            TokKind::Punct(Punct::Bang) if self.dialect == Dialect::CcRh => Some(UnOp::Not),
             TokKind::Punct(Punct::Bang) => Some(UnOp::LogicalNot),
             TokKind::Punct(Punct::Plus) => Some(UnOp::Plus),
+            TokKind::Ident(n) if self.dialect.is_cc() && starts_term(cur.nth(1).kind) => {
+                self.renesas_operator(n, tok.span)?
+            }
             _ => None,
         };
         if let Some(op) = unop {
@@ -663,7 +793,21 @@ fn describe(_cur: &Cursor<'_>, k: TokKind) -> String {
     }
 }
 
-fn peek_binop(cur: &Cursor<'_>) -> Option<BinOp> {
+/// Whether a token can begin a term, which is what makes a CC-RL `LOWW` an
+/// operator rather than a stray word.
+fn starts_term(k: TokKind) -> bool {
+    matches!(
+        k,
+        TokKind::Int(_)
+            | TokKind::Ident(_)
+            | TokKind::BadNumber(_)
+            | TokKind::Punct(
+                Punct::LParen | Punct::Minus | Punct::Plus | Punct::Tilde | Punct::Bang
+            )
+    )
+}
+
+fn peek_binop(cur: &Cursor<'_>, dialect: Dialect) -> Option<BinOp> {
     use BinOp::*;
     let TokKind::Punct(p) = cur.peek().kind else {
         return None;
@@ -675,6 +819,8 @@ fn peek_binop(cur: &Cursor<'_>) -> Option<BinOp> {
         Punct::Slash => Div,
         Punct::Percent => Rem,
         Punct::Shl => Shl,
+        Punct::Shr if dialect == Dialect::CcRl => Shr32,
+        Punct::Shr if dialect == Dialect::CcRh => Sar32,
         Punct::Shr => Shr,
         Punct::Amp => And,
         Punct::Pipe => Or,
@@ -756,6 +902,7 @@ mod tests {
                 diags: &mut diags,
                 dollar_is_here: false,
                 star_is_here: false,
+                dialect: Dialect::Gas,
             };
             p.parse(&mut cur)
         };

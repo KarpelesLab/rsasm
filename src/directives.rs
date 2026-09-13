@@ -18,7 +18,6 @@ use std::path::PathBuf;
 impl Assembler {
     pub(crate) fn directive(&mut self, stmt: &Statement, name: Name) {
         let text = self.interner.get(name).to_string();
-        let span = stmt.span;
 
         // Renesas's newer assemblers dot their directives (`.DB`, `.CSEG`).
         // Those are the vendor table's words, and take priority over a GNU as
@@ -31,7 +30,24 @@ impl Assembler {
             self.run_alias(stmt, alias);
             return;
         }
+        // CC-RL and CC-RH have a table of their own, whose `$` control
+        // instructions keep the `$` in their name.
+        if self.options.dialect.is_cc()
+            && let Some(alias) = crate::dialect::lookup(
+                self.options.dialect,
+                text.strip_prefix('.').unwrap_or(&text),
+            )
+        {
+            self.run_alias(stmt, alias);
+            return;
+        }
+        self.builtin_directive(stmt, name);
+    }
 
+    /// Runs a directive from the GNU as table, or the backend's.
+    pub(crate) fn builtin_directive(&mut self, stmt: &Statement, name: Name) {
+        let text = self.interner.get(name).to_string();
+        let span = stmt.span;
         let mut cur = stmt.arg_cursor();
 
         let handled = match text.as_str() {
@@ -184,30 +200,7 @@ impl Assembler {
         }
 
         // Give the architecture a chance before reporting it unknown.
-        let mut cur = stmt.arg_cursor();
-        let Assembler {
-            arch,
-            interner,
-            exprs,
-            diags,
-            pool,
-            symbols,
-            arch_state,
-            options,
-            ..
-        } = self;
-        let dialect = options.dialect;
-        let mut cx = crate::arch::AsmCtx {
-            interner,
-            exprs,
-            diags,
-            pool,
-            symbols,
-            state: arch_state,
-            dialect,
-        };
-        if arch.directive(&mut cx, &text, &mut cur) {
-            self.expect_end(&mut cur);
+        if self.arch_directive(stmt, &text) {
             return;
         }
 
@@ -230,6 +223,38 @@ impl Assembler {
         }
         self.diags
             .error(span, format!("unknown directive `{text}`"));
+    }
+
+    /// Offers a directive to the architecture backend. Returns whether the
+    /// backend claimed it.
+    pub(crate) fn arch_directive(&mut self, stmt: &Statement, text: &str) -> bool {
+        let mut cur = stmt.arg_cursor();
+        let Assembler {
+            arch,
+            interner,
+            exprs,
+            diags,
+            pool,
+            symbols,
+            arch_state,
+            options,
+            ..
+        } = self;
+        let dialect = options.dialect;
+        let mut cx = crate::arch::AsmCtx {
+            interner,
+            exprs,
+            diags,
+            pool,
+            symbols,
+            state: arch_state,
+            dialect,
+        };
+        if arch.directive(&mut cx, text, &mut cur) {
+            self.expect_end(&mut cur);
+            return true;
+        }
+        false
     }
 
     // ---- helpers ----------------------------------------------------------
@@ -825,6 +850,12 @@ impl Assembler {
     }
 
     fn dir_elseif(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        self.dir_elseif_kind(cur, span, ".if")
+    }
+
+    /// `.elseif`, with the test of the `.if` variant `kind`: CC-RL's
+    /// `$ELSEIFN` is an `.elseif` that tests like `.ifeq`.
+    pub(crate) fn dir_elseif_kind(&mut self, cur: &mut Cursor<'_>, span: Span, kind: &str) -> bool {
         let Some(state) = self.cond_top() else {
             self.diags.error(span, "`.elseif` without a matching `.if`");
             cur.set_pos(cur.all().len());
@@ -845,7 +876,7 @@ impl Assembler {
         // Evaluating the condition needs the enclosing conditional to look
         // active, which it is: `taken` is false only when no branch ran.
         let outer_active = self.enclosing_cond_active();
-        let value = outer_active && self.eval_condition(cur, ".if");
+        let value = outer_active && self.eval_condition(cur, kind);
         self.set_cond_active(value);
         if value {
             self.mark_cond_taken();
