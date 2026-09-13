@@ -17,6 +17,27 @@ use crate::symbol::SymbolTable;
 #[cfg(feature = "x86")]
 pub mod x86;
 
+#[cfg(feature = "aarch64")]
+pub mod aarch64;
+
+#[cfg(feature = "arm")]
+pub mod arm;
+
+#[cfg(feature = "riscv")]
+pub mod riscv;
+
+#[cfg(feature = "powerpc")]
+pub mod powerpc;
+
+#[cfg(feature = "mips")]
+pub mod mips;
+
+#[cfg(feature = "sparc")]
+pub mod sparc;
+
+#[cfg(feature = "retro")]
+pub mod retro;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Endian {
     Little,
@@ -180,6 +201,34 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     if let Some(a) = x86::lookup(&lower) {
         return Some(a);
     }
+    #[cfg(feature = "aarch64")]
+    if let Some(a) = aarch64::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "arm")]
+    if let Some(a) = arm::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "riscv")]
+    if let Some(a) = riscv::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "powerpc")]
+    if let Some(a) = powerpc::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "mips")]
+    if let Some(a) = mips::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "sparc")]
+    if let Some(a) = sparc::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "retro")]
+    if let Some(a) = retro::lookup(&lower) {
+        return Some(a);
+    }
     let _ = lower;
     None
 }
@@ -192,6 +241,20 @@ pub fn available() -> Vec<&'static str> {
     let mut v = Vec::new();
     #[cfg(feature = "x86")]
     v.extend_from_slice(x86::NAMES);
+    #[cfg(feature = "aarch64")]
+    v.extend_from_slice(aarch64::NAMES);
+    #[cfg(feature = "arm")]
+    v.extend_from_slice(arm::NAMES);
+    #[cfg(feature = "riscv")]
+    v.extend_from_slice(riscv::NAMES);
+    #[cfg(feature = "powerpc")]
+    v.extend_from_slice(powerpc::NAMES);
+    #[cfg(feature = "mips")]
+    v.extend_from_slice(mips::NAMES);
+    #[cfg(feature = "sparc")]
+    v.extend_from_slice(sparc::NAMES);
+    #[cfg(feature = "retro")]
+    v.extend_from_slice(retro::NAMES);
     v
 }
 

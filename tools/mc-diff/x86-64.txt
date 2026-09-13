@@ -1,0 +1,8 @@
+# Sanity corpus for the harness itself; the thorough x86 comparison lives in
+# tools/gas-diff, which checks against GNU as.
+nop
+ret
+movq %rbx, %rax
+addq $1, %rax
+movq 16(%rbx,%rcx,8), %rax
+pushq %r12
