@@ -742,8 +742,7 @@ fn source_and_bytes(inst: &Instance, s: Spelling) -> (String, Vec<u8>) {
             Slot::Sfr => format!("0{SFR:X}H"),
             Slot::Sfrp => format!("0{SFRP:X}H"),
             Slot::Addr16 => format!("!{ADDR16:X}H"),
-            // Decimal: the core lexer reads `0B00H` as a malformed `0b` binary.
-            Slot::Addr11 => format!("!{}", 0x800 | (bv(Var::F) as u16) << 8 | FA_LOW),
+            Slot::Addr11 => format!("!0{:X}H", 0x800 | (bv(Var::F) as u16) << 8 | FA_LOW),
             Slot::Addr5 => format!("[{:X}H]", 0x40 + 2 * bv(Var::T)),
             Slot::Rel => format!("$$+{REL_TARGET}"),
             Slot::De => word("[DE]", s),
@@ -861,10 +860,9 @@ fn callf_reaches_its_whole_range_as_constants_and_forward_references() {
     let mut want = Vec::new();
     for addr in 0x800u16..=0xfff {
         let fa = addr - 0x800;
-        // Decimal: the core lexer reads `0B00H` as a malformed `0b` binary.
-        consts.push_str(&format!("\tCALLF !{addr}\n"));
+        consts.push_str(&format!("\tCALLF !0{addr:X}H\n"));
         fwd.push_str(&format!("\tCALLF !T{addr:X}\n"));
-        defs.push_str(&format!("T{addr:X} EQU {addr}\n"));
+        defs.push_str(&format!("T{addr:X} EQU 0{addr:X}H\n"));
         want.push(0x0c | ((fa >> 8) as u8) << 4);
         want.push(fa as u8);
     }

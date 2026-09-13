@@ -270,6 +270,22 @@ pub enum TokKind {
     BadNumber(Name),
 }
 
+/// The radix of a literal written with a trailing radix letter (`0ffh`,
+/// `1010b`, `17o`, `99d`), if every character before the letter is a digit of
+/// that radix.
+fn suffix_radix(run: &str) -> Option<u32> {
+    let last = run.as_bytes().last().copied()?;
+    let radix = match last | 0x20 {
+        b'h' => 16,
+        b'b' | b'y' => 2,
+        b'o' | b'q' => 8,
+        b'd' | b't' => 10,
+        _ => return None,
+    };
+    let body = &run[..run.len() - 1];
+    (!body.is_empty() && body.chars().all(|c| c == '_' || c.is_digit(radix))).then_some(radix)
+}
+
 /// The diagnostic for a [`TokKind::BadNumber`] read where a number was
 /// expected: names the first character that is not a digit, and the base.
 pub fn explain_bad_number(text: &str) -> String {
@@ -627,6 +643,26 @@ impl<'a> Lexer<'a> {
         Some(mk(TokKind::Int(value)))
     }
 
+    /// Whether the alphanumeric run at the cursor is a complete literal with a
+    /// trailing radix letter, in the Renesas dialect.
+    ///
+    /// Renesas assemblers only have suffixes, so `0B00H` there can only be
+    /// hex. NASM reads a `0b` prefix before it looks for a suffix and rejects
+    /// the same text, so it keeps prefix-first order.
+    fn suffixed_literal_ahead(&self) -> bool {
+        if self.config.dialect != Dialect::Renesas {
+            return false;
+        }
+        let mut p = self.pos;
+        while p < self.bytes.len()
+            && (self.bytes[p].is_ascii_alphanumeric() || self.bytes[p] == b'_')
+        {
+            p += 1;
+        }
+        let run = &self.src[self.pos..p];
+        suffix_radix(run).is_some()
+    }
+
     fn lex_number(
         &mut self,
         start: usize,
@@ -666,10 +702,11 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        // A `0x` / `0b` / `0o` prefix fixes the radix up front.
+        // A `0x` / `0b` / `0o` prefix fixes the radix up front, unless the
+        // whole run is a Renesas suffixed literal such as `0B00H`.
         let mut radix: u32 = 10;
         let mut digits_start = self.pos;
-        if self.peek() == b'0' {
+        if self.peek() == b'0' && !self.suffixed_literal_ahead() {
             let next = self.peek_at(1) | 0x20;
             let prefix_radix = match next {
                 b'x' => Some(16),
@@ -700,23 +737,10 @@ impl<'a> Lexer<'a> {
 
         if !prefixed {
             if self.config.radix_suffix
-                && let Some(last) = run.as_bytes().last().copied()
+                && let Some(sr) = suffix_radix(run)
             {
-                let suffix_radix = match last | 0x20 {
-                    b'h' => Some(16),
-                    b'b' | b'y' => Some(2),
-                    b'o' | b'q' => Some(8),
-                    b'd' | b't' => Some(10),
-                    _ => None,
-                };
-                if let Some(sr) = suffix_radix {
-                    let body = &run[..run.len() - 1];
-                    let ok = !body.is_empty() && body.chars().all(|c| c == '_' || c.is_digit(sr));
-                    if ok {
-                        radix = sr;
-                        run = body;
-                    }
-                }
+                radix = sr;
+                run = &run[..run.len() - 1];
             }
             if radix == 10
                 && self.config.octal_leading_zero
@@ -1010,6 +1034,21 @@ mod tests {
                 TokKind::Int(1000),
                 // A bare leading zero is octal in GAS.
                 TokKind::Int(8),
+            ]
+        );
+    }
+
+    #[test]
+    fn renesas_suffix_wins_over_a_look_alike_prefix() {
+        let (k, _) = lex_all("0B00H 0b1h 0B0FH 0x1F 0b101", Dialect::Renesas);
+        assert_eq!(
+            &k[..5],
+            &[
+                TokKind::Int(0xb00),
+                TokKind::Int(0xb1),
+                TokKind::Int(0xb0f),
+                TokKind::Int(0x1f),
+                TokKind::Int(5),
             ]
         );
     }
