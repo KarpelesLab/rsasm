@@ -32,11 +32,13 @@
 //!   rsasm takes the 6-byte `bra.a` pair there, which reaches. (Its other
 //!   relaxation rules, shrinking included, are followed; see
 //!   [`Architecture::relaxation_may_shrink`].)
-//! - A difference of two labels already defined takes the short immediate
-//!   forms, as it does in GNU as when nothing relaxable lies between the
-//!   labels; see [`encode::classify`] for when that approximation misses.
-//! - A displacement must be a constant when read, as GNU as requires, but its
-//!   `sym1 - sym2` and `%gp()` exceptions are not supported.
+//! - A displacement must be a constant or a difference of labels, as in GNU
+//!   as, but its `%gp()` exception is not supported.
+//! - What needs one of GNU as's relocation expressions, a stack of `R_RX_SYM`
+//!   and `R_RX_OP*` entries, is refused: a difference of symbols that are not
+//!   in one section, such as `.long ext - .`, and `sub #sym`, which stores the
+//!   symbol negated. RX has no single relocation for either; even `.long ext
+//!   - .` has no 32-bit PC-relative one to stand in for the stack.
 //! - A bare number as a branch target (`bra 5`) is an address here; GNU as
 //!   sizes the branch as if the number were the displacement.
 //! - Code goes in whatever section is current, `.text` by default, where GNU

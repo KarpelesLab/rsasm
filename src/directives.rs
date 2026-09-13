@@ -248,6 +248,8 @@ impl Assembler {
             symbols,
             arch_state,
             options,
+            sections,
+            cur: section,
             ..
         } = self;
         let dialect = options.dialect;
@@ -259,6 +261,9 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            sections,
+            section: *section,
+            relaxable: false,
         };
         if arch.directive(&mut cx, text, &mut cur) {
             self.expect_end(&mut cur);
@@ -729,6 +734,7 @@ impl Assembler {
         sym.value = SymbolValue::Expr(e);
         sym.def_span = nspan;
         sym.redefinable = !once_only;
+        self.symbols.mark_defined(id);
         true
     }
 

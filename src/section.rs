@@ -190,6 +190,18 @@ pub struct FixupKind {
     /// field cannot be relocated, since no relocation rounds its base, so it
     /// is meant for fields with no `reloc`.
     pub pc_align: u8,
+    /// Relaxation sizes this field the way GNU as's RX port sizes a symbolic
+    /// immediate, rather than by whether the value fits.
+    ///
+    /// `rx_relax_frag` only knows a value for a difference of two local
+    /// labels in the fixup's own section, and takes the smallest field whose
+    /// signed range holds it. It does not move labels ahead of the
+    /// instruction by the growth so far, as it does for a branch target:
+    /// it adds that growth to the whole difference, and only when the
+    /// difference, read as an unsigned address, lies past the instruction.
+    /// Anything it cannot evaluate gets the widest field. `range` still
+    /// decides whether the value that is finally written is accepted.
+    pub relax_difference: bool,
 }
 
 /// The symbol a relocation is written against.
@@ -235,6 +247,7 @@ impl FixupKind {
             always_reloc: false,
             link: LinkValue::Plain,
             pc_align: 1,
+            relax_difference: false,
         }
     }
 
@@ -301,6 +314,13 @@ impl FixupKind {
     /// `align`; see [`FixupKind::pc_align`].
     pub fn with_pc_align(mut self, align: u8) -> FixupKind {
         self.pc_align = align.max(1);
+        self
+    }
+
+    /// Sizes the field during relaxation as GNU as's RX port does; see
+    /// [`FixupKind::relax_difference`].
+    pub fn relaxed_as_difference(mut self) -> FixupKind {
+        self.relax_difference = true;
         self
     }
 
@@ -431,6 +451,11 @@ pub struct Fragment {
     pub span: Span,
     /// Offset from the start of the section, assigned by layout.
     pub offset: u64,
+    /// The reference assembler gives this instruction a fragment that its
+    /// relaxation revisits, even though it has only one encoding here. A
+    /// difference of labels on either side of it is then not a constant
+    /// while the file is read; see [`crate::arch::AsmCtx::fixed_distance`].
+    pub relaxable: bool,
 }
 
 impl Fragment {
@@ -439,6 +464,7 @@ impl Fragment {
             kind,
             span,
             offset: 0,
+            relaxable: false,
         }
     }
 

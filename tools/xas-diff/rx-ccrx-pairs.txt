@@ -208,6 +208,16 @@ L1:	rts
 	shlr	#3, r4
 	mvtipl	#9
 	racw	#2
+=== bit length specifiers on a folded difference and a symbol
+S:	.BYTE	1, 2, 3
+E:	MOV.L	#E-S:4, R1
+	MOV.L	#ext:32, R2
+	ADD	#ext:32, R3
+--- gnu
+s:	.byte	1, 2, 3
+e:	mov.l	#e-s, r1
+	mov.l	#ext, r2
+	add	#ext, r3
 === substitute register names for the PID function
 	MOV.L	__PID_R13, __PID_R1
 	ADD	#4, __PID_R15, R6

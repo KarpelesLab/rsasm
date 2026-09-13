@@ -133,6 +133,11 @@ const PAIRS: &[(&str, &str, &str)] = &[
         "66 51 fb 26 9c 75 42 c8 fd 74 81 05 72 11 e8 03 73 11 60 79 fe fb 12 78 56 34 12 f8 14 c8 f8 19 40 9c a7 9b 06 89 12 64 06 8a 12 e8 03 3e 11 14 f0 17 79 fa 68 34 75 70 09 fd 18 10",
     ),
     (
+        "bit length specifiers on a folded difference and a symbol",
+        "S:\t.BYTE\t1, 2, 3\nE:\tMOV.L\t#E-S:4, R1\n\tMOV.L\t#ext:32, R2\n\tADD\t#ext:32, R3\n",
+        "01 02 03 66 31 fb 22 00 00 00 00 70 33 00 00 00 00",
+    ),
+    (
         "substitute register names for the PID function",
         "\tMOV.L\t__PID_R13, __PID_R1\n\tADD\t#4, __PID_R15, R6\n\tMOV.L\t4[__PID_R2], R3\n",
         "ef d1 71 f6 04 a8 2b",

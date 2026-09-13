@@ -416,3 +416,148 @@ L0:
 	rts
 	.space 1
 	.space 8
+=== a difference across an instruction with a displacement is not folded
+s:
+	add 4[r1], r2
+e:
+	mov #e-s, r1
+=== a difference across a plain [reg] operand is folded
+s:
+	mov.l [r1], r2
+e:
+	mov #e-s, r1
+=== a displacement written as zero still stops folding
+s:
+	mov.l r1, 0[r8]
+e:
+	mov #e-s, r1
+=== a zero displacement the short mov takes does not stop folding
+s:
+	mov.l 0[r1], r2
+e:
+	mov #e-s, r1
+=== the short mov to a displacement does not stop folding
+s:
+	mov.b #1, 4[r1]
+e:
+	cmp #e-s, r1
+=== a difference across an alignment is not folded
+s:
+	nop
+	.balign 4
+e:
+	mov #e-s, r1
+=== constant LEB128 values do not stop folding
+s:
+	.uleb128 300
+	.sleb128 -1000
+e:
+	mov #e-s, r1
+=== a difference across a symbolic immediate is not folded
+s:
+	mov #ext, r1
+e:
+	mov #e-s, r2
+=== a symbol minus itself is folded before it is defined
+	mov #x-x, r1
+	cmp #x-x+20, r2
+x:
+=== a difference from . folds like one from a label
+s:
+	.space 20
+	mov #.-s, r1
+=== a difference of labels as a displacement is 16 bits and not divided
+	mov.l (e-s)[r1], r2
+	mov.b (e-s)[r1], r2
+	add (e-s)[r1].w, r2
+s:
+	.space 200
+e:
+=== a folded difference as a displacement is divided and can be short
+s:
+	.space 8
+e:
+	mov.l (e-s)[r1], r2
+	add (e-s)[r3].w, r4
+=== an immediate and a displacement that are both differences relax together
+	mov.l #e-s, (e-s)[r1]
+s:
+	.space 200
+e:
+=== a byte-sized difference wraps where GNU as's fixup lets it
+	int #s-e
+	mov.b #s-e, 4[r1]
+s:
+	.space 200
+e:
+=== sbb, shift counts and rtsd take folded differences
+s:
+	.space 4
+e:
+	sbb #e-s, r1
+	shlr #e-s, r2
+	rtsd #e-s
+=== a difference with a global label is 32 bits
+	.global g
+	mov #g-s, r1
+s:
+	.space 20
+g:
+=== a difference of labels in another section is 32 bits
+	mov #e-s, r1
+	.data
+s:
+	.long 1, 2
+e:
+=== a difference from . in data resolves in the section
+	.long e - .
+	.short e - .
+	.byte e - .
+	bra e
+e:
+=== a difference straddling a branch is sized once the branch is
+	mov #e-s, r1
+s:
+	bne far
+	.space 125
+e:
+	.space 32768
+far:
+=== a symbolic immediate after a displacement starts at one byte, as GNU as estimates it
+	mov.l #e-s, 12[r3]
+	.space 6
+	bra e
+	.balign 4
+s:
+e:
+=== growth before an immediate is added to a negative difference ahead of it
+	mov.l #a-b, 4[r1]
+	mov #b-c, r1
+b:
+	.balign 2
+a:
+	.space 128
+c:
+=== a symbol set to a folded difference is a constant
+msg:
+	.ascii "hello"
+len = . - msg
+	mov #len, r1
+	cmp #len+1, r2
+=== a symbol set to a difference that does not fold is 32 bits
+s:
+	bra far
+e:
+d = e - s
+	mov #d, r3
+	.space 200
+far:
+=== a symbol set before its labels are defined is 32 bits
+size = e - s
+s:
+	.space 3
+e:
+	mov #size, r1
+=== sub of a symbol set later is a negated 32-bit add
+	sub #n, r3
+n = 300

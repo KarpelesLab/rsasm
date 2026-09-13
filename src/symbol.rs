@@ -65,6 +65,10 @@ pub struct Symbol {
     /// `.set` symbols may be redefined; plain labels may not.
     pub redefinable: bool,
     pub used: bool,
+    /// When the symbol was last defined, counting definitions in the order
+    /// they were read; 0 while it is undefined. See
+    /// [`SymbolTable::mark_defined`].
+    pub def_order: u32,
 }
 
 impl Symbol {
@@ -80,6 +84,8 @@ pub struct SymbolTable {
     /// For each numeric local label `N`, the synthetic symbols created for it,
     /// in definition order.
     locals: HashMap<u32, LocalSlots>,
+    /// Definitions read so far.
+    definitions: u32,
 }
 
 #[derive(Default)]
@@ -139,6 +145,7 @@ impl SymbolTable {
             local_number: None,
             redefinable: false,
             used: false,
+            def_order: 0,
         });
         self.by_name.insert(name, id);
         id
@@ -161,7 +168,19 @@ impl SymbolTable {
             local_number: None,
             redefinable: false,
             used: true,
+            def_order: 0,
         })
+    }
+
+    /// Records that `id` has just been given a definition.
+    ///
+    /// Which of two symbols was defined first is not otherwise recoverable once
+    /// the file is read, and it matters where the reference assembler decides
+    /// something as it reads: GNU as folds `size = end - start` to a constant
+    /// only if both labels were already defined at that line.
+    pub fn mark_defined(&mut self, id: SymbolId) {
+        self.definitions += 1;
+        self.syms[id.0 as usize].def_order = self.definitions;
     }
 
     fn push(&mut self, s: Symbol) -> SymbolId {
@@ -214,6 +233,7 @@ impl SymbolTable {
             local_number: Some(n),
             redefinable: false,
             used: false,
+            def_order: 0,
         });
         let slots = self.locals.entry(n).or_default();
         debug_assert_eq!(

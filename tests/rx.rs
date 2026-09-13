@@ -806,6 +806,142 @@ fn relaxation_follows_gnu_as() {
     ]);
 }
 
+/// Differences of labels as GNU as reads them: a constant, with the short
+/// forms, where its expression parser could fold one, which it cannot across
+/// anything that may change size; otherwise an immediate relaxed with its own
+/// rules, or a 16-bit displacement. Expected bytes are `rx-elf-as` output (the
+/// same programs are in `tools/xas-diff/rx-programs.txt`).
+#[test]
+fn label_differences_follow_gnu_as() {
+    check_programs(&[
+        (
+            "a difference across an instruction with a displacement is not folded",
+            "s:\n\tadd 4[r1], r2\ne:\n\tmov #e-s, r1\n",
+            "06 89 12 01 fb 16 04",
+        ),
+        (
+            "a difference across a plain [reg] operand is folded",
+            "s:\n\tmov.l [r1], r2\ne:\n\tmov #e-s, r1\n",
+            "ec 12 66 21",
+        ),
+        (
+            "a displacement written as zero still stops folding",
+            "s:\n\tmov.l r1, 0[r8]\ne:\n\tmov #e-s, r1\n",
+            "e3 81 fb 16 02",
+        ),
+        (
+            "a zero displacement the short mov takes does not stop folding",
+            "s:\n\tmov.l 0[r1], r2\ne:\n\tmov #e-s, r1\n",
+            "a8 12 66 21",
+        ),
+        (
+            "the short mov to a displacement does not stop folding",
+            "s:\n\tmov.b #1, 4[r1]\ne:\n\tcmp #e-s, r1\n",
+            "3c 14 01 61 31",
+        ),
+        (
+            "a difference across an alignment is not folded",
+            "s:\n\tnop\n\t.balign 4\ne:\n\tmov #e-s, r1\n",
+            "03 fc 13 00 fb 16 04 03",
+        ),
+        (
+            "constant LEB128 values do not stop folding",
+            "s:\n\t.uleb128 300\n\t.sleb128 -1000\ne:\n\tmov #e-s, r1\n",
+            "ac 02 98 78 66 41",
+        ),
+        (
+            "a difference across a symbolic immediate is not folded",
+            "s:\n\tmov #ext, r1\ne:\n\tmov #e-s, r2\n",
+            "fb 12 00 00 00 00 fb 26 06",
+        ),
+        (
+            "a symbol minus itself is folded before it is defined",
+            "\tmov #x-x, r1\n\tcmp #x-x+20, r2\nx:\n",
+            "66 01 75 52 14",
+        ),
+        (
+            "a difference from . folds like one from a label",
+            "s:\n\t.space 20\n\tmov #.-s, r1\n",
+            "00*20 75 41 14",
+        ),
+        (
+            "a difference of labels as a displacement is 16 bits and not divided",
+            "\tmov.l (e-s)[r1], r2\n\tmov.b (e-s)[r1], r2\n\tadd (e-s)[r1].w, r2\ns:\n\t.space 200\ne:\n",
+            "ee 12 c8 00 ce 12 c8 00 06 4a 12 c8 00*201",
+        ),
+        (
+            "a folded difference as a displacement is divided and can be short",
+            "s:\n\t.space 8\ne:\n\tmov.l (e-s)[r1], r2\n\tadd (e-s)[r3].w, r4\n",
+            "00*8 a8 92 06 49 34 04",
+        ),
+        (
+            "an immediate and a displacement that are both differences relax together",
+            "\tmov.l #e-s, (e-s)[r1]\ns:\n\t.space 200\ne:\n",
+            "fa 1a c8 00 c8 00*201",
+        ),
+        (
+            "a byte-sized difference wraps where GNU as's fixup lets it",
+            "\tint #s-e\n\tmov.b #s-e, 4[r1]\ns:\n\t.space 200\ne:\n",
+            "75 60 38 f9 14 04 38 00*200",
+        ),
+        (
+            "sbb, shift counts and rtsd take folded differences",
+            "s:\n\t.space 4\ne:\n\tsbb #e-s, r1\n\tshlr #e-s, r2\n\trtsd #e-s\n",
+            "00 00 00 00 fd 74 21 fb 68 42 67 01",
+        ),
+        (
+            "a difference with a global label is 32 bits",
+            "\t.global g\n\tmov #g-s, r1\ns:\n\t.space 20\ng:\n",
+            "fb 12 14 00*23",
+        ),
+        (
+            "a difference of labels in another section is 32 bits",
+            "\tmov #e-s, r1\n\t.data\ns:\n\t.long 1, 2\ne:\n",
+            "fb 12 08 00 00 00",
+        ),
+        (
+            "a difference from . in data resolves in the section",
+            "\t.long e - .\n\t.short e - .\n\t.byte e - .\n\tbra e\ne:\n",
+            "09 00 00 00 05 00 03 2e 02",
+        ),
+        (
+            "a difference straddling a branch is sized once the branch is",
+            "\tmov #e-s, r1\ns:\n\tbne far\n\t.space 125\ne:\n\t.space 32768\nfar:\n",
+            "fb 1a 82 00 15 04 81 80 00*32894",
+        ),
+        (
+            "a symbolic immediate after a displacement starts at one byte, as GNU as estimates it",
+            "\tmov.l #e-s, 12[r3]\n\t.space 6\n\tbra e\n\t.balign 4\ns:\ne:\n",
+            "f9 32 03 00*10 2e 03 03",
+        ),
+        (
+            "growth before an immediate is added to a negative difference ahead of it",
+            "\tmov.l #a-b, 4[r1]\n\tmov #b-c, r1\nb:\n\t.balign 2\na:\n\t.space 128\nc:\n",
+            "f9 12 01 00 00 00 00 fb 16 80 00*128",
+        ),
+        (
+            "a symbol set to a folded difference is a constant",
+            "msg:\n\t.ascii \"hello\"\nlen = . - msg\n\tmov #len, r1\n\tcmp #len+1, r2\n",
+            "68 65 6c 6c 6f 66 51 61 62",
+        ),
+        (
+            "a symbol set to a difference that does not fold is 32 bits",
+            "s:\n\tbra far\ne:\nd = e - s\n\tmov #d, r3\n\t.space 200\nfar:\n",
+            "38 d1 00 fb 32 03 00*203",
+        ),
+        (
+            "a symbol set before its labels are defined is 32 bits",
+            "size = e - s\ns:\n\t.space 3\ne:\n\tmov #size, r1\n",
+            "00 00 00 fb 12 03 00 00 00",
+        ),
+        (
+            "sub of a symbol set later is a negated 32-bit add",
+            "\tsub #n, r3\nn = 300\n",
+            "70 33 d4 fe ff ff",
+        ),
+    ]);
+}
+
 /// The one place rsasm departs from that on purpose: GNU as gives a target
 /// 32,769 bytes back the `bra.w` pair, whose field then wraps to +32,767.
 #[test]

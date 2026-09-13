@@ -10,9 +10,9 @@ use crate::diag::DiagBag;
 use crate::expr::{ExprArena, ExprParser};
 use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
-use crate::section::Variant;
+use crate::section::{FragKind, SectionId, Variant};
 use crate::source::Span;
-use crate::symbol::SymbolTable;
+use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
 
 #[cfg(feature = "x86")]
 pub mod x86;
@@ -192,6 +192,15 @@ pub struct AsmCtx<'a> {
     /// The source dialect, which decides operand spelling as much as lexing:
     /// the same m68k register is `%d0` to GNU as and `d0` in Motorola source.
     pub dialect: crate::lexer::Dialect,
+    /// Read-only: what has been emitted so far, for
+    /// [`AsmCtx::fixed_distance`].
+    pub sections: &'a [crate::section::Section],
+    /// The section the statement is assembled into.
+    pub section: crate::section::SectionId,
+    /// Set by a backend whose reference assembler would give this instruction
+    /// a fragment that relaxation revisits, though it has one encoding here;
+    /// see [`crate::section::Fragment::relaxable`].
+    pub relaxable: bool,
 }
 
 impl AsmCtx<'_> {
@@ -221,6 +230,67 @@ impl AsmCtx<'_> {
 
     pub fn error(&mut self, span: Span, msg: impl Into<String>) {
         self.diags.error(span, msg);
+    }
+
+    /// Where a label was defined: its section, and the index of the fragment
+    /// it starts.
+    pub fn label_position(&self, id: SymbolId) -> Option<(SectionId, u32)> {
+        match self.symbols.get(id).value {
+            SymbolValue::Label { section, frag } => Some((section, frag)),
+            _ => None,
+        }
+    }
+
+    /// Where the statement being assembled starts, in the terms of
+    /// [`AsmCtx::label_position`]; this is where its `.` is.
+    pub fn here(&self) -> (SectionId, u32) {
+        let s = &self.sections[self.section.0 as usize];
+        (self.section, s.next_frag_index())
+    }
+
+    /// The distance from `from` to `to`, if nothing emitted between them can
+    /// change size.
+    ///
+    /// This is when GNU as's expression parser folds a difference of labels
+    /// to a constant as it reads it (`frag_offset_fixed_p`), which decides
+    /// the encoding on targets whose backend chooses one by whether an operand
+    /// is constant. An alignment, a `.org`, a `.space` or LEB128 value that is
+    /// not a constant, or an instruction relaxation may resize between the
+    /// two breaks it, even where layout later finds nothing to change.
+    pub fn fixed_distance(&self, from: (SectionId, u32), to: (SectionId, u32)) -> Option<i64> {
+        if from.0 != to.0 {
+            return None;
+        }
+        let (lo, hi, sign) = if from.1 <= to.1 {
+            (from.1, to.1, 1)
+        } else {
+            (to.1, from.1, -1)
+        };
+        let frags = &self.sections[from.0.0 as usize].frags;
+        let mut total = 0i64;
+        for f in frags.get(lo as usize..hi as usize)? {
+            if f.relaxable {
+                return None;
+            }
+            total += match &f.kind {
+                FragKind::Bytes { variants, .. } if variants.len() == 1 => {
+                    variants[0].bytes.len() as i64
+                }
+                FragKind::Space { size, .. } => self.constant(*size).filter(|n| *n >= 0)?,
+                FragKind::Leb128 { value, signed, .. } => {
+                    let v = self.constant(*value)?;
+                    let n = if *signed {
+                        crate::layout::sleb128(v).len()
+                    } else {
+                        crate::layout::uleb128(v as u64).len()
+                    };
+                    n as i64
+                }
+                FragKind::Align { align, .. } if *align <= 1 => 0,
+                _ => return None,
+            };
+        }
+        Some(sign * total)
     }
 }
 
