@@ -115,18 +115,10 @@ impl Architecture for M68k {
         reloc::data(size, pcrel)
     }
 
-    /// `NOP` is `4E71`. An odd length can only be padded with a zero byte
-    /// first, and in practice that is the only odd pad there is: code is
-    /// kept on even addresses.
+    /// Zeroes, not `NOP`s: `m68k-elf-as` (in both syntaxes) and vasm pad code
+    /// alignment with zero bytes, and matching them keeps the bytes identical.
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
-        let mut v = Vec::with_capacity(len as usize);
-        if len % 2 == 1 {
-            v.push(0);
-        }
-        while (v.len() as u64) < len {
-            v.extend_from_slice(&[0x4e, 0x71]);
-        }
-        v
+        vec![0; len as usize]
     }
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {

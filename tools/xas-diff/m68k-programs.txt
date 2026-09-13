@@ -95,3 +95,8 @@ f: linkw %fp,#-8
  moveml %sp@+,%d2-%d3/%a2
  unlk %fp
  rts
+=== code alignment pads with zeroes
+ .byte 1
+ .balign 8
+ rts
+ .balign 8

@@ -821,14 +821,33 @@ fn target_conventions() {
     }
     assert!(arch::available().contains(&"m68k"));
 
-    // Padding is `NOP` (`4E71`), led by a zero byte when the length is odd.
-    // The odd byte is the only pad the references ever emit in code, since
-    // instructions keep to even addresses.
+    // Code alignment pads with zeroes, as both references do.
     let s = a.initial_state();
     assert_eq!(a.nop_fill(&s, 1), vec![0x00]);
-    assert_eq!(a.nop_fill(&s, 2), vec![0x4e, 0x71]);
-    assert_eq!(a.nop_fill(&s, 3), vec![0x00, 0x4e, 0x71]);
-    assert_eq!(a.nop_fill(&s, 4), vec![0x4e, 0x71, 0x4e, 0x71]);
+    assert_eq!(a.nop_fill(&s, 4), vec![0x00; 4]);
+}
+
+#[test]
+fn arch_takes_numeric_cpu_names() {
+    let e = errors_dialect("m68k", Gas, ".arch 68000\n extb.l %d0\n");
+    assert!(e.contains("needs a 68020"), "{e}");
+    assert_eq!(
+        hex(&text_dialect("68000", Gas, ".arch 68020\n extb.l %d0\n")),
+        "49 c0"
+    );
+}
+
+#[test]
+fn code_alignment_pads_with_zeroes() {
+    // m68k-elf-as for the GNU spelling, vasm `-devpac` for `cnop`.
+    gas(
+        " .byte 1\n .balign 8\n rts\n .balign 8\n",
+        "01 00 00 00 00 00 00 00 4e 75 00 00 00 00 00 00",
+    );
+    mot(
+        " dc.b 1\n cnop 0,8\n rts\n cnop 0,8\n",
+        "01 00 00 00 00 00 00 00 4e 75 00 00 00 00 00 00",
+    );
 }
 
 #[test]

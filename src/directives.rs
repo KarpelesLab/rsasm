@@ -922,13 +922,21 @@ impl Assembler {
     fn dir_arch(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
-            TokKind::Ident(n) => {
-                cur.advance();
-                self.interner.get(n).to_string()
-            }
             TokKind::Str(i) => {
                 cur.advance();
                 String::from_utf8_lossy(self.pool.get(i)).into_owned()
+            }
+            // A bare name is whatever is written without spaces, since names
+            // like `68000`, `78k0` and `x86-64` are not single identifiers.
+            _ if !tok.is_eol() && !tok.is_punct(Punct::Comma) => {
+                let mut last = cur.advance();
+                while !cur.peek().is_eol()
+                    && !cur.peek().is_punct(Punct::Comma)
+                    && !cur.peek().preceded_by_space
+                {
+                    last = cur.advance();
+                }
+                self.sm.span_text(tok.span.to(last.span)).to_string()
             }
             _ => {
                 self.diags.error(tok.span, "expected an architecture name");
