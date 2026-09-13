@@ -319,7 +319,7 @@ independent assembler, and compare the bytes:
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
   and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
   source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds
-  the references from checksum-pinned sources. 3,759 of 3,759 match across
+  the references from checksum-pinned sources. 3,785 of 3,785 match across
   twelve variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
