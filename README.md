@@ -286,10 +286,9 @@ independent assembler, and compare the bytes:
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
   distances between sections. 103 of 103 match across twenty-two variants.
-  It needs cross binutils built with their linkers, which
-  `tools/oracles/build.sh` does not do yet.
+  `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 
-The first two run in CI. The expected bytes in the hermetic tests under `tests/` were
+All four run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
