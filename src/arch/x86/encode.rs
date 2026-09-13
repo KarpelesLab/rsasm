@@ -672,19 +672,14 @@ fn check_decorators(
             return None;
         }
         // N is redundant — it is the register's element count — so it is
-        // recomputed and the source's spelling checked against it. If the
-        // written count could not be recovered, its length is all there is.
+        // recomputed and the source's spelling checked against it.
         let vbytes = def.vlen as u32 / 8;
         let n = match def.tuple {
             // A half-vector source is half the register, in dword elements.
             Tuple::Hv => vbytes / 2 / 4,
             _ => vbytes / if def.vex_w() { 8 } else { 4 },
         };
-        let written_ok = match b.count {
-            Some(c) => c == n,
-            None => bspan.len() as usize == format!("1to{n}").len(),
-        };
-        if !written_ok {
+        if b.count != n {
             cx.error(bspan, format!("this operand broadcasts as `{{1to{n}}}`"));
             return None;
         }

@@ -36,6 +36,14 @@ sparcv9|sparcv9|sparcv9|
 
 command -v llvm-mc >/dev/null || { echo "llvm-mc not found; skipping" >&2; exit 0; }
 command -v llvm-objcopy >/dev/null || { echo "llvm-objcopy not found; skipping" >&2; exit 0; }
+# The corpora are verified against a specific LLVM, and other versions really do
+# answer differently (see README.md). Say which one this run is using, so a
+# difference can be told apart from version drift at a glance.
+echo "oracle: $(llvm-mc --version | grep -m1 -oE 'LLVM version [0-9.]+')"
+case "$(llvm-mc --version)" in
+  *"LLVM version 22."*) ;;
+  *) echo "warning: the corpora were verified against LLVM 22; expect version drift" >&2 ;;
+esac
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump || exit 1
 hexdump="$root/target/debug/examples/hexdump"
 

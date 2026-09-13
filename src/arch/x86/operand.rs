@@ -113,9 +113,8 @@ pub struct Decor {
 #[derive(Copy, Clone, Debug)]
 pub struct Broadcast {
     pub span: Span,
-    /// The N the source wrote, when it could be recovered; see [`withdraw`].
-    /// `None` leaves only the written length to check against.
-    pub count: Option<u32>,
+    /// The N the source wrote, read straight off its `BadNumber` token.
+    pub count: u32,
 }
 
 impl Decor {
@@ -296,7 +295,7 @@ impl OperandParser<'_, '_> {
                 TokKind::BadNumber(name) => {
                     let text = self.cx.name(name).to_string();
                     match text.strip_prefix("1to").and_then(|n| n.parse::<u32>().ok()) {
-                        Some(n) => Some(n),
+                        Some(n) => n,
                         None => {
                             self.cx.error(
                                 tok.span,

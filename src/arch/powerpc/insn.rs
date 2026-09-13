@@ -101,7 +101,7 @@ pub enum F {
 /// Extended rotate mnemonics with a single immediate operand.
 ///
 /// Each is one particular `rlwinm`/`rldicl`/`rldicr` with its SH, MB and ME
-/// derived from the shift amount; [`super::encode::rotate1`] does the sums.
+/// derived from the shift amount; `encode::rot1` does the sums.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Rot {
     Slwi,

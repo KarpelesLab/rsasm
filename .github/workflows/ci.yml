@@ -185,50 +185,51 @@ jobs:
           key: mc-diff
 
       # llvm-mc is the only oracle that covers every architecture in the
-      # crate, so this is what keeps a backend honest about encodings no x86
-      # host can check. The runner has LLVM but not on PATH, and the layout
-      # moves between images, so search rather than pin — and fail loudly if
-      # it is really absent, because run.sh skips silently when the tools are
-      # missing and a silently skipped oracle is worse than none.
-      - name: Locate llvm-mc
+      # crate. It is pinned, because its answers change between releases and
+      # an oracle whose answers depend on the runner image is not an oracle.
+      # The corpora were verified against LLVM 22; the runner ships 18, which
+      # disagrees on 9 of ~3,900 cases, none of them rsasm's fault:
+      #
+      # - LLVM 18 crashes ("unable to write nop sequence of 1 bytes") on a
+      #   SPARC snippet 22 handles.
+      # - LLVM 18 rejects valid Intel-syntax AVX gathers that 22 and GNU as
+      #   accept.
+      # - RISC-V `li` switched from `addiw` to `addi` between the two.
+      - name: Install LLVM 22
         run: |
           set -euo pipefail
-          find_tool() {
-            command -v "$1" 2>/dev/null && return 0
-            ls -1 /usr/lib/llvm-*/bin/"$1" 2>/dev/null | sort -V | tail -1 | grep . && return 0
-            ls -1 /usr/bin/"$1"-* 2>/dev/null | sort -V | tail -1 | grep . && return 0
-            return 1
-          }
-          if ! find_tool llvm-mc >/dev/null; then
-            echo "llvm-mc not found; installing"
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq llvm
-          fi
-          mc=$(find_tool llvm-mc) || { echo "::error::llvm-mc unavailable"; exit 1; }
-          oc=$(find_tool llvm-objcopy) || { echo "::error::llvm-objcopy unavailable"; exit 1; }
-          echo "found $mc and $oc"
-          dir=$(dirname "$mc")
-          echo "$dir" >> "$GITHUB_PATH"
-          # run.sh calls both by bare name, so make sure both resolve there.
-          [ -x "$dir/llvm-objcopy" ] || sudo ln -s "$oc" "$dir/llvm-objcopy"
-          "$mc" --version | head -2
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$codename/ llvm-toolchain-$codename-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
-      # A guard against the harness quietly doing nothing: it exits 0 when the
-      # tools are missing, so confirm it actually compared something.
-      - name: Confirm the oracle is reachable
+      # Refuse to compare against anything but the pinned version, so a
+      # future image or PATH change fails here, visibly, rather than as a
+      # scatter of encoding "mismatches" that are really version drift.
+      - name: Confirm the pinned oracle is the one in use
         run: |
           set -euo pipefail
-          command -v llvm-mc
-          command -v llvm-objcopy
+          command -v llvm-mc llvm-objcopy
+          llvm-mc --version | tee /dev/stderr | grep -q "LLVM version 22\." \
+            || { echo "::error::llvm-mc is not LLVM 22"; exit 1; }
 
+      # The output goes to a file rather than `$(...)`: under `set -e` a
+      # failing command substitution exits before its output is printed,
+      # which hid exactly the diff needed to debug a failure.
       - name: tools/mc-diff/run.sh
         run: |
-          set -euo pipefail
-          out=$(tools/mc-diff/run.sh)
-          echo "$out"
+          set -uo pipefail
+          tools/mc-diff/run.sh > mc-diff.log 2>&1
+          status=$?
+          cat mc-diff.log
           # "0 matched" means the corpus never ran, which must not read as a pass.
-          echo "$out" | grep -qE -- "--- [1-9][0-9]* matched" \
+          grep -qE -- "--- [1-9][0-9]* matched" mc-diff.log \
             || { echo "::error::mc-diff compared nothing"; exit 1; }
+          exit $status
 
   cli_smoke:
     name: CLI end-to-end (assemble, link, run)

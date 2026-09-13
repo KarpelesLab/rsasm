@@ -3,7 +3,7 @@
 //! Everything here works on one word. Bit positions are given the way the
 //! PowerPC manuals give them — numbered from the most significant bit, so
 //! "bits 16:20" is the five-bit field whose least significant bit is word bit
-//! 11 — and [`at`] does that conversion once, so the rest of the file can name
+//! 11 — and `at` does that conversion once, so the rest of the file can name
 //! fields the way the manual does.
 
 use super::insn::{Def, F, OPT1, OPTL, Resolved, Rot, Rot2};

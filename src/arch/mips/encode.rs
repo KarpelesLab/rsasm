@@ -3,7 +3,8 @@
 //! Every MIPS instruction is exactly one 32-bit word, so encoding is a matter
 //! of ORing operand fields into the definition's fixed bits. What is not
 //! trivial is the values the assembler cannot compute yet: those become
-//! [`Fixup`]s carrying a [`FieldEncoding::Scatter`] function that knows where
+//! [`Fixup`]s carrying a [`FieldEncoding::Scatter`](crate::section::FieldEncoding::Scatter)
+//! function that knows where
 //! in the word the field lives.
 
 use super::insn::{Def, Form};
