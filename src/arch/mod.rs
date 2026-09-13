@@ -11,6 +11,7 @@ use crate::expr::{ExprArena, ExprParser};
 use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
 use crate::section::Variant;
+use crate::symbol::SymbolTable;
 use crate::source::Span;
 
 #[cfg(feature = "x86")]
@@ -91,6 +92,8 @@ pub struct AsmCtx<'a> {
     pub exprs: &'a mut ExprArena,
     pub diags: &'a mut DiagBag,
     pub pool: &'a LitPool,
+    /// Read-only: backends resolve named constants, never define them.
+    pub symbols: &'a SymbolTable,
     pub state: &'a mut ArchState,
 }
 
@@ -107,6 +110,14 @@ impl AsmCtx<'_> {
 
     pub fn name(&self, n: Name) -> &str {
         self.interner.get(n)
+    }
+
+    /// The constant value of an expression, following `.set` definitions.
+    ///
+    /// Backends use this to choose an encoding width, so `.set n, 1` followed
+    /// by `add $n, %rax` gets the same short form as `add $1, %rax`.
+    pub fn constant(&self, e: crate::expr::ExprRef) -> Option<i64> {
+        crate::expr::SymbolEnv::new(self.exprs, self.symbols).constant(e)
     }
 
     pub fn error(&mut self, span: Span, msg: impl Into<String>) {

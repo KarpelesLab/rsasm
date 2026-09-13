@@ -8,7 +8,6 @@ pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
 use crate::cursor::Cursor;
-use crate::expr;
 use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
@@ -243,10 +242,7 @@ fn assemble_inner(
         return None;
     }
 
-    if let Some(msg) = ambiguity(bits, &matches, &ops) {
-        cx.error(req.span, msg);
-        return None;
-    }
+    let matches = prefer_default_size(bits, matches, &ops);
 
     // A relative branch gets one variant per displacement width, smallest
     // first, so the layout pass can shorten it once addresses are known.
@@ -407,7 +403,7 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
         }
         Op::Imm(w) => {
             let OperandKind::Imm(e) = &o.kind else { return false };
-            match expr::const_fold(cx.exprs, *e) {
+            match cx.constant(*e) {
                 Some(v) => {
                     // A 32-bit immediate in a 64-bit operation is sign-extended
                     // to 64 bits, so it must fit as signed.
@@ -423,11 +419,11 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
         }
         Op::Imm8s => {
             let OperandKind::Imm(e) = &o.kind else { return false };
-            expr::const_fold(cx.exprs, *e).is_some_and(|v| (-128..=127).contains(&v))
+            cx.constant(*e).is_some_and(|v| (-128..=127).contains(&v))
         }
         Op::One => {
             let OperandKind::Imm(e) = &o.kind else { return false };
-            expr::const_fold(cx.exprs, *e) == Some(1)
+            cx.constant(*e) == Some(1)
         }
         Op::Fixed(name) => o.reg() == reg::lookup(name),
         Op::Rel(_) => encode::rel_expr(o).is_some(),
@@ -452,31 +448,33 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
     }
 }
 
-/// Detects an operand size that the source never pinned down, as in the AT&T
-/// `mov $1, (%rax)` — which could store 1, 2, 4 or 8 bytes.
-fn ambiguity(bits: u8, matches: &[&Def], ops: &[Operand]) -> Option<String> {
+/// Resolves an operand size the source never pinned down.
+///
+/// `mov $1, (%rax)` could store one, two, four or eight bytes. GNU as picks
+/// the mode's default operand size — four bytes in 32- and 64-bit mode — and
+/// existing sources rely on that, so rsasm does the same rather than
+/// rejecting the line. NASM-dialect input should insist on an explicit size
+/// instead; that belongs with the NASM front end, not here.
+fn prefer_default_size<'d>(bits: u8, matches: Vec<&'d Def>, ops: &[Operand]) -> Vec<&'d Def> {
     let unsized_mem = ops.iter().any(|o| o.is_mem() && o.size_hint.is_none());
-    if !unsized_mem {
-        return None;
+    if !unsized_mem || matches.len() < 2 {
+        return matches;
     }
-    // Instructions whose operand size defaults to 64 bits in long mode are not
-    // ambiguous there, even though a 16-bit form also exists.
     let first = matches[0];
+    // Instructions whose operand size already defaults to 64 bits in long
+    // mode are not ambiguous there.
     if bits == 64 && first.flags & DEF64 != 0 {
-        return None;
+        return matches;
     }
-    let differing = matches.iter().any(|d| d.opsize != first.opsize);
-    if !differing {
-        return None;
+    if matches.iter().all(|d| d.opsize == first.opsize) {
+        return matches;
     }
-    let mut sizes: Vec<u8> = matches.iter().map(|d| d.opsize).collect();
-    sizes.sort_unstable();
-    sizes.dedup();
-    let list: Vec<String> = sizes.iter().filter(|s| **s != 0).map(|s| s.to_string()).collect();
-    Some(format!(
-        "ambiguous operand size; add a suffix or a size specifier (could be {}-bit)",
-        list.join(", ")
-    ))
+    let default_size: u8 = if bits == 16 { 16 } else { 32 };
+    let mut matches = matches;
+    if let Some(pos) = matches.iter().position(|d| d.opsize == default_size) {
+        matches.swap(0, pos);
+    }
+    matches
 }
 
 fn report_no_match(

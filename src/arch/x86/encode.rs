@@ -6,7 +6,7 @@ use super::operand::{Mem, Operand, OperandKind};
 use super::reg::{self, Reg, RegClass};
 use super::reloc;
 use crate::arch::AsmCtx;
-use crate::expr::{self, ExprRef};
+use crate::expr::ExprRef;
 use crate::section::{Fixup, FixupKind, Variant};
 use crate::source::Span;
 
@@ -307,22 +307,25 @@ pub fn encode(
     // ---- immediate --------------------------------------------------------
     if let Some((e, width)) = roles.imm {
         let offset = bytes.len() as u32;
-        let folded = expr::const_fold(cx.exprs, e);
+        let folded = cx.constant(e);
         match folded {
             Some(v) => bytes.extend_from_slice(&v.to_le_bytes()[..width as usize]),
             None => {
                 bytes.extend(std::iter::repeat_n(0u8, width as usize));
+                // A 32-bit immediate in a 64-bit operation is sign-extended by
+                // the CPU, so the linker must be told to range-check it as
+                // signed rather than let it wrap.
+                let sign_extended = def.opsize == 64 && width == 4;
                 let r = if def.flags & IMM64 != 0 {
                     reloc::ABS64
+                } else if sign_extended {
+                    reloc::ABS32S
                 } else {
                     reloc::abs(width).unwrap_or(0)
                 };
-                fixups.push(Fixup {
-                    offset,
-                    expr: e,
-                    kind: FixupKind::data(width).with_reloc(r),
-                    span: cx.exprs.span(e),
-                });
+                let mut kind = FixupKind::data(width).with_reloc(r);
+                kind.signed = sign_extended;
+                fixups.push(Fixup { offset, expr: e, kind, span: cx.exprs.span(e) });
             }
         }
     }
@@ -397,7 +400,7 @@ fn encode_rm(
         // turned into "distance from here to that symbol".
         match m.disp {
             None => {}
-            Some(e) => match expr::const_fold(cx.exprs, e) {
+            Some(e) => match cx.constant(e) {
                 Some(v) => {
                     if i32::try_from(v).is_err() {
                         cx.error(m.span, format!("displacement {v} does not fit in 32 bits"));
@@ -411,7 +414,7 @@ fn encode_rm(
         return Some(());
     }
 
-    let disp_const = m.disp.and_then(|e| expr::const_fold(cx.exprs, e));
+    let disp_const = m.disp.and_then(|e| cx.constant(e));
     let has_disp = m.disp.is_some();
     let symbolic_disp = has_disp && disp_const.is_none();
 

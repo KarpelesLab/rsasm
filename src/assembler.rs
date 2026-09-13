@@ -472,6 +472,48 @@ impl Assembler {
         expr::eval(exprs, e, &mut env)
     }
 
+    /// Evaluates an expression without recording symbol uses, so it can be
+    /// called from the output writers, which only have `&Assembler`.
+    pub fn eval_ref(&self, e: ExprRef) -> Result<Value, EvalError> {
+        let mut env = expr::SymbolEnv::new(&self.exprs, &self.symbols);
+        expr::eval(&self.exprs, e, &mut env)
+    }
+
+    /// Evaluates an expression to a number, if it resolves to one.
+    pub fn eval_const(&self, e: ExprRef) -> Option<i64> {
+        self.resolve_value(self.eval_ref(e).ok()?)
+    }
+
+    /// The number a symbol stands for, if it has one.
+    ///
+    /// A difference of two labels counts: `len = end - start` is a constant
+    /// even though neither end of it is.
+    pub fn symbol_number(&self, id: SymbolId) -> Option<i64> {
+        let v = self.eval_ref_symbol(id).ok()?;
+        if let Some(n) = v.as_abs() {
+            return Some(n);
+        }
+        self.resolve_value(v)
+    }
+
+    /// The section and offset a symbol resolves to, for symbols defined by
+    /// `.set` in terms of a label.
+    pub fn symbol_target_section(&self, id: SymbolId) -> Option<(SectionId, u64)> {
+        let v = self.eval_ref_symbol(id).ok()?;
+        let (Some(p), None) = (v.plus, v.minus) else { return None };
+        let addr = self.symbol_addr(p)?.wrapping_add(v.addend);
+        let section = match self.symbols.get(p).value {
+            SymbolValue::Label { section, .. } => section,
+            _ => return None,
+        };
+        Some((section, addr.saturating_sub(self.section(section).addr as i64) as u64))
+    }
+
+    fn eval_ref_symbol(&self, id: SymbolId) -> Result<Value, EvalError> {
+        let mut env = expr::SymbolEnv::new(&self.exprs, &self.symbols);
+        env.symbol_value(id, Span::DUMMY)
+    }
+
     /// Evaluates an expression that must be a plain number right now.
     pub fn eval_absolute(&mut self, e: ExprRef, what: &str) -> Option<i64> {
         match self.eval(e) {
@@ -551,8 +593,8 @@ impl Assembler {
         };
         // Disjoint field borrows keep the architecture object accessible while
         // it mutates the interner, expression arena and diagnostics.
-        let Assembler { arch, interner, exprs, diags, pool, arch_state, .. } = self;
-        let mut cx = AsmCtx { interner, exprs, diags, pool, state: arch_state };
+        let Assembler { arch, interner, exprs, diags, pool, symbols, arch_state, .. } = self;
+        let mut cx = AsmCtx { interner, exprs, diags, pool, symbols, state: arch_state };
         let variants = arch.assemble(&mut cx, &req);
         let Some(variants) = variants else { return };
         if self.check_nobits(stmt.span) {

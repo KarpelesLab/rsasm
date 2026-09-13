@@ -13,3 +13,4 @@ pub mod parser;
 pub mod assembler;
 pub mod directives;
 pub mod layout;
+pub mod output;

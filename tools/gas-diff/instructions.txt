@@ -1,0 +1,93 @@
+nop
+ret
+leave
+hlt
+int3
+ud2
+syscall
+cpuid
+endbr64
+cltq
+cqto
+movq %rbx, %rax
+movl %ebx, %eax
+movw %bx, %ax
+movb %bl, %al
+movq %rax, %r15
+movq %r8, %r9
+movb %sil, %dil
+movb %ah, %al
+movl $1, %eax
+movq $1, %rax
+movq $0x1122334455667788, %rax
+movabsq $0x1122334455667788, %rax
+movq $-1, %rax
+addq $1, %rax
+addq $128, %rax
+addq $-129, %rax
+addl $0x1000, %eax
+addq %rbx, %rax
+addq (%rbx), %rax
+addq %rax, (%rbx)
+subq $8, %rsp
+andl $0xff, %eax
+xorq %rax, %rax
+cmpq $0, %rax
+testq %rax, %rax
+orb $1, (%rax)
+movq 8(%rbx), %rax
+movq -8(%rbx), %rax
+movq (%rbx,%rcx), %rax
+movq (%rbx,%rcx,4), %rax
+movq 16(%rbx,%rcx,8), %rax
+movq (%rsp), %rax
+movq 8(%rsp), %rax
+movq (%rbp), %rax
+movq (%r12), %rax
+movq (%r13), %rax
+movq (%r12,%r13,4), %rax
+movq 0x1000, %rax
+leaq 8(%rbx), %rax
+leaq (%rax,%rax,4), %rax
+pushq %rax
+pushq %r12
+popq %rbx
+pushq $1
+pushq $0x1000
+incq %rax
+decl %eax
+negq %rax
+notq %rax
+mulq %rbx
+idivq %rbx
+imulq %rbx
+imulq %rbx, %rax
+imulq $4, %rbx, %rax
+shlq $1, %rax
+shlq $4, %rax
+shrq %cl, %rax
+sarl $31, %eax
+movzbl %al, %eax
+movzwl %ax, %eax
+movsbl %al, %eax
+movswq %ax, %rax
+movslq %eax, %rax
+setne %al
+sete %bl
+cmovgq %rbx, %rax
+xchgq %rbx, %rax
+lock incq (%rax)
+rep movsb
+repne scasb
+cld
+std
+int $0x80
+fs movq (%rax), %rax
+movq %fs:(%rax), %rax
+movq %gs:8(%rax), %rax
+xchgq %rax, %rax
+xchgl %eax, %eax
+xchgw %ax, %ax
+xchgq %r8, %rax
+xchgl %ebx, %eax
+gs movq (%rax), %rax

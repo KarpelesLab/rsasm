@@ -11,7 +11,7 @@ use crate::diag::{DiagBag, Diagnostic};
 use crate::intern::{Interner, Name};
 use crate::lexer::{LocalDir, Punct, TokKind};
 use crate::source::Span;
-use crate::symbol::SymbolId;
+use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ExprRef(u32);
@@ -338,6 +338,75 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
     Ok(Value::abs(v))
 }
 
+/// Evaluates against a finished symbol table, without recording uses.
+///
+/// This is the read-only counterpart of the assembler's own evaluator: it
+/// resolves `.set` chains, which is what lets an immediate written as a named
+/// constant still pick the shortest encoding.
+pub struct SymbolEnv<'a> {
+    pub exprs: &'a ExprArena,
+    pub symbols: &'a SymbolTable,
+    depth: u32,
+}
+
+impl<'a> SymbolEnv<'a> {
+    pub fn new(exprs: &'a ExprArena, symbols: &'a SymbolTable) -> SymbolEnv<'a> {
+        SymbolEnv { exprs, symbols, depth: 0 }
+    }
+
+    /// Evaluates `e`, or returns `None` if anything in it is still unknown.
+    pub fn value(&mut self, e: ExprRef) -> Option<Value> {
+        let exprs = self.exprs;
+        eval(exprs, e, self).ok()
+    }
+
+    /// Evaluates `e` to a plain number, or `None` if it is not one yet.
+    pub fn constant(&mut self, e: ExprRef) -> Option<i64> {
+        self.value(e)?.as_abs()
+    }
+}
+
+impl EvalCtx for SymbolEnv<'_> {
+    fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError> {
+        match self.symbols.lookup(name) {
+            Some(id) => self.symbol_value(id, span),
+            None => Err(EvalError::new(span, "undefined symbol")),
+        }
+    }
+
+    fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, EvalError> {
+        match self.symbols.get(id).value {
+            SymbolValue::Expr(e) => {
+                if self.depth > 64 {
+                    return Err(EvalError::new(span, "symbol definition is circular"));
+                }
+                self.depth += 1;
+                let exprs = self.exprs;
+                let v = eval(exprs, e, self);
+                self.depth -= 1;
+                v
+            }
+            _ => Ok(Value::sym(id, 0)),
+        }
+    }
+
+    fn here(&mut self, span: Span) -> Result<Value, EvalError> {
+        Err(EvalError::new(span, "`.` cannot be used here"))
+    }
+
+    fn section_start(&mut self, span: Span) -> Result<Value, EvalError> {
+        Err(EvalError::new(span, "`$$` is not supported yet"))
+    }
+
+    fn local_ref(&mut self, n: u32, _: LocalDir, span: Span) -> Result<Value, EvalError> {
+        Err(EvalError::new(span, format!("local label `{n}` is not resolved yet")))
+    }
+
+    fn modifier(&mut self, _name: Name, inner: Value, _span: Span) -> Result<Value, EvalError> {
+        Ok(inner)
+    }
+}
+
 /// Evaluates an expression that must not mention any symbol.
 ///
 /// Used where a width has to be chosen before addresses are known: an
@@ -554,7 +623,7 @@ mod tests {
     use super::*;
     use crate::lexer::{Dialect, LexConfig, Lexer, LitPool};
     use crate::source::SourceMap;
-    use crate::symbol::SymbolId;
+    use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
     use std::collections::HashMap;
 
     struct TestCtx {

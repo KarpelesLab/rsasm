@@ -6,7 +6,7 @@
 
 use crate::assembler::{Assembler, Cond};
 use crate::cursor::Cursor;
-use crate::expr::{self, ExprRef};
+use crate::expr::ExprRef;
 use crate::intern::Name;
 use crate::lexer::{Punct, TokKind};
 use crate::parser::Statement;
@@ -131,8 +131,8 @@ impl Assembler {
 
         // Give the architecture a chance before reporting it unknown.
         let mut cur = stmt.arg_cursor();
-        let Assembler { arch, interner, exprs, diags, pool, arch_state, .. } = self;
-        let mut cx = crate::arch::AsmCtx { interner, exprs, diags, pool, state: arch_state };
+        let Assembler { arch, interner, exprs, diags, pool, symbols, arch_state, .. } = self;
+        let mut cx = crate::arch::AsmCtx { interner, exprs, diags, pool, symbols, state: arch_state };
         if arch.directive(&mut cx, &text, &mut cur) {
             self.expect_end(&mut cur);
             return;
@@ -210,7 +210,10 @@ impl Assembler {
         if self.check_nobits(span) {
             return;
         }
-        if let Some(v) = expr::const_fold(&self.exprs, e) {
+        // Resolve now if it already has a value: a `.set` symbol is a
+        // snapshot at each use, so a later redefinition must not reach back
+        // and change bytes that were already emitted.
+        if let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs()) {
             let kind = crate::section::FixupKind::data(size);
             if !kind.fits(v as i128) {
                 let espan = self.exprs.span(e);

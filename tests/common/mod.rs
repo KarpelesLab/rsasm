@@ -36,3 +36,33 @@ pub fn errors(src: &str) -> String {
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
 }
+
+/// Assembles `src` and hands the finished assembler back for inspection.
+pub fn assemble(src: &str) -> Assembler {
+    let arch = arch::lookup("x86-64").expect("x86 backend is enabled");
+    let mut asm = Assembler::new(arch, Options::default());
+    asm.assemble_str("test.s", src);
+    asm.finish();
+    asm
+}
+
+/// Assembles `src` for flat binary output based at `base`.
+pub fn assemble_flat(src: &str, base: u64) -> Assembler {
+    let arch = arch::lookup("x86-64").expect("x86 backend is enabled");
+    let options = Options { relocatable: false, base_addr: base, ..Options::default() };
+    let mut asm = Assembler::new(arch, options);
+    asm.assemble_str("test.s", src);
+    asm.finish();
+    asm
+}
+
+/// The bytes of a section, looked up by name.
+pub fn section(asm: &Assembler, name: &str) -> Vec<u8> {
+    let id = asm
+        .sections
+        .iter()
+        .find(|s| asm.interner.get(s.name) == name)
+        .unwrap_or_else(|| panic!("no section named `{name}`"))
+        .id;
+    asm.section_bytes(id)
+}

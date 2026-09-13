@@ -230,7 +230,7 @@ impl OperandParser<'_, '_> {
             if cur.eat_punct(Punct::Comma).is_some() {
                 let tok = cur.peek();
                 let e = self.expr(cur)?;
-                match crate::expr::const_fold(self.cx.exprs, e) {
+                match self.cx.constant(e) {
                     Some(s @ (1 | 2 | 4 | 8)) => m.scale = s as u8,
                     _ => {
                         self.cx.error(tok.span, "scale must be 1, 2, 4 or 8");
@@ -413,7 +413,7 @@ impl OperandParser<'_, '_> {
                     let stok = cur.peek();
                     // Only the scale itself, not the `+ disp` that may follow.
                     let e = self.intel_disp_term(cur)?;
-                    let Some(s @ (1 | 2 | 4 | 8)) = crate::expr::const_fold(self.cx.exprs, e) else {
+                    let Some(s @ (1 | 2 | 4 | 8)) = self.cx.constant(e) else {
                         self.cx.error(stok.span, "scale must be 1, 2, 4 or 8");
                         return None;
                     };
