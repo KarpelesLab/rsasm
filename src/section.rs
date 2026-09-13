@@ -87,6 +87,46 @@ pub enum FieldEncoding {
     Scatter(fn(u64, i64) -> u64),
 }
 
+/// What a relocation computes from its target, when that is more than the
+/// target's value.
+///
+/// In an object file the relocation type carries this and the linker does
+/// the arithmetic. A flat binary has no linker, so the core does the same
+/// arithmetic itself and has to be told which: a page-relative `adrp` and a
+/// PowerPC `@ha` both hold an address, and neither holds it truncated to the
+/// field. Relocatable output is unaffected, except where a value resolves at
+/// assembly time anyway.
+#[derive(Copy, Clone, Debug, Default)]
+pub enum LinkValue {
+    /// `S + A`, or `S + A - P` for a PC-relative field: the value itself,
+    /// fitted into the field by its range check and [`FieldEncoding`].
+    #[default]
+    Plain,
+    /// The distance from the page holding the fixup to the target's page,
+    /// with pages of `1 << n` bytes: `Page(S + A) - Page(P)`, which is
+    /// AArch64's `adrp`. That needs both addresses, not just their
+    /// difference, so in relocatable output the fixup resolves as
+    /// [`LinkValue::Plain`] would.
+    Page(u8),
+    /// A label that has to be in the same `1 << n`-byte region as the address
+    /// just past the field, because the CPU takes the target's top bits from
+    /// there: the delay slot of a MIPS `j` or `jal`. The field holds the value
+    /// as usual; only the check needs the fixup's address, so, as for
+    /// [`LinkValue::Page`], relocatable output does without it.
+    Region(u8),
+    /// The value put through a function before its range check: PowerPC's
+    /// `@ha` is `(x + 0x8000) >> 16`, whether `x` is a label or a constant.
+    Split(fn(i64) -> i64),
+    /// The low half of a PC-relative pair that names its high half by label,
+    /// like RISC-V's `%pcrel_lo(1b)`. The label is on the instruction that
+    /// carries the high half, and the value is that instruction's own
+    /// PC-relative value: its target, measured from it rather than from here.
+    PairedLow,
+    /// Something only a linker creates, described for the diagnostic: "a GOT
+    /// entry". A flat binary refuses it.
+    LinkerOnly(&'static str),
+}
+
 /// How a fixup's value is written into the output.
 #[derive(Copy, Clone, Debug)]
 pub struct FixupKind {
@@ -131,6 +171,8 @@ pub struct FixupKind {
     /// Narrower bounds than the field's width allows, where a reference
     /// assembler picks a form by a range that is not a power of two.
     pub limits: Option<(i64, i64)>,
+    /// What the value is, beyond the target itself; see [`LinkValue`].
+    pub link: LinkValue,
 }
 
 impl FixupKind {
@@ -146,6 +188,7 @@ impl FixupKind {
             encoding: FieldEncoding::Whole,
             bias_reloc_addend: true,
             limits: None,
+            link: LinkValue::Plain,
         }
     }
 
@@ -186,6 +229,12 @@ impl FixupKind {
     /// Accepts only values from `lo` to `hi`, within what the field holds.
     pub fn with_limits(mut self, lo: i64, hi: i64) -> FixupKind {
         self.limits = Some((lo, hi));
+        self
+    }
+
+    /// Sets what the value is computed as; see [`LinkValue`].
+    pub fn link(mut self, link: LinkValue) -> FixupKind {
+        self.link = link;
         self
     }
 

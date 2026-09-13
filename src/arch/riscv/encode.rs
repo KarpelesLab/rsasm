@@ -8,7 +8,7 @@
 
 use super::reloc;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 // ---- field placement ------------------------------------------------------
@@ -164,12 +164,13 @@ pub fn kind_hi20(pcrel: bool) -> FixupKind {
 
 /// `%pcrel_lo(label)`, which names the `auipc` that carries the high half.
 ///
-/// Only the linker can pair the two halves up, so this is correct in
-/// relocatable output — where a label always leaves a relocation — but not in
-/// a flat binary, where the field would be filled from the label's own
-/// address. `la` and `call` avoid the problem by patching both halves at once.
+/// In relocatable output a label always leaves a relocation and the linker
+/// pairs the two halves up. In a flat binary the core does the pairing: the
+/// field receives the low bits of the `auipc`'s own PC-relative value, not
+/// anything computed from the label's address. (`la` and `call` patch both
+/// halves as one fixup and need none of this.)
 pub fn kind_lo12(store: bool) -> FixupKind {
-    if store {
+    let kind = if store {
         FixupKind::data(4)
             .with_reloc(reloc::PCREL_LO12_S)
             .scatter(lo12_s)
@@ -177,7 +178,8 @@ pub fn kind_lo12(store: bool) -> FixupKind {
         FixupKind::data(4)
             .with_reloc(reloc::PCREL_LO12_I)
             .scatter(lo12_i)
-    }
+    };
+    kind.link(LinkValue::PairedLow)
 }
 
 /// `%lo(sym)`, which takes the low 12 bits of an absolute address and so has

@@ -10,9 +10,10 @@
 //! `.org` or `.space` whose size depends on a later symbol can be written to
 //! oscillate.
 
+use crate::arch::FlatModifier;
 use crate::assembler::{Assembler, Relocation};
 use crate::expr::{ExprKind, ExprRef, Value};
-use crate::section::{FixupKind, FragKind, Fragment, SectionId, SectionKind};
+use crate::section::{FixupKind, FragKind, Fragment, LinkValue, SectionId, SectionKind};
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId, SymbolValue};
 use std::collections::HashMap;
@@ -480,7 +481,156 @@ impl Assembler {
     }
 
     /// The number a fixup should write, or `None` if it needs a relocation.
+    ///
+    /// In a flat image that number is what the linker would have computed
+    /// from the relocation, which is more than the target's value for the
+    /// kinds that say so in [`FixupKind::link`].
     fn fixup_value(
+        &mut self,
+        e: ExprRef,
+        kind: &FixupKind,
+        section: SectionId,
+        at: u64,
+    ) -> Option<i64> {
+        let flat = !self.options.relocatable;
+        match kind.link {
+            LinkValue::Plain => {}
+            LinkValue::Split(f) => return self.plain_fixup_value(e, kind, section, at).map(f),
+            LinkValue::Page(bits) if flat => {
+                let target = self.eval(e).ok().and_then(|v| self.resolve_value(v))?;
+                let here = (self.section(section).addr + at) as i64;
+                let page = !((1i64 << bits) - 1);
+                return Some((target & page) - (here & page));
+            }
+            LinkValue::Region(bits) if flat => {
+                if self.outside_region(e, kind, section, at, bits).is_some() {
+                    return None;
+                }
+            }
+            LinkValue::PairedLow if flat => return self.paired_low_value(e),
+            LinkValue::LinkerOnly(_) if flat => return None,
+            LinkValue::Page(_)
+            | LinkValue::Region(_)
+            | LinkValue::PairedLow
+            | LinkValue::LinkerOnly(_) => {}
+        }
+        // A modifier on a plain reference (`.long foo@PLT`) only picks the
+        // relocation in an object; in a flat image it decides the value.
+        if flat && let Some(m) = self.find_modifier(e) {
+            match self.arch.flat_modifier(self.interner.get(m)) {
+                FlatModifier::Plain => {}
+                FlatModifier::PcRelative if kind.pcrel => {}
+                FlatModifier::PcRelative => {
+                    let target = self.eval(e).ok().and_then(|v| self.resolve_value(v))?;
+                    return Some(target - (self.section(section).addr + at) as i64);
+                }
+                FlatModifier::LinkerOnly => return None,
+            }
+        }
+        self.plain_fixup_value(e, kind, section, at)
+    }
+
+    /// For a [`LinkValue::Region`] fixup, the target and the address past the
+    /// field, if the target is a label outside that address's region. A
+    /// plain number is never outside: the CPU takes the region from the PC,
+    /// and GNU ld lets the number's low bits through the same way.
+    fn outside_region(
+        &mut self,
+        e: ExprRef,
+        kind: &FixupKind,
+        section: SectionId,
+        at: u64,
+        bits: u8,
+    ) -> Option<(i64, u64)> {
+        let label = self.eval(e).ok()?.plus?;
+        self.symbol_section(label)?;
+        let v = self.plain_fixup_value(e, kind, section, at)?;
+        let next = self.section(section).addr + at + kind.size as u64;
+        (v >> bits != next as i64 >> bits).then_some((v, next))
+    }
+
+    /// The value of a [`LinkValue::PairedLow`] fixup in a flat image: the
+    /// value of the PC-relative fixup on the instruction its label names,
+    /// computed where that fixup is.
+    fn paired_low_value(&mut self, e: ExprRef) -> Option<i64> {
+        let (section, at, expr, kind) = self.paired_high(e)?;
+        self.fixup_value(expr, &kind, section, at)
+    }
+
+    /// Finds the high half a [`LinkValue::PairedLow`] expression names: a
+    /// PC-relative fixup at the very address of a label, with no addend.
+    /// GNU ld refuses an addend there as well, and the label has to be on
+    /// the instruction itself, not merely near it.
+    fn paired_high(&mut self, e: ExprRef) -> Option<(SectionId, u64, ExprRef, FixupKind)> {
+        let v = self.eval(e).ok()?;
+        let (Some(label), None, 0) = (v.plus, v.minus, v.addend) else {
+            return None;
+        };
+        let SymbolValue::Label { section, frag } = self.symbols.get(label).value else {
+            return None;
+        };
+        let frags = &self.section(section).frags;
+        let off = frags.get(frag as usize)?.offset;
+        // The label names a fragment index, and empty fragments (an
+        // alignment that needed no padding) can sit between it and the
+        // instruction at the same offset.
+        frags[frag as usize..]
+            .iter()
+            .take_while(|f| f.offset == off)
+            .find_map(|f| match &f.kind {
+                FragKind::Bytes { variants, chosen } => variants[*chosen]
+                    .fixups
+                    .iter()
+                    .find(|x| x.offset == 0 && x.kind.pcrel)
+                    .map(|x| (section, off, x.expr, x.kind)),
+                _ => None,
+            })
+    }
+
+    /// Why a flat image cannot resolve a fixup that it could have relocated,
+    /// if the reason is more specific than an undefined symbol.
+    fn flat_refusal(
+        &mut self,
+        e: ExprRef,
+        kind: &FixupKind,
+        section: SectionId,
+        at: u64,
+    ) -> Option<String> {
+        match kind.link {
+            LinkValue::LinkerOnly(what) => {
+                return Some(format!(
+                    "this refers to {what}, which only a linker creates; a flat binary has none"
+                ));
+            }
+            LinkValue::PairedLow
+                if self.eval(e).is_ok_and(|v| self.resolve_value(v).is_some())
+                    && self.paired_high(e).is_none() =>
+            {
+                return Some(
+                    "the low half of a PC-relative pair must name the label on its high half, \
+                     with no addend"
+                        .into(),
+                );
+            }
+            LinkValue::Region(bits) => {
+                let (v, next) = self.outside_region(e, kind, section, at, bits)?;
+                return Some(format!(
+                    "target {v:#x} is outside the {} MB region this field reaches from {next:#x}",
+                    (1u64 << bits) >> 20
+                ));
+            }
+            LinkValue::Split(_) => return None,
+            _ => {}
+        }
+        let m = self.find_modifier(e)?;
+        let name = self.interner.get(m);
+        (self.arch.flat_modifier(name) == FlatModifier::LinkerOnly).then(|| {
+            format!("`@{name}` names something only a linker creates; a flat binary has none")
+        })
+    }
+
+    /// [`Self::fixup_value`] for a fixup whose value is the target itself.
+    fn plain_fixup_value(
         &mut self,
         e: ExprRef,
         kind: &FixupKind,
@@ -509,10 +659,11 @@ impl Assembler {
         }
         // The distance between two labels in one section is fixed no matter
         // where the linker puts that section, so it resolves even in
-        // relocatable output.
+        // relocatable output. In a flat image every label already has its
+        // final address, so a distance across sections is fixed too.
         if let (Some(p), Some(m)) = (v.plus, v.minus) {
             let (ps, ms) = (self.symbol_section(p), self.symbol_section(m));
-            if ps.is_some() && ps == ms {
+            if ps.is_some() && (ps == ms || !self.options.relocatable) {
                 return self.resolve_value(v);
             }
             return None;
@@ -608,6 +759,12 @@ impl Assembler {
                 return None;
             }
         };
+        if !self.options.relocatable
+            && let Some(msg) = self.flat_refusal(e, kind, section, at)
+        {
+            self.diags.error(span, msg);
+            return None;
+        }
         let mut kind = *kind;
         let mut v = v;
         if let Some(minus) = v.minus {

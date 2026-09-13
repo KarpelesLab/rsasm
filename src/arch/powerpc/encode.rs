@@ -12,7 +12,7 @@ use super::reg::{RegClass, describe};
 use super::reloc;
 use crate::arch::{AsmCtx, Endian};
 use crate::expr::{ExprKind, ExprRef};
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 /// The shift that puts a field whose manual bit range ends at `last` — counted
@@ -552,21 +552,14 @@ impl<'c, 'a> Encoder<'c, 'a> {
         let Some(v) = self.cx.constant(inner) else {
             return Folded::Symbolic;
         };
-        let half = match name.as_str() {
-            "l" => v,
-            "h" | "hi" => v >> 16,
-            // `@ha` pre-compensates for the low half being sign-extended when
-            // it is added back, which is what `lis` + `addi` pairs need.
-            "ha" | "h_a" => v.wrapping_add(0x8000) >> 16,
-            other => {
-                self.reject(
-                    op,
-                    format!("relocation modifier `@{other}` is not supported here"),
-                );
-                return Folded::Invalid;
-            }
+        let Some(half) = half_function(&name) else {
+            self.reject(
+                op,
+                format!("relocation modifier `@{name}` is not supported here"),
+            );
+            return Folded::Invalid;
         };
-        Folded::Truncated(half & 0xffff)
+        Folded::Truncated(half(v))
     }
 
     /// A relocation against the low halfword of the instruction word.
@@ -592,6 +585,11 @@ impl<'c, 'a> Encoder<'c, 'a> {
             }
         };
         let mut kind = FixupKind::data(2).with_reloc(reloc);
+        // What the linker does with `@l`, `@h` and `@ha`, for a flat image
+        // or a value that resolves while assembling.
+        if let Some(half) = self.modifier(e).as_deref().and_then(half_function) {
+            kind = kind.link(LinkValue::Split(half));
+        }
         // A DS-form halfword cannot be overwritten whole: its low two bits
         // belong to the opcode.
         if ds {
@@ -704,6 +702,18 @@ fn i_form(word: u64, v: i64) -> u64 {
 /// fields above it survive as well.
 fn b_form(word: u64, v: i64) -> u64 {
     (word & 0xffff_0003) | (((v >> 2) as u64 & 0x3fff) << 2)
+}
+
+/// The halfword an `@l`, `@h` or `@ha` modifier selects from a value.
+fn half_function(name: &str) -> Option<fn(i64) -> i64> {
+    Some(match name {
+        "l" => |v| v & 0xffff,
+        "h" | "hi" => |v| (v >> 16) & 0xffff,
+        // `@ha` pre-compensates for the low half being sign-extended when it
+        // is added back, which is what `lis` + `addi` pairs need.
+        "ha" | "h_a" => |v| (v.wrapping_add(0x8000) >> 16) & 0xffff,
+        _ => return None,
+    })
 }
 
 /// DS-form displacement: 14 bits of a halfword whose low two bits are opcode.

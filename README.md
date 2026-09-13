@@ -57,7 +57,7 @@ assembler, not against rsasm's own idea of the manual. See
 | AArch64 | `aarch64` | llvm-mc | 475 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 361 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 485 |
-| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1044 |
+| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1047 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
 | m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
@@ -117,9 +117,11 @@ listed separately.
 
 - RISC-V `la` of an external symbol emits only `R_RISCV_PCREL_HI20`, without
   its paired `LO12` relocation.
-- In flat binaries only (relocatable output is correct): AArch64 `adrp`, and
-  PowerPC `@ha`/`@l` on a label, are resolved without the page or split
-  arithmetic they need.
+- Sections have no default alignment beyond what `.align` asks for, where GNU
+  as and llvm-mc give them one: 4 for MIPS `.data` in GNU as, 16 in llvm-mc,
+  and 4 for m68k. So in a flat binary a section that follows an odd-sized one
+  can start at an address a linker would have rounded up. Explicit `.p2align`
+  at the start of the section avoids it.
 - A mid-file `.arch` switch to a target with different comment characters does
   not re-lex the rest of that file, though it does apply to anything included
   or expanded after the switch.
@@ -260,17 +262,24 @@ it (CC-RX) as the manual says, but the start address is not recorded.
 
 ## Verification
 
-Three differential harnesses assemble the same source with rsasm and with an
+Four differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against the host's GNU as, for x86. 844 of 844 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
-  supports. 3,944 of 3,944 match across fourteen target variants.
+  supports. 3,947 of 3,947 match across fourteen target variants.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
   and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
   source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds
   the references from checksum-pinned sources. 3,727 of 3,727 match across
   twelve variants.
+- `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
+  assembler's object, linked by GNU ld 2.47 at the same base address with the
+  sections laid end to end, against `rsasm -f bin`. That is what checks the
+  arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
+  distances between sections. 103 of 103 match across twenty-two variants.
+  It needs cross binutils built with their linkers, which
+  `tools/oracles/build.sh` does not do yet.
 
 The first two run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
@@ -279,7 +288,10 @@ rsasm against rsasm can never find a wrong encoding.
 Where rsasm and the reference legitimately differ, the corpus says so rather
 than dropping the case. The standing example is alignment padding in
 executable sections, where GNU as picks its no-op sequence by `-mtune`; only
-the total length is fixed.
+the total length is fixed. In flat binaries it is branches between sections:
+a reference assembler cannot know how far away another section will be and
+takes the longest form, while rsasm, which lays the image out itself, takes
+the shortest that reaches; the flat corpora write those widths out.
 
 ## Design
 
@@ -359,6 +371,7 @@ $ cargo build --release
 $ cargo test
 $ tools/gas-diff/run.sh     # needs binutils
 $ tools/mc-diff/run.sh      # needs llvm-mc and llvm-objcopy
+$ tools/flat-diff/run.sh    # needs cross binutils with ld, and llvm-mc
 ```
 
 ## License

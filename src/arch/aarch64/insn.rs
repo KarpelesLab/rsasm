@@ -12,8 +12,8 @@ use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, Shif
 use super::reg::{self, Arrangement, Reg, RegClass, VecReg};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
-use crate::expr::ExprRef;
-use crate::section::Variant;
+use crate::expr::{ExprKind, ExprRef};
+use crate::section::{LinkValue, Variant};
 use crate::source::Span;
 
 /// Everything one `assemble` call needs, so the family encoders take two
@@ -1418,7 +1418,17 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     let target = i.op(1)?;
     let (e, kind) = match (i.mnemonic, &target.kind) {
         ("adrp", OperandKind::Reloc(RelocOp::Got, e)) => (*e, encode::fixup_got_page()),
-        ("adrp", _) => (target.expr(cx)?, encode::fixup_adrp()),
+        ("adrp", _) => {
+            let e = target.expr(cx)?;
+            // A bare number is a count of pages from here, to GNU as and
+            // llvm-mc alike, rather than an address to take the page of.
+            let kind = if names_symbol(cx, e) {
+                encode::fixup_adrp()
+            } else {
+                encode::fixup_adrp().link(LinkValue::Plain)
+            };
+            (e, kind)
+        }
         _ => (target.expr(cx)?, encode::fixup_adr()),
     };
     let base = if i.mnemonic == "adrp" {
@@ -1427,6 +1437,17 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         0x1000_0000
     };
     one_fixup(base | field(rd.num as u32, 0, 5), e, kind, target.span)
+}
+
+/// Whether an expression refers to a symbol or a position, rather than being
+/// arithmetic on numbers alone.
+fn names_symbol(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    match cx.exprs.get(e).kind {
+        ExprKind::Int(_) => false,
+        ExprKind::Unary(_, x) | ExprKind::Modifier(_, x) => names_symbol(cx, x),
+        ExprKind::Binary(_, l, r) => names_symbol(cx, l) || names_symbol(cx, r),
+        _ => true,
+    }
 }
 
 // ---- loads and stores ------------------------------------------------------
