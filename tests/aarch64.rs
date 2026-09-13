@@ -558,8 +558,8 @@ fn out_of_range_branches_are_diagnosed() {
 fn misaligned_branch_targets_are_diagnosed() {
     // A branch counts whole instructions; a target two bytes away cannot be
     // rounded to one.
-    rejects("b odd\n.byte 0\nodd: nop", &["out of range"]);
-    rejects("cbz x0, odd\n.2byte 0\nodd: nop", &["out of range"]);
+    rejects("b odd\n.byte 0\nodd: nop", &["not a multiple of 4"]);
+    rejects("cbz x0, odd\n.2byte 0\nodd: nop", &["not a multiple of 4"]);
 }
 
 // ---- relocations -------------------------------------------------------------
@@ -1026,4 +1026,47 @@ fn malformed_input_is_reported_rather_than_ignored() {
             "`{src}` should have produced a diagnostic"
         );
     }
+}
+
+// ---- GNU-style AArch64 spelling -----------------------------------------
+//
+// Expected bytes are from `llvm-mc -triple=aarch64`. Before comments became a
+// per-target setting none of these could be written: `#` started a comment,
+// so `add x0, x1, #1` reached the backend as `add x0, x1,`.
+
+#[test]
+fn hash_immediates_are_not_comments() {
+    assert_eq!(hex(&text_for("aarch64", "add x0, x1, #1\n")), "20 04 00 91");
+    assert_eq!(
+        hex(&text_for("aarch64", "movz x0, #0x1234, lsl #16\n")),
+        "80 46 a2 d2"
+    );
+    assert_eq!(
+        hex(&text_for("aarch64", "ldr x0, [x1, #8]!\n")),
+        "20 8c 40 f8"
+    );
+    assert_eq!(
+        hex(&text_for("aarch64", "and x0, x1, #0xff\n")),
+        "20 1c 40 92"
+    );
+}
+
+#[test]
+fn slash_comments_and_first_column_hash_comments() {
+    assert_eq!(
+        hex(&text_for("aarch64", "mov x0, #42 // the answer\n")),
+        "40 05 80 d2"
+    );
+    assert_eq!(
+        hex(&text_for("aarch64", "# 1 \"f.c\"\nret\n")),
+        "c0 03 5f d6"
+    );
+}
+
+#[test]
+fn word_is_four_bytes_on_aarch64() {
+    assert_eq!(
+        hex(&text_for("aarch64", ".word 0x11223344\n")),
+        "44 33 22 11"
+    );
 }

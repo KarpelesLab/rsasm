@@ -83,6 +83,19 @@ impl Architecture for AArch64 {
         183 // EM_AARCH64
     }
 
+    /// AArch64 writes immediates as `#1`, so `#` is a comment only in the
+    /// first column and `//` is the comment everywhere else.
+    fn comments(&self) -> crate::arch::CommentSyntax {
+        crate::arch::CommentSyntax {
+            anywhere: &["//"],
+            line_start: &["#"],
+        }
+    }
+
+    fn word_bytes(&self) -> u8 {
+        4
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         if pcrel {
             reloc::pcrel(size)
