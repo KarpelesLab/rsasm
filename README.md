@@ -62,7 +62,7 @@ assembler, not against rsasm's own idea of the manual. See
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
 | m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1248 |
-| Renesas RX (RXv1) | `rx` | GNU as | 580 |
+| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 604 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 523 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 548 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
@@ -96,10 +96,13 @@ but 18 forms where both manuals show MAME to be wrong.
 **Not yet**
 
 - the NASM dialect (its lexing rules are in place; its directives are not)
-- Renesas CC-RX source syntax; RX takes GNU as syntax
 - in CC-RL and CC-RH source: bit symbols, `$label`/`%label` gp- and
   ep-relative references, `STARTOF`/`SIZEOF`, and CC-RL's `HIGH`/`LOWW` of a
   relocatable label (all refused with the reason)
+- in CC-RX source: `.FLOAT`/`.DOUBLE`, `.RVECTOR`, the `.LEN`/`.INSTR`/`.SUBSTR`
+  string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
+  bit length specifiers that ask for a longer form than the shortest (all
+  refused with the reason)
 - Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
 - ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
@@ -131,7 +134,8 @@ rsasm [options] <input.s>...
   -f, --format <fmt> output format: elf (default) or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
-                     ccrl (Renesas CC-RL) or ccrh (Renesas CC-RH)
+                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH) or
+                     ccrx (Renesas CC-RX)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
@@ -160,6 +164,7 @@ source is normally written in.
 | `renesas` | `DB 'A',1`, `; comment`, `10H` | 78K0 |
 | `ccrl` | `.DB "A",1`, `$IF`, `0x10` or `10H` (Renesas CC-RL) | — |
 | `ccrh` | `.dw #label`, `$IF`, `0x10` (Renesas CC-RH) | — |
+| `ccrx` | `.SECTION P,CODE`, `.LWORD 10H`, `#1:8` (Renesas CC-RX) | — |
 | `nasm` | lexing only, so far | — |
 
 ```console
@@ -184,10 +189,11 @@ vasm and GNU as `--mri`. Three rules in it catch people out:
   `move.l #1,d0` into `moveq #1,d0`; rsasm, like GNU as, only chooses the
   shortest encoding of the instruction you wrote.
 
-### Renesas CC-RL and CC-RH
+### Renesas CC-RL, CC-RH and CC-RX
 
-`ccrl` and `ccrh` read source written for the assemblers of Renesas's RL78 and
-RH850 compiler packages. GNU as stays the default for those targets, because
+`ccrl`, `ccrh` and `ccrx` read source written for the assemblers of Renesas's
+RL78, RH850 and RX compiler packages. GNU as stays the default for those
+targets, because
 GNU-syntax source would not always be refused in the vendor dialects — it
 would sometimes mean something else — so the dialect has to be asked for:
 
@@ -217,12 +223,40 @@ and the *CC-RH Compiler User's Manual* (R20UT3516EJ0113):
   suffixes (`setfgt`, `cmovz`, `cmpfeq.s`), `jr22`/`ld23.w`-style width
   spellings, `push`/`pushm`, and byte-sized `prepare`/`dispose` frames
 
+CC-RX has a directive set of its own, covered from the *CC-RX Compiler User's
+Manual* (R20UT3248EJ0115): `B`/`O`/`H` number suffixes, names with `$` and
+`.`, `$` as the location symbol, its operator precedence, `.SECTION` with
+`CODE`/`ROMDATA`/`DATA` and `ALIGN=`, `.ORG` and `.OFFSET` with the NOP code
+or `FILL` as padding, `.ALIGN`, `.BLKB` to `.BLKD`, `.BYTE`/`.WORD`/`.LWORD`,
+`.EQU`, `.GLB`/`.WEAK`, `.INCLUDE`, `.END`, `.IF`/`.ELIF`, `.DEFINE`, `?:`
+temporary labels, the `__PID_R0`-`__PID_R15` register names, and macros with
+`..MACPARA`, `.MREPEAT`/`..MACREP`, `.LOCAL` and `@` concatenation.
+
+```console
+$ cat reset.src
+        .SECTION P,CODE
+        .GLB    _start
+_start: MOV.L   #0FFH:8, R1
+        ADD     400[R1], R2
+        BRA     ?+
+        NOP
+?:      RTS
+        .END
+$ rsasm -a rx -d ccrx -o reset.o reset.src
+```
+
+CC-RX honours a bit length specifier such as `#1:8` even where a shorter form
+fits; GNU as ignores it and rsasm, like GNU as, assembles the shortest form.
+So a specifier is accepted where it names the width of that form, and refused
+where CC-RX would have produced something else.
+
 No Renesas assembler can be run here, so rsasm's reading of the manuals is
-checked the only way it can be: each case in `tools/xas-diff/rl78-ccrl-pairs.txt`
-and `rh850-ccrh-pairs.txt` pairs vendor source with the GNU-syntax program it
-means, and `tools/xas-diff/run.sh` requires rsasm's bytes for the first to
-equal GNU as's for the second. Placement is the linker's: an `AT` attribute or
-`.ORG` names the section as the manual does, but the address is not recorded.
+checked the only way it can be: each case in `tools/xas-diff/rl78-ccrl-pairs.txt`,
+`rh850-ccrh-pairs.txt` and `rx-ccrx-pairs.txt` pairs vendor source with the
+GNU-syntax program it means, and `tools/xas-diff/run.sh` requires rsasm's
+bytes for the first to equal GNU as's for the second. Placement is the
+linker's: an `AT` attribute or `.ORG` names the section (CC-RL, CC-RH) or pads
+it (CC-RX) as the manual says, but the start address is not recorded.
 
 ## Verification
 
@@ -233,10 +267,10 @@ independent assembler, and compare the bytes:
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
   supports. 3,944 of 3,944 match across fourteen target variants.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
-  and V850/RH850, and vasm for Motorola syntax, plus CC-RL and CC-RH source
-  paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds the
-  references from checksum-pinned sources. 3,703 of 3,703 match across eleven
-  variants.
+  and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
+  source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds
+  the references from checksum-pinned sources. 3,727 of 3,727 match across
+  twelve variants.
 
 The first two run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks

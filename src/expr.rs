@@ -95,6 +95,16 @@ impl BinOp {
                     Mul | Div | Rem | Shl | Shr | Shr32 | Sar32 => 5,
                 }
             }
+            // CC-RX Table 5.11 (R20UT3248EJ0115 page 462), which has no
+            // logical operators and puts the shifts below `+`.
+            Dialect::CcRx => match self {
+                LogicalOr | LogicalAnd | Eq | Ne | Lt | Gt | Le | Ge => 1,
+                Or | Xor => 2,
+                And => 3,
+                Shl | Shr | Shr32 | Sar32 => 4,
+                Add | Sub => 5,
+                Mul | Div | Rem => 6,
+            },
             _ => match self {
                 LogicalOr => 1,
                 LogicalAnd => 2,
@@ -654,16 +664,18 @@ impl<'a> ExprParser<'a> {
     /// `SIZEOF`, the mirror-area `MIRHW`/`MIRLW`/`SMRLW`, and the bit-symbol
     /// `DATAPOS`/`BITPOS` — are refused here with the reason, rather than
     /// being read as a call to a symbol of that name. Returns `None` after
-    /// reporting one of those.
+    /// reporting one of those. CC-RX has no separators, but its `SIZEOF` and
+    /// `TOPOF` (R20UT3248EJ0115 Table 5.7, page 461) are the linker's too.
     fn renesas_operator(&mut self, n: Name, span: Span) -> Option<Option<UnOp>> {
         let word = self.interner.get(n).to_ascii_uppercase();
+        let cc = self.dialect.is_cc();
         let op = match word.as_str() {
-            "HIGH" => UnOp::High,
-            "LOW" => UnOp::Low,
-            "HIGHW" => UnOp::HighW,
-            "LOWW" => UnOp::LowW,
+            "HIGH" if cc => UnOp::High,
+            "LOW" if cc => UnOp::Low,
+            "HIGHW" if cc => UnOp::HighW,
+            "LOWW" if cc => UnOp::LowW,
             "HIGHW1" if self.dialect == Dialect::CcRh => UnOp::HighW1,
-            "STARTOF" | "SIZEOF" => {
+            "STARTOF" | "SIZEOF" | "TOPOF" => {
                 self.diags.error(
                     span,
                     format!(
@@ -704,8 +716,27 @@ impl<'a> ExprParser<'a> {
             TokKind::Punct(Punct::Bang) if self.dialect == Dialect::CcRh => Some(UnOp::Not),
             TokKind::Punct(Punct::Bang) => Some(UnOp::LogicalNot),
             TokKind::Punct(Punct::Plus) => Some(UnOp::Plus),
-            TokKind::Ident(n) if self.dialect.is_cc() && starts_term(cur.nth(1).kind) => {
+            TokKind::Ident(n)
+                if (self.dialect.is_cc() || self.dialect == Dialect::CcRx)
+                    && starts_term(cur.nth(1).kind) =>
+            {
                 self.renesas_operator(n, tok.span)?
+            }
+            // CC-RX's `?+` and `?-`, the temporary labels after and before
+            // (R20UT3248EJ0115 page 497).
+            TokKind::Punct(Punct::Question)
+                if self.dialect == Dialect::CcRx
+                    && (cur.nth(1).is_punct(Punct::Plus) || cur.nth(1).is_punct(Punct::Minus)) =>
+            {
+                cur.advance();
+                let sign = cur.advance();
+                let dir = if sign.is_punct(Punct::Plus) {
+                    LocalDir::Forward
+                } else {
+                    LocalDir::Backward
+                };
+                let kind = ExprKind::LocalRef(crate::parser::CCRX_TEMPORARY_LABEL, dir);
+                return Some(self.arena.alloc(kind, tok.span.to(sign.span)));
             }
             _ => None,
         };
@@ -731,6 +762,30 @@ impl<'a> ExprParser<'a> {
                 let msg = crate::lexer::explain_bad_number(self.interner.get(text));
                 self.diags.error(tok.span, msg);
                 None
+            }
+            TokKind::Ident(n) if self.dialect == Dialect::CcRx => {
+                cur.advance();
+                let word = self.interner.get(n);
+                // A macro expansion has already put the count in place of
+                // these; anywhere else they are 0 (R20UT3248EJ0115 page
+                // 490).
+                if word.eq_ignore_ascii_case("..macpara") || word.eq_ignore_ascii_case("..macrep") {
+                    return Some(self.arena.alloc(ExprKind::Int(0), tok.span));
+                }
+                if [".len", ".instr", ".substr"]
+                    .iter()
+                    .any(|f| word.eq_ignore_ascii_case(f))
+                {
+                    self.diags.error(
+                        tok.span,
+                        format!(
+                            "the string function `{}` is not supported",
+                            word.to_ascii_uppercase()
+                        ),
+                    );
+                    return None;
+                }
+                Some(self.arena.alloc(ExprKind::Sym(n), tok.span))
             }
             TokKind::Ident(n) => {
                 cur.advance();

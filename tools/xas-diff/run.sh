@@ -12,7 +12,7 @@
 # <key>-programs.txt with multi-line snippets separated by `=== <name>`.
 # Motorola source is column-sensitive, so indent instructions in those corpora.
 #
-# A vendor syntax no reference assembler reads (CC-RL, CC-RH) is checked in
+# A vendor syntax no reference assembler reads (CC-RL, CC-RH, CC-RX) is checked in
 # pairs instead: <key>-pairs.txt holds snippets separated by `=== <name>`, each
 # split by a `--- gnu` line into the vendor source, which rsasm assembles in
 # the key's dialect, and the GNU-syntax source that means the same thing,
@@ -47,6 +47,7 @@ sh|sh|gas|sh-elf-as|elf:.text
 shl|shl|gas|sh-elf-as -little|elf:.text
 rl78-ccrl|rl78|ccrl|rl78-elf-as|elf:.text
 rh850-ccrh|rh850|ccrh|v850-elf-as -mv850e3v5|elf:.text
+rx-ccrx|rx|ccrx|rx-elf-as|elf:P
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }

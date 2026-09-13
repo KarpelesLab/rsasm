@@ -1,12 +1,16 @@
-//! The directives and control instructions of Renesas CC-RL and CC-RH.
+//! The directives and control instructions of Renesas CC-RL, CC-RH and CC-RX.
 //!
-//! The two assemblers share one language, and every rule here comes from
-//! their user's manuals, cited by section and page:
+//! CC-RL and CC-RH share one language; CC-RX has a directive set of its own
+//! with the same shape (dotted words, a name field before `.MACRO`). Every
+//! rule here comes from the user's manuals, cited by section and page:
 //!
 //! - *CC-RL Compiler User's Manual*, R20UT3123EJ0115 (Rev.1.15, December
 //!   2025), chapter 5, "Assembly Language Specifications".
 //! - *CC-RH Compiler User's Manual*, R20UT3516EJ0113 (Rev.1.13, June 2026),
 //!   chapter 5, of the same name.
+//! - *CC-RX Compiler User's Manual*, R20UT3248EJ0115 (Rev.1.15, June 2026),
+//!   chapter 5, of the same name. Pages cited in the CC-RX code are this
+//!   manual's.
 //!
 //! No Renesas assembler was available to run, so what the manuals describe is
 //! all there is to go on; where they leave something open, the comment says
@@ -25,7 +29,7 @@ use crate::assembler::Assembler;
 use crate::cursor::Cursor;
 use crate::dialect::Alias;
 use crate::lexer::{Dialect, Punct, TokKind};
-use crate::parser::Statement;
+use crate::parser::{Body, Statement};
 use crate::section::{FragKind, Fragment, SectionFlags, SectionKind};
 use crate::source::Span;
 use crate::symbol::Binding;
@@ -64,6 +68,32 @@ pub(crate) enum CcDirective {
     Arch,
     /// Something rsasm cannot express, and why.
     Unsupported(&'static str),
+    /// CC-RX `.SECTION name[, CODE|ROMDATA|DATA][, ALIGN=n]`.
+    RxSection,
+    /// CC-RX `.ORG address[, FILL=value]`.
+    RxOrg,
+    /// CC-RX `.OFFSET offset[, FILL=value]`.
+    RxOffset,
+    /// CC-RX `.ALIGN n[, FILL=value]`.
+    RxAlign,
+    /// CC-RX `.ENDIAN BIG|LITTLE`.
+    RxEndian,
+    /// CC-RX `.INCLUDE file`, unquoted.
+    RxInclude,
+    /// CC-RX `.BLKB`, `.BLKW`, `.BLKL` and `.BLKD`: RAM of this unit size.
+    RxBlock(u8),
+    /// CC-RX `name .DEFINE string`.
+    RxDefine,
+}
+
+/// What CC-RX's `.SECTION` and `.ORG` said about a section.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct RxSection {
+    /// The `ALIGN=` value of its `.SECTION`, or 0 without one.
+    align: u64,
+    /// The address of its first `.ORG`, which makes it an
+    /// absolute-addressing section.
+    origin: Option<i64>,
 }
 
 const BIT_SYMBOLS: &str = "bit symbols and bit sections are not supported: an ELF symbol \
@@ -74,6 +104,9 @@ const BIT_SYMBOLS: &str = "bit symbols and bit sections are not supported: an EL
 pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
     use Alias::{Cc, Data, Gas, Ignore, Space};
     use CcDirective::*;
+    if dialect == Dialect::CcRx {
+        return rx_lookup(word);
+    }
     let rl = dialect == Dialect::CcRl;
     Some(match word {
         // ---- section definition: CC-RL §5.2.2, pages 485-500; CC-RH §5.2.2,
@@ -169,6 +202,68 @@ pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
     })
 }
 
+/// The CC-RX table: `word` lowercased, without its leading dot.
+fn rx_lookup(word: &str) -> Option<Alias> {
+    use Alias::{Cc, Data, End, Gas, Ignore};
+    use CcDirective::*;
+    Some(match word {
+        // ---- link directives: §5.2.2, pages 473-475.
+        "section" => Cc(RxSection),
+        "glb" => Gas(".globl"),
+        "weak" => Gas(".weak"),
+        "rvector" => Cc(Unsupported(
+            "`.RVECTOR` registers a vector for the Renesas linker's `C$VECT` table, \
+             which an ELF object cannot ask for; write the table with `.LWORD`",
+        )),
+
+        // ---- assembler directives: §5.2.3, pages 475-476. `.EQU` is an
+        // equate the parser knows.
+        "end" => End,
+        "include" => Cc(RxInclude),
+
+        // ---- address directives: §5.2.4, pages 477-485.
+        "org" => Cc(RxOrg),
+        "offset" => Cc(RxOffset),
+        "endian" => Cc(RxEndian),
+        "blkb" => Cc(RxBlock(1)),
+        "blkw" => Cc(RxBlock(2)),
+        "blkl" => Cc(RxBlock(4)),
+        "blkd" => Cc(RxBlock(8)),
+        "byte" => Data(1),
+        "word" => Data(2),
+        "lword" => Data(4),
+        "float" | "double" => Cc(Unsupported(
+            "floating-point constants are not supported; write the value's bits with `.LWORD`",
+        )),
+        "align" => Cc(RxAlign),
+
+        // ---- macro directives: §5.2.5, pages 485-492. `.MACRO`, `.EXITM`,
+        // `.ENDM`, `.MREPEAT` and `.ENDR` are block keywords (see
+        // `crate::dialect::block_keyword`), and `.LEN`, `.INSTR` and
+        // `.SUBSTR` are terms of an expression.
+        "local" => Cc(Local),
+
+        // ---- compiler output: §5.2.6, page 493, which users are told not to
+        // write.
+        "_line_top" | "_line_end" => Ignore,
+        "swsection" | "swmov" | "switch" | "instalign" => Cc(Unsupported(
+            "this directive is compiler output for switch tables and instruction \
+             alignment, and is not supported",
+        )),
+
+        // ---- control instructions: §5.3, pages 493-499. The listing, the
+        // `.ASSERT` message, the Call Walker's stack size and the line number
+        // change no byte.
+        "list" | "assert" | "stack" | "line" => Ignore,
+        "if" => Gas(".if"),
+        "elif" => Gas(".elseif"),
+        "else" => Gas(".else"),
+        "endif" => Gas(".endif"),
+        "define" => Cc(RxDefine),
+        _ => return None,
+    })
+}
+
 /// What a section holds.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Class {
@@ -176,6 +271,29 @@ enum Class {
     Const,
     Data,
     Bss,
+}
+
+/// The ELF section type and flags for a class of contents.
+fn class_section(class: Class) -> (SectionKind, SectionFlags) {
+    match class {
+        Class::Code => (SectionKind::Progbits, SectionFlags::text()),
+        Class::Const => (SectionKind::Progbits, SectionFlags::rodata()),
+        Class::Data => (SectionKind::Progbits, SectionFlags::data()),
+        Class::Bss => (SectionKind::Nobits, SectionFlags::bss()),
+    }
+}
+
+/// The CC-RX attribute of a section: `CODE` if it runs, `DATA` if it holds
+/// no file bytes, `ROMDATA` otherwise. CC-RX has no initialized RAM section
+/// of its own (page 473).
+fn rx_class(s: &crate::section::Section) -> Class {
+    if s.flags.exec {
+        Class::Code
+    } else if s.kind == SectionKind::Nobits {
+        Class::Bss
+    } else {
+        Class::Const
+    }
 }
 
 /// A relocation attribute.
@@ -334,10 +452,18 @@ impl Assembler {
             CcDirective::Local => {
                 self.diags.error(
                     span,
-                    "`.LOCAL` is only allowed inside a macro, `.REPT` or `.IRP` body",
+                    "`.LOCAL` is only allowed inside a macro or repeat body",
                 );
                 cur.set_pos(cur.all().len());
             }
+            CcDirective::RxSection => self.rx_section(&mut cur, span),
+            CcDirective::RxOrg => self.rx_org(&mut cur, span),
+            CcDirective::RxOffset => self.rx_offset(&mut cur, span),
+            CcDirective::RxAlign => self.rx_align(&mut cur, span),
+            CcDirective::RxEndian => self.rx_endian(&mut cur, span),
+            CcDirective::RxInclude => self.rx_include(&mut cur, span),
+            CcDirective::RxBlock(width) => self.rx_block(&mut cur, width, span),
+            CcDirective::RxDefine => self.rx_define(stmt, &mut cur, span),
             CcDirective::Arch => {
                 let name = match stmt.body {
                     Some(crate::parser::Body::Directive { name, .. }) => {
@@ -552,12 +678,7 @@ impl Assembler {
             // "name" + "_AT" + the address in uppercase hex (CC-RL page 486).
             name = format!("{name}_AT{a:X}");
         }
-        let (kind, flags) = match attr.class {
-            Class::Code => (SectionKind::Progbits, SectionFlags::text()),
-            Class::Const => (SectionKind::Progbits, SectionFlags::rodata()),
-            Class::Data => (SectionKind::Progbits, SectionFlags::data()),
-            Class::Bss => (SectionKind::Nobits, SectionFlags::bss()),
-        };
+        let (kind, flags) = class_section(attr.class);
         self.cc_switch(&name, kind, flags, align.unwrap_or(attr.align), span);
     }
 
@@ -873,5 +994,452 @@ impl Assembler {
             .error(span, "expected a file name, as `(file)` or `\"file\"`");
         cur.set_pos(cur.all().len());
         None
+    }
+}
+
+// ---- CC-RX ------------------------------------------------------------------
+
+impl Assembler {
+    /// `.SECTION name[, attribute][, ALIGN=n]`, the two in either order
+    /// (page 473). A new section is `CODE` unless told otherwise, and a
+    /// restarted one keeps its attribute. `CODE` holds instructions,
+    /// `ROMDATA` fixed data, and `DATA` the RAM `.BLKB` reserves, which has
+    /// no bytes in the file (pages 479-483).
+    fn rx_section(&mut self, cur: &mut Cursor<'_>, span: Span) {
+        let end = cur.all().len();
+        let tok = cur.peek();
+        let Some(n) = tok.ident() else {
+            self.diags.error(tok.span, "expected a section name");
+            cur.set_pos(end);
+            return;
+        };
+        cur.advance();
+        let mut class = None;
+        let mut align = None;
+        while cur.eat_punct(Punct::Comma).is_some() {
+            let tok = cur.peek();
+            let word = tok
+                .ident()
+                .map(|w| self.interner.get(w).to_ascii_lowercase());
+            let given = match word.as_deref() {
+                Some("code") => Class::Code,
+                Some("romdata") => Class::Const,
+                Some("data") => Class::Bss,
+                Some("align") if cur.nth(1).is_punct(Punct::Eq) => {
+                    cur.advance();
+                    cur.advance();
+                    let v = self.parse_expr(cur).and_then(|e| {
+                        let v = self.eval_absolute(e, "section alignment")?;
+                        if !matches!(v, 2 | 4 | 8) {
+                            let espan = self.exprs.span(e);
+                            self.diags
+                                .error(espan, format!("section alignment {v} is not 2, 4 or 8"));
+                            return None;
+                        }
+                        Some(v)
+                    });
+                    let Some(v) = v else {
+                        cur.set_pos(end);
+                        return;
+                    };
+                    align = Some(v as u64);
+                    continue;
+                }
+                _ => {
+                    self.diags
+                        .error(tok.span, "expected `CODE`, `ROMDATA`, `DATA` or `ALIGN=n`");
+                    cur.set_pos(end);
+                    return;
+                }
+            };
+            cur.advance();
+            if class.replace(given).is_some() {
+                self.diags
+                    .error(tok.span, "the section attribute is given twice");
+                cur.set_pos(end);
+                return;
+            }
+        }
+        let name = self.interner.get(n).to_string();
+        let restarted = self.sections.iter().find(|s| s.name == n).map(rx_class);
+        let (kind, flags) = class_section(class.or(restarted).unwrap_or(Class::Code));
+        self.cc_switch(&name, kind, flags, align.unwrap_or(1), span);
+        if self.section(self.cur).name == n {
+            let info = self.ccrx_sections.entry(self.cur).or_default();
+            if let Some(a) = align {
+                info.align = a;
+            }
+        }
+    }
+
+    /// An absolute address or offset from 0 to 0FFFFFFFFH (pages 477-478).
+    fn rx_address(&mut self, cur: &mut Cursor<'_>, what: &str) -> Option<i64> {
+        let v = self.parse_expr(cur).and_then(|e| {
+            let v = self.eval_absolute(e, what)?;
+            if !(0..=0xffff_ffff).contains(&v) {
+                let espan = self.exprs.span(e);
+                self.diags.error(
+                    espan,
+                    format!("{what} {v:#x} is out of range (0 to 0FFFFFFFFH)"),
+                );
+                return None;
+            }
+            Some(v)
+        });
+        if v.is_none() {
+            cur.set_pos(cur.all().len());
+        }
+        v
+    }
+
+    /// The padding byte of `.ORG`, `.OFFSET` and `.ALIGN`: `FILL=value` in a
+    /// `ROMDATA` section, and otherwise, or without one, the NOP code 03H
+    /// (pages 477, 478 and 485). A `DATA` section has no bytes to fill.
+    fn rx_fill(&mut self, cur: &mut Cursor<'_>) -> Option<u8> {
+        let end = cur.all().len();
+        let mut given = None;
+        if cur.eat_punct(Punct::Comma).is_some() {
+            let tok = cur.peek();
+            let is_fill = tok
+                .ident()
+                .is_some_and(|w| self.interner.get(w).eq_ignore_ascii_case("fill"));
+            if !is_fill || !cur.nth(1).is_punct(Punct::Eq) {
+                self.diags.error(tok.span, "expected `FILL=value`");
+                cur.set_pos(end);
+                return None;
+            }
+            cur.advance();
+            cur.advance();
+            let v = self.parse_expr(cur).and_then(|e| {
+                let v = self.eval_absolute(e, "fill value")?;
+                if !(0..=0xff).contains(&v) {
+                    let espan = self.exprs.span(e);
+                    self.diags.error(
+                        espan,
+                        format!("fill value {v:#x} is out of range (0 to 0FFH)"),
+                    );
+                    return None;
+                }
+                Some(v as u8)
+            });
+            if v.is_none() {
+                cur.set_pos(end);
+                return None;
+            }
+            given = v;
+        }
+        Some(match rx_class(self.section(self.cur)) {
+            Class::Const => given.unwrap_or(0x03),
+            Class::Bss => 0,
+            _ => 0x03,
+        })
+    }
+
+    /// `.ORG address[, FILL=value]` (page 477). The first, which has to come
+    /// straight after `.SECTION`, makes the section absolute-addressing and
+    /// starts it at `address`; each later one pads up to its address. The
+    /// start address is the linker's to honour: an ELF relocatable section
+    /// has none.
+    fn rx_org(&mut self, cur: &mut Cursor<'_>, span: Span) {
+        let Some(v) = self.rx_address(cur, "`.ORG` address") else {
+            return;
+        };
+        let Some(fill) = self.rx_fill(cur) else {
+            return;
+        };
+        let id = self.cur;
+        match self.ccrx_sections.get(&id).and_then(|s| s.origin) {
+            Some(origin) if v < origin => self.diags.error(
+                span,
+                format!("`.ORG` address {v:#X} is below the section's start, {origin:#X}"),
+            ),
+            Some(origin) => {
+                let target = self.exprs.int((v - origin) as u64, span);
+                self.emit_org(target, fill, span);
+            }
+            None if self.section(id).frags.is_empty() => {
+                self.ccrx_sections.entry(id).or_default().origin = Some(v);
+            }
+            None => self.diags.error(
+                span,
+                "`.ORG` has to come straight after `.SECTION`; in a relative-addressing \
+                 section `.OFFSET` sets the offset",
+            ),
+        }
+    }
+
+    /// `.OFFSET offset[, FILL=value]` (page 478): pads a relative-addressing
+    /// section up to `offset` from its start.
+    fn rx_offset(&mut self, cur: &mut Cursor<'_>, span: Span) {
+        let Some(v) = self.rx_address(cur, "`.OFFSET` value") else {
+            return;
+        };
+        let Some(fill) = self.rx_fill(cur) else {
+            return;
+        };
+        if self
+            .ccrx_sections
+            .get(&self.cur)
+            .is_some_and(|s| s.origin.is_some())
+        {
+            self.diags.error(
+                span,
+                "`.OFFSET` cannot be used in an absolute-addressing section; use `.ORG`",
+            );
+            return;
+        }
+        let target = self.exprs.int(v as u64, span);
+        self.emit_org(target, fill, span);
+    }
+
+    /// `.ALIGN n[, FILL=value]`: a power of two from 2 to 65536 (pages
+    /// 484-485). The manual warns when a relative-addressing section was
+    /// declared without `ALIGN=`, or with a smaller one, and so does this.
+    fn rx_align(&mut self, cur: &mut Cursor<'_>, span: Span) {
+        let end = cur.all().len();
+        let Some(n) = self
+            .parse_expr(cur)
+            .and_then(|e| self.eval_absolute(e, "alignment"))
+        else {
+            cur.set_pos(end);
+            return;
+        };
+        if !(2..=65536).contains(&n) || !(n as u64).is_power_of_two() {
+            self.diags.error(
+                span,
+                format!("alignment {n} must be a power of two from 2 to 65536"),
+            );
+            cur.set_pos(end);
+            return;
+        }
+        let Some(fill) = self.rx_fill(cur) else {
+            return;
+        };
+        let unit = n as u64;
+        if let Some(info) = self.ccrx_sections.get(&self.cur).copied()
+            && info.origin.is_none()
+        {
+            if info.align == 0 {
+                self.diags.warning(
+                    span,
+                    "`.ALIGN` in a relative-addressing section declared without `ALIGN=`",
+                );
+            } else if unit > info.align {
+                self.diags.warning(
+                    span,
+                    format!(
+                        "alignment {n} is larger than the section's `ALIGN={}`",
+                        info.align
+                    ),
+                );
+            }
+        }
+        self.cur_section().push(Fragment::new(
+            FragKind::Align {
+                align: unit,
+                fill: vec![fill],
+                max_skip: None,
+                pad: 0,
+            },
+            span,
+        ));
+        let id = self.cur;
+        self.section_mut(id).align = self.section(id).align.max(unit);
+    }
+
+    /// `.ENDIAN BIG|LITTLE`, for a data section (pages 478-479). rsasm
+    /// assembles RX little-endian, so `LITTLE` changes nothing and `BIG` is
+    /// refused.
+    fn rx_endian(&mut self, cur: &mut Cursor<'_>, span: Span) {
+        let end = cur.all().len();
+        if rx_class(self.section(self.cur)) == Class::Code {
+            self.diags
+                .error(span, "`.ENDIAN` cannot be used in a `CODE` section");
+            cur.set_pos(end);
+            return;
+        }
+        let tok = cur.peek();
+        let word = tok
+            .ident()
+            .map(|w| self.interner.get(w).to_ascii_lowercase());
+        match word.as_deref() {
+            Some("little") => {
+                cur.advance();
+            }
+            Some("big") => {
+                cur.advance();
+                self.diags.error(
+                    tok.span,
+                    "big-endian sections are not supported: rsasm assembles RX little-endian",
+                );
+            }
+            _ => {
+                self.diags.error(tok.span, "expected `BIG` or `LITTLE`");
+                cur.set_pos(end);
+            }
+        }
+    }
+
+    /// `.INCLUDE file`, the name written without quotes and taken as it
+    /// stands (page 476).
+    fn rx_include(&mut self, cur: &mut Cursor<'_>, span: Span) {
+        let rest = cur.rest();
+        cur.set_pos(cur.all().len());
+        let path = match (rest.first(), rest.last()) {
+            (Some(a), Some(b)) => self
+                .sm
+                .span_text(Span::new(a.span.lo, b.span.hi))
+                .trim()
+                .to_string(),
+            _ => String::new(),
+        };
+        if path.is_empty() {
+            self.diags.error(span, "expected a file name");
+        } else if path.starts_with('"') {
+            self.diags
+                .error(span, "`.INCLUDE` takes the file name without quotes");
+        } else if path.to_ascii_uppercase().contains("..FILE") {
+            self.diags
+                .error(span, "`..FILE` is not supported in an `.INCLUDE` file name");
+        } else {
+            match self.find_include(&path) {
+                Some(p) => self.include(&p, span),
+                None => self
+                    .diags
+                    .error(span, format!("cannot find include file `{path}`")),
+            }
+        }
+    }
+
+    /// `.BLKB`, `.BLKW`, `.BLKL` and `.BLKD`: `count` units of RAM, which the
+    /// manual only allows in a `DATA` section (pages 479-481).
+    fn rx_block(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
+        if rx_class(self.section(self.cur)) != Class::Bss {
+            let unit = match width {
+                1 => 'B',
+                2 => 'W',
+                4 => 'L',
+                _ => 'D',
+            };
+            self.diags.error(
+                span,
+                format!("`.BLK{unit}` reserves RAM, so it belongs in a `DATA` section"),
+            );
+            cur.set_pos(cur.all().len());
+            return;
+        }
+        self.alias_space(cur, width, span);
+    }
+
+    /// `name .DEFINE string` (page 499): `name` stands for `string` in the
+    /// statements after it; see [`Assembler::ccrx_apply_defines`]. Quotes
+    /// around the string, single or double, are not part of it. A name
+    /// `.EQU` has already defined keeps that meaning, as the manual says the
+    /// first definition wins.
+    fn rx_define(&mut self, stmt: &Statement, cur: &mut Cursor<'_>, span: Span) {
+        let rest = cur.rest();
+        cur.set_pos(cur.all().len());
+        let Some((name, name_span)) = stmt.symbol else {
+            self.diags
+                .error(span, "`.DEFINE` needs the name it defines before it");
+            return;
+        };
+        let (Some(a), Some(b)) = (rest.first(), rest.last()) else {
+            self.diags.error(span, "`.DEFINE` needs a string");
+            return;
+        };
+        let text = match a.kind {
+            TokKind::Str(i) if rest.len() == 1 => {
+                String::from_utf8_lossy(self.pool.get(i)).into_owned()
+            }
+            _ => {
+                let raw = self.sm.span_text(Span::new(a.span.lo, b.span.hi)).trim();
+                raw.strip_prefix('\'')
+                    .and_then(|r| r.strip_suffix('\''))
+                    .unwrap_or(raw)
+                    .to_string()
+            }
+        };
+        if self
+            .symbols
+            .lookup(name)
+            .is_some_and(|id| self.symbols.get(id).is_defined())
+        {
+            let shown = self.interner.get(name).to_string();
+            self.diags.warning(
+                name_span,
+                format!("`{shown}` is already a symbol, which takes priority over `.DEFINE`"),
+            );
+            return;
+        }
+        let name = self.interner.get(name).to_string();
+        match self.ccrx_defines.iter_mut().find(|(n, _)| *n == name) {
+            Some(d) => d.1 = text,
+            None => self.ccrx_defines.push((name, text)),
+        }
+    }
+
+    /// The text of `stmt` with every name `.DEFINE` gave a string replaced by
+    /// that string, or `None` when it names none (page 499). The result is
+    /// read again as a statement of its own, so a string can stand for a
+    /// register, an operand or a whole instruction.
+    ///
+    /// The name field of `.DEFINE` and `.MACRO` is left alone, and so are the
+    /// block directives, whose bodies follow on later lines. An `.EQU` of a
+    /// name `.DEFINE` gave first is ignored with a warning, since the first
+    /// definition wins.
+    pub(crate) fn ccrx_apply_defines(&mut self, stmt: &Statement) -> Option<String> {
+        if stmt.symbol.is_some() || stmt.toks.is_empty() {
+            return None;
+        }
+        if let Some(Body::Directive { name, .. }) = stmt.body
+            && matches!(
+                self.interner.get(name).to_ascii_lowercase().as_str(),
+                ".macro" | ".endm" | ".exitm" | ".mrepeat" | ".endr"
+            )
+        {
+            return None;
+        }
+        let define = |asm: &Assembler, n: crate::intern::Name| {
+            let word = asm.interner.get(n);
+            asm.ccrx_defines
+                .iter()
+                .find(|(d, _)| d == word)
+                .map(|(_, s)| s.clone())
+        };
+        if let Some(Body::Assign { name, span }) = stmt.body
+            && define(self, name).is_some()
+        {
+            let shown = self.interner.get(name).to_string();
+            self.diags.warning(
+                span,
+                format!(
+                    "`{shown}` is already a `.DEFINE` string, which takes priority over `.EQU`"
+                ),
+            );
+            return Some(String::new());
+        }
+        let first = stmt.toks[0].span.lo;
+        let last = stmt.toks[stmt.toks.len() - 1].span.hi;
+        let mut out = String::new();
+        let mut at = first;
+        let mut changed = false;
+        for t in &stmt.toks {
+            let Some(n) = t.ident() else {
+                continue;
+            };
+            let Some(text) = define(self, n) else {
+                continue;
+            };
+            out.push_str(self.sm.span_text(Span::new(at, t.span.lo)));
+            out.push_str(&text);
+            at = t.span.hi;
+            changed = true;
+        }
+        if !changed {
+            return None;
+        }
+        out.push_str(self.sm.span_text(Span::new(at, last)));
+        Some(out)
     }
 }

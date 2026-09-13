@@ -54,7 +54,155 @@ pub fn assemble(cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Out {
         ops,
         span: req.span,
     };
-    dispatch(cx, &s)
+    let out = dispatch(cx, &s)?;
+    if s.ops.iter().any(|o| o.width.is_some()) {
+        check_bit_lengths(cx, &s, &out)?;
+    }
+    Some(out)
+}
+
+/// Checks CC-RX's bit length specifiers, `#imm:8` and `dsp:16[r1]`.
+///
+/// CC-RX uses a field of the width a specifier names even where a shorter
+/// form fits (R20UT3248EJ0115 §5.1.5 (3), page 460). rsasm always takes the
+/// shortest form, as GNU as does, so a specifier is accepted where it names
+/// the width that form has anyway, and refused where CC-RX would assemble
+/// something else.
+///
+/// Which field an operand went into is not something the encoders report, so
+/// it is found by probing: the instruction is assembled again with the value
+/// replaced by one that needs exactly the named width, and by one that needs
+/// the next width up. The specifier is the shortest form's when the real
+/// value gives the same length as the first and the second is longer or does
+/// not assemble at all. The fixed fields of 1 to 5 bits (bit numbers, shift
+/// counts, `#uimm:4`) have no shorter alternative, so there the value only
+/// has to fit.
+fn check_bit_lengths(cx: &mut AsmCtx<'_>, s: &Stmt<'_>, out: &[Variant]) -> Option<()> {
+    for (i, op) in s.ops.iter().enumerate() {
+        let Some((width, wspan)) = op.width else {
+            continue;
+        };
+        let (e, disp) = match op.kind {
+            OpKind::Imm(e) => (e, false),
+            OpKind::Mem { disp: Some(e), .. } => (e, true),
+            _ => {
+                cx.error(
+                    wspan,
+                    "a bit length specifier goes on an immediate or a displacement",
+                );
+                return None;
+            }
+        };
+        let refuse = |cx: &mut AsmCtx<'_>, why: String| {
+            cx.error(
+                wspan,
+                format!(
+                    "`:{width}` {why}; rsasm assembles the shortest form, as GNU as does, \
+                     so it only accepts the specifier that form has"
+                ),
+            );
+            None
+        };
+        let Some(v) = cx.constant(e) else {
+            // A symbol is a 32-bit immediate with a relocation.
+            let len = match out {
+                [one] if !disp && width == 32 => Some(one.bytes.len()),
+                _ => None,
+            };
+            if len.is_some() && len == probe_len(cx, s, i, 0x1000_0000) {
+                continue;
+            }
+            return refuse(
+                cx,
+                "cannot be checked on a value that is not a constant".into(),
+            );
+        };
+        if !disp && width <= 5 {
+            let (lo, hi) = if width == 1 {
+                (1, 2)
+            } else {
+                (0, (1 << width) - 1)
+            };
+            if !(lo..=hi).contains(&v) {
+                cx.error(
+                    wspan,
+                    format!("{v} does not fit a `:{width}` immediate ({lo} to {hi})"),
+                );
+                return None;
+            }
+            if width != 4 {
+                continue;
+            }
+        }
+        // Values that need exactly each width, of the sign of `v`. `#uimm:4`
+        // is probed too, since most instructions have no such form and take
+        // a small value as `#simm:8`.
+        let ladder: &[(u8, i64)] = match (disp, v < 0) {
+            (true, _) => &[(5, 4), (8, 128), (16, 1024)],
+            (false, false) => &[
+                (4, 10),
+                (8, 100),
+                (16, 1000),
+                (24, 100_000),
+                (32, 0x1000_0000),
+            ],
+            (false, true) => &[(8, -100), (16, -1000), (24, -100_000), (32, -0x1000_0000)],
+        };
+        let Some(at) = ladder.iter().position(|&(w, _)| w == width) else {
+            let what = if disp {
+                "is not a displacement width (`:5`, `:8` or `:16`)"
+            } else {
+                "is not a width for this value"
+            };
+            return refuse(cx, what.into());
+        };
+        let len = match out {
+            [one] => Some(one.bytes.len()),
+            _ => None,
+        };
+        let named = probe_len(cx, s, i, ladder[at].1);
+        let next = match ladder.get(at + 1) {
+            Some(&(_, rep)) => probe_len(cx, s, i, rep),
+            None => None,
+        };
+        let shortest = len.is_some() && len == named && next.is_none_or(|n| Some(n) > named);
+        if !shortest {
+            return refuse(cx, format!("is not the width of the shortest form for {v}"));
+        }
+    }
+    Some(())
+}
+
+/// The length of `s` assembled with the value of operand `i` replaced by
+/// `value`, or `None` if that does not assemble to one fixed encoding. The
+/// probe's diagnostics are discarded.
+fn probe_len(cx: &mut AsmCtx<'_>, s: &Stmt<'_>, i: usize, value: i64) -> Option<usize> {
+    let e = cx.exprs.int(value as u64, s.span);
+    let mut ops = s.ops.clone();
+    ops[i].kind = match ops[i].kind {
+        OpKind::Mem { base, ext, .. } => OpKind::Mem {
+            disp: Some(e),
+            base,
+            ext,
+        },
+        _ => OpKind::Imm(e),
+    };
+    let probe = Stmt {
+        m: s.m,
+        suffix: s.suffix,
+        ops,
+        span: s.span,
+    };
+    let saved = cx.diags.take();
+    let out = dispatch(cx, &probe);
+    cx.diags.take();
+    for d in saved {
+        cx.diags.emit(d);
+    }
+    match out.as_deref() {
+        Some([one]) => Some(one.bytes.len()),
+        _ => None,
+    }
 }
 
 fn dispatch(cx: &mut AsmCtx<'_>, s: &Stmt<'_>) -> Out {

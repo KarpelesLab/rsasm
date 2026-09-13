@@ -11,6 +11,10 @@ use crate::intern::{Interner, Name};
 use crate::lexer::{Dialect, LexConfig, Lexer, LitPool, Punct, TokKind, Token};
 use crate::source::{FileId, SourceMap, Span};
 
+/// The numeric local label that stands for CC-RX's `?:`: the largest number
+/// a numeric label can have, which no real source writes.
+pub const CCRX_TEMPORARY_LABEL: u32 = u32::MAX;
+
 #[derive(Clone, Debug)]
 pub enum LabelDef {
     Named(Name, Span),
@@ -194,6 +198,15 @@ impl Builder {
                     labels.push(LabelDef::Numeric(v as u32, toks[i].span));
                     i += 2;
                 }
+                // CC-RX's temporary label `?:`, which `?+` and `?-` refer to
+                // (R20UT3248EJ0115 page 497): a numeric local label under a
+                // number no source can write.
+                (Some(TokKind::Punct(Punct::Question)), Some(TokKind::Punct(Punct::Colon)))
+                    if self.dialect == Dialect::CcRx =>
+                {
+                    labels.push(LabelDef::Numeric(CCRX_TEMPORARY_LABEL, toks[i].span));
+                    i += 2;
+                }
                 _ => break,
             }
         }
@@ -271,6 +284,19 @@ impl Builder {
                 i += 1;
             }
         }
+        // CC-RX names a macro, and a `.DEFINE` string, the same way
+        // (R20UT3248EJ0115 pages 486 and 499).
+        if self.dialect == Dialect::CcRx
+            && let (Some(name_tok), Some(dir)) = (toks.get(i), toks.get(i + 1))
+            && let (Some(n), Some(d)) = (name_tok.ident(), dir.ident())
+            && matches!(
+                interner.get(d).to_ascii_lowercase().as_str(),
+                ".macro" | ".define"
+            )
+        {
+            symbol = Some((n, name_tok.span));
+            i += 1;
+        }
 
         let body = self.classify(&toks, &mut i, interner, diags);
         Statement {
@@ -300,6 +326,8 @@ impl Builder {
             Dialect::CcRl | Dialect::CcRh => {
                 word.eq_ignore_ascii_case(".equ") || word.eq_ignore_ascii_case(".set")
             }
+            // CC-RX has `.EQU` alone (R20UT3248EJ0115 page 475).
+            Dialect::CcRx => word.eq_ignore_ascii_case(".equ"),
         }
     }
 
@@ -353,7 +381,9 @@ impl Builder {
                 // Every CC-RL and CC-RH directive is dotted and every bare word
                 // is an instruction or a macro call (CC-RL Table 5.13, page
                 // 484).
-                Dialect::CcRl | Dialect::CcRh => text.starts_with('.') && text.len() > 1,
+                Dialect::CcRl | Dialect::CcRh | Dialect::CcRx => {
+                    text.starts_with('.') && text.len() > 1
+                }
             };
             let folded = text
                 .bytes()

@@ -30,9 +30,9 @@ impl Assembler {
             self.run_alias(stmt, alias);
             return;
         }
-        // CC-RL and CC-RH have a table of their own, whose `$` control
-        // instructions keep the `$` in their name.
-        if self.options.dialect.is_cc()
+        // CC-RL, CC-RH and CC-RX have tables of their own; the `$` control
+        // instructions of the first two keep the `$` in their name.
+        if self.options.dialect.renesas_cc()
             && let Some(alias) = crate::dialect::lookup(
                 self.options.dialect,
                 text.strip_prefix('.').unwrap_or(&text),
@@ -834,9 +834,15 @@ impl Assembler {
                 if kind == ".ifb" { blank } else { !blank }
             }
             _ => {
+                let mark = self.exprs.len();
                 let Some(e) = self.parse_expr(cur) else {
                     return false;
                 };
+                // CC-RX takes a symbol not defined yet as 0 here
+                // (R20UT3248EJ0115 page 495).
+                if self.options.dialect == Dialect::CcRx {
+                    self.ccrx_undefined_as_zero(mark);
+                }
                 let Some(v) = self.eval_absolute(e, "`.if` condition") else {
                     return false;
                 };

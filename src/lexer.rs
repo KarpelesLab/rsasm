@@ -38,6 +38,10 @@ pub enum Dialect {
     /// language family as CC-RL, with prefix-only numbers, a different
     /// operator precedence and `!` as the bitwise NOT.
     CcRh,
+    /// Renesas CC-RX, the assembler of the RX compiler package: suffix-only
+    /// numbers, `$` as the location counter, `.SECTION P,CODE`-style
+    /// directives and `?:` temporary labels.
+    CcRx,
 }
 
 impl Dialect {
@@ -49,6 +53,7 @@ impl Dialect {
             "renesas" | "ca78k0" | "nec" => Dialect::Renesas,
             "ccrl" | "cc-rl" => Dialect::CcRl,
             "ccrh" | "cc-rh" => Dialect::CcRh,
+            "ccrx" | "cc-rx" => Dialect::CcRx,
             _ => return None,
         })
     }
@@ -65,9 +70,18 @@ impl Dialect {
         matches!(self, Dialect::CcRl | Dialect::CcRh)
     }
 
+    /// Renesas's current assemblers, CC-RL, CC-RH and CC-RX: every directive
+    /// is dotted, a bare word is an instruction or a macro call, and a macro
+    /// parameter is a plain word rather than `\name`.
+    pub fn renesas_cc(self) -> bool {
+        matches!(self, Dialect::CcRl | Dialect::CcRh | Dialect::CcRx)
+    }
+
     /// `$` on its own is the location counter (and `$$` the section start).
+    /// CC-RX calls it the location symbol (R20UT3248EJ0115 Table 5.1, page
+    /// 453).
     pub fn dollar_is_here(self) -> bool {
-        matches!(self, Dialect::Nasm | Dialect::Renesas)
+        matches!(self, Dialect::Nasm | Dialect::Renesas | Dialect::CcRx)
     }
 
     /// Quotes inside a string are written twice (`'it''s'`). Devpac, vasm,
@@ -80,9 +94,10 @@ impl Dialect {
     /// A backslash starts a C escape sequence in a quoted literal. The older
     /// vendor syntaxes treat it as an ordinary character; CC-RL and CC-RH list
     /// `\n`, `\xhh` and the rest (CC-RL Table 5.3, page 424; CC-RH Table 5.2,
-    /// R20UT3516EJ0113 page 382).
+    /// R20UT3516EJ0113 page 382). CC-RX's manual describes none, so its
+    /// strings are taken as written.
     pub fn backslash_escapes(self) -> bool {
-        !matches!(self, Dialect::Motorola | Dialect::Renesas)
+        !matches!(self, Dialect::Motorola | Dialect::Renesas | Dialect::CcRx)
     }
 
     /// `*` in operand position is the location counter, as in `dc.l *`. It is
@@ -222,6 +237,23 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+            },
+            // CC-RX: `;` comments only, since `#` is the immediate sigil
+            // (R20UT3248EJ0115 §5.1.7, page 463), and numbers with a `B`, `O`
+            // or `H` suffix or none, a leading zero included (§5.1.5 (1),
+            // pages 455-456).
+            Dialect::CcRx => LexConfig {
+                dialect: d,
+                line_comment: vec![";"],
+                line_start_comment: vec![],
+                block_comment: false,
+                stmt_sep: vec![],
+                radix_suffix: true,
+                local_label_refs: false,
+                char_multi: true,
+                octal_leading_zero: false,
+                number_prefixes: vec![],
+                at_in_idents: false,
             },
         }
     }
@@ -726,7 +758,10 @@ impl<'a> Lexer<'a> {
     /// hex. NASM reads a `0b` prefix before it looks for a suffix and rejects
     /// the same text, so it keeps prefix-first order.
     fn suffixed_literal_ahead(&self) -> bool {
-        if !matches!(self.config.dialect, Dialect::Renesas | Dialect::CcRl) {
+        if !matches!(
+            self.config.dialect,
+            Dialect::Renesas | Dialect::CcRl | Dialect::CcRx
+        ) {
             return false;
         }
         let mut p = self.pos;

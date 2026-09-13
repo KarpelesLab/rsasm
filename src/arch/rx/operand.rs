@@ -22,7 +22,7 @@ use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
 use crate::expr::ExprRef;
 use crate::intern::Name;
-use crate::lexer::{Punct, TokKind, Token};
+use crate::lexer::{Dialect, Punct, TokKind, Token};
 use crate::source::Span;
 
 #[derive(Copy, Clone, Debug)]
@@ -55,6 +55,9 @@ pub struct Operand {
     /// The operand's text when it is a single bare identifier, so that flag
     /// names (`setpsw c`) can be read without reserving them as symbols.
     pub ident: Option<Name>,
+    /// A CC-RX bit length specifier on the immediate or displacement,
+    /// `#imm:8` or `dsp:16[r1]`, and where it was written.
+    pub width: Option<(u8, Span)>,
 }
 
 impl Operand {
@@ -88,7 +91,21 @@ fn ident<'a>(cx: &'a AsmCtx<'_>, t: &Token) -> Option<&'a str> {
 }
 
 fn gpr_tok(cx: &AsmCtx<'_>, t: &Token) -> Option<u8> {
-    ident(cx, t).and_then(reg::gpr)
+    let name = ident(cx, t)?;
+    // CC-RX's substitute names `__PID_R0` to `__PID_R15` are those registers
+    // (R20UT3248EJ0115 §5.1.10, Table 5.29, pages 471-472).
+    if cx.dialect == Dialect::CcRx
+        && let Some(prefix) = name.get(..6)
+        && prefix.eq_ignore_ascii_case("__pid_")
+    {
+        let rest = &name[6..];
+        return if rest.eq_ignore_ascii_case("sp") {
+            None
+        } else {
+            reg::gpr(rest)
+        };
+    }
+    reg::gpr(name)
 }
 
 /// Splits the statement's operand tokens on top-level commas and parses each.
@@ -120,12 +137,40 @@ fn parse_one(cx: &mut AsmCtx<'_>, toks: &[Token], stmt: Span) -> Option<Operand>
             kind,
             span,
             ident: single_ident,
+            width: None,
         })
     };
+    if cx.dialect == Dialect::CcRx
+        && let Some(t) = toks
+            .iter()
+            .find(|t| ident(cx, t).is_some_and(|w| w.eq_ignore_ascii_case("__PID_REG")))
+    {
+        cx.error(
+            t.span,
+            "`__PID_REG` names the register the Renesas `-pid` option selects, \
+             which rsasm has no option for; write the register",
+        );
+        return None;
+    }
 
     if first.is_punct(Punct::Hash) {
         let mut cur = Cursor::new(&toks[1..]);
         let e = cx.expr_parser().parse(&mut cur)?;
+        if let Some(width) = bit_length(cx, &mut cur)? {
+            if !cur.at_end() {
+                cx.error(
+                    cur.remaining_span(),
+                    "unexpected tokens after the immediate",
+                );
+                return None;
+            }
+            return Some(Operand {
+                kind: OpKind::Imm(e),
+                span,
+                ident: None,
+                width: Some(width),
+            });
+        }
         if !cur.at_end() {
             cx.error(
                 cur.remaining_span(),
@@ -163,8 +208,11 @@ fn parse_one(cx: &mut AsmCtx<'_>, toks: &[Token], stmt: Span) -> Option<Operand>
     if cur.at_end() {
         return mk(OpKind::Expr(e));
     }
+    let width = bit_length(cx, &mut cur)?;
     if cur.check_punct(Punct::LBracket) {
-        return parse_bracket(cx, cur.rest(), Some(e), span, stmt);
+        let mut op = parse_bracket(cx, cur.rest(), Some(e), span, stmt)?;
+        op.width = width;
+        return Some(op);
     }
     cx.error(
         cur.remaining_span(),
@@ -251,5 +299,29 @@ fn parse_bracket(
         kind,
         span,
         ident: None,
+        width: None,
     })
+}
+
+/// A CC-RX bit length specifier, `:width`, at the cursor: 1 to 5, 8, 16, 24
+/// or 32 bits (R20UT3248EJ0115 §5.1.5 (3), page 460, and `#imm:1` on page
+/// 457). `Some(None)` when there is none; `None` after an error. GNU as's
+/// syntax has no such thing, so only CC-RX source looks for one.
+fn bit_length(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) -> Option<Option<(u8, Span)>> {
+    if cx.dialect != Dialect::CcRx || !cur.check_punct(Punct::Colon) {
+        return Some(None);
+    }
+    let colon = cur.advance();
+    let tok = cur.advance();
+    let span = colon.span.to(tok.span);
+    match tok.kind {
+        TokKind::Int(n @ (1..=5 | 8 | 16 | 24 | 32)) => Some(Some((n as u8, span))),
+        _ => {
+            cx.error(
+                span,
+                "expected a bit length specifier: `:1` to `:5`, `:8`, `:16`, `:24` or `:32`",
+            );
+            None
+        }
+    }
 }

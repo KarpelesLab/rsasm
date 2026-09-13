@@ -144,8 +144,20 @@ pub fn substitute_with(
 /// `1` becomes `LAB1` (CC-RL §5.4.5, page 557; CC-RH §5.4.3, page 489). Both
 /// manuals leave string literals and comments alone, and so does this. A
 /// `.LOCAL` line has done its job once its names are bound, and is dropped.
-pub fn substitute_words(body: &str, bindings: &[(String, String)], concat: char) -> String {
-    let is_word = |c: char| c.is_ascii_alphanumeric() || matches!(c, '@' | '_' | '.' | '$');
+///
+/// With `quoted`, a single-quoted literal that is exactly a parameter name
+/// becomes the argument in single quotes, as CC-RX does (R20UT3248EJ0115
+/// page 487, "When a parameter in the body is enclosed within
+/// single-quotes").
+pub fn substitute_words(
+    body: &str,
+    bindings: &[(String, String)],
+    concat: char,
+    quoted: bool,
+) -> String {
+    // CC-RX's concatenation symbol, `@`, is a name character in CC-RL.
+    let is_word =
+        |c: char| c != concat && (c.is_ascii_alphanumeric() || matches!(c, '@' | '_' | '.' | '$'));
     let mut out = String::with_capacity(body.len());
     for (n, line) in body.split('\n').enumerate() {
         if n > 0 {
@@ -165,6 +177,22 @@ pub fn substitute_words(body: &str, bindings: &[(String, String)], concat: char)
                 ';' => {
                     out.push_str(&line[i..]);
                     break;
+                }
+                '\'' if quoted
+                    && let Some(close) = line[i + 1..].find('\'')
+                    && let Some((_, value)) = bindings
+                        .iter()
+                        .find(|(p, _)| *p == line[i + 1..i + 1 + close]) =>
+                {
+                    out.push('\'');
+                    out.push_str(value);
+                    out.push('\'');
+                    // Skip past the closing quote.
+                    for (j, _) in chars.by_ref() {
+                        if j == i + 1 + close {
+                            break;
+                        }
+                    }
                 }
                 '"' | '\'' => {
                     // Copy the literal through its closing quote, skipping

@@ -18,7 +18,8 @@ options:
   -f, --format <fmt> output format: elf (default) or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
-                     ccrl (Renesas CC-RL) or ccrh (Renesas CC-RH)
+                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH) or
+                     ccrx (Renesas CC-RX)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)
@@ -113,7 +114,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                 let v = next(&mut i, arg)?;
                 a.options.dialect = Dialect::from_name(&v).ok_or_else(|| {
                     format!(
-                        "unknown dialect `{v}`; expected gas, nasm, motorola, renesas, ccrl or ccrh"
+                        "unknown dialect `{v}`; expected gas, nasm, motorola, renesas, ccrl, ccrh or ccrx"
                     )
                 })?;
                 a.dialect_given = true;

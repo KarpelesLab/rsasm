@@ -120,6 +120,10 @@ pub struct Assembler {
     pub(crate) cc_bare_labels: Vec<ExprRef>,
     /// Numbers the symbols a CC-RL/CC-RH `.LOCAL` renames, across the module.
     cc_local_counter: u64,
+    /// CC-RX `.DEFINE` strings, by name; see `Assembler::ccrx_apply_defines`.
+    pub(crate) ccrx_defines: Vec<(String, String)>,
+    /// What CC-RX `.SECTION` and `.ORG` said about each section.
+    pub(crate) ccrx_sections: HashMap<SectionId, crate::dialect_cc::RxSection>,
 }
 
 impl Assembler {
@@ -159,7 +163,17 @@ impl Assembler {
             end_of_source: false,
             cc_bare_labels: Vec::new(),
             cc_local_counter: 0,
+            ccrx_defines: Vec::new(),
+            ccrx_sections: HashMap::new(),
         };
+        if asm.options.dialect == Dialect::CcRx {
+            // The predefined names CC-RX defines whatever the options
+            // (R20UT3248EJ0115 Table 5.36, pages 499-500, note 1), except the
+            // version number, which would claim a Renesas release.
+            for name in ["__ASRX__", "__RENESAS__"] {
+                asm.ccrx_defines.push((name.to_string(), "1".to_string()));
+            }
+        }
         asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
         asm
     }
@@ -308,6 +322,14 @@ impl Assembler {
     }
 
     pub fn assemble_file(&mut self, file: FileId) {
+        self.assemble_file_in(file, true);
+    }
+
+    /// Assembles `file`. With `own_conditionals`, a conditional it leaves
+    /// open is an error; without, the file is a piece of the one that caused
+    /// it, such as one statement rewritten by CC-RX `.DEFINE`, and may open a
+    /// conditional that one closes.
+    fn assemble_file_in(&mut self, file: FileId, own_conditionals: bool) {
         let mut config = LexConfig::for_dialect(self.options.dialect);
         // GNU-style comment characters are the target's choice, so they come
         // from whichever backend is active when this file starts. A `.arch`
@@ -335,10 +357,17 @@ impl Assembler {
                 }
             }
         }
+        let depth = self.cond.len();
         self.run(&statements);
-        for c in std::mem::take(&mut self.cond) {
-            self.diags
-                .error(c.span, "unterminated `.if`, expected `.endif`");
+        // Only the conditionals this file opened are its to close. One a
+        // macro left open by `.exitm` ends with the expansion.
+        if own_conditionals && self.cond.len() > depth {
+            for c in self.cond.split_off(depth) {
+                if !self.exiting_macro {
+                    self.diags
+                        .error(c.span, "unterminated `.if`, expected `.endif`");
+                }
+            }
         }
     }
 
@@ -352,6 +381,26 @@ impl Assembler {
         while i < statements.len() {
             let stmt = &statements[i];
             i += 1;
+
+            if self.options.dialect == Dialect::CcRx
+                && let Some(text) = self.ccrx_apply_defines(stmt)
+            {
+                if self.macro_depth >= 64 {
+                    self.diags.error(
+                        stmt.span,
+                        "`.DEFINE` replacement nested too deeply; is it recursive?",
+                    );
+                    return;
+                }
+                let file = self.sm.add("<.DEFINE>".to_string(), text);
+                self.macro_depth += 1;
+                self.assemble_file_in(file, false);
+                self.macro_depth -= 1;
+                if self.exiting_macro || self.end_of_source || self.diags.saturated() {
+                    return;
+                }
+                continue;
+            }
 
             // A block construct inside a false conditional is not a block at
             // all; its statements are skipped one by one like everything else.
@@ -509,11 +558,11 @@ impl Assembler {
     fn define_macro(&mut self, stmt: &Statement, statements: &[Statement], from: usize) -> usize {
         let header = self.arg_text(stmt);
         let (mut name_text, mut params_text) = macros::split_macro_header(&header);
-        let cc = self.options.dialect.is_cc();
+        let cc = self.options.dialect.renesas_cc();
         // Devpac writes `name macro`, with the name where a label goes.
-        // CC-RL and CC-RH write `NAME .MACRO params`, with the name in the
-        // symbol field, and CC-RH allows the parameters in parentheses (CC-RL
-        // page 527, CC-RH page 460).
+        // CC-RL, CC-RH and CC-RX write `NAME .MACRO params`, with the name in
+        // the symbol field, and CC-RH allows the parameters in parentheses
+        // (CC-RL page 527, CC-RH page 460, CC-RX R20UT3248EJ0115 page 486).
         let label_name = match (cc, stmt.symbol, stmt.labels.as_slice()) {
             (true, Some((n, _)), _) => Some(self.interner.get(n).to_string()),
             (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() => {
@@ -589,7 +638,7 @@ impl Assembler {
         // Each iteration is substituted separately and the results
         // concatenated, so the whole repeat becomes one expansion.
         let mut text = String::new();
-        let cc = self.options.dialect.is_cc();
+        let cc = self.options.dialect.renesas_cc();
         match kind {
             RepeatKind::Rept => {
                 let count = if cc {
@@ -600,9 +649,15 @@ impl Assembler {
                 let Some(count) = count else {
                     return next;
                 };
-                for _ in 0..count {
+                for n in 0..count {
                     if cc {
-                        let bindings = self.cc_local_bindings(&body, &[]);
+                        // CC-RX's `..MACREP` counts the expansions from 1
+                        // (R20UT3248EJ0115 page 490).
+                        let iteration = [
+                            ("..MACREP".to_string(), (n + 1).to_string()),
+                            ("..macrep".to_string(), (n + 1).to_string()),
+                        ];
+                        let bindings = self.cc_local_bindings(&body, &iteration);
                         text.push_str(&self.cc_substitute(&body, &bindings));
                     } else {
                         text.push_str(&body);
@@ -691,16 +746,17 @@ impl Assembler {
         out
     }
 
-    /// Substitutes a CC-RL/CC-RH macro body: whole-word parameters, and the
-    /// concatenation symbol, `?` for CC-RL (page 557) and `~` for CC-RH (page
-    /// 489).
+    /// Substitutes a CC-RL/CC-RH/CC-RX macro body: whole-word parameters, and
+    /// the concatenation symbol, `?` for CC-RL (page 557), `~` for CC-RH (page
+    /// 489) and `@` for CC-RX (R20UT3248EJ0115 page 497). CC-RX also replaces
+    /// a parameter inside single quotes (page 487).
     fn cc_substitute(&self, body: &str, bindings: &[(String, String)]) -> String {
-        let concat = if self.options.dialect == Dialect::CcRl {
-            '?'
-        } else {
-            '~'
+        let (concat, quoted) = match self.options.dialect {
+            Dialect::CcRl => ('?', false),
+            Dialect::CcRx => ('@', true),
+            _ => ('~', false),
         };
-        macros::substitute_words(body, bindings, concat)
+        macros::substitute_words(body, bindings, concat, quoted)
     }
 
     fn eval_text_count(&mut self, text: &str, span: Span) -> Option<i64> {
@@ -744,7 +800,7 @@ impl Assembler {
         self.macro_counter += 1;
         let counter = self.macro_counter;
         let positional = self.options.dialect.dotless_directives();
-        let text = if self.options.dialect.is_cc() {
+        let text = if self.options.dialect.renesas_cc() {
             let bindings = self.cc_local_bindings(&def.body, &bindings);
             self.cc_substitute(&def.body, &bindings)
         } else {
@@ -767,34 +823,48 @@ impl Assembler {
 
         let pieces = macros::split_args(args);
 
-        // CC-RL and CC-RH bind arguments by position only. CC-RH wants exactly
-        // as many as there are parameters (page 460); CC-RL warns about extra
-        // ones and leaves missing ones empty (page 527).
-        if self.options.dialect.is_cc() {
+        // The Renesas assemblers bind arguments by position only. CC-RH wants
+        // exactly as many as there are parameters (page 460); CC-RL warns
+        // about extra ones and leaves missing ones empty (page 527); CC-RX
+        // warns about any mismatch, takes an argument in double quotes without
+        // them, and counts the arguments in `..MACPARA` (R20UT3248EJ0115
+        // pages 487 and 490).
+        if self.options.dialect.renesas_cc() {
+            let dialect = self.options.dialect;
             let name = self.interner.get(def.name).to_string();
             let (want, got) = (def.params.len(), pieces.len());
             if got != want {
                 let msg = format!("macro `{name}` takes {want} argument(s), but {got} were given");
-                if self.options.dialect == Dialect::CcRh {
+                if dialect == Dialect::CcRh {
                     self.diags.error(span, msg);
                     return None;
                 }
-                if got > want {
+                if got > want || dialect == Dialect::CcRx {
                     self.diags.warning(span, msg);
                 }
             }
-            return Some(
-                def.params
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| {
-                        (
-                            p.name.clone(),
-                            pieces.get(i).map_or_else(String::new, |s| s.to_string()),
-                        )
-                    })
-                    .collect(),
-            );
+            let mut out: Vec<(String, String)> = def
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let arg = pieces.get(i).copied().unwrap_or("");
+                    let arg = match dialect {
+                        Dialect::CcRx => arg
+                            .strip_prefix('"')
+                            .and_then(|a| a.strip_suffix('"'))
+                            .unwrap_or(arg),
+                        _ => arg,
+                    };
+                    (p.name.clone(), arg.to_string())
+                })
+                .collect();
+            if dialect == Dialect::CcRx {
+                // Reserved words are not case-sensitive (page 500).
+                out.push(("..MACPARA".to_string(), got.to_string()));
+                out.push(("..macpara".to_string(), got.to_string()));
+            }
+            return Some(out);
         }
 
         // A vendor-dialect macro declared without parameters takes any number
@@ -975,8 +1045,11 @@ impl Assembler {
                             | ".else"
                             | ".elseif"
                             | ".endif"
-                    ) || (self.options.dialect.is_cc()
-                        && dialect::is_conditional(self.options.dialect, text))
+                    ) || (self.options.dialect.renesas_cc()
+                        && dialect::is_conditional(
+                            self.options.dialect,
+                            text.strip_prefix('.').unwrap_or(text),
+                        ))
                     {
                         self.directive(stmt, *name);
                     }
@@ -985,7 +1058,7 @@ impl Assembler {
                 // here too or a false branch could never end.
                 Some(Body::Insn { mnemonic, .. }) => {
                     let word = self.interner.get(*mnemonic);
-                    if !self.options.dialect.is_cc()
+                    if !self.options.dialect.renesas_cc()
                         && dialect::is_conditional(self.options.dialect, word)
                         && let Some(alias) = dialect::lookup(self.options.dialect, word)
                     {
@@ -1024,9 +1097,10 @@ impl Assembler {
             }
             Some(Body::Insn { mnemonic, span }) => {
                 // A bare word may be a vendor directive before it is an
-                // instruction; see `dialect::lookup`. Not in CC-RL or CC-RH,
-                // whose directives are all dotted and whose `BT` is a branch.
-                let alias = if self.options.dialect.is_cc() {
+                // instruction; see `dialect::lookup`. Not in CC-RL, CC-RH or
+                // CC-RX, whose directives are all dotted and whose `BT` is a
+                // branch.
+                let alias = if self.options.dialect.renesas_cc() {
                     None
                 } else {
                     dialect::lookup(self.options.dialect, self.interner.get(*mnemonic))
@@ -1058,8 +1132,8 @@ impl Assembler {
                         e = v;
                         self.set_symbol(*name, e, *span);
                         // Only `.SET` names may be defined again (CC-RL page
-                        // 502; CC-RH page 436).
-                        if self.options.dialect.is_cc() && !is_set {
+                        // 502; CC-RH page 436), and CC-RX has no `.SET`.
+                        if self.options.dialect.renesas_cc() && !is_set {
                             let id = self.symbols.intern(*name, *span);
                             self.symbols.get_mut(id).redefinable = false;
                         }
@@ -1104,6 +1178,22 @@ impl Assembler {
             {
                 self.symbols.get_mut(id).used = true;
                 self.exprs.nodes[i].kind = ExprKind::Int(v as u64);
+            }
+        }
+    }
+
+    /// Replaces each reference, among the expression nodes from `mark` on, to
+    /// a symbol not defined yet with 0, as CC-RX's `.IF` and `.ELIF` read one
+    /// (R20UT3248EJ0115 page 495).
+    pub(crate) fn ccrx_undefined_as_zero(&mut self, mark: usize) {
+        for i in mark..self.exprs.len() {
+            if let ExprKind::Sym(name) = self.exprs.nodes[i].kind
+                && !self
+                    .symbols
+                    .lookup(name)
+                    .is_some_and(|id| self.symbols.get(id).is_defined())
+            {
+                self.exprs.nodes[i].kind = ExprKind::Int(0);
             }
         }
     }
@@ -1290,7 +1380,7 @@ impl Assembler {
         false
     }
 
-    fn emit_org(&mut self, target: ExprRef, fill: u8, span: Span) {
+    pub(crate) fn emit_org(&mut self, target: ExprRef, fill: u8, span: Span) {
         self.cur_section().push(Fragment::new(
             FragKind::Org {
                 target,

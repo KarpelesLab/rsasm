@@ -9,8 +9,8 @@
 //! Every behaviour below was checked against a reference: vasm (in Devpac
 //! compatibility, `-no-opt -devpac`) and GNU as `--mri` for Motorola.
 //!
-//! The CC-RL and CC-RH dialects dot their directives and have far more of
-//! them; their table and handlers are in [`crate::dialect_cc`].
+//! The CC-RL, CC-RH and CC-RX dialects dot their directives and have far
+//! more of them; their tables and handlers are in [`crate::dialect_cc`].
 
 use crate::assembler::Assembler;
 use crate::cursor::Cursor;
@@ -46,7 +46,7 @@ pub(crate) enum Alias {
     MotorolaSection,
     /// A Renesas `CSEG` / `DSEG` / `BSEG`.
     Segment(SectionKind, SectionFlags, &'static str),
-    /// A CC-RL or CC-RH directive with a handler of its own.
+    /// A CC-RL, CC-RH or CC-RX directive with a handler of its own.
     Cc(CcDirective),
 }
 
@@ -54,7 +54,7 @@ pub(crate) enum Alias {
 /// dialect's directive table.
 pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
     use Alias::*;
-    if dialect.is_cc() {
+    if dialect.renesas_cc() {
         return crate::dialect_cc::lookup(dialect, word);
     }
     let common = match word {
@@ -107,7 +107,7 @@ pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
             "bseg" => Segment(SectionKind::Nobits, SectionFlags::bss(), ".bss"),
             _ => return None,
         }),
-        Dialect::Gas | Dialect::Nasm | Dialect::CcRl | Dialect::CcRh => None,
+        Dialect::Gas | Dialect::Nasm | Dialect::CcRl | Dialect::CcRh | Dialect::CcRx => None,
     }
 }
 
@@ -125,6 +125,17 @@ pub(crate) fn block_keyword(dialect: Dialect, word: &str) -> Option<&'static str
             "exitm" => ".exitm",
             "rept" => ".rept",
             "irp" => ".irp",
+            _ => return None,
+        });
+    }
+    // CC-RX ends a repeat with `.ENDR` (R20UT3248EJ0115 pages 488-489).
+    if dialect == Dialect::CcRx {
+        return Some(match word {
+            "macro" => ".macro",
+            "endm" => ".endm",
+            "exitm" => ".exitm",
+            "mrepeat" => ".rept",
+            "endr" => ".endr",
             _ => return None,
         });
     }
@@ -332,7 +343,7 @@ impl Assembler {
         true
     }
 
-    fn alias_space(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
+    pub(crate) fn alias_space(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
         self.motorola_align(width, span);
         let Some(count) = self.parse_expr(cur) else {
             return;
