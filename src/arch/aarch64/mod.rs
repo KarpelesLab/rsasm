@@ -83,6 +83,10 @@ impl Architecture for AArch64 {
         183 // EM_AARCH64
     }
 
+    fn align_is_log2(&self) -> bool {
+        true
+    }
+
     /// AArch64 writes immediates as `#1`, so `#` is a comment only in the
     /// first column and `//` is the comment everywhere else.
     fn comments(&self) -> crate::arch::CommentSyntax {

@@ -10,7 +10,7 @@
 
 use crate::assembler::{Assembler, Relocation};
 use crate::expr::{ExprKind, ExprRef, Value};
-use crate::section::{FixupKind, FragKind, SectionId, SectionKind};
+use crate::section::{FixupKind, FragKind, Fragment, SectionId, SectionKind};
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId, SymbolValue};
 
@@ -46,6 +46,7 @@ impl Assembler {
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
         self.report_undefined_locals();
+        self.pad_section_tails();
 
         let mut settled = false;
         for _ in 0..MAX_PASSES {
@@ -78,6 +79,28 @@ impl Assembler {
         self.apply_fixups();
         self.materialize();
         !self.diags.has_errors()
+    }
+
+    /// Rounds each section's end up to its alignment, on targets whose GNU as
+    /// does. Done once, before layout, as a trailing alignment fragment.
+    fn pad_section_tails(&mut self) {
+        for si in 0..self.sections.len() {
+            let s = &self.sections[si];
+            if s.align <= 1 || !self.arch.pads_section_tail(&s.flags) {
+                continue;
+            }
+            let fill = if s.flags.exec { Vec::new() } else { vec![0] };
+            let align = s.align;
+            self.sections[si].push(Fragment::new(
+                FragKind::Align {
+                    align,
+                    fill,
+                    max_skip: None,
+                    pad: 0,
+                },
+                Span::DUMMY,
+            ));
+        }
     }
 
     /// Walks every section assigning fragment offsets, recomputing the sizes

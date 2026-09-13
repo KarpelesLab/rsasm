@@ -81,7 +81,11 @@ impl Assembler {
             ".incbin" => self.dir_incbin(&mut cur, span),
 
             // ---- layout ---------------------------------------------------
-            ".align" | ".balign" => self.dir_align(&mut cur, span, false),
+            ".align" => {
+                let log2 = self.arch.align_is_log2();
+                self.dir_align(&mut cur, span, log2)
+            }
+            ".balign" => self.dir_align(&mut cur, span, false),
             ".p2align" => self.dir_align(&mut cur, span, true),
             ".org" => {
                 if let Some(e) = self.parse_expr(&mut cur) {

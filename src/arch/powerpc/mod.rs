@@ -106,6 +106,10 @@ impl Architecture for PowerPc {
         }
     }
 
+    fn align_is_log2(&self) -> bool {
+        true
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel, self.bits() == 64)
     }

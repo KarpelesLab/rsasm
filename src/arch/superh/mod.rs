@@ -97,6 +97,14 @@ impl Architecture for SuperH {
         42
     }
 
+    fn align_is_log2(&self) -> bool {
+        true
+    }
+
+    fn pads_section_tail(&self, flags: &crate::section::SectionFlags) -> bool {
+        flags.exec
+    }
+
     /// GNU as for SH comments with `!` anywhere, and with `#` only at the
     /// start of a line, where it cannot be confused with an immediate.
     /// `//` is not a comment: `mov r1,r2 // x` is an error there.

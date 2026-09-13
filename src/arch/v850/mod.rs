@@ -103,6 +103,14 @@ impl Architecture for V850 {
         36
     }
 
+    fn align_is_log2(&self) -> bool {
+        true
+    }
+
+    fn pads_section_tail(&self, _flags: &crate::section::SectionFlags) -> bool {
+        true
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
     }

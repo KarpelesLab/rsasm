@@ -276,6 +276,26 @@ pub trait Architecture {
         2
     }
 
+    /// Whether `.align n` means 2^n bytes rather than n.
+    ///
+    /// GNU as decides this per target, for historical reasons only: x86 ELF,
+    /// SPARC, m68k and RX count bytes, while ARM, AArch64, RISC-V, MIPS,
+    /// PowerPC, RL78, V850 and SuperH count low-order zero bits. `.balign` and
+    /// `.p2align` mean the same everywhere.
+    fn align_is_log2(&self) -> bool {
+        false
+    }
+
+    /// Whether GNU as rounds the end of a section with these flags up to the
+    /// section's alignment.
+    ///
+    /// The Renesas ports (RL78, RX, V850) round every section, SuperH only
+    /// code sections; the padding counts towards the section's size, so a
+    /// linker placing the next object's section sees it.
+    fn pads_section_tail(&self, _flags: &crate::section::SectionFlags) -> bool {
+        false
+    }
+
     /// Padding for `.align` in an executable section: real no-ops where the
     /// architecture has them, so padding stays executable.
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8>;

@@ -104,6 +104,10 @@ impl Architecture for Rx {
         173
     }
 
+    fn pads_section_tail(&self, _flags: &crate::section::SectionFlags) -> bool {
+        true
+    }
+
     /// `;` comments anywhere; `#` is the immediate prefix, so it starts a
     /// comment only at the beginning of a line, as GNU as for RX has it.
     fn comments(&self) -> CommentSyntax {

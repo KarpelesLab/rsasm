@@ -97,6 +97,10 @@ impl Architecture for Arm {
         40
     }
 
+    fn align_is_log2(&self) -> bool {
+        true
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }

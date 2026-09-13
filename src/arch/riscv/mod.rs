@@ -113,6 +113,10 @@ impl Architecture for Riscv {
         243 // EM_RISCV
     }
 
+    fn align_is_log2(&self) -> bool {
+        true
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }
