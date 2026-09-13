@@ -43,7 +43,7 @@ Prebuilt binaries for Linux, macOS and Windows are attached to each
 ## Status
 
 Early, but broad. The pipeline is complete end to end — lex, parse, encode,
-lay out, relax, relocate, write — with eight backends behind it.
+lay out, relax, relocate, write — with fourteen backends behind it.
 
 ### Architectures
 
@@ -53,13 +53,19 @@ assembler, not against rsasm's own idea of the manual. See
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086 | `x86-64` `i386` `i8086` | GNU as | 118 |
+| x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1584 |
 | AArch64 | `aarch64` | llvm-mc | 475 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 361 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 485 |
 | PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1044 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
+| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
+| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1248 |
+| Renesas RX (RXv1) | `rx` | GNU as | 580 |
+| Renesas RL78 | `rl78` | GNU as | 499 |
+| NEC/Renesas V850 and RH850 | `v850` `rh850` | GNU as | 512 |
+| NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
 | Z80, 6502, 8080 | `z80` `6502` `i8080` | opcode tables | — |
 
 The 8-bit targets have no llvm-mc support to check against, so they are
@@ -67,6 +73,10 @@ verified differently: tests walk the complete opcode space and assert that
 exactly the documented encodings exist, and the Z80 tables were additionally
 cross-checked against an independent disassembler (690 of 690 documented
 sequences). They are for flat binaries; ELF has no class for a 16-bit target.
+The 78K0 has no freely available assembler either: its table was extracted
+from NEC's instruction manual, checked against the byte counts in a second NEC
+manual, and cross-checked against MAME's disassembler, which agrees on all
+but 18 forms where both manuals show MAME to be wrong.
 
 ### Everything else
 
@@ -85,8 +95,9 @@ sequences). They are for flat binaries; ELF has no class for a 16-bit target.
 
 **Not yet**
 
-- x86 SIMD: MMX, SSE, AVX and AVX-512 (in progress)
 - the NASM dialect (its lexing rules are in place; its directives are not)
+- Renesas's own CC-RX, CC-RL and CC-RH source syntax; RX, RL78 and V850/RH850
+  take GNU as syntax, and the `renesas` dialect is CA78K0's
 - Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
 - ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
@@ -117,7 +128,8 @@ rsasm [options] <input.s>...
   -a, --arch <name>  target architecture (default: the host, if supported)
   -f, --format <fmt> output format: elf (default) or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
-  -d, --dialect <d>  source dialect: gas (default) or nasm
+  -d, --dialect <d>  source dialect: gas, nasm, motorola or renesas
+                     (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
       --base <addr>  base address for `bin` output
@@ -126,7 +138,8 @@ rsasm [options] <input.s>...
 ```
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
-`riscv`, `powerpc`, `mips`, `sparc` and `retro`:
+`riscv`, `powerpc`, `mips`, `sparc`, `retro`, `m68k`, `superh`, `rx`, `rl78`,
+`v850` and `k78`:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -141,8 +154,15 @@ source is normally written in.
 |---|---|---|
 | `gas` | `.byte 1`, `# comment`, `0x10` | most targets |
 | `motorola` | `dc.b 1`, `; comment`, `$10`, `%1010` | m68k |
-| `renesas` | `DB 1`, `; comment`, `10H` | 78K0 |
+| `renesas` | `DB 'A',1`, `; comment`, `10H` | 78K0 |
 | `nasm` | lexing only, so far | — |
+
+```console
+$ cat intena.s
+        move.w  #$7fff,$DFF096          ; disable all Amiga interrupts
+$ rsasm -a m68k -f bin --hex intena.s
+33 fc 7f ff 00 df f0 96
+```
 
 Motorola covers vasm, Devpac and ASM-One source and was checked against both
 vasm and GNU as `--mri`. Three rules in it catch people out:
@@ -161,14 +181,17 @@ vasm and GNU as `--mri`. Three rules in it catch people out:
 
 ## Verification
 
-Two differential harnesses assemble the same source with rsasm and with an
+Three differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
-- `tools/gas-diff/run.sh` against GNU as, for x86. 118 of 118 match.
-- `tools/mc-diff/run.sh` against llvm-mc, which can assemble every other
-  target. 3,210 of 3,210 match across thirteen target variants.
+- `tools/gas-diff/run.sh` against the host's GNU as, for x86. 844 of 844 match.
+- `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
+  supports. 3,944 of 3,944 match across fourteen target variants.
+- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
+  and V850/RH850, and vasm for Motorola syntax. `tools/oracles/build.sh` builds
+  them from checksum-pinned sources. 3,643 of 3,643 match across nine variants.
 
-Both run in CI. The expected bytes in the hermetic tests under `tests/` were
+The first two run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
