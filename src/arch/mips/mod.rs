@@ -83,6 +83,10 @@ impl Architecture for Mips {
         8 // EM_MIPS
     }
 
+    fn word_bytes(&self) -> u8 {
+        4
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         if pcrel {
             reloc::pcrel(size)

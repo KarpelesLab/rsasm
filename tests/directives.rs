@@ -284,3 +284,10 @@ fn word_is_four_bytes_on_sparc() {
     // Measured against llvm-mc, which agrees with GNU as here.
     assert_eq!(text_for("sparc", ".word 1"), vec![0, 0, 0, 1]);
 }
+
+#[test]
+#[cfg(feature = "mips")]
+fn word_is_four_bytes_on_mips() {
+    assert_eq!(text_for("mips", ".word 1"), vec![0, 0, 0, 1]);
+    assert_eq!(text_for("mipsel", ".word 1"), vec![1, 0, 0, 0]);
+}
