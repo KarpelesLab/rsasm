@@ -1,0 +1,163 @@
+# T32 (Thumb) corpus.
+#
+# As in arm.txt, immediates are written without `#` because GAS-dialect lexing
+# treats `#` as a comment. llvm-mc's Thumb parser also rejects the bare
+# spelling for a few 32-bit forms where a register is the alternative reading
+# (`mov.w r0, 291`), so those appear only in tests/arm.rs.
+
+# ---- 16-bit moves ----
+movs r0, 0
+movs r0, 5
+movs r7, 255
+mov r0, r1
+mov r8, r9
+mov sp, r0
+mov r0, lr
+movs r0, r1
+movs r7, r6
+mvns r0, r1
+
+# ---- 16-bit add and subtract ----
+adds r0, r1, r2
+adds r7, r6, r5
+subs r0, r1, r2
+adds r0, r1, 3
+adds r0, r1, 7
+subs r0, r1, 3
+adds r0, 200
+adds r7, 255
+subs r0, 200
+add r0, r1
+add r8, r9
+add sp, 16
+add sp, 508
+sub sp, 16
+add r0, sp, 8
+add r7, sp, 1020
+
+# ---- 16-bit compares and the register ALU group ----
+cmp r0, 200
+cmp r7, 0
+cmp r0, r1
+cmp r8, r9
+cmp r0, r9
+cmn r0, r1
+tst r0, r1
+ands r0, r1
+eors r0, r1
+adcs r0, r1
+sbcs r0, r1
+orrs r0, r1
+bics r0, r1
+muls r0, r1, r0
+rsbs r0, r1, 0
+
+# ---- 16-bit shifts ----
+lsls r0, r1, 3
+lsls r0, r1, 31
+lsrs r0, r1, 1
+lsrs r0, r1, 32
+asrs r0, r1, 5
+asrs r0, r1, 32
+lsls r0, r1
+lsrs r0, r1
+asrs r0, r1
+rors r0, r1
+
+# ---- 16-bit loads and stores ----
+ldr r0, [r1]
+ldr r0, [r1, 4]
+ldr r0, [r1, 124]
+str r0, [r1, 124]
+ldrb r0, [r1, 31]
+strb r0, [r1, 31]
+ldrh r0, [r1, 62]
+strh r0, [r1, 62]
+ldr r0, [sp]
+ldr r0, [sp, 8]
+str r0, [sp, 1020]
+ldr r0, [r1, r2]
+str r0, [r1, r2]
+ldrb r0, [r1, r2]
+strb r0, [r1, r2]
+ldrh r0, [r1, r2]
+strh r0, [r1, r2]
+ldrsb r0, [r1, r2]
+ldrsh r0, [r1, r2]
+
+# ---- stack and block transfers ----
+push {r0}
+push {r0, r1}
+push {r4, lr}
+push {r0-r7, lr}
+pop {r0}
+pop {r0, pc}
+pop {r0-r7, pc}
+stmia r0!, {r1, r2}
+ldmia r0!, {r1, r2}
+ldm r0!, {r1, r2}
+
+# ---- branches to registers, hints and traps ----
+bx lr
+bx r0
+blx r3
+nop
+svc 3
+bkpt 3
+bkpt 255
+
+# ---- the small unary operations ----
+rev r0, r1
+rev16 r0, r1
+revsh r0, r1
+uxtb r0, r1
+uxth r0, r1
+sxtb r0, r1
+sxth r0, r1
+
+# ---- 32-bit encodings ----
+movw r0, 291
+movw r0, 65535
+movt r0, 4660
+mov r0, 291
+mov r0, 0
+mov r0, 1
+mov r0, 255
+mov r0, 16711935
+mov r0, 0xab00ab00
+mov r0, 0xabababab
+mov r0, 65535
+add r0, r1, 1
+add r0, r0, 1
+add r0, 1
+adds r0, r1, 8
+adds r0, 300
+sub r0, r1, 1
+subs r0, r1, 8
+subs r0, 300
+add r0, r1, 291
+add r0, r1, 4095
+sub r0, r1, 4095
+add r1, sp, 1024
+cmp r0, 300
+cmp r0, 0x80000000
+movs r0, 300
+add r0, r1, r2
+sub r0, r1, r2
+mul r0, r1, r2
+mla r0, r1, r2, r3
+mls r0, r1, r2, r3
+umull r0, r1, r2, r3
+smull r0, r1, r2, r3
+umlal r0, r1, r2, r3
+smlal r0, r1, r2, r3
+clz r0, r1
+ldr r0, [r1, 291]
+str r0, [r1, 291]
+ldrb r0, [r1, 291]
+strb r0, [r1, 291]
+ldrh r0, [r1, 291]
+strh r0, [r1, 291]
+ldr.w r0, [r1, 4]
+str.w r0, [r1, 4]
+nop.w
