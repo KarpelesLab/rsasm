@@ -16,7 +16,8 @@
 //! multiple of four has no encoding at all; it is an error, never rounded.
 //! The fields are unsigned, so a negative displacement is an error too.
 
-use super::insn::{Arg, Entry, isa};
+use super::cpu;
+use super::insn::{Arg, Entry};
 use super::operand::{Kind, Operand, Value};
 use super::pcrel;
 use super::reg::Reg;
@@ -303,16 +304,19 @@ pub fn encode(
         return None;
     };
 
-    if entry.isa & cx.state.features != entry.isa {
+    // GNU as keeps the intersection of the CPU sets of the forms it has
+    // picked so far, and refuses a form that would leave no CPU in it.
+    if !cpu::valid(cpu::remaining(cx.state) & entry.arch) {
         cx.error(
             span,
             format!(
                 "`{mnemonic}` in this form needs {}, which the selected SH variant lacks",
-                isa::describe(entry.isa & !cx.state.features)
+                cpu::describe(entry.arch)
             ),
         );
         return None;
     }
+    cpu::record(cx.state, entry.arch);
 
     let mut word = entry.word;
     let mut pending = Vec::new();
