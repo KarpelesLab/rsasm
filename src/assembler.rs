@@ -7,6 +7,7 @@ use crate::diag::{DiagBag, Diagnostic};
 use crate::expr::{self, EvalCtx, EvalError, ExprArena, ExprKind, ExprRef, Value};
 use crate::intern::{Interner, Name};
 use crate::lexer::{Dialect, LexConfig, LitPool, LocalDir, Punct};
+use crate::macros::{self, MacroDef};
 use crate::parser::{Body, LabelDef, Parser, Statement};
 use crate::section::{FragKind, Fragment, Section, SectionFlags, SectionId, SectionKind};
 use crate::source::{FileId, SourceMap, Span};
@@ -51,6 +52,24 @@ impl Default for Options {
     }
 }
 
+/// The block constructs the statement walker has to recognise before the
+/// ordinary directive table sees them.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum BlockKind {
+    Macro,
+    EndMacro,
+    ExitMacro,
+    Repeat(RepeatKind),
+    EndRepeat,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum RepeatKind {
+    Rept,
+    Irp,
+    Irpc,
+}
+
 /// One level of `.if` / `.else` / `.endif`.
 pub(crate) struct Cond {
     /// Whether code in the current branch is being assembled.
@@ -83,6 +102,15 @@ pub struct Assembler {
     cond: Vec<Cond>,
     /// Guards against runaway `.include` recursion.
     include_depth: u32,
+    /// Macros defined so far, keyed by the lowercased name the parser
+    /// produces for a mnemonic.
+    pub(crate) macros: HashMap<Name, MacroDef>,
+    /// Bumped per macro invocation and substituted for `\@`, which is how
+    /// macro bodies name labels that must not collide between calls.
+    macro_counter: u64,
+    macro_depth: u32,
+    /// Set by `.exitm`; unwinds the innermost expansion.
+    exiting_macro: bool,
 }
 
 impl Assembler {
@@ -115,6 +143,10 @@ impl Assembler {
             here_sym: None,
             cond: Vec::new(),
             include_depth: 0,
+            macros: HashMap::new(),
+            macro_counter: 0,
+            macro_depth: 0,
+            exiting_macro: false,
         };
         asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
         asm
@@ -280,16 +312,393 @@ impl Assembler {
                 }
             }
         }
-        for stmt in &statements {
-            self.process(stmt);
-            if self.diags.saturated() {
-                break;
-            }
-        }
+        self.run(&statements);
         for c in std::mem::take(&mut self.cond) {
             self.diags
                 .error(c.span, "unterminated `.if`, expected `.endif`");
         }
+    }
+
+    /// Walks a statement list, expanding the block constructs as it goes.
+    ///
+    /// `.macro` and the repeat directives consume statements that follow
+    /// them, so this cannot be a plain `for` loop: the index has to be
+    /// reachable from the handlers.
+    fn run(&mut self, statements: &[Statement]) {
+        let mut i = 0usize;
+        while i < statements.len() {
+            let stmt = &statements[i];
+            i += 1;
+
+            // A block construct inside a false conditional is not a block at
+            // all; its statements are skipped one by one like everything else.
+            if self.cond_active() {
+                match self.block_kind(stmt) {
+                    Some(BlockKind::Macro) => {
+                        i = self.define_macro(stmt, statements, i);
+                        continue;
+                    }
+                    Some(BlockKind::Repeat(kind)) => {
+                        i = self.expand_repeat(stmt, kind, statements, i);
+                        continue;
+                    }
+                    Some(BlockKind::EndMacro) => {
+                        self.diags
+                            .error(stmt.span, "`.endm` without a matching `.macro`");
+                        continue;
+                    }
+                    Some(BlockKind::EndRepeat) => {
+                        self.diags.error(
+                            stmt.span,
+                            "`.endr` without a matching `.rept`, `.irp` or `.irpc`",
+                        );
+                        continue;
+                    }
+                    Some(BlockKind::ExitMacro) => {
+                        if self.macro_depth == 0 {
+                            self.diags.error(stmt.span, "`.exitm` outside a macro");
+                        } else {
+                            self.exiting_macro = true;
+                        }
+                        return;
+                    }
+                    None => {
+                        if self.try_expand_macro(stmt) {
+                            if self.exiting_macro || self.diags.saturated() {
+                                return;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            self.process(stmt);
+            if self.exiting_macro || self.diags.saturated() {
+                return;
+            }
+        }
+    }
+
+    fn directive_name(&self, stmt: &Statement) -> Option<&str> {
+        match &stmt.body {
+            Some(Body::Directive { name, .. }) => Some(self.interner.get(*name)),
+            _ => None,
+        }
+    }
+
+    fn block_kind(&self, stmt: &Statement) -> Option<BlockKind> {
+        Some(match self.directive_name(stmt)? {
+            ".macro" => BlockKind::Macro,
+            ".endm" | ".endmacro" => BlockKind::EndMacro,
+            ".exitm" => BlockKind::ExitMacro,
+            ".endr" => BlockKind::EndRepeat,
+            ".rept" => BlockKind::Repeat(RepeatKind::Rept),
+            ".irp" => BlockKind::Repeat(RepeatKind::Irp),
+            ".irpc" => BlockKind::Repeat(RepeatKind::Irpc),
+            _ => return None,
+        })
+    }
+
+    /// Collects the statements of a block, returning its source text and the
+    /// index just past its terminator.
+    ///
+    /// `opens` and `closes` name the directives that nest, so a `.rept` inside
+    /// a `.macro` body does not end the macro.
+    fn capture_block(
+        &mut self,
+        statements: &[Statement],
+        from: usize,
+        opens: &[&str],
+        closes: &[&str],
+        open_span: Span,
+    ) -> Option<(String, usize)> {
+        let mut depth = 1usize;
+        let mut i = from;
+        while i < statements.len() {
+            if let Some(name) = self.directive_name(&statements[i]) {
+                if opens.contains(&name) {
+                    depth += 1;
+                } else if closes.contains(&name) {
+                    depth -= 1;
+                    if depth == 0 {
+                        let body = if i > from {
+                            let lo = statements[from].span.lo;
+                            let hi = statements[i - 1].span.hi;
+                            self.sm.span_text(Span::new(lo, hi)).to_string()
+                        } else {
+                            String::new()
+                        };
+                        return Some((body, i + 1));
+                    }
+                }
+            }
+            i += 1;
+        }
+        self.diags.error(
+            open_span,
+            format!("unterminated block, expected `{}`", closes[0]),
+        );
+        None
+    }
+
+    /// The source text of a statement's arguments, which is what the macro
+    /// machinery works in.
+    fn arg_text(&self, stmt: &Statement) -> String {
+        let rest = &stmt.toks[stmt.args.min(stmt.toks.len())..];
+        match (rest.first(), rest.last()) {
+            (Some(a), Some(b)) => self
+                .sm
+                .span_text(Span::new(a.span.lo, b.span.hi))
+                .to_string(),
+            _ => String::new(),
+        }
+    }
+
+    fn define_macro(&mut self, stmt: &Statement, statements: &[Statement], from: usize) -> usize {
+        let header = self.arg_text(stmt);
+        let (name_text, params_text) = macros::split_macro_header(&header);
+        let Some((body, next)) = self.capture_block(
+            statements,
+            from,
+            &[".macro"],
+            &[".endm", ".endmacro"],
+            stmt.span,
+        ) else {
+            return statements.len();
+        };
+        if name_text.is_empty() {
+            self.diags.error(stmt.span, "`.macro` needs a name");
+            return next;
+        }
+        let params = match macros::parse_params(params_text) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.diags.error(stmt.span, msg);
+                return next;
+            }
+        };
+        let name = self.interner.intern(&name_text.to_ascii_lowercase());
+        if let Some(prev) = self.macros.get(&name) {
+            let prev_span = prev.def_span;
+            self.diags.emit(
+                Diagnostic::error(stmt.span, format!("macro `{name_text}` is already defined"))
+                    .with_note(prev_span, "previous definition is here")
+                    .with_help("use `.purgem` to remove it first"),
+            );
+            return next;
+        }
+        self.macros.insert(
+            name,
+            MacroDef {
+                name,
+                params,
+                body,
+                def_span: stmt.span,
+            },
+        );
+        next
+    }
+
+    fn expand_repeat(
+        &mut self,
+        stmt: &Statement,
+        kind: RepeatKind,
+        statements: &[Statement],
+        from: usize,
+    ) -> usize {
+        let header = self.arg_text(stmt);
+        let Some((body, next)) = self.capture_block(
+            statements,
+            from,
+            &[".rept", ".irp", ".irpc"],
+            &[".endr"],
+            stmt.span,
+        ) else {
+            return statements.len();
+        };
+
+        // Each iteration is substituted separately and the results
+        // concatenated, so the whole repeat becomes one expansion.
+        let mut text = String::new();
+        match kind {
+            RepeatKind::Rept => {
+                let Some(count) = self.eval_text_count(&header, stmt.span) else {
+                    return next;
+                };
+                for _ in 0..count {
+                    text.push_str(&body);
+                    text.push('\n');
+                }
+            }
+            RepeatKind::Irp | RepeatKind::Irpc => {
+                let (var, rest) = macros::split_macro_header(&header);
+                if var.is_empty() {
+                    self.diags
+                        .error(stmt.span, "`.irp` needs a symbol name and a list of values");
+                    return next;
+                }
+                let rest = rest.trim().trim_start_matches(',').trim();
+                let values: Vec<String> = if kind == RepeatKind::Irp {
+                    macros::split_args(rest)
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect()
+                } else {
+                    // `.irpc` walks the characters of its argument, with any
+                    // surrounding quotes stripped.
+                    let raw = rest.trim_matches('"');
+                    raw.chars().map(|c| c.to_string()).collect()
+                };
+                for v in values {
+                    let bindings = [(var.to_string(), v)];
+                    text.push_str(&macros::substitute(&body, &bindings, self.macro_counter));
+                    text.push('\n');
+                }
+            }
+        }
+
+        let label = match kind {
+            RepeatKind::Rept => "rept",
+            RepeatKind::Irp => "irp",
+            RepeatKind::Irpc => "irpc",
+        };
+        self.expand(label, text, stmt.span);
+        next
+    }
+
+    fn eval_text_count(&mut self, text: &str, span: Span) -> Option<i64> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            self.diags.error(span, "`.rept` needs a count");
+            return None;
+        }
+        match trimmed.parse::<i64>() {
+            Ok(n) if n >= 0 => Some(n),
+            Ok(_) => {
+                self.diags.error(span, "`.rept` count must not be negative");
+                None
+            }
+            Err(_) => {
+                self.diags
+                    .error(span, "`.rept` count must be a plain number");
+                None
+            }
+        }
+    }
+
+    /// Expands `stmt` if its mnemonic names a macro. Returns whether it did.
+    fn try_expand_macro(&mut self, stmt: &Statement) -> bool {
+        let Some(Body::Insn { mnemonic, span }) = stmt.body else {
+            return false;
+        };
+        if !self.macros.contains_key(&mnemonic) {
+            return false;
+        }
+        // Labels on the invocation line belong to the call site, not to the
+        // expansion, so they are defined before anything is substituted.
+        for l in &stmt.labels {
+            self.define_label(l);
+        }
+        let def = self.macros[&mnemonic].clone();
+        let args = self.arg_text(stmt);
+        let Some(bindings) = self.bind_macro_args(&def, &args, span) else {
+            return true;
+        };
+        self.macro_counter += 1;
+        let counter = self.macro_counter;
+        let text = macros::substitute(&def.body, &bindings, counter);
+        let name = self.interner.get(def.name).to_string();
+        self.expand(&format!("macro {name}"), text, span);
+        true
+    }
+
+    /// Matches a call's arguments to a macro's parameters.
+    fn bind_macro_args(
+        &mut self,
+        def: &MacroDef,
+        args: &str,
+        span: Span,
+    ) -> Option<Vec<(String, String)>> {
+        let mut bound: Vec<(String, Option<String>)> =
+            def.params.iter().map(|p| (p.name.clone(), None)).collect();
+
+        let pieces = macros::split_args(args);
+        let mut positional = 0usize;
+        for (i, piece) in pieces.iter().enumerate() {
+            // A `:vararg` parameter swallows the rest of the line verbatim,
+            // commas included, so it is matched before anything is split off.
+            if let Some(vi) = def.params.iter().position(|p| p.vararg)
+                && positional == vi
+            {
+                bound[vi].1 = Some(pieces[i..].join(", "));
+                break;
+            }
+            match macros::split_named_arg(piece) {
+                Some((name, value)) if def.param(name).is_some() => {
+                    let idx = def
+                        .params
+                        .iter()
+                        .position(|p| p.name == name)
+                        .expect("just checked");
+                    bound[idx].1 = Some(value.to_string());
+                }
+                _ => {
+                    if positional >= def.params.len() {
+                        self.diags.error(
+                            span,
+                            format!(
+                                "macro `{}` takes {} argument(s), but more were given",
+                                self.interner.get(def.name),
+                                def.params.len()
+                            ),
+                        );
+                        return None;
+                    }
+                    bound[positional].1 = Some((*piece).to_string());
+                    positional += 1;
+                }
+            }
+        }
+
+        let mut out = Vec::with_capacity(bound.len());
+        for (p, (name, value)) in def.params.iter().zip(bound) {
+            let value = match value.or_else(|| p.default.clone()) {
+                Some(v) => v,
+                None if p.required => {
+                    self.diags.error(
+                        span,
+                        format!(
+                            "macro `{}` requires an argument for `{name}`",
+                            self.interner.get(def.name)
+                        ),
+                    );
+                    return None;
+                }
+                None => String::new(),
+            };
+            out.push((name, value));
+        }
+        Some(out)
+    }
+
+    /// Assembles expanded text as if it were an included file.
+    ///
+    /// It becomes a real entry in the source map, so a diagnostic inside a
+    /// macro points at the expanded line and names the macro it came from.
+    fn expand(&mut self, what: &str, text: String, span: Span) {
+        if self.macro_depth >= 64 {
+            self.diags
+                .error(span, "macro expansion nested too deeply; is it recursive?");
+            return;
+        }
+        let name = format!("<{what}>");
+        let file = self.sm.add(name, text);
+        self.macro_depth += 1;
+        self.assemble_file(file);
+        self.macro_depth -= 1;
+        // `.exitm` unwinds exactly one expansion.
+        self.exiting_macro = false;
     }
 
     pub(crate) fn cond_active(&self) -> bool {
@@ -411,6 +820,10 @@ impl Assembler {
                     self.set_symbol(*name, e, *span);
                 }
                 self.expect_end(&mut cur);
+            }
+            Some(Body::Unknown { span }) => {
+                self.diags
+                    .error(*span, "expected a label, directive or instruction");
             }
             Some(Body::SetLocation { span }) => {
                 let mut cur = stmt.arg_cursor();

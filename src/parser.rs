@@ -28,6 +28,14 @@ pub enum Body {
     Assign { name: Name, span: Span },
     /// `. = expr`: move the location counter.
     SetLocation { span: Span },
+    /// Something that starts with none of the above.
+    ///
+    /// The parser classifies rather than judges: a line beginning with `\` is
+    /// nonsense on its own but perfectly ordinary inside a macro body, and the
+    /// parser cannot know which it is looking at. Reporting it is the
+    /// assembler's job, once it knows whether the statement is going to be
+    /// executed or captured.
+    Unknown { span: Span },
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +122,30 @@ impl<'a> Parser<'a> {
     }
 
     fn build(&self, toks: Vec<Token>, interner: &mut Interner, diags: &mut DiagBag) -> Statement {
+        build_statement(toks, self.lexer.config.dialect, interner, diags)
+    }
+}
+
+/// Splits a statement's tokens into labels and a body.
+///
+/// Exposed separately from [`Parser`] so that anything holding a bare token
+/// vector — a macro expansion, say — can turn it into a statement without a
+/// lexer.
+pub fn build_statement(
+    toks: Vec<Token>,
+    dialect: Dialect,
+    interner: &mut Interner,
+    diags: &mut DiagBag,
+) -> Statement {
+    Builder { dialect }.build(toks, interner, diags)
+}
+
+struct Builder {
+    dialect: Dialect,
+}
+
+impl Builder {
+    fn build(&self, toks: Vec<Token>, interner: &mut Interner, diags: &mut DiagBag) -> Statement {
         let span = toks
             .first()
             .zip(toks.last())
@@ -170,9 +202,9 @@ impl<'a> Parser<'a> {
         }
 
         let TokKind::Ident(name) = first.kind else {
-            diags.error(first.span, "expected a label, directive or instruction");
             *i = toks.len();
-            return None;
+            let _ = &diags;
+            return Some(Body::Unknown { span: first.span });
         };
 
         // `sym = expr` is an assignment, not an instruction called `sym`.
@@ -189,7 +221,7 @@ impl<'a> Parser<'a> {
         // Mnemonics and directives are case-insensitive; symbol names are not.
         let (is_directive, folded) = {
             let text = interner.get(name);
-            let is_directive = match self.lexer.config.dialect {
+            let is_directive = match self.dialect {
                 // GAS spells every directive with a leading dot. A bare `.` is
                 // the location counter and was handled above.
                 Dialect::Gas => text.starts_with('.') && text.len() > 1,

@@ -121,6 +121,13 @@ impl Assembler {
                 true
             }
 
+            // ---- macros ---------------------------------------------------
+            // `.macro`, `.endm`, `.exitm`, `.rept`, `.irp`, `.irpc` and
+            // `.endr` never reach here: the statement walker intercepts them
+            // because they consume the statements that follow. Only `.purgem`
+            // is an ordinary directive.
+            ".purgem" => self.dir_purgem(&mut cur),
+
             // ---- files and configuration ----------------------------------
             ".include" => self.dir_include(&mut cur, span),
             ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
@@ -794,6 +801,24 @@ impl Assembler {
             }
         }
         direct.exists().then_some(direct)
+    }
+
+    fn dir_purgem(&mut self, cur: &mut Cursor<'_>) -> bool {
+        loop {
+            let Some((name, span)) = self.expect_name(cur) else {
+                return true;
+            };
+            let lowered = self.interner.get(name).to_ascii_lowercase();
+            let key = self.interner.intern(&lowered);
+            if self.macros.remove(&key).is_none() {
+                self.diags
+                    .error(span, format!("no macro named `{lowered}` to purge"));
+            }
+            if cur.eat_punct(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        true
     }
 
     fn dir_include(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {

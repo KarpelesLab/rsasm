@@ -25,6 +25,7 @@ pub mod expr;
 pub mod intern;
 pub mod layout;
 pub mod lexer;
+pub mod macros;
 pub mod output;
 pub mod parser;
 pub mod section;

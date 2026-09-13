@@ -51,12 +51,13 @@ relax, relocate, write — and there is one real architecture behind it.
 - `.code16` / `.code32` / `.code64`
 - ELF relocatable objects, 32- and 64-bit, and flat binaries
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
+- macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
+  `.irpc`, `.exitm` and `.purgem`
 - diagnostics with source snippets, and assembly that continues past the
   first error
 
 **Not yet**
 
-- macros (`.macro` / `.rept` / `.irp`)
 - the NASM dialect (its lexing rules are in place; its directives are not)
 - Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
@@ -129,6 +130,15 @@ different things depending on where in the file they appear, which is
 information that no longer exists by the time an expression is evaluated. Both
 are rewritten into ordinary symbol references as soon as the statement
 containing them is parsed.
+
+**Macro expansion is textual, and re-lexed.** Substituting tokens cannot
+express what macro bodies rely on: `.L\@_loop:` has to paste the invocation
+counter into the middle of an identifier, and there is no token meaning "join
+these". Expanding into text and re-lexing gives that for free, and it is what
+GNU as does, so bodies written for it behave the same way. The expansion
+becomes a real entry in the source map, which turns out to be a feature — a
+diagnostic inside a macro points at the expanded line and names the macro it
+came from.
 
 **A fragment that might change size carries every candidate.** An instruction
 whose branch could be short or long is encoded *both* ways at parse time; the
