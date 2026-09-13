@@ -269,6 +269,7 @@ impl Assembler {
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Label { section, frag };
         sym.def_span = span;
+        self.symbols.mark_defined(id);
         id
     }
 
@@ -298,6 +299,7 @@ impl Assembler {
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Label { section, frag };
         sym.def_span = span;
+        self.symbols.mark_defined(id);
     }
 
     /// The name to show for a symbol in diagnostics.
@@ -1362,6 +1364,7 @@ impl Assembler {
         sym.value = SymbolValue::Expr(e);
         sym.def_span = span;
         sym.redefinable = true;
+        self.symbols.mark_defined(id);
     }
 
     // ---- emitting ---------------------------------------------------------
@@ -1427,6 +1430,8 @@ impl Assembler {
             symbols,
             arch_state,
             options,
+            sections,
+            cur,
             ..
         } = self;
         let dialect = options.dialect;
@@ -1438,8 +1443,12 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            sections,
+            section: *cur,
+            relaxable: false,
         };
         let variants = arch.assemble(&mut cx, &req);
+        let relaxable = cx.relaxable;
         let Some(variants) = variants else { return };
         // Motorola syntax aligns code as well as data; see `motorola_align`.
         if self.options.dialect == Dialect::Motorola {
@@ -1449,7 +1458,8 @@ impl Assembler {
         if self.check_nobits(stmt.span) {
             return;
         }
-        self.cur_section().emit_variants(variants, stmt.span);
+        let idx = self.cur_section().emit_variants(variants, stmt.span);
+        self.cur_section().frags[idx as usize].relaxable = relaxable;
     }
 }
 

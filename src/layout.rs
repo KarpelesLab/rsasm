@@ -378,6 +378,17 @@ impl Assembler {
             self.relax_shift = Some((id, fi as u32, frag_off, delta + stretch));
         }
         let fits = fixups.iter().all(|(off, e, kind)| {
+            if kind.relax_difference {
+                // The smallest field whose signed range holds the value,
+                // with no limit on the four-byte one.
+                let half = 1i64 << (kind.size.min(4) as u32 * 8 - 1);
+                return match self.relaxed_difference(*e, id, frag_off, stretch) {
+                    Some(v) => {
+                        (kind.size >= 4 || (-half..half).contains(&v)) && kind.fits(v as i128)
+                    }
+                    None => false,
+                };
+            }
             let at = frag_off + *off as u64;
             match self.fixup_value(*e, kind, id, at) {
                 Some(v) => kind.fits(v as i128),
@@ -392,6 +403,48 @@ impl Assembler {
         });
         self.relax_shift = None;
         fits
+    }
+
+    /// The value GNU as's RX port sizes a symbolic immediate by, for a
+    /// fixup marked [`FixupKind::relax_difference`] in an instruction at
+    /// offset `pc` that the growth so far has moved by `stretch`.
+    ///
+    /// `rx_frag_fix_value` gives up, and the widest field is taken, unless
+    /// the value is a difference of two labels in the instruction's own
+    /// section that the linker could not move apart: a global or weak label
+    /// always gets a relocation in ELF, so it counts as unknown. Labels ahead
+    /// of the instruction are where the last pass put them, and the growth is
+    /// then added to the difference as a whole, when the difference read as
+    /// an unsigned address lies past `pc` — which is also true of every
+    /// negative difference. The test makes little sense for a difference, but
+    /// it is the one GNU as applies, and the sizes it picks follow from it.
+    fn relaxed_difference(
+        &mut self,
+        e: ExprRef,
+        section: SectionId,
+        pc: u64,
+        stretch: i64,
+    ) -> Option<i64> {
+        let v = self.eval(e).ok()?;
+        let (Some(p), Some(m)) = (v.plus, v.minus) else {
+            return None;
+        };
+        for s in [p, m] {
+            if self.symbol_section(s) != Some(section)
+                || self.symbols.get(s).binding != Binding::Local
+            {
+                return None;
+            }
+        }
+        // Where the labels are on this pass, not where `variant_fits` is
+        // weighing moving them.
+        let shift = self.relax_shift.take();
+        let diff = self.symbol_addr(p).zip(self.symbol_addr(m));
+        self.relax_shift = shift;
+        let diff = diff.map(|(p, m)| p.wrapping_sub(m))?;
+        let pc = self.section(section).addr + pc;
+        let grown = if diff as u64 > pc { stretch } else { 0 };
+        Some(diff.wrapping_add(v.addend).wrapping_add(grown))
     }
 
     /// Gives each section a base address. Relocatable output leaves them all

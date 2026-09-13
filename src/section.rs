@@ -131,6 +131,18 @@ pub struct FixupKind {
     /// Narrower bounds than the field's width allows, where a reference
     /// assembler picks a form by a range that is not a power of two.
     pub limits: Option<(i64, i64)>,
+    /// Relaxation sizes this field the way GNU as's RX port sizes a symbolic
+    /// immediate, rather than by whether the value fits.
+    ///
+    /// `rx_relax_frag` only knows a value for a difference of two local
+    /// labels in the fixup's own section, and takes the smallest field whose
+    /// signed range holds it. It does not move labels ahead of the
+    /// instruction by the growth so far, as it does for a branch target:
+    /// it adds that growth to the whole difference, and only when the
+    /// difference, read as an unsigned address, lies past the instruction.
+    /// Anything it cannot evaluate gets the widest field. `range` still
+    /// decides whether the value that is finally written is accepted.
+    pub relax_difference: bool,
 }
 
 impl FixupKind {
@@ -146,6 +158,7 @@ impl FixupKind {
             encoding: FieldEncoding::Whole,
             bias_reloc_addend: true,
             limits: None,
+            relax_difference: false,
         }
     }
 
@@ -186,6 +199,13 @@ impl FixupKind {
     /// Accepts only values from `lo` to `hi`, within what the field holds.
     pub fn with_limits(mut self, lo: i64, hi: i64) -> FixupKind {
         self.limits = Some((lo, hi));
+        self
+    }
+
+    /// Sizes the field during relaxation as GNU as's RX port does; see
+    /// [`FixupKind::relax_difference`].
+    pub fn relaxed_as_difference(mut self) -> FixupKind {
+        self.relax_difference = true;
         self
     }
 
@@ -316,6 +336,11 @@ pub struct Fragment {
     pub span: Span,
     /// Offset from the start of the section, assigned by layout.
     pub offset: u64,
+    /// The reference assembler gives this instruction a fragment that its
+    /// relaxation revisits, even though it has only one encoding here. A
+    /// difference of labels on either side of it is then not a constant
+    /// while the file is read; see [`crate::arch::AsmCtx::fixed_distance`].
+    pub relaxable: bool,
 }
 
 impl Fragment {
@@ -324,6 +349,7 @@ impl Fragment {
             kind,
             span,
             offset: 0,
+            relaxable: false,
         }
     }
 

@@ -12,9 +12,7 @@
 //! Most of RX's variable length comes from two places:
 //!
 //! - **Displacements** are 0, 8 or 16 bits, chosen from the value, and are
-//!   stored *divided by the operand size*: `mov.l 8[r1], r2` stores 2. They
-//!   must be constants when the instruction is read; GNU as rejects anything
-//!   else, and so does this backend.
+//!   stored *divided by the operand size*: `mov.l 8[r1], r2` stores 2.
 //! - **Immediates** are 8, 16, 24 or 32 bits, with a two-bit length code
 //!   (`li`) in the opcode, where `00` means 32. Several instructions also have
 //!   a shorter form for small unsigned values (`mov #uimm4, r1`, `cmp #uimm8,
@@ -24,27 +22,32 @@
 //! constant *at that moment*. That is not the same thing as whether it is a
 //! constant eventually, and matching the reference means following it:
 //!
-//! - a constant takes the shortest form that fits;
-//! - a difference of two labels that are both already defined, in the same
-//!   section, has been folded to a constant by GNU as's expression parser, so
-//!   it too takes the shortest form — but only layout knows its value, so
-//!   every candidate is offered and layout picks;
-//! - any other difference of symbols is relaxed by GNU as among the general
-//!   form's 8/16/24/32-bit immediates, never the short forms;
+//! - a constant takes the shortest form that fits. So does a difference of
+//!   two labels GNU as's expression parser has already folded, which it does
+//!   when nothing between them can change size ([`AsmCtx::fixed_distance`]);
+//! - any other difference of labels is an immediate GNU as relaxes itself,
+//!   among the general form's 8/16/24/32-bit fields and never the short
+//!   forms, re-picking on every pass as it does for branches
+//!   ([`FixupKind::relax_difference`]). As a displacement it is always 16
+//!   bits, and stored undivided;
 //! - anything else referring to a symbol is a 32-bit immediate with a
-//!   relocation, even if the symbol turns out to be nearby.
+//!   relocation, even if the symbol turns out to be nearby, and cannot be a
+//!   displacement at all.
 //!
-//! The second rule is an approximation. GNU as folds only when no relaxable
-//! instruction or alignment lies between the two labels, which a backend
-//! cannot see; see [`classify`].
+//! Because folding depends on what lies between two labels, which
+//! instructions GNU as can resize matters beyond their own encoding. Those
+//! are the ones with a relaxed branch or immediate, and — whatever its
+//! value — every one whose grammar rule reads a displacement, even an absent
+//! one; the backend reports them through [`AsmCtx::relaxable`].
 
 use super::reg::Size;
 use super::reloc;
 use crate::arch::AsmCtx;
-use crate::expr::{BinOp, ExprKind, ExprRef, SymbolEnv, UnOp, Value};
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::expr::{BinOp, ExprKind, ExprRef, SymbolEnv, UnOp};
+use crate::intern::Name;
+use crate::section::{Fixup, FixupKind, SectionId, Variant};
 use crate::source::Span;
-use crate::symbol::SymbolValue;
+use crate::symbol::{SymbolId, SymbolValue};
 
 /// An instruction under construction.
 #[derive(Clone, Debug)]
@@ -115,7 +118,7 @@ impl Enc {
 
 /// Folds `e` to a number, or reports `what` must be a constant.
 pub fn constant(cx: &mut AsmCtx<'_>, e: ExprRef, span: Span, what: &str) -> Option<i64> {
-    match cx.constant(e) {
+    match known(cx, e) {
         Some(v) => Some(v),
         None => {
             cx.error(span, format!("{what} must be a constant"));
@@ -141,6 +144,19 @@ pub fn constant_in(
     Some(v)
 }
 
+/// A field GNU as fills in itself once the value is known, `n` bytes wide.
+///
+/// Its overflow check in `fixup_segment` reads the field as unsigned but
+/// lets the value's negation pass too, so a byte takes anything from -255 to
+/// 255: `int #s-e` with `e` 200 bytes past `s` stores `38`.
+fn gnu_field(n: u8) -> FixupKind {
+    let max = (1i64 << (8 * n as u32)) - 1;
+    FixupKind::data(n)
+        .signed()
+        .with_field(8 * n + 1, 1)
+        .with_limits(-max, max)
+}
+
 // ---- displacements --------------------------------------------------------
 
 /// Appends a displacement for an operand of size `size`, writing its length
@@ -148,7 +164,15 @@ pub fn constant_in(
 ///
 /// A zero displacement, written or not, takes no bytes. Otherwise the stored
 /// value is the displacement divided by the operand size, which is why a
-/// `.l` operand reaches 262140 bytes and must be a multiple of 4.
+/// `.l` operand reaches 262140 bytes and must be a multiple of 4. A
+/// difference of labels GNU as has not folded is the exception: its
+/// `displacement` gives that 16 bits and stores it as it is, undivided.
+/// Checked: `mov.l (e-s)[r1], r2` with `e - s` a forward 200 is `ee 12 c8
+/// 00`.
+///
+/// This is GNU as's `DSP`, which makes the instruction relaxable whether or
+/// not a displacement was written, so the grammar rules for a plain `[reg]`
+/// that read none must not call it.
 pub fn disp(
     cx: &mut AsmCtx<'_>,
     enc: &mut Enc,
@@ -157,15 +181,24 @@ pub fn disp(
     size: Size,
     span: Span,
 ) -> Option<()> {
+    cx.relaxable = true;
     let Some(e) = disp else {
         return Some(());
     };
-    let Some(v) = cx.constant(e) else {
-        cx.error(
-            span,
-            "displacements must be constants; GNU as reads them before any label is placed",
-        );
-        return None;
+    let v = match classify(cx, e) {
+        Val::Const(v) => v,
+        Val::Relax(e) => {
+            enc.field(2, pos, 2).fixup(e, gnu_field(2), span);
+            return Some(());
+        }
+        Val::Sym(_) => {
+            cx.error(
+                span,
+                "displacements must be constants or differences of labels; GNU as reads \
+                 them before any label is placed",
+            );
+            return None;
+        }
     };
     if v == 0 {
         return Some(());
@@ -211,91 +244,185 @@ pub fn disp(
 /// size. A missing displacement does not count, because GNU as's grammar
 /// sends `[reg]` to the long form.
 pub fn disp5(cx: &AsmCtx<'_>, disp: Option<ExprRef>, size: Size) -> Option<u32> {
-    let v = cx.constant(disp?)?;
+    let v = known(cx, disp?)?;
     let scale = size.scale();
     (v >= 0 && v % scale == 0 && v / scale <= 31).then_some((v / scale) as u32)
 }
 
-// ---- immediates -----------------------------------------------------------
+// ---- operand values -------------------------------------------------------
 
-/// What is known about an immediate when the instruction is read.
+/// What is known about an operand when the instruction is read.
 #[derive(Copy, Clone, Debug)]
 pub enum Val {
+    /// A constant, including a difference of labels GNU as has folded.
     Const(i64),
-    /// A difference of labels GNU as would have folded to a constant.
-    Folded(ExprRef),
-    /// A difference GNU as leaves to its own relaxation.
+    /// A difference of labels GNU as leaves to be resolved later.
     Relax(ExprRef),
     /// Anything else: a relocation.
     Sym(ExprRef),
 }
 
-/// Classifies an immediate the way GNU as's parser would see it.
+/// Classifies an operand the way GNU as's parser would see it.
 ///
-/// A difference of two labels that are already defined in the same section
-/// is taken to be one GNU as folded. The reference also requires that nothing
-/// between them changes size during relaxation — no unsized branch, no
-/// symbolic immediate, no displacement-bearing instruction and no `.align` —
-/// which a backend has no way to see, so such a difference is assembled here
-/// with the short forms available where GNU as would use the long ones.
+/// GNU as's expression parser turns `a - b` into a constant when `a` and `b`
+/// are the same symbol, or labels already defined in one section with
+/// nothing between them that can change size. Any other `a - b`, give or
+/// take added constants, stays a difference (`O_subtract`) for its RX port
+/// to relax or resolve later.
+///
+/// A symbol set to such a difference (`len = . - msg`) was folded the same
+/// way where it was set, and is a plain constant from then on; if it was not
+/// foldable there, it is a symbol of its own, never a difference.
 pub fn classify(cx: &AsmCtx<'_>, e: ExprRef) -> Val {
+    classify_as_of(cx, e, Reading::default())
+}
+
+/// Where an expression is being read: in the statement being assembled, or
+/// in the definition of a symbol it refers to.
+#[derive(Copy, Clone, Default)]
+struct Reading {
+    /// Symbol definitions followed to get here.
+    depth: u32,
+    /// The [`Symbol::def_order`](crate::symbol::Symbol::def_order) of that
+    /// definition: only what was defined before it counts as defined.
+    before: Option<u32>,
+}
+
+impl Reading {
+    fn sees(self, cx: &AsmCtx<'_>, id: SymbolId) -> bool {
+        self.before.is_none_or(|b| cx.symbols.get(id).def_order < b)
+    }
+}
+
+fn classify_as_of(cx: &AsmCtx<'_>, e: ExprRef, at: Reading) -> Val {
     if let Some(c) = cx.constant(e) {
         return Val::Const(c);
     }
-    if let Some(v) = SymbolEnv::new(cx.exprs, cx.symbols).value(e)
-        && let (Some(p), Some(m)) = (v.plus, v.minus)
+    let mut d = Difference::default();
+    if !d.collect(cx, e, false, at) {
+        return Val::Sym(e);
+    }
+    let (plus, minus) = match (d.plus, d.minus) {
+        (Some(plus), Some(minus)) => (plus, minus),
+        // Symbols set to constants, and nothing else.
+        (None, None) => return Val::Const(d.addend),
+        _ => return Val::Sym(e),
+    };
+    if plus == minus {
+        return Val::Const(d.addend);
+    }
+    if let (Some(to), Some(from)) = (plus.position(cx, at), minus.position(cx, at))
+        && let Some(n) = cx.fixed_distance(from, to)
     {
-        let sec = |id| match cx.symbols.get(id).value {
-            SymbolValue::Label { section, .. } => Some(section),
+        return Val::Const(n.wrapping_add(d.addend));
+    }
+    Val::Relax(e)
+}
+
+/// The value of `e`, if GNU as has a constant there when reading it.
+pub fn known(cx: &AsmCtx<'_>, e: ExprRef) -> Option<i64> {
+    match classify(cx, e) {
+        Val::Const(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// A symbol in a difference. A name seen for the first time is not in the
+/// symbol table yet, and `.` is not bound to its label until the statement
+/// has been assembled.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Term {
+    Id(SymbolId),
+    Name(Name),
+    Here,
+}
+
+impl Term {
+    fn position(self, cx: &AsmCtx<'_>, at: Reading) -> Option<(SectionId, u32)> {
+        match self {
+            Term::Id(id) if at.sees(cx, id) => cx.label_position(id),
+            Term::Id(_) | Term::Name(_) => None,
+            Term::Here => Some(cx.here()),
+        }
+    }
+}
+
+/// `plus - minus + addend`, read off an expression's syntax.
+#[derive(Default)]
+struct Difference {
+    plus: Option<Term>,
+    minus: Option<Term>,
+    addend: i64,
+}
+
+impl Difference {
+    /// Adds `e`, negated if `neg`. Returns false if the sum is not one GNU as
+    /// keeps as a single difference: more than one symbol on a side, or a
+    /// symbol negated on its own (`-b + a`), which GNU as makes an expression
+    /// symbol of.
+    fn collect(&mut self, cx: &AsmCtx<'_>, e: ExprRef, neg: bool, at: Reading) -> bool {
+        let kind = &cx.exprs.get(e).kind;
+        let id = match kind {
+            ExprKind::Sym(name) => cx.symbols.lookup(*name),
+            ExprKind::SymId(id) => Some(*id),
             _ => None,
         };
-        if sec(p).is_some() && sec(p) == sec(m) {
-            return Val::Folded(e);
+        let constant = match id {
+            Some(id) => folded_symbol(cx, id, at),
+            None => cx.constant(e),
+        };
+        if let Some(c) = constant {
+            self.addend = if neg {
+                self.addend.wrapping_sub(c)
+            } else {
+                self.addend.wrapping_add(c)
+            };
+            return true;
         }
-        return Val::Relax(e);
-    }
-    if is_difference(cx, e) {
-        Val::Relax(e)
-    } else {
-        Val::Sym(e)
-    }
-}
-
-/// Whether `e` is, syntactically, `a - b` with symbols on both sides, give
-/// or take added constants — what GNU as calls `O_subtract`.
-fn is_difference(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
-    match cx.exprs.get(e).kind {
-        ExprKind::Binary(BinOp::Sub, l, r) => mentions_symbol(cx, l) && mentions_symbol(cx, r),
-        ExprKind::Binary(BinOp::Add, l, r) => {
-            match (mentions_symbol(cx, l), mentions_symbol(cx, r)) {
-                (true, false) => is_difference(cx, l),
-                (false, true) => is_difference(cx, r),
-                _ => false,
+        let term = match (kind, id) {
+            (_, Some(id)) => Term::Id(id),
+            (ExprKind::Sym(name), None) => Term::Name(*name),
+            (ExprKind::Here, _) => Term::Here,
+            (ExprKind::Unary(UnOp::Plus, x), _) => return self.collect(cx, *x, neg, at),
+            (ExprKind::Binary(BinOp::Add, l, r), _) => {
+                return self.collect(cx, *l, neg, at) && self.collect(cx, *r, neg, at);
             }
-        }
-        ExprKind::Unary(UnOp::Plus, x) => is_difference(cx, x),
-        _ => false,
+            (ExprKind::Binary(BinOp::Sub, l, r), _) => {
+                return self.collect(cx, *l, neg, at) && self.collect(cx, *r, !neg, at);
+            }
+            _ => return false,
+        };
+        let slot = if neg { &mut self.minus } else { &mut self.plus };
+        slot.replace(term).is_none()
     }
 }
 
-fn mentions_symbol(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
-    match cx.exprs.get(e).kind {
-        ExprKind::Int(_) => false,
-        ExprKind::Sym(_)
-        | ExprKind::SymId(_)
-        | ExprKind::LocalRef(..)
-        | ExprKind::Here
-        | ExprKind::SectionStart => cx.constant(e).is_none(),
-        ExprKind::Unary(_, x) | ExprKind::Modifier(_, x) => mentions_symbol(cx, x),
-        ExprKind::Binary(_, l, r) => mentions_symbol(cx, l) || mentions_symbol(cx, r),
+/// The value of symbol `id`, if it is set to something GNU as folded to a
+/// constant where it was set — so it must have been set by then too.
+fn folded_symbol(cx: &AsmCtx<'_>, id: SymbolId, at: Reading) -> Option<i64> {
+    let SymbolValue::Expr(x) = cx.symbols.get(id).value else {
+        return None;
+    };
+    // As deep as `SymbolEnv` follows definitions before calling them
+    // circular.
+    if !at.sees(cx, id) || at.depth >= 64 {
+        return None;
+    }
+    let inner = Reading {
+        depth: at.depth + 1,
+        before: Some(cx.symbols.get(id).def_order),
+    };
+    match classify_as_of(cx, x, inner) {
+        Val::Const(c) => Some(c),
+        _ => None,
     }
 }
 
-/// The values a field accepts.
+// ---- immediates -----------------------------------------------------------
+
+/// The values a constant field accepts.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Range {
-    /// Two's complement: -128..=127 for a byte.
-    Signed,
     /// 0..=255 for a byte.
     Unsigned,
     /// Either reading: -128..=255 for a byte.
@@ -306,7 +433,6 @@ impl Range {
     fn bounds(self, bits: u32) -> (i64, i64) {
         let half = 1i64 << (bits - 1);
         match self {
-            Range::Signed => (-half, half - 1),
             Range::Unsigned => (0, 2 * half - 1),
             Range::Either => (-half, 2 * half - 1),
         }
@@ -351,12 +477,13 @@ impl Rung {
         }
     }
 
-    /// Marks an immediate that follows a displacement.
+    /// Marks an immediate that follows a constant displacement.
     ///
     /// GNU as records the displacement as a relaxation too, and its relaxation
-    /// pass then looks for the immediate's expression in the wrong slot, finds
-    /// nothing it can evaluate, and settles on 32 bits. Checked: `mov.w #e-s,
-    /// 4[r2]` with `e - s` a forward 5 is `f9 21 02 05 00 00 00`.
+    /// pass then looks for the immediate's expression in the slot a
+    /// displacement fixup would have taken, finds nothing it can evaluate,
+    /// and settles on 32 bits. Checked: `mov.w #e-s, 4[r2]` with `e - s` a
+    /// forward 5 is `f9 21 02 05 00 00 00`.
     pub fn after_displacement(mut self) -> Rung {
         self.wide_when_symbolic = true;
         self
@@ -407,7 +534,6 @@ pub fn immediate(
 ) -> Option<Vec<Variant>> {
     match classify(cx, e) {
         Val::Const(c) => const_immediate(cx, rungs, c, span).map(|v| vec![v]),
-        Val::Folded(e) => Some(folded(cx, rungs, e, span)),
         Val::Relax(e) => symbolic(cx, rungs, e, span, true),
         Val::Sym(e) => symbolic(cx, rungs, e, span, false),
     }
@@ -464,119 +590,8 @@ pub fn const_immediate(
     None
 }
 
-// Folded differences need a fixup that accepts exactly a rung's range, so
-// layout moves past a rung whenever GNU as's constant test would have. Signed
-// ranges are what a fixup checks natively; an unsigned one is checked as a
-// signed range around its midpoint, by fixing up `e - mid` and adding `mid`
-// back when writing.
-
-fn hi_nibble_plus8(word: u64, v: i64) -> u64 {
-    (word & 0x0f) | ((((v + 8) as u64) & 0xf) << 4)
-}
-
-fn lo_nibble_plus8(word: u64, v: i64) -> u64 {
-    (word & 0xf0) | (((v + 8) as u64) & 0xf)
-}
-
-fn byte_plus128(_word: u64, v: i64) -> u64 {
-    ((v + 128) as u64) & 0xff
-}
-
 fn negate4(_word: u64, v: i64) -> u64 {
     (v.wrapping_neg() as u64) & 0xffff_ffff
-}
-
-fn offset_expr(cx: &mut AsmCtx<'_>, e: ExprRef, by: u64, span: Span) -> ExprRef {
-    let k = cx.exprs.int(by, span);
-    cx.exprs.alloc(ExprKind::Binary(BinOp::Sub, e, k), span)
-}
-
-/// The fixup for an `n`-byte immediate field accepting `range`.
-fn byte_kind(n: u8, range: Range, reloc: u32) -> FixupKind {
-    let k = FixupKind::data(n).with_reloc(reloc);
-    match range {
-        Range::Signed => k.signed(),
-        Range::Unsigned | Range::Either => k,
-    }
-}
-
-/// Every rung, as a variant, for a difference only layout can evaluate.
-fn folded(cx: &mut AsmCtx<'_>, rungs: Vec<Rung>, e: ExprRef, span: Span) -> Vec<Variant> {
-    // `-(a - b)` has no value until layout, and the shared evaluator will not
-    // negate a relocatable value, so the negation is spelled `b - a`.
-    let neg = |cx: &mut AsmCtx<'_>| negated_difference(cx, e, span);
-    let mut out = Vec::new();
-    for Rung {
-        enc, place, negate, ..
-    } in rungs
-    {
-        let val = if negate { neg(cx) } else { e };
-        match place {
-            Place::Nibble(pos) => {
-                let mut enc = enc;
-                let scatter = if pos % 8 == 0 {
-                    hi_nibble_plus8
-                } else {
-                    lo_nibble_plus8
-                };
-                let kind = FixupKind::data(1)
-                    .signed()
-                    .with_field(4, 1)
-                    .scatter(scatter);
-                let shifted = offset_expr(cx, val, 8, span);
-                enc.fixup_at((pos / 8) as usize, shifted, kind, span);
-                out.push(enc.variant());
-            }
-            Place::Bytes { n, range, reloc } => {
-                let mut enc = enc;
-                if range == Range::Unsigned && n == 1 {
-                    let kind = FixupKind::data(1).signed().scatter(byte_plus128);
-                    let shifted = offset_expr(cx, val, 128, span);
-                    enc.fixup(shifted, kind, span);
-                } else {
-                    enc.fixup(val, byte_kind(n, range, reloc), span);
-                }
-                out.push(enc.variant());
-            }
-            Place::Imm { li, bits } => {
-                let ladder: &[(u8, Range)] = match bits {
-                    8 => &[(1, Range::Either)],
-                    16 => &[(1, Range::Signed), (2, Range::Either)],
-                    _ => &[
-                        (1, Range::Signed),
-                        (2, Range::Signed),
-                        (3, Range::Signed),
-                        (4, Range::Either),
-                    ],
-                };
-                for &(n, range) in ladder {
-                    let mut enc = enc.clone();
-                    enc.field(li_code(n), li, 2);
-                    enc.fixup(val, byte_kind(n, range, imm_reloc(n)), span);
-                    out.push(enc.variant());
-                }
-            }
-        }
-    }
-    out
-}
-
-/// `-e` for a difference of labels `e`, written as the reverse difference.
-fn negated_difference(cx: &mut AsmCtx<'_>, e: ExprRef, span: Span) -> ExprRef {
-    let v = SymbolEnv::new(cx.exprs, cx.symbols).value(e);
-    let Some(Value {
-        addend,
-        plus: Some(p),
-        minus: Some(m),
-    }) = v
-    else {
-        return cx.exprs.alloc(ExprKind::Unary(UnOp::Neg, e), span);
-    };
-    let m = cx.exprs.alloc(ExprKind::SymId(m), span);
-    let p = cx.exprs.alloc(ExprKind::SymId(p), span);
-    let diff = cx.exprs.alloc(ExprKind::Binary(BinOp::Sub, m, p), span);
-    let k = cx.exprs.int(addend as u64, span);
-    cx.exprs.alloc(ExprKind::Binary(BinOp::Sub, diff, k), span)
 }
 
 /// The relocation GNU as gives an `n`-byte immediate.
@@ -606,11 +621,19 @@ fn symbolic(
     let mut out = Vec::new();
     match last.place {
         Place::Imm { li, .. } if last.negate => {
-            // The stored value is `-e`: always 32 bits in GNU as. A difference
-            // resolves in the file and is negated when written; a symbol would
-            // need GNU as's stack-machine relocation (`R_RX_SYM`, `R_RX_OPneg`,
-            // `R_RX_ABS32`), which one fixup cannot express.
-            if !relax {
+            // The stored value is `-e`: always 32 bits in GNU as, which does
+            // not relax it. What resolves in the file, a difference or a
+            // symbol set to a constant later, is negated when written; a
+            // label or an external symbol would need GNU as's stack-machine
+            // relocation (`R_RX_SYM`, `R_RX_OPneg`, `R_RX_ABS32`), which one
+            // fixup cannot express. That is refused here where it is already
+            // certain, and by layout otherwise.
+            let relocated = SymbolEnv::new(cx.exprs, cx.symbols)
+                .value(e)
+                .is_some_and(|v| {
+                    v.plus.is_some_and(|p| cx.symbols.get(p).is_defined()) && v.minus.is_none()
+                });
+            if relocated {
                 cx.error(
                     span,
                     "a symbolic immediate here would be stored negated, which needs a \
@@ -620,26 +643,34 @@ fn symbolic(
             }
             let mut enc = last.enc;
             enc.field(0, li, 2);
-            enc.fixup(e, FixupKind::data(4).scatter(negate4), span);
+            enc.fixup(e, gnu_field(4).scatter(negate4), span);
             out.push(enc.variant());
         }
         Place::Imm { li, .. } => {
-            let ladder: &[u8] = if relax && !last.wide_when_symbolic {
-                &[1, 2, 3, 4]
-            } else {
-                &[4]
-            };
+            // GNU as relaxes every symbolic `IMM`, though it only ever finds
+            // a value for a difference; anything else ends up 32 bits. It
+            // starts each at one byte all the same, and the pass that grows
+            // one to four moves everything after it, so a one-byte candidate
+            // that never fits stands in for that first estimate.
+            cx.relaxable = true;
+            let sized = relax && !last.wide_when_symbolic;
+            let ladder: &[u8] = if sized { &[1, 2, 3, 4] } else { &[1, 4] };
             for &n in ladder {
                 let mut enc = last.enc.clone();
                 enc.field(li_code(n), li, 2);
-                let range = if n == 4 { Range::Either } else { Range::Signed };
-                enc.fixup(e, byte_kind(n, range, imm_reloc(n)), span);
+                let mut kind = gnu_field(n)
+                    .with_reloc(imm_reloc(n))
+                    .relaxed_as_difference();
+                if !sized && n < 4 {
+                    kind = kind.with_limits(1, 0);
+                }
+                enc.fixup(e, kind, span);
                 out.push(enc.variant());
             }
         }
-        Place::Bytes { n, range, reloc } => {
+        Place::Bytes { n, reloc, .. } => {
             let mut enc = last.enc;
-            enc.fixup(e, byte_kind(n, range, reloc), span);
+            enc.fixup(e, gnu_field(n).with_reloc(reloc), span);
             out.push(enc.variant());
         }
         Place::Nibble(_) => {
@@ -677,9 +708,11 @@ mod tests {
     }
 
     #[test]
-    fn unsigned_rungs_scatter_back_their_midpoint() {
-        assert_eq!(hi_nibble_plus8(0x05, 15 - 8), 0xf5);
-        assert_eq!(lo_nibble_plus8(0x50, -8), 0x50);
-        assert_eq!(byte_plus128(0, 255 - 128), 0xff);
+    fn resolved_fields_take_what_gnu_as_lets_through() {
+        let byte = gnu_field(1);
+        assert!(byte.fits(255) && byte.fits(-255));
+        assert!(!byte.fits(256) && !byte.fits(-256));
+        let long = gnu_field(4);
+        assert!(long.fits(0xffff_ffff) && long.fits(-0xffff_ffff));
     }
 }

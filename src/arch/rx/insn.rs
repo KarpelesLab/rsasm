@@ -103,10 +103,13 @@ fn check_bit_lengths(cx: &mut AsmCtx<'_>, s: &Stmt<'_>, out: &[Variant]) -> Opti
             );
             None
         };
-        let Some(v) = cx.constant(e) else {
-            // A symbol is a 32-bit immediate with a relocation.
-            let len = match out {
-                [one] if !disp && width == 32 => Some(one.bytes.len()),
+        let Some(v) = encode::known(cx, e) else {
+            // A symbol is a 32-bit immediate with a relocation: the widest
+            // candidate, which is the one layout takes for it. A difference
+            // of labels is sized by its value, which is not known yet.
+            let symbol = matches!(encode::classify(cx, e), encode::Val::Sym(_));
+            let len = match out.last() {
+                Some(widest) if symbol && !disp && width == 32 => Some(widest.bytes.len()),
                 _ => None,
             };
             if len.is_some() && len == probe_len(cx, s, i, 0x1000_0000) {
@@ -194,7 +197,9 @@ fn probe_len(cx: &mut AsmCtx<'_>, s: &Stmt<'_>, i: usize, value: i64) -> Option<
         span: s.span,
     };
     let saved = cx.diags.take();
+    let relaxable = cx.relaxable;
     let out = dispatch(cx, &probe);
+    cx.relaxable = relaxable;
     cx.diags.take();
     for d in saved {
         cx.diags.emit(d);
@@ -508,7 +513,14 @@ fn mov(cx: &mut AsmCtx<'_>, s: &Stmt<'_>) -> Out {
                 0
             };
             let mut enc = Enc::new(&[0xf8, base << 4 | z | preset]);
-            encode::disp(cx, &mut enc, 6, disp, sz, s.span_of(1))?;
+            // Only the long form reads a displacement in GNU as's grammar,
+            // and only when one is written; which form is taken is known
+            // below.
+            let short_available = !rungs.is_empty();
+            if disp.is_some() {
+                encode::disp(cx, &mut enc, 6, disp, sz, s.span_of(1))?;
+                cx.relaxable = false;
+            }
             rungs.push(match sz {
                 // A byte move's long form stores its immediate as a plain byte;
                 // only word and long moves get a length code.
@@ -528,11 +540,14 @@ fn mov(cx: &mut AsmCtx<'_>, s: &Stmt<'_>) -> Out {
             if sz == Size::B && disp.is_none() {
                 let last = rungs.pop().expect("a long form was pushed");
                 rungs.push(Rung::new(last.enc, Place::Imm { li: 12, bits: 8 }));
-            } else if disp.is_some() {
+            } else if disp.is_some_and(|d| encode::known(cx, d).is_some()) {
                 let last = rungs.pop().expect("a long form was pushed");
                 rungs.push(last.after_displacement());
             }
-            encode::immediate(cx, rungs, e, s.span_of(0))
+            let out = encode::immediate(cx, rungs, e, s.span_of(0))?;
+            let short = short_available && out.len() == 1 && out[0].bytes[0] & 0xfc == 0x3c;
+            cx.relaxable |= disp.is_some() && !short;
+            Some(out)
         }
         [Reg(a), Reg(b)] => Enc::new(&[0xcf | z << 4, a << 4 | b]).one(),
         [Reg(src), Mem { .. }] => {
@@ -545,7 +560,11 @@ fn mov(cx: &mut AsmCtx<'_>, s: &Stmt<'_>) -> Out {
                 return short_mov(0x80 | z << 4, base, src, d);
             }
             let mut enc = Enc::new(&[0xc3 | z << 4, base << 4 | src]);
-            encode::disp(cx, &mut enc, 4, disp, sz, s.span_of(1))?;
+            // `[reg]` has a grammar rule of its own, which reads no
+            // displacement.
+            if disp.is_some() {
+                encode::disp(cx, &mut enc, 4, disp, sz, s.span_of(1))?;
+            }
             enc.one()
         }
         [Mem { .. }, Reg(dst)] => {
@@ -558,7 +577,9 @@ fn mov(cx: &mut AsmCtx<'_>, s: &Stmt<'_>) -> Out {
                 return short_mov(0x88 | z << 4, base, dst, d);
             }
             let mut enc = Enc::new(&[0xcc | z << 4, base << 4 | dst]);
-            encode::disp(cx, &mut enc, 6, disp, sz, s.span_of(0))?;
+            if disp.is_some() {
+                encode::disp(cx, &mut enc, 6, disp, sz, s.span_of(0))?;
+            }
             enc.one()
         }
         [Mem { .. }, Mem { .. }] => {
@@ -641,7 +662,9 @@ fn movu(cx: &mut AsmCtx<'_>, s: &Stmt<'_>) -> Out {
                 return enc.one();
             }
             let mut enc = Enc::new(&[0x58 | z << 2, base << 4 | dst]);
-            encode::disp(cx, &mut enc, 6, disp, sz, s.span_of(0))?;
+            if disp.is_some() {
+                encode::disp(cx, &mut enc, 6, disp, sz, s.span_of(0))?;
+            }
             enc.one()
         }
         [PostInc(b), Reg(dst)] => Enc::new(&[0xfd, 0x38 | z, b << 4 | dst]).one(),
@@ -924,7 +947,7 @@ fn adc_sbb(cx: &mut AsmCtx<'_>, s: &Stmt<'_>, op: u8) -> Out {
             // There is no `sbb #imm`: GNU as assembles `adc #~imm`, which
             // subtracts `imm` plus the borrow. That needs the value now.
             let span = s.span_of(0);
-            let Some(v) = cx.constant(e) else {
+            let Some(v) = encode::known(cx, e) else {
                 cx.error(span, "`sbb` cannot use a symbolic immediate");
                 return None;
             };
