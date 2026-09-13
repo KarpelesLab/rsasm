@@ -231,6 +231,55 @@ jobs:
             || { echo "::error::mc-diff compared nothing"; exit 1; }
           exit $status
 
+  xas_diff:
+    name: Differential test against cross GNU as and vasm
+    runs-on: ubuntu-latest
+    env:
+      # Outside target/, so rust-cache neither saves nor wipes it.
+      RSASM_ORACLES: ${{ github.workspace }}/../oracles
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: xas-diff
+
+      # m68k, SuperH, RX, RL78 and V850 have no llvm-mc support, so their
+      # references are cross builds of binutils plus vasm. Building them takes
+      # minutes, so the install is cached, keyed on the build script: that is
+      # where the versions and checksums live, so bumping a reference rebuilds.
+      - name: Cache the reference assemblers
+        id: oracles
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../oracles/bin
+          key: oracles-${{ runner.os }}-${{ hashFiles('tools/oracles/build.sh') }}
+
+      - name: Build the reference assemblers
+        if: steps.oracles.outputs.cache-hit != 'true'
+        run: tools/oracles/build.sh
+
+      - name: Install llvm-objcopy
+        run: command -v llvm-objcopy || { sudo apt-get update -qq && sudo apt-get install -y -qq llvm; }
+
+      # Same guards as mc-diff: the log goes to a file so a failure still
+      # prints it, and a run that compared nothing is a failure, not a pass.
+      - name: tools/xas-diff/run.sh
+        run: |
+          set -uo pipefail
+          tools/xas-diff/run.sh > xas-diff.log 2>&1
+          status=$?
+          cat xas-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" xas-diff.log \
+            || { echo "::error::xas-diff compared nothing"; exit 1; }
+          grep -q "REF-MISSING" xas-diff.log \
+            && { echo "::error::a reference assembler is missing"; exit 1; }
+          exit $status
+
   cli_smoke:
     name: CLI end-to-end (assemble, link, run)
     runs-on: ubuntu-latest
