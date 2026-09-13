@@ -86,3 +86,24 @@ tails! {
     "sparc", sparc_rounds_nothing, "sparc" =>
         "01 00 00 00 02", "03 00 00 00 04", 5;
 }
+
+macro_rules! three_byte {
+    ($($feature:literal, $test:ident, $arch:literal, $section:literal, $reloc:literal;)*) => {$(
+        #[cfg(feature = $feature)]
+        #[test]
+        fn $test() {
+            let asm = assemble_for($arch, ".3byte 0x123456, x+1, -1\n");
+            assert!(!asm.diags.has_errors(), "{}", asm.diags.render(&asm.sm, false));
+            assert_eq!(hex(&section(&asm, $section)), "56 34 12 00 00 00 ff ff ff");
+            assert_eq!(asm.relocs.len(), 1);
+            let r = &asm.relocs[0];
+            assert_eq!((r.kind, r.offset, r.addend), ($reloc, 3, 1));
+        }
+    )*};
+}
+
+// `R_RL78_DIR24S` and `R_RX_DIR24S` are both type 2.
+three_byte! {
+    "rl78", three_byte_data_on_rl78, "rl78", ".text", 2;
+    "rx", three_byte_data_on_rx, "rx", ".text", 2;
+}

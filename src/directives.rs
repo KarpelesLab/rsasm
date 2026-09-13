@@ -66,6 +66,9 @@ impl Assembler {
                 let w = self.arch.word_bytes();
                 self.dir_data(&mut cur, w, span)
             }
+            // `.3byte` is the RL78 and RX ports' 24-bit address; like
+            // `.dword` below, it means nothing else anywhere.
+            ".3byte" => self.dir_data(&mut cur, 3, span),
             ".int" | ".long" | ".4byte" => self.dir_data(&mut cur, 4, span),
             // `.dword` (MIPS, RISC-V) and `.xword` (AArch64, SPARC V9) both
             // mean eight bytes; accepting them everywhere is harmless, since
