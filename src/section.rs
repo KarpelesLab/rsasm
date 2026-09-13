@@ -128,6 +128,9 @@ pub struct FixupKind {
     /// instruction, and GNU as writes `A = 0`. Same-section resolution is
     /// unaffected either way; this only decides what the linker is handed.
     pub bias_reloc_addend: bool,
+    /// Narrower bounds than the field's width allows, where a reference
+    /// assembler picks a form by a range that is not a power of two.
+    pub limits: Option<(i64, i64)>,
 }
 
 impl FixupKind {
@@ -142,6 +145,7 @@ impl FixupKind {
             value_align: 1,
             encoding: FieldEncoding::Whole,
             bias_reloc_addend: true,
+            limits: None,
         }
     }
 
@@ -179,6 +183,12 @@ impl FixupKind {
         self
     }
 
+    /// Accepts only values from `lo` to `hi`, within what the field holds.
+    pub fn with_limits(mut self, lo: i64, hi: i64) -> FixupKind {
+        self.limits = Some((lo, hi));
+        self
+    }
+
     /// Sets the function that scatters the value through the instruction word.
     pub fn scatter(mut self, f: fn(u64, i64) -> u64) -> FixupKind {
         self.encoding = FieldEncoding::Scatter(f);
@@ -196,6 +206,14 @@ impl FixupKind {
 
     /// Inclusive range of values this field can hold.
     pub fn range(&self) -> (i128, i128) {
+        let (lo, hi) = self.field_range();
+        match self.limits {
+            Some((l, h)) => (lo.max(l as i128), hi.min(h as i128)),
+            None => (lo, hi),
+        }
+    }
+
+    fn field_range(&self) -> (i128, i128) {
         let bits = self.bits();
         if bits >= 128 {
             return (i128::MIN, i128::MAX);
@@ -213,7 +231,7 @@ impl FixupKind {
         if self.value_align > 1 && v % self.value_align as i128 != 0 {
             return false;
         }
-        if self.bits() >= 64 {
+        if self.bits() >= 64 && self.limits.is_none() {
             return true;
         }
         let (lo, hi) = self.range();

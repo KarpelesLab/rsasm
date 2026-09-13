@@ -282,6 +282,19 @@ pub trait Architecture {
         2
     }
 
+    /// Whether relaxation may move an instruction back to a smaller form.
+    ///
+    /// Layout normally only grows candidates, starting from the smallest,
+    /// which finds the smallest layout whenever a form that reaches a target
+    /// also reaches every nearer one. RX breaks that: `bra.s` reaches 3 to 10
+    /// bytes forward, not 0 to 10, so a branch that was too close early on
+    /// can come within reach once the code around it grows. GNU as's RX port
+    /// re-picks every size on each pass for this reason, and a backend that
+    /// returns true gets the same treatment.
+    fn relaxation_may_shrink(&self) -> bool {
+        false
+    }
+
     /// Whether a plain number as a PC-relative target (`call 0x1000`) is an
     /// absolute address, which relocatable output must relocate against no
     /// symbol, rather than an offset into the current section.

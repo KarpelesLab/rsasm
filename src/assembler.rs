@@ -116,6 +116,10 @@ pub struct Assembler {
     exiting_macro: bool,
     /// Set by a vendor `END`: nothing after it in the source is assembled.
     pub(crate) end_of_source: bool,
+    /// While relaxation weighs another size for one fragment: labels in that
+    /// section after that fragment, and still at an offset past `pc`, move
+    /// by `shift` bytes. Fields: section, fragment index, `pc`, `shift`.
+    pub(crate) relax_shift: Option<(SectionId, u32, u64, i64)>,
     /// CC-RH data values written without `#` that were not constants when
     /// read, to be refused at the end if they are labels; see
     /// `Assembler::cc_data`.
@@ -163,6 +167,7 @@ impl Assembler {
             macro_depth: 0,
             exiting_macro: false,
             end_of_source: false,
+            relax_shift: None,
             cc_bare_labels: Vec::new(),
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),

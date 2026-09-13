@@ -761,6 +761,64 @@ fn corpus_data() {
     ]);
 }
 
+/// Relaxation as GNU as's RX port does it: sizes are re-picked every pass, so
+/// they can shrink as well as grow, in its walk order and with its limits.
+/// Expected bytes are `rx-elf-as` output (the same programs are in
+/// `tools/xas-diff/rx-programs.txt`).
+#[test]
+fn relaxation_follows_gnu_as() {
+    check_programs(&[
+        (
+            "a branch too close for .s at first shrinks back once the code grows",
+            "\tbne 1f\n\tbra x\n1:\trts\n",
+            "1d 04 00 00 00 02",
+        ),
+        (
+            "two branches that both settle on their short forms",
+            "\tbne 1f\n\tbra 2f\n1:\trts\n2:\trts\n",
+            "1b 2e 03 02 02",
+        ),
+        (
+            "bra.s over two bsr that grow to bsr.a",
+            "\tbra 1f\n\tbsr x\n\tbsr x\n1:\trts\n",
+            "09 05 00 00 00 05 00 00 00 02",
+        ),
+        (
+            "a target carried past the branch by earlier growth is not moved",
+            "\tbra L1\n\tbeq L2\nL2:\n\tbo L0\n\tbsr ext\n\tbc L0\nL0:\n\tbne L4\n\t.balign 4\nL4:\n\trts\n\t.space 114\nL1:\n",
+            "38 83 00 20 02 2c 08 05 00 00 00 22 02 21 03 03 02 00*114 03",
+        ),
+        (
+            "the bra.w pair stops three bytes short of its field's reach",
+            "\tbgt L0\n\t.space 32762\nL0:\n",
+            "2b 05 38 fd 7f 00*32762",
+        ),
+        (
+            "one byte further takes the bra.a pair",
+            "\tbgt L0\n\t.space 32763\nL0:\n",
+            "2b 06 04 ff 7f 00*32764",
+        ),
+        (
+            "sizes that flip around an alignment settle as GNU as's do",
+            "\tnop\n\tbsr ext\n\tblt L0\n\tbsr ext\n\tbno L0\n\tbc L0\n\t.space 123\n\t.balign 4\nL0:\n\tbge L0\n\tadd #1,r3\n\tbsr ext\n\tmov.l r1,r2\n\tbo L0\n\tbsr L0\n\tbn L0\n\tbno L0\n\t.space 32760\n\t.space 32763\n\tbsr ext\n\tble L0\n\tbra L0\n\trts\n\t.space 1\n\t.space 8\n",
+            "03 05 00 00 00 28 05 38 8d 00 05 00 00 00 2c 05 38 84 00 23 05 38 7f 00*124 03 28 00 62 13 05 00 00 00 ef 12 2c f6 39 f4 ff 27 f1 2d ef 00*65523 05 00 00 00 2a 06 04 f4 ff fe 04 f0 ff fe 02 00*9 ef 00",
+        ),
+    ]);
+}
+
+/// The one place rsasm departs from that on purpose: GNU as gives a target
+/// 32,769 bytes back the `bra.w` pair, whose field then wraps to +32,767.
+#[test]
+fn a_conditional_just_out_of_bra_w_reach_backwards_still_reaches() {
+    let bytes = text_for("rx", "L0:\n\t.space 32767\n\tbgt L0\n");
+    let at = 32767;
+    // `ble .+6` over `bra.a`, measured from the `bra.a` opcode.
+    assert_eq!(&bytes[at..at + 3], &[0x2b, 0x06, 0x04]);
+    let field = &bytes[at + 3..at + 6];
+    let disp = i32::from_le_bytes([field[0], field[1], field[2], 0]) << 8 >> 8;
+    assert_eq!(disp, -(at as i32 + 2));
+}
+
 #[test]
 fn programs() {
     check_programs(&[

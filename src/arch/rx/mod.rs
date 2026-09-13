@@ -26,10 +26,12 @@
 //!   linker overwrites it either way.
 //! - An unresolved `beq`/`bne` or other conditional branch is given the
 //!   synthetic long form rather than GNU as's 16- or 8-bit one.
-//! - GNU as's relaxation may shrink a branch again after growing it, which
-//!   the shared layout never does. A `.s` branch needs at least 3 bytes of
-//!   distance, so `bne 1f; bra x; 1:` — where the `bra` grows after the `bne`
-//!   was measured — comes out one byte longer here (`bne.b` for `bne.s`).
+//! - GNU as picks a far conditional's `bra.w` pair by the displacement from
+//!   the conditional, not from the `bra.w`, so a target 32,769 or 32,770
+//!   bytes back gets a 16-bit field that silently wraps and branches forward.
+//!   rsasm takes the 6-byte `bra.a` pair there, which reaches. (Its other
+//!   relaxation rules, shrinking included, are followed; see
+//!   [`Architecture::relaxation_may_shrink`].)
 //! - A difference of two labels already defined takes the short immediate
 //!   forms, as it does in GNU as when nothing relaxable lies between the
 //!   labels; see [`encode::classify`] for when that approximation misses.
@@ -38,8 +40,7 @@
 //! - A bare number as a branch target (`bra 5`) is an address here; GNU as
 //!   sizes the branch as if the number were the displacement.
 //! - Code goes in whatever section is current, `.text` by default, where GNU
-//!   as uses the Renesas name `P`; and the ELF header's `e_flags` is 0 where
-//!   GNU as sets `E_FLAG_RX_ABI`. Both are the shared output code's to decide.
+//!   as uses the Renesas name `P`.
 //!
 //! # CC-RX source
 //!
@@ -116,6 +117,13 @@ impl Architecture for Rx {
 
     fn elf_machine(&self) -> u16 {
         173
+    }
+
+    /// `rx_relax_frag` in GNU as re-picks each branch and immediate size on
+    /// every pass, so a `bne` that was too close for `.s` at first takes `.s`
+    /// once the code it jumps over has grown.
+    fn relaxation_may_shrink(&self) -> bool {
+        true
     }
 
     fn pcrel_number_is_address(&self) -> bool {

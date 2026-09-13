@@ -354,3 +354,65 @@ s:
 	.space 5
 e:
 	rts
+=== a branch too close for .s at first shrinks back once the code grows
+	bne 1f
+	bra x
+1:	rts
+=== two branches that both settle on their short forms
+	bne 1f
+	bra 2f
+1:	rts
+2:	rts
+=== bra.s over two bsr that grow to bsr.a
+	bra 1f
+	bsr x
+	bsr x
+1:	rts
+=== a target carried past the branch by earlier growth is not moved
+	bra L1
+	beq L2
+L2:
+	bo L0
+	bsr ext
+	bc L0
+L0:
+	bne L4
+	.balign 4
+L4:
+	rts
+	.space 114
+L1:
+=== the bra.w pair stops three bytes short of its field's reach
+	bgt L0
+	.space 32762
+L0:
+=== one byte further takes the bra.a pair
+	bgt L0
+	.space 32763
+L0:
+=== sizes that flip around an alignment settle as GNU as's do
+	nop
+	bsr ext
+	blt L0
+	bsr ext
+	bno L0
+	bc L0
+	.space 123
+	.balign 4
+L0:
+	bge L0
+	add #1,r3
+	bsr ext
+	mov.l r1,r2
+	bo L0
+	bsr L0
+	bn L0
+	bno L0
+	.space 32760
+	.space 32763
+	bsr ext
+	ble L0
+	bra L0
+	rts
+	.space 1
+	.space 8

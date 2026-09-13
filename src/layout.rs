@@ -3,20 +3,29 @@
 //! Fragment sizes and symbol addresses depend on each other: an alignment's
 //! padding depends on where it lands, and where it lands depends on how long
 //! the branches before it turned out to be. The pass below iterates to a fixed
-//! point. Instruction sizes only ever grow — `chosen` never decreases — so the
-//! branch half of the loop always terminates; the whole loop is bounded as
-//! well, since a `.org` or `.space` whose size depends on a later symbol can
-//! be written to oscillate.
+//! point. Instruction sizes normally only grow — `chosen` never decreases — so
+//! the branch half of the loop always terminates. A backend can let sizes
+//! shrink again too (RX does, as GNU as does there), under GNU as's limit on
+//! how often one fragment may flip. The whole loop is bounded as well, since a
+//! `.org` or `.space` whose size depends on a later symbol can be written to
+//! oscillate.
 
 use crate::assembler::{Assembler, Relocation};
 use crate::expr::{ExprKind, ExprRef, Value};
 use crate::section::{FixupKind, FragKind, Fragment, SectionId, SectionKind};
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId, SymbolValue};
+use std::collections::HashMap;
 
 /// Enough passes for any realistic file; hitting the limit means the input is
 /// self-referential in a way that cannot settle.
 const MAX_PASSES: u32 = 32;
+
+/// The pass limit where sizes may also shrink. A fragment can then flip
+/// between two sizes around an alignment, and GNU as's guard only stops it
+/// after ten shrinks and ten growths, so settling legitimately takes more
+/// passes than growth alone ever does; the guard is what bounds it.
+const MAX_PASSES_SHRINKING: u32 = 1000;
 
 /// What a fragment's size depends on, extracted so the size computation can
 /// call back into the assembler without holding a borrow on the fragment.
@@ -50,7 +59,13 @@ impl Assembler {
         self.pad_section_tails();
 
         let mut settled = false;
-        for _ in 0..MAX_PASSES {
+        let mut history = HashMap::new();
+        let limit = if self.arch.relaxation_may_shrink() {
+            MAX_PASSES_SHRINKING
+        } else {
+            MAX_PASSES
+        };
+        for _ in 0..limit {
             // Addresses are assigned from the previous pass's sizes before
             // this pass computes new ones. For relocatable output every
             // section sits at zero and this changes nothing; for a flat image
@@ -61,7 +76,7 @@ impl Assembler {
             // addresses that pass used are the final ones.
             self.assign_addresses();
             let sizes_changed = self.assign_offsets();
-            let relaxed = self.relax();
+            let relaxed = self.relax(&mut history);
             if !sizes_changed && !relaxed {
                 settled = true;
                 break;
@@ -237,54 +252,146 @@ impl Assembler {
         }
     }
 
-    fn relax(&mut self) -> bool {
+    /// Moves fragments to a larger candidate where the current one no longer
+    /// reaches. `history` is only used by [`Self::repick`], for targets whose
+    /// sizes may also shrink.
+    fn relax(&mut self, history: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
+        if self.arch.relaxation_may_shrink() {
+            return self.repick(history);
+        }
         let mut changed = false;
         for si in 0..self.sections.len() {
             for fi in 0..self.sections[si].frags.len() {
-                let (nvariants, chosen, frag_off) = match &self.sections[si].frags[fi].kind {
-                    FragKind::Bytes { variants, chosen } => {
-                        (variants.len(), *chosen, self.sections[si].frags[fi].offset)
-                    }
-                    _ => continue,
+                let FragKind::Bytes { variants, chosen } = &self.sections[si].frags[fi].kind else {
+                    continue;
                 };
-                if nvariants <= 1 || chosen + 1 >= nvariants {
+                let (nvariants, chosen) = (variants.len(), *chosen);
+                if chosen + 1 >= nvariants || self.variant_fits(si, fi, chosen, 0) {
                     continue;
                 }
-                let fixups: Vec<(u32, ExprRef, FixupKind)> = match &self.sections[si].frags[fi].kind
-                {
-                    FragKind::Bytes { variants, .. } => variants[chosen]
+                if let FragKind::Bytes { chosen, .. } = &mut self.sections[si].frags[fi].kind {
+                    *chosen += 1;
+                }
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Re-picks every fragment's size as the smallest candidate that reaches,
+    /// walking each section in order the way GNU as's `relax_segment` does:
+    /// fragments behind the one being sized are already at this pass's
+    /// addresses, and a target ahead of it is moved by how much everything
+    /// before it has grown so far (GNU's `stretch`). The order matters
+    /// because a section can have more than one layout where everything
+    /// reaches, and this is how GNU as arrives at its one.
+    ///
+    /// "Ahead" is decided the way `rx_relax_frag` decides it: by the target's
+    /// address from the last pass against the branch's address in this one.
+    /// A target that the growth so far has carried past the branch therefore
+    /// counts as behind it and is not moved, which can leave that branch a
+    /// size larger than it needs. GNU as does exactly that, so this does too.
+    ///
+    /// Alignment padding is recomputed on the way, as GNU as does; `.org`,
+    /// `.space` and LEB128 sizes wait for the next full pass.
+    fn repick(&mut self, history: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
+        let mut changed = false;
+        for si in 0..self.sections.len() {
+            let mut off: u64 = 0;
+            for fi in 0..self.sections[si].frags.len() {
+                let old_off = self.sections[si].frags[fi].offset;
+                self.sections[si].frags[fi].offset = off;
+                let stretch = off as i64 - old_off as i64;
+                let size = match &self.sections[si].frags[fi].kind {
+                    FragKind::Bytes { variants, chosen } if variants.len() > 1 => {
+                        let (n, chosen) = (variants.len(), *chosen);
+                        let first_fit = (0..n)
+                            .find(|&k| self.variant_fits(si, fi, k, stretch))
+                            .unwrap_or(n - 1);
+                        let counts = history.entry((si, fi)).or_insert((0, 0));
+                        let pick = if first_fit < chosen {
+                            // GNU as's guard against a size that flips back
+                            // and forth, as alignment padding can make it:
+                            // after ten of each, a fragment stops shrinking.
+                            let stuck = counts.0 > 10 && counts.1 > 10;
+                            counts.0 += 1;
+                            if stuck { chosen } else { first_fit }
+                        } else {
+                            if first_fit > chosen {
+                                counts.1 += 1;
+                            }
+                            first_fit
+                        };
+                        if pick != chosen {
+                            changed = true;
+                        }
+                        if let FragKind::Bytes { variants, chosen } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *chosen = pick;
+                            variants[pick].bytes.len() as u64
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    FragKind::Align { .. } => {
+                        let task = self.task_for(si, fi);
+                        let (pad, _) = self.compute_size(si, off, task);
+                        if let FragKind::Align { pad: slot, .. } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *slot = pad;
+                        }
+                        pad
+                    }
+                    _ => self.sections[si].frags[fi].size(),
+                };
+                off = off.saturating_add(size);
+            }
+            if self.sections[si].size != off {
+                self.sections[si].size = off;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Whether every fixup of candidate `k` of a fragment is in range, with
+    /// the fragment taking that candidate's size and everything after it
+    /// moved by a further `stretch` bytes.
+    fn variant_fits(&mut self, si: usize, fi: usize, k: usize, stretch: i64) -> bool {
+        let frag_off = self.sections[si].frags[fi].offset;
+        let (fixups, delta): (Vec<(u32, ExprRef, FixupKind)>, i64) =
+            match &self.sections[si].frags[fi].kind {
+                FragKind::Bytes { variants, chosen } => (
+                    variants[k]
                         .fixups
                         .iter()
                         .map(|f| (f.offset, f.expr, f.kind))
                         .collect(),
-                    _ => continue,
-                };
-                let id = SectionId(si as u32);
-                let all_fit = fixups.iter().all(|(off, e, kind)| {
-                    let at = frag_off + *off as u64;
-                    match self.fixup_value(*e, kind, id, at) {
-                        Some(v) => kind.fits(v as i128),
-                        // An unresolved reference takes the widest form on
-                        // offer. Nothing is known about how far away its
-                        // target will be, so any shorter form is a guess the
-                        // linker may not be able to honour: a RISC-V `c.j`
-                        // carries a relocation, but reaches only ±2 KiB.
-                        // llvm-mc makes the same choice (checked: `j sym` to
-                        // an undefined `sym` is a full `R_RISCV_JAL`). The
-                        // widest variant is never bumped past, since `relax`
-                        // stops at the last one.
-                        None => false,
-                    }
-                });
-                if !all_fit {
-                    if let FragKind::Bytes { chosen, .. } = &mut self.sections[si].frags[fi].kind {
-                        *chosen += 1;
-                    }
-                    changed = true;
-                }
-            }
+                    variants[k].bytes.len() as i64 - variants[*chosen].bytes.len() as i64,
+                ),
+                _ => return true,
+            };
+        let id = SectionId(si as u32);
+        if delta + stretch != 0 {
+            self.relax_shift = Some((id, fi as u32, frag_off, delta + stretch));
         }
-        changed
+        let fits = fixups.iter().all(|(off, e, kind)| {
+            let at = frag_off + *off as u64;
+            match self.fixup_value(*e, kind, id, at) {
+                Some(v) => kind.fits(v as i128),
+                // An unresolved reference takes the widest form on offer.
+                // Nothing is known about how far away its target will be, so
+                // any shorter form is a guess the linker may not be able to
+                // honour: a RISC-V `c.j` carries a relocation, but reaches only
+                // ±2 KiB. llvm-mc makes the same choice (checked: `j sym` to
+                // an undefined `sym` is a full `R_RISCV_JAL`).
+                None => false,
+            }
+        });
+        self.relax_shift = None;
+        fits
     }
 
     /// Gives each section a base address. Relocatable output leaves them all
@@ -317,7 +424,11 @@ impl Assembler {
                     // its own; it sits at the section's current size.
                     None => s.size,
                 };
-                Some((s.addr + off) as i64)
+                let shift = match self.relax_shift {
+                    Some((sec, fi, pc, shift)) if sec == section && frag > fi && off > pc => shift,
+                    _ => 0,
+                };
+                Some((s.addr + off) as i64 + shift)
             }
             _ => None,
         }

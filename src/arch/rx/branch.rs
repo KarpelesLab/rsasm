@@ -156,9 +156,18 @@ pub fn assemble(
         (Kind::Cond(c), Width::B) => vec![plain(0x20 | c, 1, t, span)],
         (Kind::Cond(c), Width::Auto) => {
             let inv = 0x20 | (c ^ 1);
+            // `rx_relax_frag` checks the `bra.w` pair's reach from the
+            // conditional's opcode, two bytes before the `bra.w`, so GNU as
+            // stops using it at a forward displacement of 32765. Its matching
+            // lower check lets -32769 and -32770 through, where the field
+            // then silently wraps; that half is not copied.
+            let mut pair = long(&[inv, 0x05, 0x38], 2, t, span);
+            for f in &mut pair.fixups {
+                f.kind = f.kind.with_limits(-0x8000, 0x7ffd);
+            }
             vec![
                 plain(0x20 | c, 1, t, span),
-                long(&[inv, 0x05, 0x38], 2, t, span),
+                pair,
                 long(&[inv, 0x06, 0x04], 3, t, span),
             ]
         }
