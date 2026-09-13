@@ -7,12 +7,11 @@
 //! Nothing below emits an instruction, so no m68k backend is involved.
 
 mod common;
-use common::*;
-use rsasm::lexer::Dialect::{Motorola, Renesas};
 
 #[cfg(feature = "sparc")]
 mod motorola {
-    use super::*;
+    use super::common::*;
+    use rsasm::lexer::Dialect::Motorola;
 
     fn mot(src: &str) -> String {
         hex(&text_dialect("sparc", Motorola, src))
@@ -124,7 +123,8 @@ mod motorola {
 
 #[cfg(feature = "x86")]
 mod renesas {
-    use super::*;
+    use super::common::*;
+    use rsasm::lexer::Dialect::Renesas;
 
     fn ren(src: &str) -> String {
         hex(&text_dialect("x86-64", Renesas, src))
