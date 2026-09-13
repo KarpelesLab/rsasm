@@ -1,76 +1,136 @@
 //! MIPS, 32- and 64-bit, big and little endian. `EM_MIPS`.
 //!
-//! Placeholder. The backend is registered so that `.arch` and `--arch` can
-//! name it and report something useful, but it assembles nothing yet.
+//! Four targets share one backend, differing only in byte order and register
+//! width: `mips` and `mipsel` are 32-bit, `mips64` and `mips64el` 64-bit. The
+//! instruction words are identical; only how they are laid down in memory and
+//! which doubleword instructions are legal change.
+//!
+//! **Delay slots are the programmer's problem.** GNU as defaults to
+//! `.set reorder`, in which the assembler may move an instruction into the
+//! slot after a branch or insert a `nop` there. This backend behaves as
+//! `.set noreorder` always: it emits exactly the instructions written, in the
+//! order written, and never invents a `nop`. Multi-instruction *macros* such
+//! as `li` and `la` are still expanded, since almost no real source avoids
+//! them.
+
+pub mod encode;
+pub mod insn;
+pub mod operand;
+pub mod pseudo;
+pub mod reg;
+pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
 use crate::section::Variant;
+use encode::Args;
+use operand::{Operand, OperandParser};
 
 pub const NAMES: &[&str] = &["mips", "mipsel", "mips64", "mips64el"];
 
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
-    let canonical = match name {
-        "mips" => "mips",
-        "mipsel" => "mipsel",
-        "mips64" => "mips64",
-        "mips64el" => "mips64el",
-        "mips32" => "mips",
+    let (canonical, endian, bits) = match name {
+        "mips" | "mips32" => ("mips", Endian::Big, 32),
+        "mipsel" | "mips32el" | "mipsle" => ("mipsel", Endian::Little, 32),
+        "mips64" => ("mips64", Endian::Big, 64),
+        "mips64el" | "mips64le" => ("mips64el", Endian::Little, 64),
         _ => return None,
     };
-    Some(Box::new(Stub { name: canonical }))
+    Some(Box::new(Mips {
+        name: canonical,
+        endian,
+        bits,
+    }))
 }
 
-struct Stub {
+pub struct Mips {
     name: &'static str,
+    endian: Endian,
+    bits: u8,
 }
 
-impl Architecture for Stub {
+impl Architecture for Mips {
     fn name(&self) -> &'static str {
         self.name
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &["mips32"]
+        &["mips32", "mips32el", "mipsle", "mips64le"]
     }
 
     fn endian(&self) -> Endian {
-        Endian::Big
+        self.endian
     }
 
     fn pointer_bytes(&self, _state: &ArchState) -> u8 {
-        4
+        self.bits / 8
     }
 
     fn initial_state(&self) -> ArchState {
         ArchState {
-            bits: 32,
+            bits: self.bits,
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
         }
     }
 
-    fn supports_syntax(&self, _syntax: Syntax) -> bool {
-        true
+    fn supports_syntax(&self, syntax: Syntax) -> bool {
+        // MIPS assembly has only ever had one operand order.
+        syntax == Syntax::Att
     }
 
     fn elf_machine(&self) -> u16 {
-        8
+        8 // EM_MIPS
     }
 
-    fn data_reloc(&self, _size: u8, _pcrel: bool) -> Option<u32> {
-        None
+    fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
+        if pcrel {
+            reloc::pcrel(size)
+        } else {
+            reloc::abs(size)
+        }
     }
 
+    /// MIPS `nop` is `sll $zero, $zero, 0`, whose encoding is the all-zero
+    /// word. Zero fill therefore *is* nop fill here, which is why this looks
+    /// like the unimplemented default and is not.
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         vec![0; len as usize]
     }
 
-    fn assemble(&self, cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>) -> Option<Vec<Variant>> {
-        cx.error(
-            insn.span,
-            format!("the `{}` backend is not implemented yet", self.name),
-        );
-        None
+    fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
+        let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
+
+        let cur = req.cursor();
+        let pieces = cur.split_commas();
+        let mut ops: Vec<Operand> = Vec::with_capacity(pieces.len());
+        for piece in &pieces {
+            let mut p = OperandParser { cx };
+            ops.push(p.parse_all(piece, req.span)?);
+        }
+
+        let args = Args {
+            mnemonic: &mnemonic,
+            ops: &ops,
+            span: req.span,
+        };
+
+        // Macros are tried first: `b` and `move` are not real opcodes, so
+        // there is nothing in the table for them to shadow.
+        if pseudo::is_pseudo(&mnemonic) {
+            return pseudo::expand(cx, &mnemonic, &args, self.endian, self.bits == 64)
+                .map(|v| vec![v]);
+        }
+
+        let Some(def) = insn::lookup(&mnemonic) else {
+            cx.error(
+                req.mnemonic_span,
+                format!("unknown instruction `{mnemonic}`"),
+            );
+            return None;
+        };
+        // Every MIPS instruction is one word wide, so there is never more than
+        // one candidate for the layout pass to choose between.
+        encode::encode(cx, &def, &args, self.endian, self.bits == 64).map(|v| vec![v])
     }
 }
