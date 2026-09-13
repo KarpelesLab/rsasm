@@ -1,0 +1,358 @@
+//! Mnemonics, condition codes and the suffix grammar that joins them.
+//!
+//! An ARM mnemonic is not one word but three glued together: a base operation,
+//! an optional `s` (update the flags) and an optional two-letter condition, in
+//! that order — `add` + `s` + `eq` = `addseq`. Thumb adds a fourth part, the
+//! `.n`/`.w` width hint. Peeling those apart is the ARM equivalent of the
+//! x86 backend's AT&T size suffixes, and it has the same hazard: several base
+//! mnemonics end in letters that also spell a suffix (`bics` ends in `cs`,
+//! `movs` in `vs`, `bls` is `b` + `ls` and not `bl` + `s`). The rule that
+//! resolves all of them is to accept a split only when what is left is a real
+//! base mnemonic, and to try the splits in a fixed order.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Condition code encoding, `AL` when unconditional.
+pub const AL: u8 = 14;
+
+#[rustfmt::skip]
+static CONDS: &[(&str, u8)] = &[
+    ("eq", 0), ("ne", 1),
+    ("cs", 2), ("hs", 2), ("cc", 3), ("lo", 3),
+    ("mi", 4), ("pl", 5), ("vs", 6), ("vc", 7),
+    ("hi", 8), ("ls", 9), ("ge", 10), ("lt", 11),
+    ("gt", 12), ("le", 13), ("al", 14),
+];
+
+pub fn condition(name: &str) -> Option<u8> {
+    CONDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
+}
+
+/// Direction and index-before/after mode of a block transfer.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct BlockMode {
+    /// P: index before the transfer.
+    pub before: bool,
+    /// U: addresses increase.
+    pub increment: bool,
+}
+
+/// Every operation this backend can encode, after suffix stripping.
+///
+/// The same enum serves both instruction sets; each encoder rejects what its
+/// own set cannot express.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Mnem {
+    // Data processing, in ARM opcode-field order so the encoder can use the
+    // discriminant directly.
+    And,
+    Eor,
+    Sub,
+    Rsb,
+    Add,
+    Adc,
+    Sbc,
+    Rsc,
+    Tst,
+    Teq,
+    Cmp,
+    Cmn,
+    Orr,
+    Mov,
+    Bic,
+    Mvn,
+    // Shifts, which A32 encodes as forms of `mov`.
+    Lsl,
+    Lsr,
+    Asr,
+    Ror,
+    Rrx,
+    // Loads and stores.
+    Ldr,
+    Str,
+    Ldrb,
+    Strb,
+    Ldrh,
+    Strh,
+    Ldrsb,
+    Ldrsh,
+    Ldm(BlockMode),
+    Stm(BlockMode),
+    Push,
+    Pop,
+    // Branches.
+    B,
+    Bl,
+    Bx,
+    Blx,
+    // Multiplies.
+    Mul,
+    Mla,
+    Mls,
+    Umull,
+    Umlal,
+    Smull,
+    Smlal,
+    // Move-wide and the small unary operations.
+    Movw,
+    Movt,
+    Clz,
+    Rev,
+    Rev16,
+    Revsh,
+    Uxtb,
+    Uxth,
+    Sxtb,
+    Sxth,
+    // System and hints.
+    Nop,
+    Svc,
+    Bkpt,
+    Mrs,
+    Msr,
+    Dmb,
+    Dsb,
+    Isb,
+}
+
+impl Mnem {
+    /// The 4-bit A32 data-processing opcode, for the sixteen operations that
+    /// have one.
+    pub fn dp_opcode(self) -> Option<u32> {
+        use Mnem::*;
+        Some(match self {
+            And => 0,
+            Eor => 1,
+            Sub => 2,
+            Rsb => 3,
+            Add => 4,
+            Adc => 5,
+            Sbc => 6,
+            Rsc => 7,
+            Tst => 8,
+            Teq => 9,
+            Cmp => 10,
+            Cmn => 11,
+            Orr => 12,
+            Mov => 13,
+            Bic => 14,
+            Mvn => 15,
+            _ => return None,
+        })
+    }
+
+    /// True for the comparisons, which have no destination and always set the
+    /// flags.
+    pub fn is_compare(self) -> bool {
+        matches!(self, Mnem::Tst | Mnem::Teq | Mnem::Cmp | Mnem::Cmn)
+    }
+
+    /// True for `mov`/`mvn`, which take a destination but no first source.
+    pub fn is_move(self) -> bool {
+        matches!(self, Mnem::Mov | Mnem::Mvn)
+    }
+
+    /// The operation encoding the same value with the immediate complemented.
+    ///
+    /// ARM has no encoding for `add r0, r1, #-1`, but `sub r0, r1, #1` is the
+    /// same instruction, and every assembler makes that substitution rather
+    /// than rejecting the line. The `negate` flag says whether the partner
+    /// wants the arithmetic negation or the bitwise complement.
+    pub fn immediate_partner(self) -> Option<(Mnem, bool)> {
+        use Mnem::*;
+        Some(match self {
+            Add => (Sub, true),
+            Sub => (Add, true),
+            Cmp => (Cmn, true),
+            Cmn => (Cmp, true),
+            And => (Bic, false),
+            Bic => (And, false),
+            Mov => (Mvn, false),
+            Mvn => (Mov, false),
+            Adc => (Sbc, false),
+            Sbc => (Adc, false),
+            _ => return None,
+        })
+    }
+
+    /// True when an `s` suffix is meaningful. The comparisons already set the
+    /// flags, and nothing else in this table has an S bit.
+    pub fn allows_s(self) -> bool {
+        use Mnem::*;
+        self.dp_opcode().is_some() && !self.is_compare()
+            || matches!(
+                self,
+                Lsl | Lsr | Asr | Ror | Rrx | Mul | Mla | Umull | Umlal | Smull | Smlal
+            )
+    }
+}
+
+#[rustfmt::skip]
+fn table() -> &'static HashMap<&'static str, Mnem> {
+    static T: OnceLock<HashMap<&'static str, Mnem>> = OnceLock::new();
+    T.get_or_init(|| {
+        use Mnem::*;
+        let ia = BlockMode { before: false, increment: true };
+        let ib = BlockMode { before: true, increment: true };
+        let da = BlockMode { before: false, increment: false };
+        let db = BlockMode { before: true, increment: false };
+        let mut m: HashMap<&'static str, Mnem> = HashMap::new();
+        let mut add = |n: &'static str, v: Mnem| { m.insert(n, v); };
+        add("and", And); add("eor", Eor); add("sub", Sub); add("rsb", Rsb);
+        add("add", Add); add("adc", Adc); add("sbc", Sbc); add("rsc", Rsc);
+        add("tst", Tst); add("teq", Teq); add("cmp", Cmp); add("cmn", Cmn);
+        add("orr", Orr); add("mov", Mov); add("bic", Bic); add("mvn", Mvn);
+        add("lsl", Lsl); add("lsr", Lsr); add("asr", Asr); add("ror", Ror);
+        add("rrx", Rrx);
+        add("ldr", Ldr); add("str", Str);
+        add("ldrb", Ldrb); add("strb", Strb);
+        add("ldrh", Ldrh); add("strh", Strh);
+        add("ldrsb", Ldrsb); add("ldrsh", Ldrsh);
+        // The stack-oriented spellings are the same instructions: a full
+        // descending stack pushes with `stmdb` and pops with `ldmia`.
+        add("ldm", Ldm(ia)); add("ldmia", Ldm(ia)); add("ldmfd", Ldm(ia));
+        add("ldmib", Ldm(ib)); add("ldmed", Ldm(ib));
+        add("ldmda", Ldm(da)); add("ldmfa", Ldm(da));
+        add("ldmdb", Ldm(db)); add("ldmea", Ldm(db));
+        add("stm", Stm(ia)); add("stmia", Stm(ia)); add("stmea", Stm(ia));
+        add("stmib", Stm(ib)); add("stmfa", Stm(ib));
+        add("stmda", Stm(da)); add("stmed", Stm(da));
+        add("stmdb", Stm(db)); add("stmfd", Stm(db));
+        add("push", Push); add("pop", Pop);
+        add("b", B); add("bl", Bl); add("bx", Bx); add("blx", Blx);
+        add("mul", Mul); add("mla", Mla); add("mls", Mls);
+        add("umull", Umull); add("umlal", Umlal);
+        add("smull", Smull); add("smlal", Smlal);
+        add("movw", Movw); add("movt", Movt);
+        add("clz", Clz); add("rev", Rev); add("rev16", Rev16); add("revsh", Revsh);
+        add("uxtb", Uxtb); add("uxth", Uxth); add("sxtb", Sxtb); add("sxth", Sxth);
+        add("nop", Nop); add("svc", Svc); add("swi", Svc);
+        add("bkpt", Bkpt);
+        add("mrs", Mrs); add("msr", Msr);
+        add("dmb", Dmb); add("dsb", Dsb); add("isb", Isb);
+        m
+    })
+}
+
+pub fn lookup(name: &str) -> Option<Mnem> {
+    table().get(name).copied()
+}
+
+/// Requested instruction width, from a Thumb `.n` / `.w` suffix.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Width {
+    Any,
+    /// `.n`: the caller insists on a 16-bit encoding.
+    Narrow,
+    /// `.w`: the caller insists on a 32-bit encoding.
+    Wide,
+}
+
+/// A mnemonic split into its parts.
+#[derive(Copy, Clone, Debug)]
+pub struct Resolved {
+    pub mnem: Mnem,
+    pub cond: u8,
+    /// Whether a condition was written, as opposed to defaulting to `al`.
+    pub cond_written: bool,
+    pub set_flags: bool,
+    pub width: Width,
+}
+
+/// Splits `text` into base mnemonic, `s` flag, condition and width.
+///
+/// Returns `None` if no split yields a known mnemonic, which the caller
+/// reports as an unknown instruction.
+pub fn resolve(text: &str) -> Option<Resolved> {
+    // The width hint is unambiguous: nothing in the table contains a dot.
+    let (head, width) = match text.rsplit_once('.') {
+        Some((h, "n")) => (h, Width::Narrow),
+        Some((h, "w")) => (h, Width::Wide),
+        Some(_) => return None,
+        None => (text, Width::Any),
+    };
+
+    let mk = |mnem: Mnem, cond: u8, cond_written: bool, set_flags: bool| Resolved {
+        mnem,
+        cond,
+        cond_written,
+        set_flags,
+        width,
+    };
+
+    // An exact match always wins, so `bl`, `mrs` and `mls` are never taken
+    // apart into a shorter mnemonic plus a suffix.
+    if let Some(m) = lookup(head) {
+        return Some(mk(m, AL, false, false));
+    }
+
+    // Condition first: `bls` is `b` + `ls`, not `bl` + `s`. The base may still
+    // carry an `s`, giving the UAL order `add` + `s` + `eq`. The split is
+    // checked because the mnemonic is user text and need not be ASCII.
+    if let Some((base, suffix)) = head
+        .len()
+        .checked_sub(2)
+        .and_then(|at| head.split_at_checked(at))
+        && !base.is_empty()
+        && let Some(cond) = condition(suffix)
+    {
+        if let Some(m) = lookup(base) {
+            return Some(mk(m, cond, true, false));
+        }
+        if let Some(base) = base.strip_suffix('s')
+            && let Some(m) = lookup(base)
+            && m.allows_s()
+        {
+            return Some(mk(m, cond, true, true));
+        }
+    }
+
+    // A bare `s`: `movs`, `bics`, `adds`.
+    if let Some(base) = head.strip_suffix('s')
+        && let Some(m) = lookup(base)
+        && m.allows_s()
+    {
+        return Some(mk(m, AL, false, true));
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn split(text: &str) -> Option<(Mnem, u8, bool)> {
+        resolve(text).map(|r| (r.mnem, r.cond, r.set_flags))
+    }
+
+    #[test]
+    fn suffixes_that_spell_other_mnemonics_resolve_correctly() {
+        // `bls` is a conditional `b`, not a flag-setting `bl`.
+        assert_eq!(split("bls"), Some((Mnem::B, 9, false)));
+        assert_eq!(split("bl"), Some((Mnem::Bl, AL, false)));
+        assert_eq!(split("blls"), Some((Mnem::Bl, 9, false)));
+        // `bics` ends in the condition `cs` and `movs` in `vs`.
+        assert_eq!(split("bics"), Some((Mnem::Bic, AL, true)));
+        assert_eq!(split("movs"), Some((Mnem::Mov, AL, true)));
+        assert_eq!(split("smlals"), Some((Mnem::Smlal, AL, true)));
+        // An exact entry is never split: `mls` is not `ml` + `s`.
+        assert_eq!(split("mls"), Some((Mnem::Mls, AL, false)));
+        assert_eq!(split("addseq"), Some((Mnem::Add, 0, true)));
+        assert_eq!(split("ldrhs"), Some((Mnem::Ldr, 2, false)));
+    }
+
+    #[test]
+    fn meaningless_suffixes_are_rejected() {
+        // The pre-UAL order, which LLVM also rejects.
+        assert!(resolve("addeqs").is_none());
+        // Nothing to set flags on.
+        assert!(resolve("cmps").is_none());
+        assert!(resolve("revs").is_none());
+        assert!(resolve("add.q").is_none());
+        // Not ASCII, so the two-byte condition split lands inside a character.
+        assert!(resolve("\u{e9}eq").is_none());
+        assert!(resolve("a\u{e9}").is_none());
+    }
+}
