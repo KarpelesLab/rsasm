@@ -94,6 +94,10 @@ impl Architecture for M68k {
         4 // EM_68K
     }
 
+    fn pcrel_number_is_address(&self) -> bool {
+        true
+    }
+
     fn default_dialect(&self) -> crate::lexer::Dialect {
         crate::lexer::Dialect::Motorola
     }

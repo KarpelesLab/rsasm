@@ -105,6 +105,10 @@ impl Architecture for Rx {
         173
     }
 
+    fn pcrel_number_is_address(&self) -> bool {
+        true
+    }
+
     /// `E_FLAG_RX_ABI`, which GNU as sets unless told to use the old ABI.
     fn elf_flags(&self, _state: &ArchState) -> u32 {
         0x8

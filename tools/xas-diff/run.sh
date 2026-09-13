@@ -76,7 +76,7 @@ reference() { # command, extraction; source on stdin
 compare() { # key arch dialect cmd extract name source
   local r m
   m=$(printf '%s\n' "$7" | reference "$4" "$5")
-  r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" 2>&1)
+  r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "${5%%:*}" 2>&1)
   if [ "$m" = "$r" ]; then
     pass=$((pass + 1))
   else

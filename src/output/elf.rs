@@ -418,7 +418,10 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         buf.pad_to(class.table_align());
         shdrs[*idx as usize].offset = buf.len();
         for r in &relocs_by_section[sid] {
-            let sym = sym_index.get(&r.symbol).copied().unwrap_or(0);
+            let sym = r
+                .symbol
+                .and_then(|s| sym_index.get(&s).copied())
+                .unwrap_or(0);
             buf.addr(r.offset);
             match class {
                 // ELF32 packs the symbol index into the top 24 bits and the

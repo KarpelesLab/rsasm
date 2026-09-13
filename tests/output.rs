@@ -112,7 +112,14 @@ fn a_difference_from_a_label_in_the_same_section_is_pc_relative() {
     let got: Vec<(u64, u32, String, i64)> = asm
         .relocs
         .iter()
-        .map(|r| (r.offset, r.kind, asm.display_name(r.symbol), r.addend))
+        .map(|r| {
+            (
+                r.offset,
+                r.kind,
+                asm.display_name(r.symbol.unwrap()),
+                r.addend,
+            )
+        })
         .collect();
     let want: Vec<(u64, u32, String, i64)> = vec![
         (4, 2, "x".into(), 0),
@@ -124,6 +131,32 @@ fn a_difference_from_a_label_in_the_same_section_is_pc_relative() {
     assert_eq!(hex(&section(&asm, ".data")), "00 ".repeat(19) + "00");
     // A label in another section still has no single-relocation form.
     assert!(errors(".data\nL: .long 0\n.text\n.long x-L\n").contains("different sections"));
+}
+
+#[test]
+fn a_branch_to_a_plain_address_is_relocated_against_no_symbol() {
+    // GNU as: both fields zero, relocated against *ABS* with addends 0xffc
+    // and 0x1ffc. (GNU as picks R_X86_64_PC32; rsasm's R_X86_64_PLT32 links
+    // identically for a symbol that cannot be preempted.)
+    let asm = assemble("nop\ncall 0x1000\njmp F\nF = 0x2000\n");
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&text("nop\ncall 0x1000\njmp F\nF = 0x2000\n")),
+        "90 e8 00 00 00 00 e9 00 00 00 00"
+    );
+    let got: Vec<(u64, Option<_>, i64)> = asm
+        .relocs
+        .iter()
+        .map(|r| (r.offset, r.symbol, r.addend))
+        .collect();
+    assert_eq!(got, vec![(2, None, 0xffc), (7, None, 0x1ffc)]);
+    // A flat image knows where the field is, and resolves it.
+    let flat = assemble_flat("nop\ncall 0x1000\n", 0);
+    assert!(flat.relocs.is_empty());
 }
 
 #[test]
@@ -161,7 +194,7 @@ fn local_references_relocate_against_their_section() {
     assert_eq!(r.addend, 1, "the label's offset becomes the addend");
     assert_eq!(
         rsasm::symbol::SymType::Section,
-        asm.symbols.get(r.symbol).ty
+        asm.symbols.get(r.symbol.unwrap()).ty
     );
 }
 

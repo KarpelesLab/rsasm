@@ -74,6 +74,10 @@ impl Architecture for X86 {
         }
     }
 
+    fn pcrel_number_is_address(&self) -> bool {
+        true
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         let abi = reloc::Abi::for_object_bits(self.bits);
         if pcrel {

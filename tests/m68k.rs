@@ -60,11 +60,20 @@ fn err(arch: &str, dialect: Dialect, src: &str, needle: &str) {
 /// Runs a table of one-line cases, reporting every mismatch at once.
 #[track_caller]
 fn table(arch: &str, dialect: Dialect, cases: &[(&str, &str)]) {
+    table_as(arch, dialect, cases, false);
+}
+
+/// `flat` assembles an image at address 0, to compare with vasm's `-Fbin`.
+fn table_as(arch: &str, dialect: Dialect, cases: &[(&str, &str)], flat: bool) {
     let mut bad = Vec::new();
     for (src, want) in cases {
         // Motorola source is column-sensitive: indent the instruction.
         let line = format!(" {src}\n");
-        let asm = assemble_dialect(arch, dialect, &line);
+        let asm = if flat {
+            assemble_flat_dialect(arch, dialect, &line, 0)
+        } else {
+            assemble_dialect(arch, dialect, &line)
+        };
         let got = if asm.diags.has_errors() {
             asm.diags.render(&asm.sm, false)
         } else {
@@ -203,8 +212,9 @@ fn pc_relative_operands_measure_from_their_extension_word() {
     );
     // In GNU syntax a constant is the displacement itself.
     gas("movew %pc@(8),%d0\n", "30 3a 00 08");
-    // In Motorola syntax it is the address; from vasm.
-    mot(" move.w 8(pc),d0\n", "30 3a 00 06");
+    // In Motorola syntax it is the address; from vasm, in a flat image at 0.
+    let asm = assemble_flat_dialect("m68k", Motorola, " move.w 8(pc),d0\n", 0);
+    assert_eq!(hex(&asm.section_bytes(SectionId(0))), "30 3a 00 06");
 }
 
 #[test]
@@ -828,6 +838,29 @@ fn target_conventions() {
 }
 
 #[test]
+fn pc_relative_references_to_plain_addresses_are_relocated() {
+    // m68k-elf-as: `bsrw` with R_68K_PC16 `*ABS*+0x2000`, and `jsr` through
+    // a 32-bit PC displacement with R_68K_PC32 `*ABS*+0x2002`.
+    let asm = assemble_dialect("m68k", Gas, " nop\n bsr F\n jsr (F,%pc)\nF = 0x2000\n");
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&section(&asm, ".text")),
+        "4e 71 61 00 00 00 4e bb 01 70 00 00 00 00"
+    );
+    let got: Vec<(u64, u32, Option<_>, i64)> = asm
+        .relocs
+        .iter()
+        .map(|r| (r.offset, r.kind, r.symbol, r.addend))
+        .collect();
+    // R_68K_PC16 = 5, R_68K_PC32 = 4.
+    assert_eq!(got, vec![(4, 5, None, 0x2000), (10, 4, None, 0x2002)]);
+}
+
+#[test]
 fn arch_takes_numeric_cpu_names() {
     let e = errors_dialect("m68k", Gas, ".arch 68000\n extb.l %d0\n");
     assert!(e.contains("needs a 68020"), "{e}");
@@ -885,7 +918,7 @@ fn gnu_corpus_matches_gnu_as() {
 
 #[test]
 fn vasm_corpus_matches_vasm() {
-    table("m68k", Motorola, VASM);
+    table_as("m68k", Motorola, VASM, true);
 }
 
 const MOTOROLA: &[(&str, &str)] = &[

@@ -29,10 +29,14 @@ fn main() {
         },
         None => arch.default_dialect(),
     };
+    // A third argument, `bin`, assembles a flat image at address 0, for
+    // comparison with a reference that writes one.
+    let flat = std::env::args().nth(3).as_deref() == Some("bin");
     let mut asm = Assembler::new(
         arch,
         Options {
             dialect,
+            relocatable: !flat,
             ..Options::default()
         },
     );

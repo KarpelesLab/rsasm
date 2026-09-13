@@ -22,7 +22,9 @@ pub struct Relocation {
     pub section: SectionId,
     /// Offset within the section.
     pub offset: u64,
-    pub symbol: SymbolId,
+    /// `None` for a reference to a plain number, which ELF relocates against
+    /// symbol 0.
+    pub symbol: Option<SymbolId>,
     pub addend: i64,
     /// Architecture-specific relocation type.
     pub kind: u32,

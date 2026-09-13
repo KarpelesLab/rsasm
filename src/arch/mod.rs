@@ -281,6 +281,17 @@ pub trait Architecture {
         2
     }
 
+    /// Whether a plain number as a PC-relative target (`call 0x1000`) is an
+    /// absolute address, which relocatable output must relocate against no
+    /// symbol, rather than an offset into the current section.
+    ///
+    /// The references split on this. GNU as on x86, m68k, RL78 and RX takes
+    /// the address; GNU as on SuperH and V850, and llvm-mc everywhere except
+    /// x86, measure from the start of the section.
+    fn pcrel_number_is_address(&self) -> bool {
+        false
+    }
+
     /// `e_flags` for ELF output, given the state at the end of the source.
     fn elf_flags(&self, _state: &ArchState) -> u32 {
         0

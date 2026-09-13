@@ -110,6 +110,10 @@ impl Architecture for Rl78 {
         197
     }
 
+    fn pcrel_number_is_address(&self) -> bool {
+        true
+    }
+
     fn align_is_log2(&self) -> bool {
         true
     }

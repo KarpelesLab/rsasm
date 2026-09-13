@@ -380,9 +380,14 @@ impl Assembler {
         // reference resolves even in relocatable output. Across sections it
         // resolves only once the sections have real addresses.
         if kind.pcrel {
+            // An absolute target is no closer, on targets where a number is
+            // an address: where the field ends up is the linker's decision,
+            // so `call 0x1000` needs a relocation too.
             if self.options.relocatable
-                && v.plus
-                    .is_some_and(|p| self.symbol_section(p) != Some(section))
+                && match v.plus {
+                    Some(p) => self.symbol_section(p) != Some(section),
+                    None => v.minus.is_none() && self.arch.pcrel_number_is_address(),
+                }
             {
                 return None;
             }
@@ -521,12 +526,18 @@ impl Assembler {
             kind.reloc = r;
         }
         let kind = &kind;
-        let Some(target) = v.plus else {
-            self.diags.error(span, "cannot resolve this value");
-            return None;
+        let target = match v.plus {
+            Some(t) => Some(t),
+            // A PC-relative reference to a plain number, relocated against
+            // no symbol at all (ELF symbol 0).
+            None if kind.pcrel && v.minus.is_none() && self.options.relocatable => None,
+            None => {
+                self.diags.error(span, "cannot resolve this value");
+                return None;
+            }
         };
         if !self.options.relocatable {
-            let name = self.display_name(target);
+            let name = target.map_or_else(String::new, |t| self.display_name(t));
             self.diags.error(span, format!("undefined symbol `{name}`"));
             return None;
         }
@@ -560,8 +571,8 @@ impl Assembler {
 
         // Local symbols are relocated against their section, which is what
         // linkers expect and what keeps local labels out of the symbol table.
-        let sym = self.symbols.get(target);
-        let symbol =
+        let symbol = target.map(|target| {
+            let sym = self.symbols.get(target);
             if sym.binding == Binding::Local && matches!(sym.value, SymbolValue::Label { .. }) {
                 let sec = self.symbol_section(target).expect("label has a section");
                 addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
@@ -569,7 +580,8 @@ impl Assembler {
             } else {
                 self.symbols.get_mut(target).used = true;
                 target
-            };
+            }
+        });
 
         Some(Relocation {
             section,
