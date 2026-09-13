@@ -72,6 +72,7 @@ impl Architecture for Mips {
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 
@@ -82,6 +83,16 @@ impl Architecture for Mips {
 
     fn elf_machine(&self) -> u16 {
         8 // EM_MIPS
+    }
+
+    /// What llvm-mc writes for the default CPUs: MIPS32 with the o32 ABI and
+    /// `EF_MIPS_CPIC`, or MIPS64 (n64 has no ABI bits) with `EF_MIPS_CPIC`.
+    fn elf_flags(&self, _state: &ArchState) -> u32 {
+        if self.bits == 64 {
+            0x6000_0004
+        } else {
+            0x5000_1004
+        }
     }
 
     fn align_is_log2(&self) -> bool {

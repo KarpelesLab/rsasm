@@ -82,6 +82,7 @@ impl Architecture for M68k {
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 

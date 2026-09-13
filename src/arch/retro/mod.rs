@@ -85,6 +85,7 @@ impl Architecture for Retro {
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 

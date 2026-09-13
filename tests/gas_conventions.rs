@@ -107,3 +107,47 @@ three_byte! {
     "rl78", three_byte_data_on_rl78, "rl78", ".text", 2;
     "rx", three_byte_data_on_rx, "rx", ".text", 2;
 }
+
+/// `e_flags` of the ELF object for `src`.
+#[allow(dead_code)]
+fn e_flags(arch: &str, src: &str) -> u32 {
+    let asm = assemble_for(arch, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let elf = rsasm::output::elf::build(&asm).expect("ELF output");
+    let at = if elf[4] == 2 { 0x30 } else { 0x24 };
+    let b: [u8; 4] = elf[at..at + 4].try_into().unwrap();
+    if elf[5] == 2 {
+        u32::from_be_bytes(b)
+    } else {
+        u32::from_le_bytes(b)
+    }
+}
+
+macro_rules! header_flags {
+    ($($feature:literal, $test:ident, $arch:literal, $src:literal => $flags:literal;)*) => {$(
+        #[cfg(feature = $feature)]
+        #[test]
+        fn $test() {
+            assert_eq!(e_flags($arch, $src), $flags);
+        }
+    )*};
+}
+
+// llvm-mc for ARM, MIPS and RISC-V (with the corpora's `+m,+a,+f,+d,+c`);
+// the cross GNU as for RX and V850.
+header_flags! {
+    "x86", no_header_flags_on_x86_64, "x86-64", "nop\n" => 0;
+    "arm", arm_objects_are_eabi_version_5, "arm", "nop\n" => 0x0500_0000;
+    "arm", thumb_objects_are_eabi_version_5, "thumb", "nop\n" => 0x0500_0000;
+    "mips", mips32_objects_are_o32_cpic, "mips", "nop\n" => 0x5000_1004;
+    "mips", mips64_objects_are_mips64_cpic, "mips64el", "nop\n" => 0x6000_0004;
+    "riscv", riscv_objects_are_rvc_double_float, "riscv64", "nop\n" => 0x5;
+    "rx", rx_objects_use_the_rx_abi, "rx", "nop\n" => 0x8;
+    "v850", v850_objects_use_the_rh850_abi, "v850", "nop\n" => 0xf000_0000;
+    "v850", rh850_objects_add_the_v3_flag, "rh850", "nop\n" => 0xf010_0000;
+    "v850", the_cpu_the_file_ends_in_decides, "v850", ".v850e3v5\nnop\n" => 0xf010_0000;
+}

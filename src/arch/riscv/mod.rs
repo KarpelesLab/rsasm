@@ -100,6 +100,7 @@ impl Architecture for Riscv {
             // instructions are on unless `.option norvc` turns them off.
             features: STACK_BOTTOM | RVC,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 
@@ -111,6 +112,14 @@ impl Architecture for Riscv {
 
     fn elf_machine(&self) -> u16 {
         243 // EM_RISCV
+    }
+
+    /// `EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE`: the `rv32gc`/`rv64gc`
+    /// defaults with their `ilp32d`/`lp64d` ABIs. GNU ld refuses to link
+    /// objects whose float ABIs differ, and the flag records the ISA the file
+    /// started with, so `.option norvc` leaves it set, as in GNU as.
+    fn elf_flags(&self, _state: &ArchState) -> u32 {
+        0x5
     }
 
     fn align_is_log2(&self) -> bool {

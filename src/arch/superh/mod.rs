@@ -84,6 +84,7 @@ impl Architecture for SuperH {
             syntax: Syntax::Att,
             features: self.features,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 

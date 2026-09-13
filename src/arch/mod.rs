@@ -141,6 +141,11 @@ pub struct ArchState {
     pub features: u64,
     /// Set by `.intel_syntax noprefix` / `prefix`.
     pub intel_register_prefix: bool,
+    /// Bitset of what the source has used so far, in the backend's own terms,
+    /// for header fields that describe the object's contents rather than the
+    /// options it was assembled with: GNU as for SuperH derives `e_flags` from
+    /// the least capable CPU that has every instruction in the file.
+    pub used: u64,
 }
 
 /// One instruction to assemble, as the generic parser saw it.
@@ -274,6 +279,11 @@ pub trait Architecture {
     /// is 2 because that is the value for x86 and for every 8-bit target.
     fn word_bytes(&self) -> u8 {
         2
+    }
+
+    /// `e_flags` for ELF output, given the state at the end of the source.
+    fn elf_flags(&self, _state: &ArchState) -> u32 {
+        0
     }
 
     /// Whether a relocation of type `reloc` keeps its addend in the relocated

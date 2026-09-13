@@ -85,6 +85,7 @@ impl Architecture for V850 {
             syntax: Syntax::Att,
             features: if self.rh850 { FEATURE_RH850 } else { 0 },
             intel_register_prefix: false,
+            used: 0,
         }
     }
 
@@ -101,6 +102,17 @@ impl Architecture for V850 {
     /// would be misread.
     fn elf_machine(&self) -> u16 {
         36
+    }
+
+    /// `EF_V850_RH850_ABI` (the top nibble GNU as writes for both CPU
+    /// names), plus `EF_RH850_V3` (0x0010_0000) when the file ends in RH850
+    /// mode, whether that came from the target name or `.v850e3v5`.
+    fn elf_flags(&self, state: &ArchState) -> u32 {
+        if state.features & FEATURE_RH850 != 0 {
+            0xf010_0000
+        } else {
+            0xf000_0000
+        }
     }
 
     fn align_is_log2(&self) -> bool {

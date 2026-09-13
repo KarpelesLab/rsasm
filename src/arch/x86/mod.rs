@@ -59,6 +59,7 @@ impl Architecture for X86 {
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 

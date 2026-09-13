@@ -85,6 +85,7 @@ impl Architecture for Arm {
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 
@@ -95,6 +96,12 @@ impl Architecture for Arm {
 
     fn elf_machine(&self) -> u16 {
         40
+    }
+
+    /// `EF_ARM_EABI_VER5`, as llvm-mc writes for `arm-linux-gnueabi`; GNU ld
+    /// refuses to mix EABI versions, and version 0 is not an EABI object.
+    fn elf_flags(&self, _state: &ArchState) -> u32 {
+        0x0500_0000
     }
 
     fn align_is_log2(&self) -> bool {

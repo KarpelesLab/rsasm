@@ -92,6 +92,7 @@ impl Architecture for Rx {
             syntax: Syntax::Att,
             features: 0,
             intel_register_prefix: false,
+            used: 0,
         }
     }
 
@@ -102,6 +103,11 @@ impl Architecture for Rx {
 
     fn elf_machine(&self) -> u16 {
         173
+    }
+
+    /// `E_FLAG_RX_ABI`, which GNU as sets unless told to use the old ABI.
+    fn elf_flags(&self, _state: &ArchState) -> u32 {
+        0x8
     }
 
     fn pads_section_tail(&self, _flags: &crate::section::SectionFlags) -> bool {

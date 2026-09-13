@@ -514,7 +514,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     hdr.addr(0); // e_entry
     hdr.addr(0); // e_phoff
     hdr.addr(shoff);
-    hdr.u32(0); // e_flags
+    hdr.u32(asm.arch.elf_flags(&asm.arch_state));
     hdr.u16(class.ehdr_size() as u16);
     hdr.u16(0); // e_phentsize
     hdr.u16(0); // e_phnum
