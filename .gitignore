@@ -2,3 +2,6 @@
 **/*.rs.bk
 *.o
 *.bin
+
+# Claude Code session/worktree state
+.claude/

@@ -4,11 +4,16 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 description = "A multi-syntax, multi-architecture assembler"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/MagicalTux/rsasm"
+license = "MIT"
+repository = "https://github.com/KarpelesLab/rsasm"
 readme = "README.md"
 keywords = ["assembler", "asm", "x86", "codegen"]
 categories = ["development-tools"]
+
+[package.metadata.docs.rs]
+# Document every architecture backend, not just the default set. Mirrors the
+# CI docs job.
+all-features = true
 
 [dependencies]
 

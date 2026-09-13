@@ -26,6 +26,15 @@ $ rsasm -o hello.o hello.s && ld -o hello hello.o && ./hello
 Hello from rsasm!
 ```
 
+## Install
+
+```console
+$ cargo install rsasm
+```
+
+Prebuilt binaries for Linux, macOS and Windows are attached to each
+[release](https://github.com/KarpelesLab/rsasm/releases).
+
 ## Status
 
 Early. The pipeline is complete end to end — lex, parse, encode, lay out,
@@ -139,4 +148,4 @@ $ tools/gas-diff/run.sh     # needs binutils
 
 ## License
 
-MIT OR Apache-2.0
+MIT — see [LICENSE](LICENSE).

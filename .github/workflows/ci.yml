@@ -2,32 +2,211 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [master]
   pull_request:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Test & lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all-targets
-      - run: cargo test --doc
-      # binutils is preinstalled on the runner, so the differential test
-      # against GNU as runs here too.
-      - run: tools/gas-diff/run.sh
 
-  no-default-features:
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Format
+        if: runner.os == 'Linux' # formatting is platform-independent
+        run: cargo fmt --all --check
+
+      - name: Clippy (all features, warnings denied)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test (all features)
+        run: cargo test --all-features
+
+      - name: Doc tests
+        run: cargo test --all-features --doc
+
+  features:
+    name: Feature combinations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # The core must still build with every architecture backend switched off.
-      - run: cargo build --no-default-features
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: features
+
+      # Every architecture backend is a feature, so the core has to keep
+      # building with all of them off. This is what stops the generic half of
+      # the assembler from quietly growing a dependency on x86 — the trait in
+      # `arch::Architecture` is only a real seam if the crate compiles without
+      # anything behind it.
+      - name: Build with no backends
+        run: cargo build --no-default-features
+
+      - name: Clippy with no backends
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      # Each backend on its own, so a feature can never come to depend on
+      # another one being enabled alongside it.
+      - name: Build x86 alone
+        run: cargo build --no-default-features --features x86
+
+      - name: Test x86 alone
+        run: cargo test --no-default-features --features x86
+
+  cross_check:
+    name: Cross-compile check (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # rsasm is a host tool, so what matters here is host properties the
+        # x86-64 runners cannot exercise:
+        #
+        # * i686-unknown-linux-gnu — a 32-bit host. Section offsets, fragment
+        #   sizes and file positions move between `u64` and `usize` all over
+        #   the layout and ELF writer; on a 64-bit host a `usize` cast that
+        #   should have been `u64` is invisible.
+        # * s390x-unknown-linux-gnu — a big-endian host. Output byte order is
+        #   the *target's*, never the host's, so every integer written to a
+        #   section or an ELF field must go through an explicit conversion.
+        #   A stray `to_ne_bytes` compiles and passes everywhere else.
+        target: [i686-unknown-linux-gnu, s390x-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.target }}
+
+      # `cargo check` only: these need no native linker, and the point is to
+      # compile the code, not to run it.
+      - name: cargo check --all-features --all-targets
+        run: cargo check --target ${{ matrix.target }} --all-features --all-targets
+
+  msrv:
+    name: MSRV (Rust 1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Keep this pin in sync with `rust-version` in Cargo.toml. Compiling on
+      # the declared minimum guards against accidentally using a std/library or
+      # language feature newer than 1.89 (behavior itself is covered by the
+      # stable `test` job, so this is compile-only).
+      - name: Install Rust 1.89 (declared MSRV)
+        uses: dtolnay/rust-toolchain@1.89
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: cargo check --all-features --all-targets
+        run: cargo check --all-features --all-targets
+
+  gas_diff:
+    name: Differential test against GNU as
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: gas-diff
+
+      # The encodings asserted in tests/x86_encoding.rs were taken from GNU as,
+      # but a hermetic test can only ever confirm rsasm still agrees with what
+      # rsasm said last time. This job assembles a corpus with both assemblers
+      # and compares the bytes, so a wrong expectation cannot become the
+      # baseline. binutils is preinstalled on the runner.
+      - name: Check binutils is present
+        run: as --version | head -1
+
+      - name: tools/gas-diff/run.sh
+        run: tools/gas-diff/run.sh
+
+  cli_smoke:
+    name: CLI end-to-end (assemble, link, run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-smoke
+
+      - name: Build
+        run: cargo build --release
+
+      # The unit tests check bytes; this checks that the bytes are a real
+      # object file. A relocation with the wrong addend, a bad `sh_info`, or a
+      # symbol in the wrong table all produce output that passes every
+      # assertion in the test suite and still fails to link.
+      - name: Assemble, link and run the example
+        run: |
+          set -euxo pipefail
+          ./target/release/rsasm -o hello.o examples/hello.s
+          readelf -hSsr hello.o
+          ld -o hello hello.o
+          test "$(./hello)" = "Hello from rsasm!"
+
+      - name: Flat binary output
+        run: ./target/release/rsasm -f bin -o hello.bin examples/hello.s && test -s hello.bin
+
+  docs:
+    name: Docs build (warnings denied)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings -D rustdoc::broken-intra-doc-links
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps --all-features
