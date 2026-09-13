@@ -63,7 +63,7 @@ impl Assembler {
 
         let mut settled = false;
         let mut history = HashMap::new();
-        let limit = if self.arch.relaxation_may_shrink() {
+        let limit = if self.any_arch_shrinks() {
             MAX_PASSES_SHRINKING
         } else {
             MAX_PASSES
@@ -125,7 +125,10 @@ impl Assembler {
     fn pad_section_tails(&mut self) {
         for si in 0..self.sections.len() {
             let s = &self.sections[si];
-            if s.align <= 1 || !self.arch.pads_section_tail(&s.flags) {
+            // A section that ends in another backend's code is padded as
+            // that backend's GNU as would.
+            let (arch, _) = self.frag_arch(si, s.frags.len());
+            if s.align <= 1 || !arch.pads_section_tail(&s.flags) {
                 continue;
             }
             let fill = if s.flags.exec { Vec::new() } else { vec![0] };
@@ -279,10 +282,10 @@ impl Assembler {
     /// reaches. `history` is only used by [`Self::repick`], for targets whose
     /// sizes may also shrink.
     fn relax(&mut self, history: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
-        if self.arch.relaxation_may_shrink() {
+        if self.any_arch_shrinks() {
             return self.repick(history);
         }
-        if self.arch.relaxes_in_order() {
+        if self.any_arch_relaxes_in_order() {
             return self.grow_in_order();
         }
         let mut changed = false;
@@ -331,7 +334,14 @@ impl Assembler {
                 let size = match &self.sections[si].frags[fi].kind {
                     FragKind::Bytes { variants, chosen } if variants.len() > 1 => {
                         let (n, chosen) = (variants.len(), *chosen);
-                        let first_fit = (0..n)
+                        // In a file that also has code for a backend that
+                        // does not shrink, that code keeps growing only.
+                        let lowest = if self.frag_arch(si, fi).0.relaxation_may_shrink() {
+                            0
+                        } else {
+                            chosen
+                        };
+                        let first_fit = (lowest..n)
                             .find(|&k| self.variant_fits(si, fi, k, stretch))
                             .unwrap_or(n - 1);
                         let counts = history.entry((si, fi)).or_insert((0, 0));
@@ -478,7 +488,7 @@ impl Assembler {
         };
         let here = self.section(id).addr as i64 + frag_off as i64;
         for (off, e, kind) in fixups {
-            let Some(mut value) = self.fixup_value(e, &kind, id, frag_off + off as u64) else {
+            let Some(mut value) = self.fixup_value(e, &kind, id, fi, frag_off + off as u64) else {
                 return false;
             };
             // A label ahead, in the fragments this pass has yet to reach.
@@ -532,7 +542,7 @@ impl Assembler {
         }
         let fits = fixups.iter().all(|(off, e, kind)| {
             let at = frag_off + *off as u64;
-            match self.fixup_value(*e, kind, id, at) {
+            match self.fixup_value(*e, kind, id, fi, at) {
                 Some(v) => kind.fits(v as i128),
                 // An unresolved reference takes the widest form on offer.
                 // Nothing is known about how far away its target will be, so
@@ -642,6 +652,7 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
     ) -> Option<i64> {
         if kind.always_reloc {
@@ -650,7 +661,9 @@ impl Assembler {
         let flat = !self.options.relocatable;
         match kind.link {
             LinkValue::Plain => {}
-            LinkValue::Split(f) => return self.plain_fixup_value(e, kind, section, at).map(f),
+            LinkValue::Split(f) => {
+                return self.plain_fixup_value(e, kind, section, fi, at).map(f);
+            }
             LinkValue::Page(bits) if flat => {
                 let target = self.eval(e).ok().and_then(|v| self.resolve_value(v))?;
                 let here = (self.section(section).addr + at) as i64;
@@ -658,7 +671,10 @@ impl Assembler {
                 return Some((target & page) - (here & page));
             }
             LinkValue::Region(bits) if flat => {
-                if self.outside_region(e, kind, section, at, bits).is_some() {
+                if self
+                    .outside_region(e, kind, section, fi, at, bits)
+                    .is_some()
+                {
                     return None;
                 }
             }
@@ -672,7 +688,8 @@ impl Assembler {
         // A modifier on a plain reference (`.long foo@PLT`) only picks the
         // relocation in an object; in a flat image it decides the value.
         if flat && let Some(m) = self.find_modifier(e) {
-            match self.arch.flat_modifier(self.interner.get(m)) {
+            let name = self.interner.get(m);
+            match self.frag_arch(section.0 as usize, fi).0.flat_modifier(name) {
                 FlatModifier::Plain => {}
                 FlatModifier::PcRelative if kind.pcrel => {}
                 FlatModifier::PcRelative => {
@@ -682,7 +699,7 @@ impl Assembler {
                 FlatModifier::LinkerOnly => return None,
             }
         }
-        self.plain_fixup_value(e, kind, section, at)
+        self.plain_fixup_value(e, kind, section, fi, at)
     }
 
     /// For a [`LinkValue::Region`] fixup, the target and the address past the
@@ -694,12 +711,13 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
         bits: u8,
     ) -> Option<(i64, u64)> {
         let label = self.eval(e).ok()?.plus?;
         self.symbol_section(label)?;
-        let v = self.plain_fixup_value(e, kind, section, at)?;
+        let v = self.plain_fixup_value(e, kind, section, fi, at)?;
         let next = self.section(section).addr + at + kind.size as u64;
         (v >> bits != next as i64 >> bits).then_some((v, next))
     }
@@ -708,15 +726,15 @@ impl Assembler {
     /// value of the PC-relative fixup on the instruction its label names,
     /// computed where that fixup is.
     fn paired_low_value(&mut self, e: ExprRef) -> Option<i64> {
-        let (section, at, expr, kind) = self.paired_high(e)?;
-        self.fixup_value(expr, &kind, section, at)
+        let (section, fi, at, expr, kind) = self.paired_high(e)?;
+        self.fixup_value(expr, &kind, section, fi, at)
     }
 
     /// Finds the high half a [`LinkValue::PairedLow`] expression names: a
     /// PC-relative fixup at the very address of a label, with no addend.
     /// GNU ld refuses an addend there as well, and the label has to be on
     /// the instruction itself, not merely near it.
-    fn paired_high(&mut self, e: ExprRef) -> Option<(SectionId, u64, ExprRef, FixupKind)> {
+    fn paired_high(&mut self, e: ExprRef) -> Option<(SectionId, usize, u64, ExprRef, FixupKind)> {
         let v = self.eval(e).ok()?;
         let (Some(label), None, 0) = (v.plus, v.minus, v.addend) else {
             return None;
@@ -731,13 +749,14 @@ impl Assembler {
         // instruction at the same offset.
         frags[frag as usize..]
             .iter()
-            .take_while(|f| f.offset == off)
-            .find_map(|f| match &f.kind {
+            .enumerate()
+            .take_while(|(_, f)| f.offset == off)
+            .find_map(|(i, f)| match &f.kind {
                 FragKind::Bytes { variants, chosen } => variants[*chosen]
                     .fixups
                     .iter()
                     .find(|x| x.offset == 0 && x.kind.pcrel)
-                    .map(|x| (section, off, x.expr, x.kind)),
+                    .map(|x| (section, frag as usize + i, off, x.expr, x.kind)),
                 _ => None,
             })
     }
@@ -749,6 +768,7 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
     ) -> Option<String> {
         match kind.link {
@@ -768,7 +788,7 @@ impl Assembler {
                 );
             }
             LinkValue::Region(bits) => {
-                let (v, next) = self.outside_region(e, kind, section, at, bits)?;
+                let (v, next) = self.outside_region(e, kind, section, fi, at, bits)?;
                 return Some(format!(
                     "target {v:#x} is outside the {} MB region this field reaches from {next:#x}",
                     (1u64 << bits) >> 20
@@ -779,7 +799,8 @@ impl Assembler {
         }
         let m = self.find_modifier(e)?;
         let name = self.interner.get(m);
-        (self.arch.flat_modifier(name) == FlatModifier::LinkerOnly).then(|| {
+        let arch = self.frag_arch(section.0 as usize, fi).0;
+        (arch.flat_modifier(name) == FlatModifier::LinkerOnly).then(|| {
             format!("`@{name}` names something only a linker creates; a flat binary has none")
         })
     }
@@ -790,6 +811,7 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
     ) -> Option<i64> {
         let v = self.eval(e).ok()?;
@@ -803,7 +825,13 @@ impl Assembler {
             if self.options.relocatable
                 && match v.plus {
                     Some(p) => self.symbol_section(p) != Some(section),
-                    None => v.minus.is_none() && self.arch.pcrel_number_is_address(),
+                    None => {
+                        v.minus.is_none()
+                            && self
+                                .frag_arch(section.0 as usize, fi)
+                                .0
+                                .pcrel_number_is_address()
+                    }
                 }
             {
                 return None;
@@ -842,8 +870,8 @@ impl Assembler {
         // throughout, so asking the ELF writer which convention the target
         // uses is consistent rather than a layering slip.
         let rela = crate::output::elf::uses_rela(
-            self.arch.elf_machine(),
-            crate::output::elf::is_elf64(self.arch.as_ref()),
+            self.target().elf_machine(),
+            crate::output::elf::is_elf64(self.target()),
         );
         for si in 0..self.sections.len() {
             let id = SectionId(si as u32);
@@ -860,13 +888,13 @@ impl Assembler {
                     };
                 for (off, e, kind, span) in list {
                     let at = frag_off + off as u64;
-                    match self.fixup_value(e, &kind, id, at) {
+                    match self.fixup_value(e, &kind, id, fi, at) {
                         Some(v) => {
                             if !kind.fits(v as i128) {
                                 self.diags.error(span, range_message(&kind, v));
                                 continue;
                             }
-                            let endian = self.arch.endian();
+                            let endian = self.frag_arch(si, fi).0.endian();
                             if let FragKind::Bytes { variants, chosen } =
                                 &mut self.sections[si].frags[fi].kind
                             {
@@ -899,9 +927,10 @@ impl Assembler {
                             });
                         }
                         None => {
-                            if let Some(mut r) = self.build_relocation(e, &kind, id, at, span) {
-                                if self.arch.addend_in_field(r.kind, rela) && r.addend != 0 {
-                                    let endian = self.arch.endian();
+                            if let Some(mut r) = self.build_relocation(e, &kind, id, fi, at, span) {
+                                let (arch, _) = self.frag_arch(si, fi);
+                                if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
+                                    let endian = arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =
                                         &mut self.sections[si].frags[fi].kind
                                     {
@@ -928,9 +957,11 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
         span: Span,
     ) -> Option<Relocation> {
+        let si = section.0 as usize;
         let v = match self.eval(e) {
             Ok(v) => v,
             Err(err) => {
@@ -939,7 +970,7 @@ impl Assembler {
             }
         };
         if !self.options.relocatable
-            && let Some(msg) = self.flat_refusal(e, kind, section, at)
+            && let Some(msg) = self.flat_refusal(e, kind, section, fi, at)
         {
             self.diags.error(span, msg);
             return None;
@@ -954,10 +985,10 @@ impl Assembler {
             let here = self.section(section).addr as i64 + at as i64;
             let pcrel = if !kind.pcrel
                 && kind.reloc != 0
-                && Some(kind.reloc) == self.arch.data_reloc(kind.size, false)
+                && Some(kind.reloc) == self.frag_arch(si, fi).0.data_reloc(kind.size, false)
                 && self.symbol_section(minus) == Some(section)
             {
-                self.arch.data_reloc(kind.size, true)
+                self.frag_arch(si, fi).0.data_reloc(kind.size, true)
             } else {
                 None
             };
@@ -996,13 +1027,35 @@ impl Assembler {
             self.diags.error(span, format!("undefined symbol `{name}`"));
             return None;
         }
+        // Relocation numbers mean something only to one machine, and the
+        // linker applies them in the object's byte order and word size, so
+        // code for another target in the file cannot be relocated.
+        let (arch, out) = (self.frag_arch(si, fi).0, self.target());
+        if arch.elf_machine() != out.elf_machine()
+            || arch.endian() != out.endian()
+            || crate::output::elf::is_elf64(arch) != crate::output::elf::is_elf64(out)
+        {
+            let msg = format!(
+                "this reference, in code for `{}`, needs a relocation, which an object \
+                 for `{}` cannot hold",
+                arch.name(),
+                out.name()
+            );
+            self.diags.emit(
+                crate::diag::Diagnostic::error(span, msg)
+                    .with_help("resolve it within the file, or assemble this code on its own"),
+            );
+            return None;
+        }
 
         // A modifier anywhere in the expression selects the relocation.
         let reloc = self
             .find_modifier(e)
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
-                self.arch.modifier_reloc(&name, kind.size, kind.pcrel)
+                self.frag_arch(si, fi)
+                    .0
+                    .modifier_reloc(&name, kind.size, kind.pcrel)
             })
             .unwrap_or(kind.reloc);
         if reloc == 0 {
@@ -1100,7 +1153,8 @@ impl Assembler {
                     FragKind::Bytes { .. } => continue,
                     FragKind::Align { fill, .. } => {
                         if fill.is_empty() && exec {
-                            self.arch.nop_fill(&self.arch_state, size as u64)
+                            let (arch, state) = self.frag_arch(si, fi);
+                            arch.nop_fill(state, size as u64)
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()

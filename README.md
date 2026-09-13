@@ -83,6 +83,8 @@ but 18 forms where both manuals show MAME to be wrong.
 **Working**
 
 - AT&T and Intel syntax on x86, switchable mid-file; `.code16`/`.code32`/`.code64`
+- several targets in one file, switched with `.arch`; see
+  [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
   and flat binaries
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
@@ -128,9 +130,6 @@ listed separately.
   and 4 for m68k. So in a flat binary a section that follows an odd-sized one
   can start at an address a linker would have rounded up. Explicit `.p2align`
   at the start of the section avoids it.
-- A mid-file `.arch` switch to a target with different comment characters does
-  not re-lex the rest of that file, though it does apply to anything included
-  or expanded after the switch.
 
 ## Usage
 
@@ -266,6 +265,47 @@ bytes for the first to equal GNU as's for the second. Placement is the
 linker's: an `AT` attribute or `.ORG` names the section (CC-RL, CC-RH) or pads
 it (CC-RX) as the manual says, but the start address is not recorded.
 
+## Multi-architecture files
+
+`.arch <name>` switches the target for everything after it, so one file can
+hold, say, a boot stub for one CPU and the code it loads for another:
+
+```console
+$ cat two.s
+        movl    $0x10000, %esp          # x86: `#` starts a comment
+        .arch   m68k
+        movew   #0x2700, %sr            | m68k: `#` is an immediate, `|` a comment
+        .arch   sh
+        mov     #1, r0                  ! SuperH: `!` is the comment
+$ rsasm -a i386 -f bin --hex two.s
+bc 00 00 01 00 46 fc 27 00 e0 01
+```
+
+- **Source is read as the target it is for.** The statement after an `.arch`
+  is lexed by the new target's rules — its comment characters, and number
+  spellings such as RL78's `10H` — whether the switch was in the file itself,
+  in a macro expansion or in an included file. The rest of the `.arch` line,
+  a trailing comment say, still belongs to the old target. The dialect (`-d`)
+  does not change.
+- **A macro body is read where it is expanded.** Only where it ends is found by
+  the rules in force at `.macro`; the body is kept as text and lexed by the
+  rules in force at each expansion, like an included file.
+- **An `.arch` that is not assembled does nothing,** whether it is in a false
+  conditional or in a macro that is never called.
+- **Code keeps its target.** Byte order, branch displacements resolved at the
+  end, and the no-ops that pad an alignment are those of the target the code
+  was written for, not the one active at the end of the file.
+- **The object is for the starting target.** The ELF class, machine and byte
+  order are those of `-a`. Code for a different machine, byte order or word
+  size can be in it, but cannot be relocated: a reference in that code has to
+  resolve within the file.
+  Switching to another CPU of the object's own machine (`.arch sh4` in an `sh`
+  file) carries over what the ELF header records about the code so far.
+
+Every case in `tools/multiarch-diff/programs.txt` is checked the only way it
+can be: the file is split at its `.arch` lines, each part is assembled by its
+own target's reference, and rsasm has to produce the concatenation.
+
 ## Verification
 
 Four differential harnesses assemble the same source with rsasm and with an
@@ -287,8 +327,10 @@ independent assembler, and compare the bytes:
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
   distances between sections. 103 of 103 match across twenty-two variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
+- `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
+  against the same references, one part at a time.
 
-All four run in CI. The expected bytes in the hermetic tests under `tests/` were
+All five run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
@@ -311,7 +353,9 @@ in GAS and the binary constant `2` in NASM. Within GAS, `#` is a comment on x86
 but the immediate prefix on ARM, AArch64 and SPARC, where it is a comment only
 in the first column — which is also what C preprocessor line markers look like.
 So each backend supplies its comment syntax, and the lexer is configured from
-it when a file is read.
+it. A file is read one statement at a time, each after the one before it has
+been assembled, which is what lets an `.arch` switch change how the next line
+is spelled without a second pass or a guess.
 
 **The parser stops at the statement level.** It finds labels, directives and
 mnemonics; it does not look inside operands. `disp(base,index,scale)` and
@@ -379,6 +423,8 @@ $ cargo test
 $ tools/gas-diff/run.sh     # needs binutils
 $ tools/mc-diff/run.sh      # needs llvm-mc and llvm-objcopy
 $ tools/flat-diff/run.sh    # needs cross binutils with ld, and llvm-mc
+$ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
+$ tools/multiarch-diff/run.sh  # needs all of the above
 ```
 
 ## License

@@ -483,6 +483,11 @@ pub struct Section {
     /// The `.subsection`-style saved location counter is not modelled yet;
     /// this records the section's declared group name if it has one.
     pub group: Option<Name>,
+    /// Where the backend that emitted this section's fragments changes, as
+    /// (first fragment index, backend slot) pairs in order; see
+    /// `Assembler::switch_arch`. Empty while every fragment is the first
+    /// backend's, which is the case in any file without `.arch`.
+    pub arch_marks: Vec<(u32, u32)>,
 }
 
 impl Section {
@@ -500,6 +505,34 @@ impl Section {
             sym: None,
             open_data: None,
             group: None,
+            arch_marks: Vec::new(),
+        }
+    }
+
+    /// Records that fragments from here on are emitted by backend `slot`.
+    pub fn mark_arch(&mut self, slot: u32) {
+        // Bytes emitted after the switch must not merge into a fragment
+        // emitted before it, or one fragment would have two byte orders.
+        self.seal();
+        let at = self.next_frag_index();
+        let current = self.arch_marks.last().map_or(0, |&(_, s)| s);
+        match self.arch_marks.last_mut() {
+            _ if current == slot => {}
+            // Nothing was emitted under the previous mark: replace it, so
+            // switching back and forth adds nothing.
+            Some(last) if last.0 == at => last.1 = slot,
+            _ => self.arch_marks.push((at, slot)),
+        }
+    }
+
+    /// The backend slot that emitted fragment `fi`.
+    pub fn arch_slot(&self, fi: usize) -> u32 {
+        match self
+            .arch_marks
+            .partition_point(|&(at, _)| at as usize <= fi)
+        {
+            0 => 0,
+            n => self.arch_marks[n - 1].1,
         }
     }
 
