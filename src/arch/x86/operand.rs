@@ -12,6 +12,7 @@
 use super::reg::{self, Reg, RegClass};
 use crate::arch::{AsmCtx, Syntax};
 use crate::cursor::Cursor;
+use crate::diag::Severity;
 use crate::expr::{ExprKind, ExprRef};
 use crate::lexer::{Punct, TokKind, Token};
 use crate::source::Span;
@@ -45,6 +46,85 @@ impl Mem {
     }
 }
 
+/// AVX-512 embedded rounding control, written as a pseudo-operand.
+///
+/// `{rn-sae}` and its siblings both pick a rounding mode and suppress
+/// floating-point exceptions; `{sae}` only suppresses them. Both ride in the
+/// EVEX `b` bit, with the mode in the `L'L` field that would otherwise hold
+/// the vector length — which is why they only exist on 512-bit forms.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum RoundCtl {
+    Rn,
+    Rd,
+    Ru,
+    Rz,
+    /// `{sae}`: exception suppression with the default rounding mode.
+    Sae,
+}
+
+impl RoundCtl {
+    pub fn from_name(name: &str) -> Option<RoundCtl> {
+        Some(match name {
+            "rn-sae" => RoundCtl::Rn,
+            "rd-sae" => RoundCtl::Rd,
+            "ru-sae" => RoundCtl::Ru,
+            "rz-sae" => RoundCtl::Rz,
+            "sae" => RoundCtl::Sae,
+            _ => return None,
+        })
+    }
+
+    /// The `L'L` value this mode encodes.
+    ///
+    /// `{sae}` has no mode to store, and the field is then ignored by the CPU;
+    /// GNU as and llvm-mc both leave it zero rather than the vector length, so
+    /// rsasm does too.
+    pub fn ll(self) -> u8 {
+        match self {
+            RoundCtl::Rn | RoundCtl::Sae => 0,
+            RoundCtl::Rd => 1,
+            RoundCtl::Ru => 2,
+            RoundCtl::Rz => 3,
+        }
+    }
+
+    pub fn is_sae_only(self) -> bool {
+        self == RoundCtl::Sae
+    }
+}
+
+/// The `{...}` decorators AVX-512 hangs off an individual operand.
+#[derive(Copy, Clone, Default, Debug)]
+pub struct Decor {
+    /// Writemask register from `{%k1}`. `k0` is never a writemask — it is the
+    /// encoding for "unmasked" — so writing it is rejected.
+    pub mask: Option<Reg>,
+    /// `{z}`: masked-out elements are zeroed instead of left untouched.
+    pub zeroing: bool,
+    /// A `{1toN}` broadcast decorator.
+    pub broadcast: Option<Broadcast>,
+    /// Span covering the decorators, for diagnostics about them.
+    pub span: Span,
+}
+
+/// A `{1toN}` decorator as written.
+///
+/// N is redundant — it is the element count the instruction already implies —
+/// so it is only kept to check the source against.
+#[derive(Copy, Clone, Debug)]
+pub struct Broadcast {
+    pub span: Span,
+    /// The N the source wrote, when it could be recovered; see [`withdraw`].
+    /// `None` leaves only the written length to check against.
+    pub count: Option<u32>,
+}
+
+impl Decor {
+    pub fn is_empty(&self) -> bool {
+        self.mask.is_none() && !self.zeroing && self.broadcast.is_none()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum OperandKind {
     Reg(Reg),
@@ -55,6 +135,9 @@ pub enum OperandKind {
     /// `jmp *%rax` / `jmp rax`: an indirect branch through a register or
     /// memory operand.
     Indirect(Box<OperandKind>),
+    /// `{rn-sae}` and friends, which the source writes in the operand list but
+    /// which encode as bits rather than as an operand.
+    Rounding(RoundCtl),
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +145,7 @@ pub struct Operand {
     pub kind: OperandKind,
     /// Explicit operand size in bytes from `dword ptr` or an AT&T suffix.
     pub size_hint: Option<u8>,
+    pub decor: Decor,
     pub span: Span,
 }
 
@@ -77,6 +161,13 @@ impl Operand {
         matches!(self.kind, OperandKind::Mem(_))
     }
 
+    pub fn rounding(&self) -> Option<RoundCtl> {
+        match &self.kind {
+            OperandKind::Rounding(r) => Some(*r),
+            _ => None,
+        }
+    }
+
     pub fn describe(&self) -> String {
         match &self.kind {
             OperandKind::Reg(r) => format!("register `{}`", reg::name_of(*r)),
@@ -84,6 +175,7 @@ impl Operand {
             OperandKind::Mem(_) => "a memory operand".into(),
             OperandKind::Rel(_) => "a branch target".into(),
             OperandKind::Indirect(_) => "an indirect branch target".into(),
+            OperandKind::Rounding(_) => "a rounding-control decorator".into(),
         }
     }
 }
@@ -123,10 +215,176 @@ impl OperandParser<'_, '_> {
         p.parse(cur)
     }
 
+    // ---- AVX-512 decorators -----------------------------------------------
+
+    /// Reads a `{rn-sae}`-style pseudo-operand.
+    ///
+    /// Returns `None` when the brace group is not a rounding mode, having
+    /// consumed nothing, so the caller can go on to try a masked operand.
+    fn try_rounding(&mut self, cur: &mut Cursor<'_>) -> Option<Option<Operand>> {
+        let TokKind::Ident(n) = cur.nth(1).kind else {
+            return None;
+        };
+        let head = self.cx.interner.get(n).to_ascii_lowercase();
+        // `{sae}` is one token; `{rn-sae}` lexes as `rn`, `-`, `sae`.
+        let (name, len) = if cur.nth(2).is_punct(Punct::Minus) {
+            let TokKind::Ident(m) = cur.nth(3).kind else {
+                return None;
+            };
+            (format!("{head}-{}", self.cx.interner.get(m)), 4)
+        } else {
+            (head, 2)
+        };
+        let ctl = RoundCtl::from_name(&name.to_ascii_lowercase())?;
+        let start = cur.peek().span;
+        for _ in 0..len {
+            cur.advance();
+        }
+        let close = cur.peek();
+        if cur.eat_punct(Punct::RBrace).is_none() {
+            self.cx
+                .error(close.span, "expected `}` to close a rounding decorator");
+            return Some(None);
+        }
+        Some(Some(Operand {
+            kind: OperandKind::Rounding(ctl),
+            size_hint: None,
+            decor: Decor::default(),
+            span: start.to(close.span),
+        }))
+    }
+
+    /// An operand that starts with `{`, which can only be a rounding mode.
+    fn rounding_operand(&mut self, cur: &mut Cursor<'_>) -> Option<Operand> {
+        if let Some(o) = self.try_rounding(cur) {
+            return o;
+        }
+        self.cx.error(
+            cur.remaining_span(),
+            "expected a rounding-control decorator: `{rn-sae}`, `{rd-sae}`, `{ru-sae}`, `{rz-sae}` or `{sae}`",
+        );
+        None
+    }
+
+    /// Reads any run of `{...}` decorators that follows an operand.
+    fn decorators(&mut self, cur: &mut Cursor<'_>) -> Option<Decor> {
+        let mut decor = Decor::default();
+        while cur.check_punct(Punct::LBrace) {
+            let open = cur.advance();
+            self.one_decorator(cur, &mut decor, open.span)?;
+            let close = cur.peek();
+            if cur.eat_punct(Punct::RBrace).is_none() {
+                self.cx
+                    .error(close.span, "expected `}` to close an operand decorator");
+                return None;
+            }
+            decor.span = if decor.span.is_dummy() {
+                open.span.to(close.span)
+            } else {
+                decor.span.to(close.span)
+            };
+        }
+        Some(decor)
+    }
+
+    fn one_decorator(&mut self, cur: &mut Cursor<'_>, decor: &mut Decor, open: Span) -> Option<()> {
+        // `{1toN}`. The lexer scans `1to16` as a malformed integer literal and
+        // reports it, so the complaint is withdrawn here: inside a decorator
+        // it is not a number at all.
+        if let TokKind::Int(_) = cur.peek().kind {
+            let tok = cur.advance();
+            let count = match withdraw(self.cx, tok.span) {
+                // Nothing to withdraw means the lexer read a well-formed
+                // integer, and no well-formed integer is a broadcast.
+                Withdrawn::Nothing => {
+                    self.cx
+                        .error(tok.span, "expected `1toN` in a broadcast decorator");
+                    return None;
+                }
+                Withdrawn::Literal(text) => {
+                    match text.strip_prefix("1to").and_then(|n| n.parse::<u32>().ok()) {
+                        Some(n) => Some(n),
+                        None => {
+                            self.cx.error(
+                                tok.span,
+                                format!(
+                                    "`{{{text}}}` is not a broadcast decorator; expected `{{1toN}}`"
+                                ),
+                            );
+                            return None;
+                        }
+                    }
+                }
+                Withdrawn::Unreadable => None,
+            };
+            if decor.broadcast.is_some() {
+                self.cx
+                    .error(tok.span, "duplicate broadcast decorator on one operand");
+                return None;
+            }
+            decor.broadcast = Some(Broadcast {
+                span: tok.span,
+                count,
+            });
+            return Some(());
+        }
+
+        let masked = cur.eat_punct(Punct::Percent).is_some();
+        let tok = cur.peek();
+        let TokKind::Ident(n) = tok.kind else {
+            self.cx.error(
+                open.to(tok.span),
+                "expected `z`, a mask register or `1toN` in an operand decorator",
+            );
+            return None;
+        };
+        cur.advance();
+        let text = self.cx.interner.get(n).to_ascii_lowercase();
+        if text == "z" && !masked {
+            if decor.zeroing {
+                self.cx.error(tok.span, "duplicate `{z}` decorator");
+                return None;
+            }
+            decor.zeroing = true;
+            return Some(());
+        }
+        match reg::lookup(&text) {
+            Some(r) if r.class == RegClass::Mask => {
+                if r.num == 0 {
+                    // `k0` is the encoding for "no writemask", so it can never
+                    // be named as one; the source almost certainly meant k1-k7.
+                    self.cx
+                        .error(tok.span, "`k0` cannot be used as a writemask register");
+                    return None;
+                }
+                if decor.mask.is_some() {
+                    self.cx
+                        .error(tok.span, "an operand may carry only one writemask");
+                    return None;
+                }
+                decor.mask = Some(r);
+                Some(())
+            }
+            _ => {
+                self.cx.error(
+                    tok.span,
+                    format!("`{text}` is not a mask register or operand decorator"),
+                );
+                None
+            }
+        }
+    }
+
     // ---- AT&T -------------------------------------------------------------
 
     fn parse_att(&mut self, cur: &mut Cursor<'_>) -> Option<Operand> {
         let start = cur.peek().span;
+
+        // A lone `{rn-sae}` is an operand of its own in AT&T syntax, written
+        // before the sources.
+        if cur.check_punct(Punct::LBrace) {
+            return self.rounding_operand(cur);
+        }
 
         // `*` marks an indirect branch target.
         if cur.eat_punct(Punct::Star).is_some() {
@@ -134,6 +392,7 @@ impl OperandParser<'_, '_> {
             return Some(Operand {
                 kind: OperandKind::Indirect(Box::new(inner.kind)),
                 size_hint: inner.size_hint,
+                decor: inner.decor,
                 span: start.to(inner.span),
             });
         }
@@ -144,6 +403,7 @@ impl OperandParser<'_, '_> {
             return Some(Operand {
                 kind: OperandKind::Imm(e),
                 size_hint: None,
+                decor: Decor::default(),
                 span: start.to(self.cx.exprs.span(e)),
             });
         }
@@ -156,15 +416,19 @@ impl OperandParser<'_, '_> {
                 let mut m = self.att_memory(cur, start)?;
                 m.seg = Some(r);
                 let span = start.to(m.span);
+                let decor = self.decorators(cur)?;
                 return Some(Operand {
                     kind: OperandKind::Mem(m),
                     size_hint: None,
+                    decor,
                     span,
                 });
             }
+            let decor = self.decorators(cur)?;
             return Some(Operand {
                 kind: OperandKind::Reg(r),
                 size_hint: Some(r.size),
+                decor,
                 span: start,
             });
         }
@@ -172,9 +436,11 @@ impl OperandParser<'_, '_> {
         // Anything else is a memory operand: `disp`, `disp(...)` or `(...)`.
         let m = self.att_memory(cur, start)?;
         let span = start.to(m.span);
+        let decor = self.decorators(cur)?;
         Some(Operand {
             kind: OperandKind::Mem(m),
             size_hint: None,
+            decor,
             span,
         })
     }
@@ -239,7 +505,7 @@ impl OperandParser<'_, '_> {
                     return None;
                 }
                 m.index = Some(r);
-                m.addr_size = r.size;
+                note_addr_size(&mut m, r);
             }
             if cur.eat_punct(Punct::Comma).is_some() {
                 let tok = cur.peek();
@@ -269,6 +535,10 @@ impl OperandParser<'_, '_> {
     fn parse_intel(&mut self, cur: &mut Cursor<'_>) -> Option<Operand> {
         let start = cur.peek().span;
         let mut size_hint = None;
+
+        if cur.check_punct(Punct::LBrace) {
+            return self.rounding_operand(cur);
+        }
 
         // `dword ptr [...]`, or just `dword [...]` as NASM allows.
         if let TokKind::Ident(n) = cur.peek().kind {
@@ -303,15 +573,19 @@ impl OperandParser<'_, '_> {
                     let mut m = self.intel_memory(cur, start)?;
                     m.seg = Some(r);
                     let span = start.to(m.span);
+                    let decor = self.decorators(cur)?;
                     return Some(Operand {
                         kind: OperandKind::Mem(m),
                         size_hint,
+                        decor,
                         span,
                     });
                 }
+                let decor = self.decorators(cur)?;
                 return Some(Operand {
                     kind: OperandKind::Reg(r),
                     size_hint: size_hint.or(Some(r.size)),
+                    decor,
                     span: start,
                 });
             }
@@ -320,9 +594,11 @@ impl OperandParser<'_, '_> {
         if cur.check_punct(Punct::LBracket) {
             let m = self.intel_memory(cur, start)?;
             let span = start.to(m.span);
+            let decor = self.decorators(cur)?;
             return Some(Operand {
                 kind: OperandKind::Mem(m),
                 size_hint,
+                decor,
                 span,
             });
         }
@@ -332,6 +608,7 @@ impl OperandParser<'_, '_> {
         Some(Operand {
             kind: OperandKind::Imm(e),
             size_hint,
+            decor: Decor::default(),
             span: start.to(self.cx.exprs.span(e)),
         })
     }
@@ -436,12 +713,25 @@ impl OperandParser<'_, '_> {
                     m.rip_relative = true;
                     return Some(None);
                 }
-                if r.class != RegClass::Gpr {
+                // A vector register here is a VSIB index, as gather and
+                // scatter use; anything else cannot address memory at all.
+                if r.class != RegClass::Gpr && !r.is_vector() {
                     self.cx.error(
                         tok.span,
                         "only general-purpose registers may address memory",
                     );
                     return None;
+                }
+                if r.is_vector() && m.index.is_some() {
+                    self.cx
+                        .error(tok.span, "a memory operand may have only one index");
+                    return None;
+                }
+                // A vector register is always the index, never the base, so
+                // `[zmm1]` does not silently become base-relative addressing.
+                if r.is_vector() && !cur.check_punct(Punct::Star) {
+                    m.index = Some(r);
+                    return Some(None);
                 }
                 // `reg * scale` makes it the index.
                 if cur.check_punct(Punct::Star) {
@@ -469,7 +759,7 @@ impl OperandParser<'_, '_> {
                     }
                     m.index = Some(r);
                     m.scale = s as u8;
-                    m.addr_size = r.size;
+                    note_addr_size(m, r);
                     return Some(None);
                 }
                 // First bare register is the base, a second becomes the index.
@@ -500,7 +790,7 @@ impl OperandParser<'_, '_> {
                         .error(tok.span, "too many registers in a memory operand");
                     return None;
                 }
-                m.addr_size = r.size;
+                note_addr_size(m, r);
                 return Some(None);
             }
         }
@@ -529,7 +819,7 @@ impl OperandParser<'_, '_> {
                 cur.advance();
                 m.index = Some(r);
                 m.scale = v as u8;
-                m.addr_size = r.size;
+                note_addr_size(m, r);
                 return Some(None);
             }
         }
@@ -556,6 +846,64 @@ impl OperandParser<'_, '_> {
         }
         Some(e)
     }
+}
+
+/// Records the address size a base or index register implies.
+///
+/// A VSIB index is a vector register, which says nothing about how wide the
+/// address is: that still comes from the base, or from the mode.
+fn note_addr_size(m: &mut Mem, r: Reg) {
+    if r.class == RegClass::Gpr {
+        m.addr_size = r.size;
+    }
+}
+
+/// What [`withdraw`] found at a span.
+enum Withdrawn {
+    /// No error was recorded there: the token lexed cleanly.
+    Nothing,
+    /// An error was withdrawn and the literal it quoted recovered.
+    Literal(String),
+    /// An error was withdrawn but did not quote its literal.
+    Unreadable,
+}
+
+/// Retracts the lexer's complaint about a `{1toN}` count, and recovers the
+/// text it complained about.
+///
+/// `1to16` starts with a digit, so the shared lexer scans it as an integer
+/// literal and reports the `t` as an invalid digit before this backend sees
+/// the tokens. Inside a decorator it is not a number, so the complaint is
+/// withdrawn. The backend is handed only `Int(0)` and a span — `AsmCtx` has no
+/// source map — and the diagnostic, which quotes the literal in backticks, is
+/// the one place the written count survives, so it is read back from there.
+///
+/// This leans on the wording of a message in shared code, which is why
+/// `Unreadable` degrades to a length check rather than failing. The proper fix
+/// is for the lexer to hand an alphanumeric run that is not a number to the
+/// parser as an identifier; that is shared code this backend does not own.
+fn withdraw(cx: &mut AsmCtx<'_>, span: Span) -> Withdrawn {
+    let mut found = Withdrawn::Nothing;
+    let kept: Vec<_> = cx
+        .diags
+        .take()
+        .into_iter()
+        .filter(|d| {
+            if d.severity != Severity::Error || d.span != span {
+                return true;
+            }
+            let quoted = d.msg.rsplit('`').nth(1).map(str::to_owned);
+            found = match quoted {
+                Some(text) if !text.is_empty() => Withdrawn::Literal(text),
+                _ => Withdrawn::Unreadable,
+            };
+            false
+        })
+        .collect();
+    for d in kept {
+        cx.diags.emit(d);
+    }
+    found
 }
 
 /// Consumes tokens up to the next top-level `+`, `-` or `]`.

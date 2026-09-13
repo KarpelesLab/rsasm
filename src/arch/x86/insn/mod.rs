@@ -9,10 +9,55 @@
 //! keeps any one file readable: the SIMD families alone outnumber the base
 //! integer instruction set several times over.
 
+pub mod avx;
+pub mod avx512;
 pub mod base;
+pub mod mmx;
+pub mod sse;
 
+use super::reg::{Reg, RegClass};
 use std::collections::HashMap;
 use std::sync::OnceLock;
+
+/// A non-general-purpose register file an operand slot can name.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Vk {
+    /// `mm0`-`mm7`.
+    Mm,
+    Xmm,
+    Ymm,
+    Zmm,
+    /// The AVX-512 opmask registers `k0`-`k7`, as an ordinary operand rather
+    /// than as a `{k1}` writemask decorator.
+    K,
+}
+
+impl Vk {
+    /// Register width in bytes, which is also the natural width of a memory
+    /// operand in the same slot.
+    pub fn width(self) -> u8 {
+        match self {
+            Vk::Mm | Vk::K => 8,
+            Vk::Xmm => 16,
+            Vk::Ymm => 32,
+            Vk::Zmm => 64,
+        }
+    }
+
+    pub fn class(self) -> RegClass {
+        match self {
+            Vk::Mm => RegClass::Mmx,
+            Vk::Xmm => RegClass::Xmm,
+            Vk::Ymm => RegClass::Ymm,
+            Vk::Zmm => RegClass::Zmm,
+            Vk::K => RegClass::Mask,
+        }
+    }
+
+    pub fn accepts(self, r: Reg) -> bool {
+        r.class == self.class()
+    }
+}
 
 /// What an operand slot accepts. Widths are in bytes.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -35,6 +80,20 @@ pub enum Op {
     One,
     /// Register or memory operand used indirectly (`jmp *%rax`).
     IndirectRm(u8),
+    /// A vector or mask register, encoded in ModRM.reg.
+    V(Vk),
+    /// A vector or mask register, or memory, encoded in ModRM.rm. The second
+    /// field is the memory operand's width in bytes; `0` means the register
+    /// width, which is what all the full-width forms want.
+    Vm(Vk, u8),
+    /// The non-destructive source VEX and EVEX carry in `vvvv`.
+    Nds(Vk),
+    /// A register named by the top four bits of a trailing immediate byte, as
+    /// `vblendvps` does with its selector.
+    Is4(Vk),
+    /// A gather/scatter memory operand, whose SIB index is a vector register
+    /// of this class rather than a GPR.
+    Vsib(Vk),
 }
 
 impl Op {
@@ -45,6 +104,9 @@ impl Op {
             Op::Rel(w) => w,
             Op::One => 0,
             Op::Fixed(_) => 0,
+            Op::V(k) | Op::Nds(k) | Op::Is4(k) | Op::Vsib(k) => k.width(),
+            Op::Vm(k, 0) => k.width(),
+            Op::Vm(_, w) => w,
         }
     }
 }
@@ -60,35 +122,163 @@ pub enum ModRm {
     Ext(u8),
 }
 
-pub const PLUSREG: u16 = 1 << 0;
+pub const PLUSREG: u32 = 1 << 0;
 /// Operand size defaults to 64 bits in long mode (push, pop, jmp, call, ret).
-pub const DEF64: u16 = 1 << 1;
+pub const DEF64: u32 = 1 << 1;
 /// Only encodable in 64-bit mode.
-pub const ONLY64: u16 = 1 << 2;
+pub const ONLY64: u32 = 1 << 2;
 /// Not encodable in 64-bit mode.
-pub const NO64: u16 = 1 << 3;
+pub const NO64: u32 = 1 << 3;
 /// The immediate is an absolute 64-bit value (`movabs`).
-pub const IMM64: u16 = 1 << 4;
+pub const IMM64: u32 = 1 << 4;
 /// Not usable when every register operand is the accumulator. `xchg` needs
 /// this: `xchg eax, eax` must not encode as `90`, which is `nop` and does not
 /// clear the upper half of `rax`.
-pub const NOTACC: u16 = 1 << 5;
+pub const NOTACC: u32 = 1 << 5;
 /// A 64-bit form that needs no REX.W, because the plain opcode already means
 /// what the source asked for. `xchg rax, rax` is the one case: it is spelled
 /// `90`, the canonical `nop`.
-pub const NO_REX_W: u16 = 1 << 6;
+pub const NO_REX_W: u32 = 1 << 6;
+/// The instruction accepts embedded rounding control (`{rn-sae}` and its
+/// siblings). Only the 512-bit and scalar forms of the operations whose result
+/// depends on the rounding mode do: `vaddps` yes, `vmaxps` no.
+pub const EVEX_ER: u32 = 1 << 7;
+/// This EVEX form takes no writemask, so `{k1}` on it is an error. Most EVEX
+/// instructions are maskable; the handful that are not (the non-temporal
+/// stores, `vcomiss`, `vmovd`) set this.
+pub const NOMASK: u32 = 1 << 8;
+/// The instruction accepts `{sae}` alone: it can raise floating-point
+/// exceptions but has no rounding to control (`vmaxps`, `vcmpps`, `vcomiss`).
+pub const EVEX_SAE: u32 = 1 << 9;
+/// The writemask is mandatory. Gathers and scatters use it as the per-element
+/// "still to do" set, so there is no unmasked form to fall back to.
+pub const NEEDS_MASK: u32 = 1 << 10;
+
+/// Which prefix family carries the instruction.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum Enc {
+    /// Opcode bytes as written, with a legacy mandatory prefix if any.
+    #[default]
+    Legacy,
+    /// Two- or three-byte VEX, chosen by whichever fits.
+    Vex,
+    /// Four-byte EVEX.
+    Evex,
+}
+
+/// EVEX *tuple type*: how a compressed 8-bit displacement is scaled.
+///
+/// EVEX replaces the plain `disp8` with `disp8 * N`, so a byte can still reach
+/// the whole of a 512-bit stride. `N` is not the operand size: it is the size
+/// of the *memory access the instruction actually makes*, which depends on the
+/// vector length, on `EVEX.W`, and on whether a `{1toN}` broadcast turned a
+/// full-width load into a scalar one. The tuple type is the manual's name for
+/// the rule that decides it, and each opcode is documented with exactly one.
+///
+/// Getting `N` wrong yields an instruction that assembles cleanly and touches
+/// the wrong address, which is why this is spelled out rather than guessed.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum Tuple {
+    /// Not an EVEX form, or an EVEX form with no memory operand.
+    #[default]
+    None,
+    /// Full Vector: the whole register, or one element under broadcast.
+    Fv,
+    /// Half Vector: half the register, or one 32-bit element broadcast.
+    Hv,
+    /// Full Vector Mem: the whole register, never broadcast.
+    Fvm,
+    /// Half Mem, Quarter Mem, Eighth Mem: the `vpmov*` conversions, which
+    /// read or write a fraction of the register.
+    Hvm,
+    Qvm,
+    Ovm,
+    /// Tuple1 Scalar: one element, sized by `EVEX.W` (4 or 8 bytes).
+    T1s,
+    /// Tuple1 Scalar with a fixed byte or word element (`vpbroadcastb`/`w`).
+    T1s8,
+    T1s16,
+    /// Tuple4: four elements, sized by `EVEX.W` — the `32x4`/`64x4` inserts,
+    /// extracts and broadcasts.
+    T4,
+    /// `vmovddup`: 8 bytes at 128 bits, the whole register above that.
+    Dup,
+    // The manual defines a few more (Tuple1 Fixed, Tuple2, Tuple8, Mem128)
+    // for instruction sets not in the table yet; they belong here when a row
+    // needs one.
+}
+
+impl Tuple {
+    /// The disp8 scale factor for this tuple at `vbytes` vector bytes.
+    ///
+    /// `w` is `EVEX.W` and `broadcast` says whether a `{1toN}` decorator turned
+    /// the memory operand into a single element.
+    pub fn scale(self, vbytes: u32, w: bool, broadcast: bool) -> Option<u32> {
+        let elem = if w { 8 } else { 4 };
+        Some(match self {
+            Tuple::None => return None,
+            Tuple::Fv => {
+                if broadcast {
+                    elem
+                } else {
+                    vbytes
+                }
+            }
+            Tuple::Hv => {
+                if broadcast {
+                    4
+                } else {
+                    vbytes / 2
+                }
+            }
+            Tuple::Fvm => vbytes,
+            Tuple::Hvm => vbytes / 2,
+            Tuple::Qvm => vbytes / 4,
+            Tuple::Ovm => vbytes / 8,
+            Tuple::T1s => elem,
+            Tuple::T1s8 => 1,
+            Tuple::T1s16 => 2,
+            Tuple::T4 => elem * 4,
+            Tuple::Dup => {
+                if vbytes == 16 {
+                    8
+                } else {
+                    vbytes
+                }
+            }
+        })
+    }
+
+    /// True if this tuple's memory operand may carry a `{1toN}` broadcast.
+    pub fn broadcastable(self) -> bool {
+        matches!(self, Tuple::Fv | Tuple::Hv)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Def {
     pub ops: Vec<Op>,
-    /// Mandatory prefix emitted before REX: 0x66, 0xF2 or 0xF3.
+    /// Mandatory prefix emitted before REX: 0x66, 0xF2 or 0xF3. For VEX and
+    /// EVEX the same value picks the `pp` field instead of being emitted.
     pub pfx: u8,
+    /// Legacy: every opcode byte including the `0F` escapes. VEX and EVEX:
+    /// just the final opcode byte, since the escape lives in `map`.
     pub opcode: Vec<u8>,
     pub modrm: ModRm,
     /// Operation width in bits: 0 (irrelevant), 8, 16, 32 or 64. Drives the
-    /// 0x66 prefix and REX.W.
+    /// 0x66 prefix and REX.W (or VEX.W / EVEX.W).
     pub opsize: u8,
-    pub flags: u16,
+    pub flags: u32,
+    pub enc: Enc,
+    /// VEX/EVEX opcode map: 1 = `0F`, 2 = `0F 38`, 3 = `0F 3A`.
+    pub map: u8,
+    /// Vector length in bits: 128, 256 or 512, for the VEX/EVEX `L` bits.
+    pub vlen: u16,
+    pub tuple: Tuple,
+    /// 3DNow! selects the operation with a byte *after* the ModRM and any
+    /// displacement, where an immediate would go. It is not an immediate: the
+    /// source never writes it, and it is part of the opcode.
+    pub suffix: Option<u8>,
 }
 
 impl Def {
@@ -100,12 +290,52 @@ impl Def {
             modrm,
             opsize,
             flags: 0,
+            enc: Enc::Legacy,
+            map: 0,
+            vlen: 0,
+            tuple: Tuple::None,
+            suffix: None,
         }
     }
 
-    pub fn flags(mut self, f: u16) -> Def {
+    pub fn flags(mut self, f: u32) -> Def {
         self.flags |= f;
         self
+    }
+
+    /// The mandatory `66`/`F2`/`F3` prefix, or the VEX/EVEX `pp` it implies.
+    pub fn pfx(mut self, p: u8) -> Def {
+        self.pfx = p;
+        self
+    }
+
+    pub fn map(mut self, m: u8) -> Def {
+        self.map = m;
+        self
+    }
+
+    pub fn vex(mut self, vlen: u16) -> Def {
+        self.enc = Enc::Vex;
+        self.vlen = vlen;
+        self
+    }
+
+    pub fn evex(mut self, vlen: u16, tuple: Tuple) -> Def {
+        self.enc = Enc::Evex;
+        self.vlen = vlen;
+        self.tuple = tuple;
+        self
+    }
+
+    pub fn suffix(mut self, s: u8) -> Def {
+        self.suffix = Some(s);
+        self
+    }
+
+    /// True when `VEX.W` / `EVEX.W` is set, which the tables express as a
+    /// 64-bit operand size.
+    pub fn vex_w(&self) -> bool {
+        self.opsize == 64
     }
 }
 
@@ -141,9 +371,26 @@ pub fn opsize_bits(w: u8) -> u8 {
     w * 8
 }
 
-fn build() -> HashMap<&'static str, Vec<Def>> {
-    let mut t: HashMap<&'static str, Vec<Def>> = HashMap::new();
+/// The table under construction, so a family module can append to a mnemonic
+/// another family already defined without silently replacing it.
+pub type Tbl = HashMap<&'static str, Vec<Def>>;
+
+/// Appends `defs` to `mnem`, creating the entry if needed.
+///
+/// Order within an entry is preference order, and `add` keeps it: a family
+/// installed later offers its forms only after the earlier ones have been
+/// tried. `movq` relies on that — the GPR forms must win over the MMX ones.
+pub fn add(t: &mut Tbl, mnem: &'static str, defs: Vec<Def>) {
+    t.entry(mnem).or_default().extend(defs);
+}
+
+fn build() -> Tbl {
+    let mut t: Tbl = HashMap::new();
     base::install(&mut t);
+    mmx::install(&mut t);
+    sse::install(&mut t);
+    avx::install(&mut t);
+    avx512::install(&mut t);
     t
 }
 
@@ -194,5 +441,81 @@ mod tests {
             .position(|x| x.ops == [Op::Rm(4), Op::Imm(4)])
             .unwrap();
         assert!(i8_pos < i32_pos, "imm8 form must be matched first");
+    }
+
+    /// Every row across every family, with its mnemonic.
+    fn all_rows() -> impl Iterator<Item = (&'static str, &'static Def)> {
+        table()
+            .iter()
+            .flat_map(|(m, defs)| defs.iter().map(move |d| (*m, d)))
+    }
+
+    #[test]
+    fn simd_families_are_installed() {
+        for m in [
+            "paddb",
+            "pfadd",
+            "femms",
+            "addps",
+            "pshufb",
+            "pcmpistri",
+            "aesenc",
+            "crc32",
+            "vaddps",
+            "vgatherdps",
+            "vfmadd231sd",
+            "vmovdqa32",
+            "vpternlogd",
+            "kmovw",
+        ] {
+            assert!(is_mnemonic(m), "missing `{m}`");
+        }
+    }
+
+    #[test]
+    fn prefixed_rows_are_well_formed() {
+        for (m, d) in all_rows() {
+            if d.enc == Enc::Legacy {
+                assert!(
+                    d.vlen == 0 && d.tuple == Tuple::None,
+                    "`{m}`: legacy row {d:?}"
+                );
+                continue;
+            }
+            assert!((1..=3).contains(&d.map), "`{m}`: bad map in {d:?}");
+            assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
+            assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
+            assert!(d.suffix.is_none(), "`{m}`: only 3DNow! has a suffix");
+            if d.enc == Enc::Vex {
+                assert!(d.vlen != 512 && d.tuple == Tuple::None, "`{m}`: {d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_evex_memory_form_has_a_tuple_type() {
+        // Without one the displacement cannot be compressed correctly, so the
+        // encoder would refuse the instruction at the first memory operand.
+        for (m, d) in all_rows() {
+            let takes_mem = d
+                .ops
+                .iter()
+                .any(|o| matches!(o, Op::Vm(..) | Op::M(_) | Op::Rm(_) | Op::Vsib(_)));
+            if d.enc == Enc::Evex && takes_mem {
+                assert_ne!(d.tuple, Tuple::None, "`{m}`: {d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rounding_is_only_offered_where_the_prefix_has_room_for_it() {
+        for (m, d) in all_rows() {
+            if d.flags & (EVEX_ER | EVEX_SAE) != 0 {
+                assert_eq!(d.enc, Enc::Evex, "`{m}`: {d:?}");
+                // Packed forms need the full 512 bits; scalars ignore L'L.
+                let scalar = matches!(d.tuple, Tuple::T1s | Tuple::None);
+                assert!(d.vlen == 512 || scalar, "`{m}`: {d:?}");
+            }
+        }
     }
 }

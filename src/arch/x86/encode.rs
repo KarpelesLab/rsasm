@@ -1,8 +1,11 @@
-//! Instruction encoding: prefixes, REX, opcode, ModRM/SIB, displacement and
-//! immediate.
+//! Instruction encoding: prefixes, REX/VEX/EVEX, opcode, ModRM/SIB,
+//! displacement and immediate.
 
-use super::insn::{DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, ONLY64, Op, PLUSREG};
-use super::operand::{Mem, Operand, OperandKind};
+use super::insn::{
+    DEF64, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO64, NOMASK, ONLY64,
+    Op, PLUSREG, Tuple, Vk,
+};
+use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
 use super::reloc;
 use crate::arch::AsmCtx;
@@ -24,9 +27,15 @@ pub struct Prefixes {
 struct Roles<'o> {
     rm: Option<&'o Operand>,
     reg: Option<Reg>,
-    /// (operand, encoded width in bytes, sign-extended-from-8)
+    /// The non-destructive source VEX and EVEX carry in `vvvv`.
+    nds: Option<Reg>,
+    /// A register named by the top nibble of a trailing immediate byte.
+    is4: Option<Reg>,
+    /// (expression, encoded width in bytes)
     imm: Option<(ExprRef, u8)>,
     rel: Option<(ExprRef, u8)>,
+    /// The decorators found on the operands, merged.
+    decor: Decor,
 }
 
 pub fn segment_prefix(r: Reg) -> Option<u8> {
@@ -58,6 +67,7 @@ pub fn indirect_inner(o: &Operand) -> Option<Operand> {
         OperandKind::Indirect(inner) => Some(Operand {
             kind: (**inner).clone(),
             size_hint: o.size_hint,
+            decor: o.decor,
             span: o.span,
         }),
         // Intel syntax writes indirect branches without a sigil.
@@ -66,11 +76,6 @@ pub fn indirect_inner(o: &Operand) -> Option<Operand> {
     }
 }
 
-/// Works out which operand fills which encoding slot.
-///
-/// The pattern says everything needed: the first r/m-capable operand goes to
-/// ModRM.rm, a register operand goes to ModRM.reg (or the low bits of a `+r`
-/// opcode), and immediates and branch targets go to their own fields.
 /// The register behind an r/m operand, if it is a register rather than memory.
 fn rm_register(o: &Operand) -> Option<Reg> {
     match &o.kind {
@@ -83,17 +88,46 @@ fn rm_register(o: &Operand) -> Option<Reg> {
     }
 }
 
+/// Works out which operand fills which encoding slot.
+///
+/// The pattern says everything needed: the first r/m-capable operand goes to
+/// ModRM.rm, a register operand goes to ModRM.reg (or the low bits of a `+r`
+/// opcode), and immediates and branch targets go to their own fields.
 fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
     let mut roles = Roles {
         rm: None,
         reg: None,
+        nds: None,
+        is4: None,
         imm: None,
         rel: None,
+        decor: Decor::default(),
     };
     let takes_reg_field = def.modrm == ModRm::Reg || def.flags & PLUSREG != 0;
     for (pat, o) in def.ops.iter().zip(ops) {
+        // Decorators are written on whichever operand they qualify, but they
+        // all end up in the one EVEX prefix, so they are merged here.
+        if !o.decor.is_empty() {
+            let d = &o.decor;
+            roles.decor.mask = roles.decor.mask.or(d.mask);
+            roles.decor.zeroing |= d.zeroing;
+            roles.decor.broadcast = roles.decor.broadcast.or(d.broadcast);
+            roles.decor.span = if roles.decor.span.is_dummy() {
+                d.span
+            } else {
+                roles.decor.span
+            };
+        }
         match *pat {
             Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) if roles.rm.is_none() => roles.rm = Some(o),
+            Op::Vm(..) | Op::Vsib(_) if roles.rm.is_none() => roles.rm = Some(o),
+            Op::V(_) if takes_reg_field && roles.reg.is_none() => roles.reg = o.reg(),
+            // A `/digit` encoding has no reg field, so its register operand
+            // goes to r/m instead: that is how the shift-by-immediate forms
+            // of `psllw` and friends are built.
+            Op::V(_) if roles.rm.is_none() => roles.rm = Some(o),
+            Op::Nds(_) => roles.nds = o.reg(),
+            Op::Is4(_) => roles.is4 = o.reg(),
             Op::R(_) if takes_reg_field && roles.reg.is_none() => roles.reg = o.reg(),
             // An encoding with no reg field puts its register in r/m instead.
             Op::R(_) if roles.rm.is_none() => roles.rm = Some(o),
@@ -118,12 +152,32 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
     roles
 }
 
+/// The `pp` field VEX and EVEX use in place of a mandatory legacy prefix.
+fn pp_bits(pfx: u8) -> u8 {
+    match pfx {
+        0x66 => 1,
+        0xf3 => 2,
+        0xf2 => 3,
+        _ => 0,
+    }
+}
+
+/// The `L'L` field: 0 = 128-bit, 1 = 256-bit, 2 = 512-bit.
+fn len_bits(vlen: u16) -> u8 {
+    match vlen {
+        256 => 1,
+        512 => 2,
+        _ => 0,
+    }
+}
+
 pub fn encode(
     cx: &mut AsmCtx<'_>,
     bits: u8,
     def: &Def,
     ops: &[Operand],
     prefixes: Prefixes,
+    rounding: Option<(RoundCtl, Span)>,
     span: Span,
 ) -> Option<Variant> {
     if bits == 64 && def.flags & NO64 != 0 {
@@ -155,6 +209,34 @@ pub fn encode(
         },
         _ => None,
     });
+
+    check_decorators(cx, def, &roles, rounding, mem.is_some(), span)?;
+    check_vsib(cx, def, mem.as_ref(), span)?;
+
+    // Only EVEX has the fifth register-number bit, so `xmm16` and above are
+    // unreachable from any other encoding even though they parse fine.
+    if def.enc != Enc::Evex {
+        let high = [
+            roles.reg,
+            roles.nds,
+            roles.is4,
+            roles.rm.and_then(rm_register),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(mem.iter().flat_map(|m| [m.base, m.index]).flatten())
+        .find(|r| r.needs_evex_ext());
+        if let Some(r) = high {
+            cx.error(
+                span,
+                format!(
+                    "`{}` is only reachable through an EVEX-encoded instruction",
+                    reg::name_of(r)
+                ),
+            );
+            return None;
+        }
+    }
 
     let seg_override = match mem.as_ref().and_then(|m| m.seg) {
         Some(seg) => match segment_prefix(seg) {
@@ -193,74 +275,158 @@ pub fn encode(
         }
     }
 
-    // Operand-size override.
-    let wants_66 = match def.opsize {
-        16 => bits != 16,
-        32 => bits == 16,
+    let rm_reg = roles.rm.and_then(rm_register);
+    let plus_reg = def.flags & PLUSREG != 0;
+
+    // VEX and EVEX store their extension bits inverted so that outside 64-bit
+    // mode an unextended prefix still decodes, there, as the `LES`/`LDS`/
+    // `BOUND` opcode it overlays. Setting one would produce a different
+    // instruction, so the registers that need one simply do not exist.
+    // The legacy path makes the same check when it builds a REX byte.
+    if bits != 64 && def.enc != Enc::Legacy {
+        let all = [roles.reg, roles.nds, roles.is4, rm_reg]
+            .into_iter()
+            .flatten()
+            .chain(mem.iter().flat_map(|m| [m.base, m.index]).flatten());
+        for r in all {
+            if r.num >= 8 || (r.is_gpr() && r.size == 8) {
+                cx.error(
+                    span,
+                    format!("`{}` is only available in 64-bit mode", reg::name_of(r)),
+                );
+                return None;
+            }
+        }
+    }
+
+    // The REX-style register extension bits, worked out before deciding which
+    // prefix will carry them. `X` doubles as the fifth bit of a register-direct r/m
+    // operand under EVEX, which is how `xmm16`-`xmm31` are reached there.
+    let base_reg = mem.as_ref().and_then(|m| m.base);
+    let index_reg = mem.as_ref().and_then(|m| m.index);
+    let ext_r = !plus_reg && roles.reg.is_some_and(|r| r.num & 8 != 0);
+    let ext_b = rm_reg.is_some_and(|r| r.num & 8 != 0)
+        || base_reg.is_some_and(|r| r.num & 8 != 0)
+        || (plus_reg && roles.reg.is_some_and(|r| r.num & 8 != 0));
+    let ext_x = match (&index_reg, rm_reg) {
+        (Some(i), _) => i.num & 8 != 0,
+        (None, Some(r)) if def.enc == Enc::Evex => r.num & 16 != 0,
         _ => false,
     };
-    if wants_66 {
-        bytes.push(0x66);
-    }
-    if def.pfx != 0 {
-        bytes.push(def.pfx);
-    }
 
-    // ---- REX --------------------------------------------------------------
-    let rex_w =
-        def.opsize == 64 && def.flags & NO_REX_W == 0 && !(bits == 64 && def.flags & DEF64 != 0);
-    if def.opsize == 64 && bits != 64 && def.flags & DEF64 == 0 {
-        cx.error(span, "64-bit operands require 64-bit mode");
-        return None;
-    }
+    match def.enc {
+        Enc::Legacy => {
+            // Operand-size override.
+            let wants_66 = match def.opsize {
+                16 => bits != 16,
+                32 => bits == 16,
+                _ => false,
+            };
+            if wants_66 {
+                bytes.push(0x66);
+            }
+            if def.pfx != 0 {
+                bytes.push(def.pfx);
+            }
 
-    let rm_reg = roles.rm.and_then(rm_register);
+            let rex_w = def.opsize == 64
+                && def.flags & NO_REX_W == 0
+                && !(bits == 64 && def.flags & DEF64 != 0);
+            if def.opsize == 64 && bits != 64 && def.flags & DEF64 == 0 {
+                cx.error(span, "64-bit operands require 64-bit mode");
+                return None;
+            }
 
-    // With a `+r` opcode the register lives in the opcode's low three bits,
-    // so its fourth bit is REX.B rather than REX.R.
-    let plus_reg = def.flags & PLUSREG != 0;
-    let rex_r = !plus_reg && roles.reg.is_some_and(|r| r.needs_rex_ext());
-    let rex_b = rm_reg.is_some_and(|r| r.needs_rex_ext())
-        || mem
-            .as_ref()
-            .and_then(|m| m.base)
-            .is_some_and(|r| r.needs_rex_ext())
-        || (plus_reg && roles.reg.is_some_and(|r| r.needs_rex_ext()));
-    let rex_x = mem
-        .as_ref()
-        .and_then(|m| m.index)
-        .is_some_and(|r| r.needs_rex_ext());
+            // spl/bpl/sil/dil only exist with a REX prefix present, even an
+            // empty one.
+            let forced_rex =
+                roles.reg.is_some_and(|r| r.rex_required) || rm_reg.is_some_and(|r| r.rex_required);
+            // ah/ch/dh/bh cannot coexist with REX.
+            let has_high_byte = roles.reg.is_some_and(|r| r.class == RegClass::GprHigh)
+                || rm_reg.is_some_and(|r| r.class == RegClass::GprHigh);
 
-    // spl/bpl/sil/dil only exist with a REX prefix present, even an empty one.
-    let forced_rex =
-        roles.reg.is_some_and(|r| r.rex_required) || rm_reg.is_some_and(|r| r.rex_required);
-    // ah/ch/dh/bh cannot coexist with REX.
-    let has_high_byte = roles.reg.is_some_and(|r| r.class == RegClass::GprHigh)
-        || rm_reg.is_some_and(|r| r.class == RegClass::GprHigh);
-
-    let need_rex = rex_w || rex_r || rex_b || rex_x || forced_rex;
-    if need_rex {
-        if has_high_byte {
-            cx.error(
-                span,
-                "`ah`, `ch`, `dh` and `bh` cannot be used in an instruction that needs a REX prefix",
+            let need_rex = rex_w || ext_r || ext_b || ext_x || forced_rex;
+            if need_rex {
+                if has_high_byte {
+                    cx.error(
+                        span,
+                        "`ah`, `ch`, `dh` and `bh` cannot be used in an instruction that needs a REX prefix",
+                    );
+                    return None;
+                }
+                if bits != 64 {
+                    cx.error(span, "this operand combination requires 64-bit mode");
+                    return None;
+                }
+                let rex = 0x40
+                    | ((rex_w as u8) << 3)
+                    | ((ext_r as u8) << 2)
+                    | ((ext_x as u8) << 1)
+                    | (ext_b as u8);
+                bytes.push(rex);
+            }
+        }
+        Enc::Vex => {
+            let vvvv = roles.nds.map_or(0, |r| r.num);
+            let l = len_bits(def.vlen);
+            let pp = pp_bits(def.pfx);
+            let w = def.vex_w();
+            // The two-byte form has no room for X, B or W, and only reaches
+            // the `0F` map; anything else has to spell the prefix out.
+            if def.map == 1 && !w && !ext_x && !ext_b {
+                bytes.push(0xc5);
+                bytes.push(((!ext_r as u8) << 7) | ((!vvvv & 0xf) << 3) | (l << 2) | pp);
+            } else {
+                bytes.push(0xc4);
+                bytes.push(
+                    ((!ext_r as u8) << 7)
+                        | ((!ext_x as u8) << 6)
+                        | ((!ext_b as u8) << 5)
+                        | (def.map & 0x1f),
+                );
+                bytes.push(((w as u8) << 7) | ((!vvvv & 0xf) << 3) | (l << 2) | pp);
+            }
+        }
+        Enc::Evex => {
+            let vvvv = roles.nds.map_or(0, |r| r.num);
+            let pp = pp_bits(def.pfx);
+            let w = def.vex_w();
+            let ext_r2 = roles.reg.is_some_and(|r| r.num & 16 != 0);
+            // `V'` extends `vvvv`, except with a VSIB memory operand, where it
+            // is the fifth bit of the vector index instead.
+            let ext_v2 = match index_reg {
+                Some(i) if i.is_vector() => i.num & 16 != 0,
+                _ => vvvv & 16 != 0,
+            };
+            let broadcast = roles.decor.broadcast.is_some();
+            // Embedded rounding replaces the vector length with the rounding
+            // mode and sets `b`, which is why it only exists on register-only
+            // forms: there is no memory operand left to broadcast or scale.
+            let (ll, b_bit) = match rounding {
+                Some((ctl, _)) => (ctl.ll(), true),
+                None => (len_bits(def.vlen), broadcast),
+            };
+            let aaa = roles.decor.mask.map_or(0, |r| r.num);
+            bytes.push(0x62);
+            bytes.push(
+                ((!ext_r as u8) << 7)
+                    | ((!ext_x as u8) << 6)
+                    | ((!ext_b as u8) << 5)
+                    | ((!ext_r2 as u8) << 4)
+                    | (def.map & 7),
             );
-            return None;
+            bytes.push(((w as u8) << 7) | ((!vvvv & 0xf) << 3) | (1 << 2) | pp);
+            bytes.push(
+                ((roles.decor.zeroing as u8) << 7)
+                    | (ll << 5)
+                    | ((b_bit as u8) << 4)
+                    | ((!ext_v2 as u8) << 3)
+                    | (aaa & 7),
+            );
         }
-        if bits != 64 {
-            cx.error(span, "this operand combination requires 64-bit mode");
-            return None;
-        }
-        let rex = 0x40
-            | ((rex_w as u8) << 3)
-            | ((rex_r as u8) << 2)
-            | ((rex_x as u8) << 1)
-            | (rex_b as u8);
-        bytes.push(rex);
     }
 
     // ---- opcode -----------------------------------------------------------
-    let opcode_start = bytes.len();
     bytes.extend_from_slice(&def.opcode);
     if plus_reg {
         let Some(r) = roles.reg else {
@@ -270,12 +436,32 @@ pub fn encode(
         let last = bytes.len() - 1;
         bytes[last] += r.num & 7;
     }
-    let _ = opcode_start;
 
     // ---- ModRM / SIB / displacement ---------------------------------------
     // A RIP-relative displacement is measured from the end of the whole
     // instruction, so its fixup is built after the immediate has been emitted.
     let mut disp_fixup: Option<(usize, ExprRef, Span, bool)> = None;
+
+    // EVEX scales an 8-bit displacement by the size of the memory access, so
+    // one byte still spans a 512-bit stride. See `Tuple`.
+    let disp_scale = if def.enc == Enc::Evex {
+        let vbytes = def.vlen as u32 / 8;
+        match def
+            .tuple
+            .scale(vbytes, def.vex_w(), roles.decor.broadcast.is_some())
+        {
+            Some(n) => n,
+            None => {
+                if mem.is_some() {
+                    cx.error(span, "internal: EVEX memory form with no tuple type");
+                    return None;
+                }
+                1
+            }
+        }
+    } else {
+        1
+    };
 
     match def.modrm {
         ModRm::None => {}
@@ -302,6 +488,7 @@ pub fn encode(
                 reg_field,
                 rm_operand,
                 mem.as_ref(),
+                disp_scale,
             )?;
         }
     }
@@ -317,7 +504,7 @@ pub fn encode(
                 // A 32-bit immediate in a 64-bit operation is sign-extended by
                 // the CPU, so the linker must be told to range-check it as
                 // signed rather than let it wrap.
-                let sign_extended = def.opsize == 64 && width == 4;
+                let sign_extended = def.opsize == 64 && width == 4 && def.enc == Enc::Legacy;
                 let r = if def.flags & IMM64 != 0 {
                     reloc::ABS64
                 } else if sign_extended {
@@ -335,6 +522,16 @@ pub fn encode(
                 });
             }
         }
+    }
+
+    // `is4`: a whole immediate byte whose top nibble names a register.
+    if let Some(r) = roles.is4 {
+        bytes.push((r.num & 0xf) << 4);
+    }
+
+    // 3DNow! puts its opcode selector where an immediate would go.
+    if let Some(s) = def.suffix {
+        bytes.push(s);
     }
 
     // A displacement fixup can only be built now that the instruction length,
@@ -372,7 +569,140 @@ pub fn encode(
     Some(Variant { bytes, fixups })
 }
 
+/// Rejects decorators the chosen encoding cannot carry.
+fn check_decorators(
+    cx: &mut AsmCtx<'_>,
+    def: &Def,
+    roles: &Roles<'_>,
+    rounding: Option<(RoundCtl, Span)>,
+    has_mem: bool,
+    span: Span,
+) -> Option<()> {
+    let d = &roles.decor;
+    if def.enc != Enc::Evex {
+        if let Some((_, rspan)) = rounding {
+            cx.error(
+                rspan,
+                "embedded rounding control is only available on AVX-512 forms",
+            );
+            return None;
+        }
+        if !d.is_empty() {
+            cx.error(
+                d.span,
+                "operand decorators are only available on AVX-512 forms",
+            );
+            return None;
+        }
+        return Some(());
+    }
+
+    if let Some((ctl, rspan)) = rounding {
+        if ctl.is_sae_only() {
+            if def.flags & (EVEX_SAE | EVEX_ER) == 0 {
+                cx.error(rspan, "this instruction does not take `{sae}`");
+                return None;
+            }
+            // Rounding-capable instructions spell exception suppression with
+            // an explicit mode; a bare `{sae}` is rejected there by both
+            // reference assemblers.
+            if def.flags & EVEX_SAE == 0 {
+                cx.error(
+                    rspan,
+                    "this instruction takes a rounding mode such as `{rn-sae}`, not `{sae}`",
+                );
+                return None;
+            }
+        } else if def.flags & EVEX_ER == 0 {
+            cx.error(rspan, "this instruction takes no embedded rounding control");
+            return None;
+        }
+        if has_mem {
+            cx.error(
+                rspan,
+                "embedded rounding control cannot be combined with a memory operand",
+            );
+            return None;
+        }
+    }
+    if d.mask.is_some() && def.flags & NOMASK != 0 {
+        cx.error(d.span, "this instruction takes no writemask");
+        return None;
+    }
+    if d.mask.is_none() && def.flags & NEEDS_MASK != 0 {
+        cx.error(
+            span,
+            "this instruction requires a writemask such as `{%k1}`",
+        );
+        return None;
+    }
+    if d.zeroing && d.mask.is_none() {
+        cx.error(d.span, "`{z}` requires a writemask register");
+        return None;
+    }
+    if let Some(b) = d.broadcast {
+        let bspan = b.span;
+        if !has_mem {
+            cx.error(bspan, "a broadcast decorator needs a memory operand");
+            return None;
+        }
+        if !def.tuple.broadcastable() {
+            cx.error(bspan, "this instruction does not support broadcast");
+            return None;
+        }
+        // N is redundant — it is the register's element count — so it is
+        // recomputed and the source's spelling checked against it. If the
+        // written count could not be recovered, its length is all there is.
+        let vbytes = def.vlen as u32 / 8;
+        let n = match def.tuple {
+            // A half-vector source is half the register, in dword elements.
+            Tuple::Hv => vbytes / 2 / 4,
+            _ => vbytes / if def.vex_w() { 8 } else { 4 },
+        };
+        let written_ok = match b.count {
+            Some(c) => c == n,
+            None => bspan.len() as usize == format!("1to{n}").len(),
+        };
+        if !written_ok {
+            cx.error(bspan, format!("this operand broadcasts as `{{1to{n}}}`"));
+            return None;
+        }
+    }
+    Some(())
+}
+
+/// Checks that a VSIB pattern got a vector index and that nothing else did.
+fn check_vsib(cx: &mut AsmCtx<'_>, def: &Def, mem: Option<&Mem>, span: Span) -> Option<()> {
+    let want: Option<Vk> = def.ops.iter().find_map(|o| match o {
+        Op::Vsib(k) => Some(*k),
+        _ => None,
+    });
+    let index = mem.and_then(|m| m.index);
+    match (want, index) {
+        (Some(k), Some(i)) if k.accepts(i) => Some(()),
+        (Some(_), _) => {
+            cx.error(
+                mem.map_or(span, |m| m.span),
+                "this instruction needs a vector index register",
+            );
+            None
+        }
+        (None, Some(i)) if i.is_vector() => {
+            cx.error(
+                mem.map_or(span, |m| m.span),
+                format!(
+                    "`{}` can only index memory in a gather or scatter",
+                    reg::name_of(i)
+                ),
+            );
+            None
+        }
+        _ => Some(()),
+    }
+}
+
 /// Emits the ModRM byte plus any SIB and displacement.
+#[allow(clippy::too_many_arguments)]
 fn encode_rm(
     cx: &mut AsmCtx<'_>,
     bits: u8,
@@ -381,6 +711,7 @@ fn encode_rm(
     reg_field: u8,
     rm_operand: &Operand,
     mem: Option<&Mem>,
+    disp_scale: u32,
 ) -> Option<()> {
     // Register direct.
     if let Some(r) = rm_register(rm_operand) {
@@ -455,18 +786,22 @@ fn encode_rm(
     let base = m.base;
     let base_low = base.map_or(0, |b| b.num & 7);
     // rsp/r12 as a base always needs SIB; rbp/r13 always needs a displacement.
+    // A VSIB index also forces SIB, since that is where it lives.
     let need_sib = m.index.is_some() || base.is_none() || base_low == 0b100;
     let base_forces_disp = base.is_some() && base_low == 0b101;
 
-    let disp_size: u8 = if symbolic_disp {
-        4
-    } else if base.is_none() {
-        // index-only addressing encodes disp32 with mod=00.
+    // index-only addressing encodes disp32 with mod=00.
+    let disp_size: u8 = if symbolic_disp || base.is_none() {
         4
     } else {
-        match disp_const.unwrap_or(0) {
-            0 if !base_forces_disp => 0,
-            v if (-128..=127).contains(&v) => 1,
+        let v = disp_const.unwrap_or(0);
+        // Under EVEX a one-byte displacement is stored pre-divided by the size
+        // of the access, so it is only usable when the value divides exactly.
+        let n = disp_scale as i64;
+        let fits8 = v % n == 0 && (-128..=127).contains(&(v / n));
+        match () {
+            _ if v == 0 && !base_forces_disp => 0,
+            _ if fits8 => 1,
             _ => 4,
         }
     };
@@ -508,7 +843,7 @@ fn encode_rm(
 
     match disp_size {
         0 => {}
-        1 => bytes.push(disp_const.unwrap_or(0) as u8),
+        1 => bytes.push((disp_const.unwrap_or(0) / disp_scale as i64) as u8),
         _ => push_disp32(cx, bytes, disp_fixup, m, disp_const),
     }
     Some(())
@@ -570,7 +905,7 @@ pub fn nop_bytes(bits: u8, len: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::nop_bytes;
+    use super::*;
 
     #[test]
     fn nop_padding_has_the_requested_length() {
@@ -584,5 +919,21 @@ mod tests {
     #[test]
     fn sixteen_bit_mode_uses_only_the_one_byte_nop() {
         assert_eq!(nop_bytes(16, 3), vec![0x90, 0x90, 0x90]);
+    }
+
+    #[test]
+    fn tuple_scales_match_the_manual() {
+        // Full vector: the whole register, or one element under broadcast.
+        assert_eq!(Tuple::Fv.scale(64, false, false), Some(64));
+        assert_eq!(Tuple::Fv.scale(32, false, false), Some(32));
+        assert_eq!(Tuple::Fv.scale(64, false, true), Some(4));
+        assert_eq!(Tuple::Fv.scale(64, true, true), Some(8));
+        // Scalars scale by their element, whatever the vector length.
+        assert_eq!(Tuple::T1s.scale(64, false, false), Some(4));
+        assert_eq!(Tuple::T1s.scale(16, true, false), Some(8));
+        // The fractional-memory tuples follow the vector length.
+        assert_eq!(Tuple::Hvm.scale(64, false, false), Some(32));
+        assert_eq!(Tuple::Qvm.scale(64, false, false), Some(16));
+        assert_eq!(Tuple::Ovm.scale(64, false, false), Some(8));
     }
 }
