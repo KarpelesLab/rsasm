@@ -2,8 +2,8 @@
 //! displacement and immediate.
 
 use super::insn::{
-    DEF64, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO64, NOMASK, ONLY64,
-    Op, PLUSREG, Tuple, Vk,
+    ADDR16, ADDR32, DEF64, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO64,
+    NO66, NOMASK, ONLY64, Op, PLUSREG, Tuple, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -21,6 +21,10 @@ pub struct Prefixes {
     pub rep: Option<u8>,
     /// A segment override written as a standalone prefix, as in `fs movq ...`.
     pub seg: Option<u8>,
+    /// `data16`/`data32` and `addr16`/`addr32`, which ask for the operand or
+    /// address size override whether or not the operands need it.
+    pub data: bool,
+    pub addr: bool,
 }
 
 /// Which operand fills which encoding slot, worked out from the pattern.
@@ -33,7 +37,12 @@ struct Roles<'o> {
     is4: Option<Reg>,
     /// (expression, encoded width in bytes)
     imm: Option<(ExprRef, u8)>,
+    imm2: Option<(ExprRef, u8)>,
     rel: Option<(ExprRef, u8)>,
+    /// The absolute address of a `moffs` form.
+    moffs: Option<&'o Operand>,
+    /// The segment and offset of a direct far pointer.
+    far: Option<(ExprRef, ExprRef)>,
     /// The decorators found on the operands, merged.
     decor: Decor,
 }
@@ -100,10 +109,19 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
         nds: None,
         is4: None,
         imm: None,
+        imm2: None,
         rel: None,
+        moffs: None,
+        far: None,
         decor: Decor::default(),
     };
     let takes_reg_field = def.modrm == ModRm::Reg || def.flags & PLUSREG != 0;
+    // A segment, control or debug register can only be in the reg field, so
+    // a general register beside one goes to r/m whatever order they are in.
+    let special_reg = def
+        .ops
+        .iter()
+        .any(|p| matches!(p, Op::Seg | Op::Cr | Op::Dr));
     for (pat, o) in def.ops.iter().zip(ops) {
         // Decorators are written on whichever operand they qualify, but they
         // all end up in the one EVEX prefix, so they are merged here.
@@ -119,7 +137,20 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             };
         }
         match *pat {
-            Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) if roles.rm.is_none() => roles.rm = Some(o),
+            Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) | Op::FarM | Op::Fword
+                if roles.rm.is_none() =>
+            {
+                roles.rm = Some(o)
+            }
+            Op::Seg | Op::Cr | Op::Dr | Op::St if takes_reg_field && roles.reg.is_none() => {
+                roles.reg = o.reg()
+            }
+            Op::Moffs(_) => roles.moffs = Some(o),
+            Op::Far => {
+                if let OperandKind::FarPtr { seg, off } = o.kind {
+                    roles.far = Some((seg, off));
+                }
+            }
             Op::Vm(..) | Op::Vsib(_) if roles.rm.is_none() => roles.rm = Some(o),
             Op::V(_) if takes_reg_field && roles.reg.is_none() => roles.reg = o.reg(),
             // A `/digit` encoding has no reg field, so its register operand
@@ -128,12 +159,18 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             Op::V(_) if roles.rm.is_none() => roles.rm = Some(o),
             Op::Nds(_) => roles.nds = o.reg(),
             Op::Is4(_) => roles.is4 = o.reg(),
-            Op::R(_) if takes_reg_field && roles.reg.is_none() => roles.reg = o.reg(),
+            Op::R(_) if takes_reg_field && !special_reg && roles.reg.is_none() => {
+                roles.reg = o.reg()
+            }
             // An encoding with no reg field puts its register in r/m instead.
             Op::R(_) if roles.rm.is_none() => roles.rm = Some(o),
+            // `enter` has two immediates, written in the order they are encoded.
             Op::Imm(w) => {
                 if let OperandKind::Imm(e) = &o.kind {
-                    roles.imm = Some((*e, w));
+                    match roles.imm {
+                        None => roles.imm = Some((*e, w)),
+                        Some(_) => roles.imm2 = Some((*e, w)),
+                    }
                 }
             }
             Op::Imm8s => {
@@ -204,14 +241,14 @@ pub fn encode(
     let mut fixups: Vec<Fixup> = Vec::new();
 
     // ---- legacy prefixes --------------------------------------------------
-    if prefixes.lock {
-        bytes.push(0xf0);
-    }
-    if let Some(r) = prefixes.rep {
-        bytes.push(r);
+    // In the order GNU as writes them, which is by kind rather than as
+    // written: `fwait`, segment, address size, operand size, repeat, lock.
+    // llvm-mc orders some of them differently; the CPU does not care.
+    if def.flags & WAIT != 0 {
+        bytes.push(0x9b);
     }
 
-    let mem = roles.rm.and_then(|o| match &o.kind {
+    let mem = roles.rm.or(roles.moffs).and_then(|o| match &o.kind {
         OperandKind::Mem(m) => Some(m.clone()),
         OperandKind::Indirect(inner) => match &**inner {
             OperandKind::Mem(m) => Some(m.clone()),
@@ -248,8 +285,12 @@ pub fn encode(
         }
     }
 
-    let seg_override = match mem.as_ref().and_then(|m| m.seg) {
-        Some(seg) => match segment_prefix(seg) {
+    let seg_override = match mem.as_ref().and_then(|m| m.seg.map(|s| (m, s))) {
+        // An override naming the segment the address uses anyway is left
+        // out, as GNU as does: `ss` for a `bp` or `sp` base, `ds` otherwise.
+        // llvm-mc keeps it.
+        Some((m, seg)) if seg.num == default_segment(m) => prefixes.seg,
+        Some((_, seg)) => match segment_prefix(seg) {
             Some(p) => Some(p),
             None => {
                 cx.error(
@@ -265,13 +306,21 @@ pub fn encode(
         bytes.push(p);
     }
 
-    // Address-size override: a 32-bit address in 64-bit mode, or vice versa.
+    // Address-size override: the other address size the mode can reach, as
+    // 32-bit addressing in 64-bit mode, or an implicit counter register of
+    // the other size.
+    let mut addr_override = prefixes.addr
+        || match bits {
+            16 => def.flags & ADDR32 != 0,
+            32 => def.flags & ADDR16 != 0,
+            _ => def.flags & ADDR32 != 0,
+        };
     if let Some(m) = &mem {
         let uses_regs = m.base.is_some() || m.index.is_some();
-        let native = if bits == 64 { 8 } else { 4 };
+        let native = bits / 8;
         if uses_regs && m.addr_size != native {
-            if (bits == 64 && m.addr_size == 4) || (bits == 32 && m.addr_size == 2) {
-                bytes.push(0x67);
+            if matches!((bits, m.addr_size), (64, 4) | (32, 2) | (16, 4)) {
+                addr_override = true;
             } else {
                 cx.error(
                     m.span,
@@ -283,6 +332,9 @@ pub fn encode(
                 return None;
             }
         }
+    }
+    if addr_override {
+        bytes.push(0x67);
     }
 
     let rm_reg = roles.rm.and_then(rm_register);
@@ -327,14 +379,16 @@ pub fn encode(
     match def.enc {
         Enc::Legacy => {
             // Operand-size override.
-            let wants_66 = match def.opsize {
-                16 => bits != 16,
-                32 => bits == 16,
-                _ => false,
-            };
-            if wants_66 {
+            let wants_66 = def.flags & NO66 == 0
+                && match def.opsize {
+                    16 => bits != 16,
+                    32 => bits == 16,
+                    _ => false,
+                };
+            if wants_66 || prefixes.data {
                 bytes.push(0x66);
             }
+            push_rep_lock(&mut bytes, prefixes);
             if def.pfx != 0 {
                 bytes.push(def.pfx);
             }
@@ -377,6 +431,7 @@ pub fn encode(
             }
         }
         Enc::Vex => {
+            push_rep_lock(&mut bytes, prefixes);
             let vvvv = roles.nds.map_or(0, |r| r.num);
             let l = len_bits(def.vlen);
             let pp = pp_bits(def.pfx);
@@ -398,6 +453,7 @@ pub fn encode(
             }
         }
         Enc::Evex => {
+            push_rep_lock(&mut bytes, prefixes);
             let vvvv = roles.nds.map_or(0, |r| r.num);
             let pp = pp_bits(def.pfx);
             let w = def.vex_w();
@@ -450,7 +506,7 @@ pub fn encode(
     // ---- ModRM / SIB / displacement ---------------------------------------
     // A RIP-relative displacement is measured from the end of the whole
     // instruction, so its fixup is built after the immediate has been emitted.
-    let mut disp_fixup: Option<(usize, ExprRef, Span, bool)> = None;
+    let mut disp_fixup: Option<DispFixup> = None;
 
     // EVEX scales an 8-bit displacement by the size of the memory access, so
     // one byte still spans a 512-bit stride. See `Tuple`.
@@ -503,8 +559,39 @@ pub fn encode(
         }
     }
 
+    // ---- absolute address and far pointer ---------------------------------
+    if let (Some(m), Some(_)) = (&mem, roles.moffs) {
+        let width = m.addr_size;
+        let offset = bytes.len();
+        bytes.extend(std::iter::repeat_n(0u8, width as usize));
+        if let Some(e) = m.disp {
+            match cx.constant(e) {
+                Some(v) => bytes[offset..].copy_from_slice(&v.to_le_bytes()[..width as usize]),
+                None => disp_fixup = Some((offset, e, m.span, false, width)),
+            }
+        }
+    }
+    if let Some((seg, off)) = roles.far {
+        let width = if def.opsize == 16 { 2 } else { 4 };
+        for (e, width) in [(off, width), (seg, 2)] {
+            let offset = bytes.len() as u32;
+            match cx.constant(e) {
+                Some(v) => bytes.extend_from_slice(&v.to_le_bytes()[..width as usize]),
+                None => {
+                    bytes.extend(std::iter::repeat_n(0u8, width as usize));
+                    fixups.push(Fixup {
+                        offset,
+                        expr: e,
+                        kind: FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0)),
+                        span: cx.exprs.span(e),
+                    });
+                }
+            }
+        }
+    }
+
     // ---- immediate --------------------------------------------------------
-    if let Some((e, width)) = roles.imm {
+    for (e, width) in roles.imm.into_iter().chain(roles.imm2) {
         let offset = bytes.len() as u32;
         let folded = cx.constant(e);
         match folded {
@@ -546,10 +633,12 @@ pub fn encode(
 
     // A displacement fixup can only be built now that the instruction length,
     // and therefore the RIP-relative bias, is known.
-    if let Some((offset, e, dspan, rip_relative)) = disp_fixup {
+    if let Some((offset, e, dspan, rip_relative, width)) = disp_fixup {
         let trailing = (bytes.len() - offset - 4) as i8;
         let kind = if rip_relative {
             FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
+        } else if width != 4 {
+            FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
         } else if bits == 64 {
             // A 64-bit-mode displacement is sign-extended to the address
             // width, so the linker has to range-check it as signed.
@@ -567,6 +656,9 @@ pub fn encode(
 
     // ---- relative branch target -------------------------------------------
     if let Some((e, width)) = roles.rel {
+        // The wide displacement is as wide as the operand size, which in
+        // 16-bit mode is a word.
+        let width = if width == 4 && bits == 16 { 2 } else { width };
         let offset = bytes.len() as u32;
         bytes.extend(std::iter::repeat_n(0u8, width as usize));
         // GNU as routes a plain 64-bit-mode call through the PLT but leaves a
@@ -574,8 +666,7 @@ pub fn encode(
         // the object: `.code32` inside an x86-64 object gets `R_X86_64_PC32`.
         let reloc = match width {
             4 if bits == 64 => abi.plt32(),
-            4 => abi.pcrel(4).unwrap_or(0),
-            _ => 0,
+            _ => abi.pcrel(width).unwrap_or(0),
         };
         fixups.push(Fixup {
             offset,
@@ -588,6 +679,30 @@ pub fn encode(
     }
 
     Some(Variant { bytes, fixups })
+}
+
+/// The number of the segment register an address uses by default: `ss` (2)
+/// when the base is `sp` or `bp` in any width, `ds` (3) otherwise.
+fn default_segment(m: &Mem) -> u8 {
+    match m.base {
+        Some(b) if !m.rip_relative && matches!(b.num & 7, 4 | 5) => 2,
+        _ => 3,
+    }
+}
+
+/// Where a symbolic displacement goes: its offset, expression, span, whether
+/// it is RIP-relative, and its width in bytes.
+type DispFixup = (usize, ExprRef, Span, bool, u8);
+
+/// `rep` and `lock`, which go after the operand-size prefix. VEX and EVEX
+/// have no operand-size prefix, so there they follow the address size.
+fn push_rep_lock(bytes: &mut Vec<u8>, prefixes: Prefixes) {
+    if let Some(r) = prefixes.rep {
+        bytes.push(r);
+    }
+    if prefixes.lock {
+        bytes.push(0xf0);
+    }
 }
 
 /// Rejects decorators the chosen encoding cannot carry.
@@ -723,7 +838,7 @@ fn encode_rm(
     cx: &mut AsmCtx<'_>,
     bits: u8,
     bytes: &mut Vec<u8>,
-    disp_fixup: &mut Option<(usize, ExprRef, Span, bool)>,
+    disp_fixup: &mut Option<DispFixup>,
     reg_field: u8,
     rm_operand: &Operand,
     mem: Option<&Mem>,
@@ -775,7 +890,7 @@ fn encode_rm(
                     }
                     bytes[at..at + 4].copy_from_slice(&(v as i32).to_le_bytes());
                 }
-                None => *disp_fixup = Some((at, e, m.span, true)),
+                None => *disp_fixup = Some((at, e, m.span, true, 4)),
             },
         }
         return Some(());
@@ -784,6 +899,10 @@ fn encode_rm(
     let disp_const = m.disp.and_then(|e| cx.constant(e));
     let has_disp = m.disp.is_some();
     let symbolic_disp = has_disp && disp_const.is_none();
+
+    if m.addr_size == 2 {
+        return encode_rm16(cx, bytes, disp_fixup, reg_field, m, disp_const);
+    }
 
     // No base and no index: an absolute address.
     if m.base.is_none() && m.index.is_none() {
@@ -865,20 +984,96 @@ fn encode_rm(
     Some(())
 }
 
+/// ModRM for 16-bit addressing, which has no SIB byte: `rm` names one of
+/// eight fixed base and index combinations.
+fn encode_rm16(
+    cx: &mut AsmCtx<'_>,
+    bytes: &mut Vec<u8>,
+    disp_fixup: &mut Option<DispFixup>,
+    reg_field: u8,
+    m: &Mem,
+    disp_const: Option<i64>,
+) -> Option<()> {
+    let reg = (reg_field & 7) << 3;
+    // Numbers of the registers involved: bx 3, bp 5, si 6, di 7.
+    let rm = match (m.base.map(|r| r.num), m.index.map(|r| r.num)) {
+        (None, None) => {
+            // A bare 16-bit displacement.
+            bytes.push(reg | 0b110);
+            push_disp(cx, bytes, disp_fixup, m, disp_const, 2);
+            return Some(());
+        }
+        (Some(3), Some(6)) => 0b000,
+        (Some(3), Some(7)) => 0b001,
+        (Some(5), Some(6)) => 0b010,
+        (Some(5), Some(7)) => 0b011,
+        (Some(6), None) => 0b100,
+        (Some(7), None) => 0b101,
+        (Some(5), None) => 0b110,
+        (Some(3), None) => 0b111,
+        _ => {
+            cx.error(
+                m.span,
+                "16-bit addressing takes `bx` or `bp` and `si` or `di`, one or both",
+            );
+            return None;
+        }
+    };
+    if m.scale != 1 {
+        cx.error(m.span, "16-bit addressing has no scale factor");
+        return None;
+    }
+    // The displacement is taken modulo 2^16, as the CPU adds it. `bp` alone
+    // has no form without one.
+    let disp = match disp_const {
+        None if m.disp.is_some() => 2,
+        _ => {
+            let v = disp_const.unwrap_or(0) as i16 as i64;
+            if v == 0 && rm != 0b110 {
+                0
+            } else if (-128..=127).contains(&v) {
+                1
+            } else {
+                2
+            }
+        }
+    };
+    let mod_bits = [0b00, 0b01, 0b10][disp as usize];
+    bytes.push((mod_bits << 6) | reg | rm);
+    match disp {
+        0 => {}
+        1 => bytes.push(disp_const.unwrap_or(0) as u8),
+        _ => push_disp(cx, bytes, disp_fixup, m, disp_const, 2),
+    }
+    Some(())
+}
+
 fn push_disp32(
     cx: &mut AsmCtx<'_>,
     bytes: &mut Vec<u8>,
-    disp_fixup: &mut Option<(usize, ExprRef, Span, bool)>,
+    disp_fixup: &mut Option<DispFixup>,
     m: &Mem,
     disp_const: Option<i64>,
 ) {
+    push_disp(cx, bytes, disp_fixup, m, disp_const, 4);
+}
+
+/// A displacement of `width` bytes, or a fixup for one.
+fn push_disp(
+    cx: &mut AsmCtx<'_>,
+    bytes: &mut Vec<u8>,
+    disp_fixup: &mut Option<DispFixup>,
+    m: &Mem,
+    disp_const: Option<i64>,
+    width: u8,
+) {
     match disp_const {
-        Some(v) => bytes.extend_from_slice(&(v as i32).to_le_bytes()),
+        Some(v) => bytes.extend_from_slice(&v.to_le_bytes()[..width as usize]),
         None => {
             let at = bytes.len();
-            bytes.extend_from_slice(&[0; 4]);
+            bytes.extend(std::iter::repeat_n(0u8, width as usize));
             let e = m.disp.unwrap_or_else(|| cx.exprs.int(0, m.span));
-            *disp_fixup = Some((at, e, m.span, false));
+            *disp_fixup = Some((at, e, m.span, false, width));
         }
     }
 }

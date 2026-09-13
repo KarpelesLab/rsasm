@@ -136,6 +136,13 @@ pub enum OperandKind {
     /// `{rn-sae}` and friends, which the source writes in the operand list but
     /// which encode as bits rather than as an operand.
     Rounding(RoundCtl),
+    /// A direct far pointer, `seg:offset` in Intel syntax. AT&T writes the
+    /// two halves as separate immediates, `ljmp $seg, $offset`, and the
+    /// matcher pairs them up.
+    FarPtr {
+        seg: ExprRef,
+        off: ExprRef,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -174,6 +181,7 @@ impl Operand {
             OperandKind::Rel(_) => "a branch target".into(),
             OperandKind::Indirect(_) => "an indirect branch target".into(),
             OperandKind::Rounding(_) => "a rounding-control decorator".into(),
+            OperandKind::FarPtr { .. } => "a far pointer".into(),
         }
     }
 }
@@ -185,6 +193,7 @@ pub fn size_keyword(name: &str) -> Option<u8> {
         "word" => 2,
         "dword" => 4,
         "qword" => 8,
+        "fword" => 6,
         "tbyte" | "tword" => 10,
         "xmmword" | "oword" => 16,
         "ymmword" => 32,
@@ -453,6 +462,7 @@ impl OperandParser<'_, '_> {
         cur.advance();
         let text = self.cx.interner.get(n).to_ascii_lowercase();
         match reg::lookup(&text) {
+            Some(r) if r.class == RegClass::St => self.st_index(cur, r),
             Some(r) => Some(r),
             None => {
                 self.cx
@@ -460,6 +470,33 @@ impl OperandParser<'_, '_> {
                 None
             }
         }
+    }
+
+    /// The `(n)` of `st(n)`, if one follows `st`.
+    fn st_index(&mut self, cur: &mut Cursor<'_>, top: Reg) -> Option<Reg> {
+        if !cur.check_punct(Punct::LParen) {
+            return Some(top);
+        }
+        let open = cur.advance();
+        let tok = cur.advance();
+        let close = cur.peek();
+        let n = match tok.kind {
+            TokKind::Int(v) => reg::st(u8::try_from(v).unwrap_or(u8::MAX)),
+            _ => None,
+        };
+        let Some(r) = n else {
+            self.cx.error(
+                open.span.to(tok.span),
+                "an x87 stack register is `st(0)` to `st(7)`",
+            );
+            return None;
+        };
+        if cur.eat_punct(Punct::RParen).is_none() {
+            self.cx
+                .error(close.span, "expected `)` after the x87 stack index");
+            return None;
+        }
+        Some(r)
     }
 
     /// `disp(base, index, scale)`, any part of which may be absent.
@@ -564,6 +601,11 @@ impl OperandParser<'_, '_> {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
             if let Some(r) = reg::lookup(&text) {
                 cur.advance();
+                let r = if r.class == RegClass::St {
+                    self.st_index(cur, r)?
+                } else {
+                    r
+                };
                 // `seg:[...]`
                 if r.class == RegClass::Segment && cur.check_punct(Punct::Colon) {
                     cur.advance();
@@ -602,6 +644,16 @@ impl OperandParser<'_, '_> {
 
         // Otherwise an immediate or branch target; the matcher decides which.
         let e = self.expr(cur)?;
+        // `seg:offset`, a direct far branch target.
+        if cur.eat_punct(Punct::Colon).is_some() {
+            let off = self.expr(cur)?;
+            return Some(Operand {
+                kind: OperandKind::FarPtr { seg: e, off },
+                size_hint,
+                decor: Decor::default(),
+                span: start.to(self.cx.exprs.span(off)),
+            });
+        }
         Some(Operand {
             kind: OperandKind::Imm(e),
             size_hint,
@@ -683,6 +735,18 @@ impl OperandParser<'_, '_> {
         }
         m.disp = disp;
         m.span = start.to(close.span);
+        // 16-bit addressing pairs `bx` or `bp` with `si` or `di`, and ModRM
+        // encodes the pair rather than an order, so `[si+bx]` is `[bx+si]`.
+        if let (Some(b), Some(i)) = (m.base, m.index)
+            && b.size == 2
+            && i.size == 2
+            && m.scale == 1
+            && matches!(b.num, 6 | 7)
+            && matches!(i.num, 3 | 5)
+        {
+            m.base = Some(i);
+            m.index = Some(b);
+        }
         Some(m)
     }
 

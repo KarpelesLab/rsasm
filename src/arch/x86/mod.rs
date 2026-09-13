@@ -12,8 +12,9 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{DEF64, Def, Enc, NOTACC, Op};
+use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
+use reg::RegClass;
 
 pub const NAMES: &[&str] = &["x86-64", "i386", "i8086"];
 
@@ -124,6 +125,12 @@ impl Architecture for X86 {
             ".code16" | ".code32" | ".code64" => {
                 let bits: u8 = name[5..].parse().expect("literal is numeric");
                 cx.state.bits = bits;
+                cx.state.features &= !CODE16GCC;
+                true
+            }
+            ".code16gcc" => {
+                cx.state.bits = 16;
+                cx.state.features |= CODE16GCC;
                 true
             }
             ".intel_syntax" => {
@@ -149,11 +156,20 @@ impl Architecture for X86 {
     }
 }
 
+/// Set in `ArchState::features` by `.code16gcc`: 16-bit code in which the
+/// stack instructions and calls default to 32 bits, as GCC's 32-bit output
+/// assumes when it is assembled to run in real mode.
+pub const CODE16GCC: u64 = 1 << 0;
+
 /// A prefix mnemonic, which attaches to the instruction written after it.
 enum PrefixKind {
     Lock,
     Rep(u8),
     Segment(u8),
+    /// `data16`/`data32`: the operand size override, with its size.
+    Data(u8),
+    /// `addr16`/`addr32`: the address size override, with its size.
+    Addr(u8),
 }
 
 fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
@@ -165,6 +181,10 @@ fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
             let r = reg::lookup(mnemonic).expect("segment names are in the register table");
             PrefixKind::Segment(encode::segment_prefix(r).expect("segment has a prefix byte"))
         }
+        "data16" => PrefixKind::Data(16),
+        "data32" => PrefixKind::Data(32),
+        "addr16" => PrefixKind::Addr(16),
+        "addr32" => PrefixKind::Addr(32),
         _ => return None,
     })
 }
@@ -184,23 +204,34 @@ fn assemble_inner(
 
     // `lock`, `rep`, `fs` and friends prefix the instruction that follows.
     if let Some(kind) = prefix_kind(mnemonic) {
+        let bits = cx.state.bits;
         match kind {
             PrefixKind::Lock => prefixes.lock = true,
             PrefixKind::Rep(r) => prefixes.rep = Some(r),
             PrefixKind::Segment(s) => prefixes.seg = Some(s),
+            // Either size is the mode's own in some mode, where the prefix
+            // asks for nothing; 64-bit addressing needs no `addr64`.
+            PrefixKind::Data(size) => prefixes.data |= (size == 16) != (bits == 16),
+            PrefixKind::Addr(size) => prefixes.addr |= size != bits.min(32) || bits == 64,
         }
         let mut cur = req.cursor();
         if cur.at_end() {
             // A bare prefix on its own line emits just the prefix byte.
             let mut bytes = Vec::new();
-            if prefixes.lock {
-                bytes.push(0xf0);
+            if let Some(s) = prefixes.seg {
+                bytes.push(s);
+            }
+            if prefixes.addr {
+                bytes.push(0x67);
+            }
+            if prefixes.data {
+                bytes.push(0x66);
             }
             if let Some(r) = prefixes.rep {
                 bytes.push(r);
             }
-            if let Some(s) = prefixes.seg {
-                bytes.push(s);
+            if prefixes.lock {
+                bytes.push(0xf0);
             }
             return Some(vec![Variant::new(bytes)]);
         }
@@ -253,9 +284,29 @@ fn assemble_inner(
         ops.push(o);
     }
 
-    // The table is written in Intel order, so AT&T operands are reversed.
-    if syntax == Syntax::Att {
+    // The table is written in Intel order, so AT&T operands are reversed —
+    // except for `enter` and `bound`, whose AT&T operands GNU as has always
+    // taken in Intel order, and llvm-mc with it.
+    let base_name = mnemonic.trim_end_matches(['w', 'l']);
+    if syntax == Syntax::Att && !matches!(base_name, "enter" | "bound") {
         ops.reverse();
+    }
+    // AT&T writes a direct far pointer as two immediates, segment first.
+    if syntax == Syntax::Att
+        && ops.len() == 2
+        && resolved.defs.iter().any(|d| d.ops == [Op::Far])
+        && let (OperandKind::Imm(off), OperandKind::Imm(seg)) = (&ops[0].kind, &ops[1].kind)
+    {
+        let span = ops[1].span.to(ops[0].span);
+        ops = vec![Operand {
+            kind: OperandKind::FarPtr {
+                seg: *seg,
+                off: *off,
+            },
+            size_hint: None,
+            decor: Default::default(),
+            span,
+        }];
     }
 
     // `{rn-sae}` occupies an operand slot in the source but encodes as bits in
@@ -274,11 +325,22 @@ fn assemble_inner(
 
     let matches = select(cx, bits, resolved.defs, &resolved, &ops);
     if matches.is_empty() {
-        report_no_match(cx, req, mnemonic, resolved.defs, &ops);
+        report_no_match(cx, req, mnemonic, &resolved, &ops);
         return None;
     }
 
-    let matches = prefer_default_size(bits, matches, &ops);
+    // Stack and branch instructions have a default operand size in every
+    // mode, which the rest do not; the rows long mode widened say which.
+    let stack = resolved.defs.iter().any(|d| d.flags & DEF64 != 0);
+    if syntax == Syntax::Intel && !stack && ambiguous_memory_size(&matches, &ops) {
+        cx.error(
+            req.span,
+            format!("`{mnemonic}` needs the size of its memory operand, as in `dword ptr [...]`"),
+        );
+        return None;
+    }
+    let gcc16 = cx.state.features & CODE16GCC != 0;
+    let matches = prefer_default_size(bits, gcc16, stack, matches, &resolved);
     let matches = prefer_evex_when_required(matches, &ops, rounding.is_some());
 
     // A relative branch gets one variant per displacement width, smallest
@@ -508,6 +570,20 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     })
 }
 
+/// True if `def` exists in the current mode and syntax.
+fn available(cx: &AsmCtx<'_>, bits: u8, def: &Def) -> bool {
+    let mode_ok = if bits == 64 {
+        def.flags & NO64 == 0
+    } else {
+        def.flags & ONLY64 == 0
+    };
+    let syntax_ok = match cx.state.syntax {
+        Syntax::Att => def.flags & INTEL_ONLY == 0,
+        Syntax::Intel => def.flags & ATT_ONLY == 0,
+    };
+    mode_ok && syntax_ok
+}
+
 /// Every definition that accepts `ops`, in table (preference) order.
 fn select<'d>(
     cx: &mut AsmCtx<'_>,
@@ -518,7 +594,7 @@ fn select<'d>(
 ) -> Vec<&'d Def> {
     let mut out = Vec::new();
     for def in defs {
-        if def.ops.len() != ops.len() {
+        if def.ops.len() != ops.len() || !available(cx, bits, def) {
             continue;
         }
         if let Some(want) = resolved.opsize
@@ -552,6 +628,7 @@ fn select<'d>(
     if out.is_empty() && resolved.opsize.is_some() && resolved.rm_width.is_none() {
         for def in defs {
             if def.ops.len() == ops.len()
+                && available(cx, bits, def)
                 && def.opsize == 0
                 && def
                     .ops
@@ -566,6 +643,7 @@ fn select<'d>(
     if out.is_empty() {
         for def in resolved.fallback {
             if def.ops.len() == ops.len()
+                && available(cx, bits, def)
                 && def
                     .ops
                     .iter()
@@ -631,11 +709,11 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             };
             cx.constant(*e).is_some_and(|v| (-128..=127).contains(&v))
         }
-        Op::One => {
+        Op::One | Op::Three => {
             let OperandKind::Imm(e) = &o.kind else {
                 return false;
             };
-            cx.constant(*e) == Some(1)
+            cx.constant(*e) == Some(if *pat == Op::One { 1 } else { 3 })
         }
         Op::V(k) | Op::Nds(k) | Op::Is4(k) => o.reg().is_some_and(|r| k.accepts(r)),
         Op::Vm(k, msz) => match &o.kind {
@@ -667,6 +745,44 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             _ => false,
         },
         Op::Fixed(name) => o.reg() == reg::lookup(name),
+        Op::Seg => o.reg().is_some_and(|r| r.class == RegClass::Segment),
+        Op::Cr => o.reg().is_some_and(|r| r.class == RegClass::Control),
+        Op::Dr => o.reg().is_some_and(|r| r.class == RegClass::Debug),
+        Op::St => o.reg().is_some_and(|r| r.class == RegClass::St),
+        Op::Moffs(w) => match &o.kind {
+            OperandKind::Mem(m) => {
+                m.base.is_none()
+                    && m.index.is_none()
+                    && !m.rip_relative
+                    && m.disp.is_some()
+                    && o.size_hint.is_none_or(|h| h == w)
+            }
+            _ => false,
+        },
+        Op::Far => matches!(o.kind, OperandKind::FarPtr { .. }),
+        Op::FarM | Op::Fword => {
+            let is_mem = match &o.kind {
+                OperandKind::Mem(_) => true,
+                OperandKind::Indirect(inner) => matches!(**inner, OperandKind::Mem(_)),
+                _ => false,
+            };
+            is_mem
+                && match *pat {
+                    Op::Fword => o.size_hint == Some(6),
+                    _ => o.size_hint.is_none_or(|h| h == 6),
+                }
+        }
+        Op::Dx => match &o.kind {
+            OperandKind::Reg(r) => *r == reg::lookup("dx").expect("dx is a register"),
+            // AT&T also spells the port `(%dx)`.
+            OperandKind::Mem(m) => {
+                m.base == reg::lookup("dx")
+                    && m.index.is_none()
+                    && m.disp.is_none()
+                    && m.seg.is_none()
+            }
+            _ => false,
+        },
         Op::Rel(_) => encode::rel_expr(o).is_some(),
         Op::IndirectRm(w) => {
             // AT&T marks indirect branches with `*`; Intel does not.
@@ -691,40 +807,92 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
 
 /// Resolves an operand size the source never pinned down.
 ///
-/// `mov $1, (%rax)` could store one, two, four or eight bytes. GNU as picks
-/// the mode's default operand size — four bytes in 32- and 64-bit mode — and
+/// `mov $1, (%rax)` could store one, two, four or eight bytes, and `push $1`
+/// or `pushf` could push two, four or eight. GNU as picks the mode's default
+/// operand size — 16 bits in 16-bit mode, 32 in 32- and 64-bit mode, except
+/// for the stack and branch instructions long mode widened to 64 — and
 /// existing sources rely on that, so rsasm does the same rather than
 /// rejecting the line. NASM-dialect input should insist on an explicit size
 /// instead; that belongs with the NASM front end, not here.
-fn prefer_default_size<'d>(bits: u8, matches: Vec<&'d Def>, ops: &[Operand]) -> Vec<&'d Def> {
-    let unsized_mem = ops.iter().any(|o| o.is_mem() && o.size_hint.is_none());
-    if !unsized_mem || matches.len() < 2 {
-        return matches;
-    }
+///
+/// `.code16gcc` makes the stack instructions default to 32 bits as well.
+fn prefer_default_size<'d>(
+    bits: u8,
+    gcc16: bool,
+    stack: bool,
+    matches: Vec<&'d Def>,
+    resolved: &Resolved,
+) -> Vec<&'d Def> {
     let first = matches[0];
-    // Instructions whose operand size already defaults to 64 bits in long
-    // mode are not ambiguous there.
-    if bits == 64 && first.flags & DEF64 != 0 {
+    // A row with no operand size, such as a relative branch that also reads
+    // as an indirect one through memory, is preferred as it stands.
+    if resolved.opsize.is_some()
+        || first.opsize == 0
+        || matches.iter().all(|d| d.opsize == first.opsize)
+    {
         return matches;
     }
-    if matches.iter().all(|d| d.opsize == first.opsize) {
-        return matches;
-    }
-    let default_size: u8 = if bits == 16 { 16 } else { 32 };
+    let default_size: u8 = match bits {
+        64 if stack => 64,
+        16 if !(gcc16 && stack) => 16,
+        _ => 32,
+    };
     let mut matches = matches;
     if let Some(pos) = matches.iter().position(|d| d.opsize == default_size) {
-        matches.swap(0, pos);
+        let chosen = matches.remove(pos);
+        matches.insert(0, chosen);
     }
     matches
+}
+
+/// True when an unsized memory operand leaves more than one width possible.
+///
+/// GNU as's Intel syntax refuses `add [eax], 1` and `fld [eax]` for want of a
+/// `dword ptr`, where its AT&T syntax only warns and takes a default.
+fn ambiguous_memory_size(matches: &[&Def], ops: &[Operand]) -> bool {
+    let Some(slot) = ops.iter().position(|o| o.is_mem() && o.size_hint.is_none()) else {
+        return false;
+    };
+    let width = |d: &Def| match d.ops[slot] {
+        Op::Rm(w) | Op::M(w) | Op::Moffs(w) | Op::IndirectRm(w) => w,
+        _ => 0,
+    };
+    let first = width(matches[0]);
+    matches.iter().any(|d| width(d) != first)
 }
 
 fn report_no_match(
     cx: &mut AsmCtx<'_>,
     req: &InsnRequest<'_>,
     mnemonic: &str,
-    defs: &[Def],
+    resolved: &Resolved,
     ops: &[Operand],
 ) {
+    let defs = resolved.defs;
+    let bits = cx.state.bits;
+    // Something that would have matched in another mode or syntax is worth
+    // saying so about.
+    let elsewhere = defs.iter().find(|def| {
+        def.ops.len() == ops.len()
+            && !available(cx, bits, def)
+            && resolved.opsize.is_none_or(|w| def.opsize == w)
+            && def
+                .ops
+                .iter()
+                .zip(ops)
+                .all(|(p, o)| op_matches(cx, bits, def, p, o))
+    });
+    if let Some(def) = elsewhere {
+        let msg = if def.flags & NO64 != 0 && bits == 64 {
+            format!("`{mnemonic}` with these operands is not available in 64-bit mode")
+        } else if def.flags & ONLY64 != 0 && bits != 64 {
+            format!("`{mnemonic}` with these operands is only available in 64-bit mode")
+        } else {
+            format!("`{mnemonic}` with these operands is not available in this syntax")
+        };
+        cx.error(req.span, msg);
+        return;
+    }
     let arities: Vec<usize> = {
         let mut v: Vec<usize> = defs.iter().map(|d| d.ops.len()).collect();
         v.sort_unstable();
