@@ -249,6 +249,15 @@ impl<'a> Lexer<'a> {
         self.pos >= self.bytes.len()
     }
 
+    /// Length in bytes of the character at the cursor. `pos` is always on a
+    /// character boundary, so this is well defined.
+    fn char_len(&self) -> usize {
+        self.src[self.pos..]
+            .chars()
+            .next()
+            .map_or(1, char::len_utf8)
+    }
+
     fn starts_with(&self, s: &str) -> bool {
         self.bytes[self.pos.min(self.bytes.len())..].starts_with(s.as_bytes())
     }
@@ -342,8 +351,10 @@ impl<'a> Lexer<'a> {
         }
 
         if is_ident_start(c) || (c == b'.' && is_ident_cont(self.peek_at(1))) {
+            // Identifiers may contain non-ASCII characters, so advance by
+            // whole characters and never leave `pos` inside one.
             while !self.at_end() && is_ident_cont(self.peek()) {
-                self.pos += 1;
+                self.pos += self.char_len();
             }
             let text = &self.src[start..self.pos];
             let name = interner.intern(text);

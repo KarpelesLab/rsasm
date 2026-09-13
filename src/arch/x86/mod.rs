@@ -331,10 +331,14 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
         }
     }
 
-    // A single trailing size letter.
-    let (stem, last) = mnemonic.split_at(mnemonic.len().checked_sub(1)?);
-    let w = suffix_width(last.as_bytes()[0])?;
-    let defs = insn::lookup(stem)?;
+    // A single trailing size letter. Only an ASCII byte can be one, which is
+    // also what makes `len - 1` a safe place to split.
+    let last = *mnemonic.as_bytes().last()?;
+    if !last.is_ascii() {
+        return None;
+    }
+    let w = suffix_width(last)?;
+    let defs = insn::lookup(&mnemonic[..mnemonic.len() - 1])?;
     Some(Resolved {
         defs,
         opsize: Some(w * 8),
