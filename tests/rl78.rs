@@ -864,20 +864,48 @@ fn unresolved_operands_get_the_reference_relocations() {
 }
 
 #[test]
-fn a_relative_branch_out_of_its_section_is_refused_not_mislinked() {
-    // The GNU linker computes `R_RL78_DIR8S_PCREL` as `S + A - (P + 1)`,
-    // and the core cannot yet write the addend that convention needs.
-    for src in [
-        "br $ext",
-        "br $!ext",
-        "call $!ext",
-        "bc $ext",
-        "bt a.1, $ext",
+fn relative_branches_out_of_their_section_carry_unbiased_relocations() {
+    // The GNU linker computes `R_RL78_DIR8S_PCREL` and `DIR16S_PCREL` as
+    // `S + A - (P + size)`, so GNU as writes an addend of 0. Offsets, types
+    // and addends below are what `rl78-elf-as` produces for the same source.
+    for (src, bytes, kind, offset) in [
+        ("br $ext", "ef 00", R_DIR8S_PCREL, 1),
+        ("br $!ext", "ee 00 00", R_DIR16S_PCREL, 1),
+        ("call $!ext", "fe 00 00", R_DIR16S_PCREL, 1),
     ] {
-        let e = errors_for("rl78", src);
-        assert!(e.contains("PC-relative"), "`{src}`: {e}");
+        let asm = assemble_for("rl78", src);
+        assert!(
+            !asm.diags.has_errors(),
+            "`{src}`: {}",
+            asm.diags.render(&asm.sm, false)
+        );
+        assert_eq!(hex(&section(&asm, ".text")), bytes, "`{src}`");
+        assert_eq!(asm.relocs.len(), 1, "`{src}`");
+        let r = &asm.relocs[0];
+        assert_eq!((r.kind, r.offset, r.addend), (kind, offset, 0), "`{src}`");
     }
 }
+
+#[test]
+fn a_conditional_branch_to_an_unknown_target_takes_the_long_form() {
+    // A deliberate difference from GNU as, which keeps the two-byte form with
+    // an 8-bit relocation that fails to link if the target lands more than 127
+    // bytes away. Nothing is known about an external symbol's distance, so
+    // rsasm takes the form that always reaches: the inverted condition skipping
+    // over `br $!ext`.
+    let asm = assemble_for("rl78", "bc $ext");
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(hex(&section(&asm, ".text")), "de 03 ee 00 00");
+    let r = &asm.relocs[0];
+    assert_eq!((r.kind, r.offset, r.addend), (R_DIR16S_PCREL, 3, 0));
+}
+
+const R_DIR16S_PCREL: u32 = 0x0a;
+const R_DIR8S_PCREL: u32 = 0x0b;
 
 // ---- layout ------------------------------------------------------------------------
 

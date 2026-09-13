@@ -19,6 +19,10 @@ pub const R_RL78_DIR16S: u32 = 0x05;
 pub const R_RL78_DIR8S: u32 = 0x08;
 /// A short direct address (`saddr`), which the linker reduces to one byte.
 pub const R_RL78_RH_SADDR: u32 = 0x2f;
+/// `S + A - (P + 2)`: a 16-bit displacement measured from the end of its field.
+pub const R_RL78_DIR16S_PCREL: u32 = 0x0a;
+/// `S + A - (P + 1)`: an 8-bit displacement measured from the end of its field.
+pub const R_RL78_DIR8S_PCREL: u32 = 0x0b;
 
 /// An 8-bit immediate or based-addressing displacement.
 pub fn imm8() -> FixupKind {
@@ -64,21 +68,23 @@ pub fn saddr() -> FixupKind {
 /// Every RL78 relative field is the last thing in its instruction, so the
 /// adjustment is simply the field width.
 ///
-/// No relocation is attached, deliberately. The GNU linker computes
-/// `R_RL78_DIR8S_PCREL` and `R_RL78_DIR16S_PCREL` as `S + A - (P + size)`
-/// (`bfd/elf32-rl78.c`, `rl78_elf_relocate_section`), so the reference writes
-/// an addend of 0 for `$sym`. The core writes `addend - adjust`, the x86
-/// convention, which would land every such branch `size` bytes early. A
-/// target in the same section never needs a relocation; one in another
-/// section is reported as unrelocatable rather than silently mislinked.
+/// The relocation is *unbiased*. The GNU linker computes `R_RL78_DIR8S_PCREL`
+/// and `R_RL78_DIR16S_PCREL` as `S + A - (P + size)` (`bfd/elf32-rl78.c`,
+/// `rl78_elf_relocate_section`), so the field's own width is already
+/// accounted for and GNU as writes an addend of 0. Taking the core's default
+/// x86-style bias as well would land every such branch `size` bytes early.
 pub fn rel8() -> FixupKind {
     FixupKind::pcrel(1, 1)
+        .with_reloc(R_RL78_DIR8S_PCREL)
+        .unbiased_reloc()
 }
 
 /// The 16-bit displacement of `br $!addr` and `call $!addr`. See [`rel8`] for
-/// why it has no relocation.
+/// why the relocation is unbiased.
 pub fn rel16() -> FixupKind {
     FixupKind::pcrel(2, 2)
+        .with_reloc(R_RL78_DIR16S_PCREL)
+        .unbiased_reloc()
 }
 
 /// The relocation for a data directive of `size` bytes.
