@@ -10,3 +10,6 @@ pub mod section;
 pub mod symbol;
 pub mod arch;
 pub mod parser;
+pub mod assembler;
+pub mod directives;
+pub mod layout;

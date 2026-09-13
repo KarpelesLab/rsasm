@@ -13,7 +13,7 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{Def, Op, DEF64};
+use insn::{Def, Op, DEF64, NOTACC};
 use operand::{Operand, OperandKind, OperandParser};
 
 pub const NAMES: &[&str] = &["x86-64", "i386", "i8086"];
@@ -78,8 +78,20 @@ impl Architecture for X86 {
         if pcrel { reloc::pcrel(size) } else { reloc::abs(size) }
     }
 
-    fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
-        encode::nop_bytes(len as usize)
+    fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
+        match name {
+            "plt" => Some(reloc::PLT32),
+            "gotpcrel" => Some(reloc::GOTPCREL),
+            "got" => Some(reloc::GOT32),
+            _ => {
+                let _ = (size, pcrel);
+                None
+            }
+        }
+    }
+
+    fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8> {
+        encode::nop_bytes(state.bits, len as usize)
     }
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
@@ -117,12 +129,22 @@ impl Architecture for X86 {
     }
 }
 
-/// Prefix mnemonics that attach to the instruction written after them.
-fn prefix_byte(mnemonic: &str) -> Option<(bool, Option<u8>)> {
+/// A prefix mnemonic, which attaches to the instruction written after it.
+enum PrefixKind {
+    Lock,
+    Rep(u8),
+    Segment(u8),
+}
+
+fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
     Some(match mnemonic {
-        "lock" => (true, None),
-        "rep" | "repe" | "repz" => (false, Some(0xf3)),
-        "repne" | "repnz" => (false, Some(0xf2)),
+        "lock" => PrefixKind::Lock,
+        "rep" | "repe" | "repz" => PrefixKind::Rep(0xf3),
+        "repne" | "repnz" => PrefixKind::Rep(0xf2),
+        "es" | "cs" | "ss" | "ds" | "fs" | "gs" => {
+            let r = reg::lookup(mnemonic).expect("segment names are in the register table");
+            PrefixKind::Segment(encode::segment_prefix(r).expect("segment has a prefix byte"))
+        }
         _ => return None,
     })
 }
@@ -139,11 +161,12 @@ fn assemble_inner(
         return None;
     }
 
-    // `lock`, `rep` and friends prefix the instruction that follows them.
-    if let Some((lock, rep)) = prefix_byte(mnemonic) {
-        prefixes.lock |= lock;
-        if let Some(r) = rep {
-            prefixes.rep = Some(r);
+    // `lock`, `rep`, `fs` and friends prefix the instruction that follows.
+    if let Some(kind) = prefix_kind(mnemonic) {
+        match kind {
+            PrefixKind::Lock => prefixes.lock = true,
+            PrefixKind::Rep(r) => prefixes.rep = Some(r),
+            PrefixKind::Segment(s) => prefixes.seg = Some(s),
         }
         let mut cur = req.cursor();
         if cur.at_end() {
@@ -154,6 +177,9 @@ fn assemble_inner(
             }
             if let Some(r) = prefixes.rep {
                 bytes.push(r);
+            }
+            if let Some(s) = prefixes.seg {
+                bytes.push(s);
             }
             return Some(vec![Variant::new(bytes)]);
         }
@@ -332,6 +358,9 @@ fn select<'d>(
                 continue;
             }
         }
+        if def.flags & NOTACC != 0 && all_accumulator(ops) {
+            continue;
+        }
         if def.ops.iter().zip(ops).all(|(p, o)| op_matches(cx, bits, def, p, o)) {
             out.push(def);
         }
@@ -349,6 +378,11 @@ fn select<'d>(
         }
     }
     out
+}
+
+/// True when every operand is a register and all of them are the accumulator.
+fn all_accumulator(ops: &[Operand]) -> bool {
+    !ops.is_empty() && ops.iter().all(|o| o.reg().is_some_and(|r| r.is_gpr() && r.num == 0))
 }
 
 fn fits_unsigned_or_signed(v: i64, width: u8) -> bool {

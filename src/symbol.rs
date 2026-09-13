@@ -141,6 +141,26 @@ impl SymbolTable {
         id
     }
 
+    /// Creates the symbol that stands for a whole section.
+    ///
+    /// It is deliberately not registered by name: `.text` as a section symbol
+    /// and `.text` as a user-written label are different things.
+    pub fn intern_section(&mut self, name: Name, section: SectionId) -> SymbolId {
+        self.push(Symbol {
+            name,
+            value: SymbolValue::Label { section, frag: 0 },
+            binding: Binding::Local,
+            ty: SymType::Section,
+            visibility: Visibility::Default,
+            size: None,
+            def_span: Span::DUMMY,
+            first_use: Span::DUMMY,
+            local_number: None,
+            redefinable: false,
+            used: true,
+        })
+    }
+
     fn push(&mut self, s: Symbol) -> SymbolId {
         let id = SymbolId(self.syms.len() as u32);
         self.syms.push(s);

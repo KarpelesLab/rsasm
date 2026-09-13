@@ -1,7 +1,7 @@
 //! Instruction encoding: prefixes, REX, opcode, ModRM/SIB, displacement and
 //! immediate.
 
-use super::insn::{Def, ModRm, Op, DEF64, IMM64, NO64, ONLY64, PLUSREG};
+use super::insn::{Def, ModRm, Op, DEF64, IMM64, NO64, NO_REX_W, ONLY64, PLUSREG};
 use super::operand::{Mem, Operand, OperandKind};
 use super::reg::{self, Reg, RegClass};
 use super::reloc;
@@ -16,6 +16,8 @@ pub struct Prefixes {
     pub lock: bool,
     /// 0xF3 (`rep`/`repe`) or 0xF2 (`repne`), whichever was written.
     pub rep: Option<u8>,
+    /// A segment override written as a standalone prefix, as in `fs movq ...`.
+    pub seg: Option<u8>,
 }
 
 /// Which operand fills which encoding slot, worked out from the pattern.
@@ -27,7 +29,7 @@ struct Roles<'o> {
     rel: Option<(ExprRef, u8)>,
 }
 
-fn segment_prefix(r: Reg) -> Option<u8> {
+pub fn segment_prefix(r: Reg) -> Option<u8> {
     Some(match r.num {
         0 => 0x26, // es
         1 => 0x2e, // cs
@@ -165,14 +167,18 @@ pub fn encode(
         _ => None,
     });
 
-    if let Some(seg) = mem.as_ref().and_then(|m| m.seg) {
-        match segment_prefix(seg) {
-            Some(p) => bytes.push(p),
+    let seg_override = match mem.as_ref().and_then(|m| m.seg) {
+        Some(seg) => match segment_prefix(seg) {
+            Some(p) => Some(p),
             None => {
                 cx.error(span, format!("`{}` is not a valid segment override", reg::name_of(seg)));
                 return None;
             }
-        }
+        },
+        None => prefixes.seg,
+    };
+    if let Some(p) = seg_override {
+        bytes.push(p);
     }
 
     // Address-size override: a 32-bit address in 64-bit mode, or vice versa.
@@ -206,7 +212,9 @@ pub fn encode(
     }
 
     // ---- REX --------------------------------------------------------------
-    let rex_w = def.opsize == 64 && !(bits == 64 && def.flags & DEF64 != 0);
+    let rex_w = def.opsize == 64
+        && def.flags & NO_REX_W == 0
+        && !(bits == 64 && def.flags & DEF64 != 0);
     if def.opsize == 64 && bits != 64 && def.flags & DEF64 == 0 {
         cx.error(span, "64-bit operands require 64-bit mode");
         return None;
@@ -221,9 +229,13 @@ pub fn encode(
         _ => None,
     });
 
-    let rex_r = roles.reg.is_some_and(|r| r.needs_rex_ext());
+    // With a `+r` opcode the register lives in the opcode's low three bits,
+    // so its fourth bit is REX.B rather than REX.R.
+    let plus_reg = def.flags & PLUSREG != 0;
+    let rex_r = !plus_reg && roles.reg.is_some_and(|r| r.needs_rex_ext());
     let rex_b = rm_reg.is_some_and(|r| r.needs_rex_ext())
-        || mem.as_ref().and_then(|m| m.base).is_some_and(|r| r.needs_rex_ext());
+        || mem.as_ref().and_then(|m| m.base).is_some_and(|r| r.needs_rex_ext())
+        || (plus_reg && roles.reg.is_some_and(|r| r.needs_rex_ext()));
     let rex_x = mem.as_ref().and_then(|m| m.index).is_some_and(|r| r.needs_rex_ext());
 
     // spl/bpl/sil/dil only exist with a REX prefix present, even an empty one.
@@ -256,7 +268,7 @@ pub fn encode(
     // ---- opcode -----------------------------------------------------------
     let opcode_start = bytes.len();
     bytes.extend_from_slice(&def.opcode);
-    if def.flags & PLUSREG != 0 {
+    if plus_reg {
         let Some(r) = roles.reg else {
             cx.error(span, "internal: `+r` encoding without a register operand");
             return None;
@@ -380,8 +392,22 @@ fn encode_rm(
         bytes.push(((reg_field & 7) << 3) | 0b101);
         let at = bytes.len();
         bytes.extend_from_slice(&[0; 4]);
-        let e = m.disp.unwrap_or_else(|| cx.exprs.int(0, m.span));
-        *disp_fixup = Some((at, e, m.span, true));
+        // A constant here is the displacement itself: `2(%rip)` addresses two
+        // bytes past the next instruction. Only a symbolic displacement is
+        // turned into "distance from here to that symbol".
+        match m.disp {
+            None => {}
+            Some(e) => match expr::const_fold(cx.exprs, e) {
+                Some(v) => {
+                    if i32::try_from(v).is_err() {
+                        cx.error(m.span, format!("displacement {v} does not fit in 32 bits"));
+                        return None;
+                    }
+                    bytes[at..at + 4].copy_from_slice(&(v as i32).to_le_bytes());
+                }
+                None => *disp_fixup = Some((at, e, m.span, true)),
+            },
+        }
         return Some(());
     }
 
@@ -485,7 +511,15 @@ fn push_disp32(
 
 /// The canonical multi-byte no-ops recommended by both vendors, indexed by
 /// length. Padding with these keeps alignment padding executable and cheap.
-pub fn nop_bytes(len: usize) -> Vec<u8> {
+///
+/// The exact split differs from GNU as, which varies it by `-mtune`; any
+/// sequence of no-ops of the right total length is correct.
+pub fn nop_bytes(bits: u8, len: usize) -> Vec<u8> {
+    // The long forms are `0f 1f`, which predates neither 16-bit mode nor the
+    // pre-P6 processors that 16-bit code is usually written for.
+    if bits < 32 {
+        return vec![0x90; len];
+    }
     const NOPS: [&[u8]; 12] = [
         &[],
         &[0x90],
@@ -508,4 +542,23 @@ pub fn nop_bytes(len: usize) -> Vec<u8> {
         left -= take;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nop_bytes;
+
+    #[test]
+    fn nop_padding_has_the_requested_length() {
+        for bits in [16u8, 32, 64] {
+            for len in 0..64 {
+                assert_eq!(nop_bytes(bits, len).len(), len, "bits={bits} len={len}");
+            }
+        }
+    }
+
+    #[test]
+    fn sixteen_bit_mode_uses_only_the_one_byte_nop() {
+        assert_eq!(nop_bytes(16, 3), vec![0x90, 0x90, 0x90]);
+    }
 }

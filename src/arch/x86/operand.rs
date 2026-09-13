@@ -411,7 +411,8 @@ impl OperandParser<'_, '_> {
                 if cur.check_punct(Punct::Star) {
                     cur.advance();
                     let stok = cur.peek();
-                    let e = self.expr(cur)?;
+                    // Only the scale itself, not the `+ disp` that may follow.
+                    let e = self.intel_disp_term(cur)?;
                     let Some(s @ (1 | 2 | 4 | 8)) = crate::expr::const_fold(self.cx.exprs, e) else {
                         self.cx.error(stok.span, "scale must be 1, 2, 4 or 8");
                         return None;

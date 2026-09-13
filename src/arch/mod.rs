@@ -140,6 +140,12 @@ pub trait Architecture {
     /// reference of that width an error).
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32>;
 
+    /// Relocation type selected by a source-level `@` modifier such as
+    /// `foo@PLT`. `None` means the modifier is not recognised.
+    fn modifier_reloc(&self, _name: &str, _size: u8, _pcrel: bool) -> Option<u32> {
+        None
+    }
+
     /// Padding for `.align` in an executable section: real no-ops where the
     /// architecture has them, so padding stays executable.
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8>;

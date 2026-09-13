@@ -77,6 +77,9 @@ pub enum ExprKind {
     Int(u64),
     /// A named symbol, resolved at evaluation time.
     Sym(Name),
+    /// An already-resolved symbol. Positional references (`.`, `1f`) are
+    /// rewritten into this once the statement they appear in is parsed.
+    SymId(SymbolId),
     /// `1f` / `2b`: nearest numeric local label in the given direction.
     LocalRef(u32, LocalDir),
     /// The current location counter (`.` in GAS, `$` in NASM).
@@ -170,6 +173,8 @@ impl Value {
 pub trait EvalCtx {
     /// Resolves a name to a value, interning the symbol if it is new.
     fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError>;
+    /// Resolves an already-identified symbol.
+    fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, EvalError>;
     /// The current location counter.
     fn here(&mut self, span: Span) -> Result<Value, EvalError>;
     /// The start of the current section.
@@ -203,6 +208,7 @@ pub fn eval(arena: &ExprArena, r: ExprRef, cx: &mut dyn EvalCtx) -> Result<Value
     match &node.kind {
         ExprKind::Int(v) => Ok(Value::abs(*v as i64)),
         ExprKind::Sym(n) => cx.lookup_symbol(*n, span),
+        ExprKind::SymId(id) => cx.symbol_value(*id, span),
         ExprKind::LocalRef(n, dir) => cx.local_ref(*n, *dir, span),
         ExprKind::Here => cx.here(span),
         ExprKind::SectionStart => cx.section_start(span),
@@ -341,6 +347,9 @@ pub fn const_fold(arena: &ExprArena, r: ExprRef) -> Option<i64> {
     struct NoSymbols;
     impl EvalCtx for NoSymbols {
         fn lookup_symbol(&mut self, _: Name, span: Span) -> Result<Value, EvalError> {
+            Err(EvalError::new(span, "not a constant"))
+        }
+        fn symbol_value(&mut self, _: SymbolId, span: Span) -> Result<Value, EvalError> {
             Err(EvalError::new(span, "not a constant"))
         }
         fn here(&mut self, span: Span) -> Result<Value, EvalError> {
@@ -558,6 +567,9 @@ mod tests {
         fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError> {
             let s = self.names.get(&name).cloned().unwrap_or_default();
             self.syms.get(&s).copied().ok_or_else(|| EvalError::new(span, format!("undefined: {s}")))
+        }
+        fn symbol_value(&mut self, _: SymbolId, span: Span) -> Result<Value, EvalError> {
+            Err(EvalError::new(span, "no such symbol"))
         }
         fn here(&mut self, _: Span) -> Result<Value, EvalError> {
             Ok(Value::abs(self.here))

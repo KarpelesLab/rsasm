@@ -62,6 +62,14 @@ pub const ONLY64: u16 = 1 << 2;
 pub const NO64: u16 = 1 << 3;
 /// The immediate is an absolute 64-bit value (`movabs`).
 pub const IMM64: u16 = 1 << 4;
+/// Not usable when every register operand is the accumulator. `xchg` needs
+/// this: `xchg eax, eax` must not encode as `90`, which is `nop` and does not
+/// clear the upper half of `rax`.
+pub const NOTACC: u16 = 1 << 5;
+/// A 64-bit form that needs no REX.W, because the plain opcode already means
+/// what the source asked for. `xchg rax, rax` is the one case: it is spelled
+/// `90`, the canonical `nop`.
+pub const NO_REX_W: u16 = 1 << 6;
 
 #[derive(Clone, Debug)]
 pub struct Def {
@@ -292,7 +300,27 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
     });
 
     t.insert("xchg", {
-        let mut defs = vec![d(vec![Op::Rm(1), Op::R(1)], &[0x86], ModRm::Reg, 8)];
+        // `xchg rax, rax` is spelled `nop`, and `xchg ax, ax` is `66 90`;
+        // both are shorter than the ModRM forms, so they come first.
+        let mut defs = vec![
+            d(vec![Op::Fixed("rax"), Op::Fixed("rax")], &[0x90], ModRm::None, 64)
+                .flags(NO_REX_W),
+            d(vec![Op::Fixed("ax"), Op::Fixed("ax")], &[0x90], ModRm::None, 16),
+        ];
+        // `xchg rAX, r` has a one-byte encoding.
+        for (w, acc) in [(2u8, "ax"), (4, "eax"), (8, "rax")] {
+            let bits = opsize_bits(w);
+            defs.push(
+                d(vec![Op::Fixed(acc), Op::R(w)], &[0x90], ModRm::None, bits)
+                    .flags(PLUSREG | NOTACC),
+            );
+            defs.push(
+                d(vec![Op::R(w), Op::Fixed(acc)], &[0x90], ModRm::None, bits)
+                    .flags(PLUSREG | NOTACC),
+            );
+        }
+        defs.push(d(vec![Op::Rm(1), Op::R(1)], &[0x86], ModRm::Reg, 8));
+        defs.push(d(vec![Op::R(1), Op::Rm(1)], &[0x86], ModRm::Reg, 8));
         for w in WIDTHS {
             defs.push(d(vec![Op::Rm(w), Op::R(w)], &[0x87], ModRm::Reg, opsize_bits(w)));
             defs.push(d(vec![Op::R(w), Op::Rm(w)], &[0x87], ModRm::Reg, opsize_bits(w)));
