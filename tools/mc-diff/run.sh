@@ -89,7 +89,7 @@ canon() { # object
   xxd -p "$1.bin" | tr -d '\n'
   echo
   llvm-readobj --symbols "$1" > "$1.syms"
-  llvm-readobj --relocs --expand-relocs "$1" | awk -f "$here/relocs.awk" "$1.syms" -
+  llvm-readobj --relocs --expand-relocs "$1" | ${AWK:-awk} -f "$here/relocs.awk" "$1.syms" -
 }
 
 compare_object() { # arch, rsasm_arch, triple, flags, name, source
