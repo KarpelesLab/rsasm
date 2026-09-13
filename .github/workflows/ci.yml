@@ -185,18 +185,50 @@ jobs:
           key: mc-diff
 
       # llvm-mc is the only oracle that covers every architecture in the
-      # crate, so this is what keeps a backend honest about encodings that no
-      # x86 host can check. The runner ships LLVM; pick whatever version is
-      # installed rather than pinning one that may be dropped.
+      # crate, so this is what keeps a backend honest about encodings no x86
+      # host can check. The runner has LLVM but not on PATH, and the layout
+      # moves between images, so search rather than pin — and fail loudly if
+      # it is really absent, because run.sh skips silently when the tools are
+      # missing and a silently skipped oracle is worse than none.
       - name: Locate llvm-mc
         run: |
           set -euo pipefail
-          dir=$(dirname "$(readlink -f "$(command -v llvm-mc || command -v llvm-mc-* | head -1)")")
+          find_tool() {
+            command -v "$1" 2>/dev/null && return 0
+            ls -1 /usr/lib/llvm-*/bin/"$1" 2>/dev/null | sort -V | tail -1 | grep . && return 0
+            ls -1 /usr/bin/"$1"-* 2>/dev/null | sort -V | tail -1 | grep . && return 0
+            return 1
+          }
+          if ! find_tool llvm-mc >/dev/null; then
+            echo "llvm-mc not found; installing"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq llvm
+          fi
+          mc=$(find_tool llvm-mc) || { echo "::error::llvm-mc unavailable"; exit 1; }
+          oc=$(find_tool llvm-objcopy) || { echo "::error::llvm-objcopy unavailable"; exit 1; }
+          echo "found $mc and $oc"
+          dir=$(dirname "$mc")
           echo "$dir" >> "$GITHUB_PATH"
-          "$dir/llvm-mc" --version | head -2
+          # run.sh calls both by bare name, so make sure both resolve there.
+          [ -x "$dir/llvm-objcopy" ] || sudo ln -s "$oc" "$dir/llvm-objcopy"
+          "$mc" --version | head -2
+
+      # A guard against the harness quietly doing nothing: it exits 0 when the
+      # tools are missing, so confirm it actually compared something.
+      - name: Confirm the oracle is reachable
+        run: |
+          set -euo pipefail
+          command -v llvm-mc
+          command -v llvm-objcopy
 
       - name: tools/mc-diff/run.sh
-        run: tools/mc-diff/run.sh
+        run: |
+          set -euo pipefail
+          out=$(tools/mc-diff/run.sh)
+          echo "$out"
+          # "0 matched" means the corpus never ran, which must not read as a pass.
+          echo "$out" | grep -qE -- "--- [1-9][0-9]* matched" \
+            || { echo "::error::mc-diff compared nothing"; exit 1; }
 
   cli_smoke:
     name: CLI end-to-end (assemble, link, run)
