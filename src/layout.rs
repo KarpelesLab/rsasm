@@ -499,7 +499,12 @@ impl Assembler {
             return None;
         }
 
-        let mut addend = v.addend - if kind.pcrel { kind.adjust as i64 } else { 0 };
+        let bias = if kind.pcrel && kind.bias_reloc_addend {
+            kind.adjust as i64
+        } else {
+            0
+        };
+        let mut addend = v.addend - bias;
 
         // Local symbols are relocated against their section, which is what
         // linkers expect and what keeps local labels out of the symbol table.

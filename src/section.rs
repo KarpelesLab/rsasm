@@ -119,6 +119,15 @@ pub struct FixupKind {
     /// to round.
     pub value_align: u8,
     pub encoding: FieldEncoding,
+    /// Whether a PC-relative relocation's addend carries the `adjust` bias.
+    ///
+    /// Relocations disagree about where "here" is. x86-64's `PC32` is
+    /// `S + A - P` with `P` the field itself, so a field four bytes short of
+    /// the end of its instruction needs `A = -4`, and GNU as writes that. The
+    /// Renesas-lineage targets — RL78, RX, V850 — define theirs from the
+    /// instruction, and GNU as writes `A = 0`. Same-section resolution is
+    /// unaffected either way; this only decides what the linker is handed.
+    pub bias_reloc_addend: bool,
 }
 
 impl FixupKind {
@@ -132,6 +141,7 @@ impl FixupKind {
             value_bits: 0,
             value_align: 1,
             encoding: FieldEncoding::Whole,
+            bias_reloc_addend: true,
         }
     }
 
@@ -159,6 +169,13 @@ impl FixupKind {
     pub fn with_field(mut self, bits: u8, align: u8) -> FixupKind {
         self.value_bits = bits;
         self.value_align = align.max(1);
+        self
+    }
+
+    /// Leaves the `adjust` bias out of the relocation addend; see
+    /// [`FixupKind::bias_reloc_addend`].
+    pub fn unbiased_reloc(mut self) -> FixupKind {
+        self.bias_reloc_addend = false;
         self
     }
 
@@ -495,6 +512,17 @@ mod tests {
         // Misaligned targets are rejected rather than rounded.
         assert!(!k.fits(2));
         assert!(k.fits(4));
+    }
+
+    #[test]
+    fn the_relocation_bias_is_on_by_default_and_can_be_dropped() {
+        // Every existing backend relies on the x86-style bias, so it must stay
+        // the default; the Renesas-lineage targets opt out.
+        assert!(FixupKind::pcrel(4, 4).bias_reloc_addend);
+        assert!(!FixupKind::pcrel(1, 1).unbiased_reloc().bias_reloc_addend);
+        // Dropping the bias does not touch how the field resolves locally.
+        let k = FixupKind::pcrel(1, 1).unbiased_reloc();
+        assert_eq!(k.adjust, 1);
     }
 
     #[test]
