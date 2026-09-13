@@ -63,22 +63,30 @@ jobs:
 
       # Every architecture backend is a feature, so the core has to keep
       # building with all of them off. This is what stops the generic half of
-      # the assembler from quietly growing a dependency on x86 — the trait in
-      # `arch::Architecture` is only a real seam if the crate compiles without
-      # anything behind it.
+      # the assembler from quietly growing a dependency on one backend — the
+      # trait in `arch::Architecture` is only a real seam if the crate
+      # compiles with nothing behind it.
       - name: Build with no backends
         run: cargo build --no-default-features
 
       - name: Clippy with no backends
         run: cargo clippy --all-targets --no-default-features -- -D warnings
 
-      # Each backend on its own, so a feature can never come to depend on
-      # another one being enabled alongside it.
-      - name: Build x86 alone
-        run: cargo build --no-default-features --features x86
-
-      - name: Test x86 alone
-        run: cargo test --no-default-features --features x86
+      # Each backend on its own, so no feature can come to depend on another
+      # being enabled alongside it. The list is read out of Cargo.toml rather
+      # than repeated here, so adding a backend cannot silently skip this.
+      - name: Build and test each backend alone
+        run: |
+          set -euo pipefail
+          features=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].features | keys[] | select(. != "default")')
+          echo "backends: $(echo $features)"
+          for f in $features; do
+            echo "::group::$f"
+            cargo build --no-default-features --features "$f"
+            cargo test --no-default-features --features "$f"
+            echo "::endgroup::"
+          done
 
   cross_check:
     name: Cross-compile check (${{ matrix.target }})
@@ -161,6 +169,34 @@ jobs:
 
       - name: tools/gas-diff/run.sh
         run: tools/gas-diff/run.sh
+
+  mc_diff:
+    name: Differential test against llvm-mc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: mc-diff
+
+      # llvm-mc is the only oracle that covers every architecture in the
+      # crate, so this is what keeps a backend honest about encodings that no
+      # x86 host can check. The runner ships LLVM; pick whatever version is
+      # installed rather than pinning one that may be dropped.
+      - name: Locate llvm-mc
+        run: |
+          set -euo pipefail
+          dir=$(dirname "$(readlink -f "$(command -v llvm-mc || command -v llvm-mc-* | head -1)")")
+          echo "$dir" >> "$GITHUB_PATH"
+          "$dir/llvm-mc" --version | head -2
+
+      - name: tools/mc-diff/run.sh
+        run: tools/mc-diff/run.sh
 
   cli_smoke:
     name: CLI end-to-end (assemble, link, run)

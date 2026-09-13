@@ -4,6 +4,8 @@
 //! (`as --64`), so this file doubles as a record of where rsasm intends to be
 //! byte-compatible with it.
 
+#![cfg(feature = "x86")]
+
 mod common;
 use common::*;
 

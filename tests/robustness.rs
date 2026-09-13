@@ -1,5 +1,7 @@
 //! Malformed input must produce diagnostics, never a panic or a hang.
 
+#![cfg(feature = "x86")]
+
 mod common;
 use common::*;
 

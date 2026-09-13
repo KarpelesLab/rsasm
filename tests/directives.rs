@@ -1,5 +1,7 @@
 //! Directive behaviour, including the error cases.
 
+#![cfg(feature = "x86")]
+
 mod common;
 use common::*;
 

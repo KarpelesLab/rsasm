@@ -1,5 +1,7 @@
 //! Object and flat-binary output.
 
+#![cfg(feature = "x86")]
+
 mod common;
 use common::*;
 
