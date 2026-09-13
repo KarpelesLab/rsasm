@@ -56,6 +56,20 @@ impl Endian {
         }
     }
 
+    /// Reads up to eight bytes back as an integer in this byte order.
+    pub fn read(self, src: &[u8]) -> u64 {
+        let n = src.len();
+        let mut v = 0u64;
+        for (i, b) in src.iter().enumerate() {
+            let shift = match self {
+                Endian::Little => i,
+                Endian::Big => n - 1 - i,
+            };
+            v |= (*b as u64) << (shift * 8);
+        }
+        v
+    }
+
     pub fn bytes(self, value: u64, n: usize) -> Vec<u8> {
         let mut v = vec![0u8; n];
         self.write(&mut v, value);

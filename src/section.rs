@@ -63,8 +63,32 @@ impl SectionFlags {
     }
 }
 
+/// How a resolved value is placed into the bytes a fixup covers.
+///
+/// Not comparable: the `Scatter` variant holds a function pointer, and
+/// comparing those says nothing useful.
+#[derive(Copy, Clone, Debug, Default)]
+pub enum FieldEncoding {
+    /// The value fills the field: it is written as an integer of `size` bytes
+    /// in the target's byte order. This is what byte-oriented architectures
+    /// need, and what every data directive uses.
+    #[default]
+    Whole,
+    /// The architecture scatters the value through an instruction word.
+    ///
+    /// Fixed-width RISC encodings rarely have a contiguous displacement field:
+    /// a RISC-V B-type immediate arrives in four pieces, and AArch64 branch
+    /// offsets are pre-shifted. The function is handed the bytes already
+    /// emitted, read as an integer in the target's byte order, plus the
+    /// resolved value, and returns the patched word.
+    ///
+    /// A plain `fn` pointer keeps [`FixupKind`] `Copy` and lets each backend
+    /// keep its bit-placement next to the instruction it belongs to.
+    Scatter(fn(u64, i64) -> u64),
+}
+
 /// How a fixup's value is written into the output.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct FixupKind {
     /// Field width in bytes: 1, 2, 4 or 8.
     pub size: u8,
@@ -81,6 +105,20 @@ pub struct FixupKind {
     /// `0` means "no relocation available"; an unresolved fixup is then an
     /// error.
     pub reloc: u32,
+    /// How many bits of the value the field can hold. `0` means the whole
+    /// field, `size * 8`.
+    ///
+    /// A 4-byte AArch64 instruction word carrying a 26-bit branch offset has
+    /// `size: 4` but `value_bits: 28` — 26 encoded bits plus the two that the
+    /// alignment supplies.
+    pub value_bits: u8,
+    /// The value must be a multiple of this. `1` means no constraint.
+    ///
+    /// Branch displacements on fixed-width architectures are counted in
+    /// instructions, so a misaligned target is an error rather than something
+    /// to round.
+    pub value_align: u8,
+    pub encoding: FieldEncoding,
 }
 
 impl FixupKind {
@@ -91,16 +129,18 @@ impl FixupKind {
             signed: false,
             adjust: 0,
             reloc: 0,
+            value_bits: 0,
+            value_align: 1,
+            encoding: FieldEncoding::Whole,
         }
     }
 
     pub fn pcrel(size: u8, adjust: i8) -> FixupKind {
         FixupKind {
-            size,
             pcrel: true,
             signed: true,
             adjust,
-            reloc: 0,
+            ..FixupKind::data(size)
         }
     }
 
@@ -114,9 +154,35 @@ impl FixupKind {
         self
     }
 
+    /// Constrains the field to `bits` bits of value, requiring the value to be
+    /// a multiple of `align`.
+    pub fn with_field(mut self, bits: u8, align: u8) -> FixupKind {
+        self.value_bits = bits;
+        self.value_align = align.max(1);
+        self
+    }
+
+    /// Sets the function that scatters the value through the instruction word.
+    pub fn scatter(mut self, f: fn(u64, i64) -> u64) -> FixupKind {
+        self.encoding = FieldEncoding::Scatter(f);
+        self
+    }
+
+    /// How many bits of value the field holds.
+    pub fn bits(&self) -> u32 {
+        if self.value_bits > 0 {
+            self.value_bits as u32
+        } else {
+            self.size as u32 * 8
+        }
+    }
+
     /// Inclusive range of values this field can hold.
     pub fn range(&self) -> (i128, i128) {
-        let bits = self.size as u32 * 8;
+        let bits = self.bits();
+        if bits >= 128 {
+            return (i128::MIN, i128::MAX);
+        }
         if self.signed {
             (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
         } else {
@@ -127,11 +193,24 @@ impl FixupKind {
     }
 
     pub fn fits(&self, v: i128) -> bool {
-        if self.size >= 8 {
+        if self.value_align > 1 && v % self.value_align as i128 != 0 {
+            return false;
+        }
+        if self.bits() >= 64 {
             return true;
         }
         let (lo, hi) = self.range();
         v >= lo && v <= hi
+    }
+
+    /// Applies `value` to the `size` bytes at `dst`, in the target's byte
+    /// order.
+    pub fn write(&self, endian: crate::arch::Endian, dst: &mut [u8], value: i64) {
+        let word = match self.encoding {
+            FieldEncoding::Whole => value as u64,
+            FieldEncoding::Scatter(f) => f(endian.read(dst), value),
+        };
+        endian.write(dst, word);
     }
 }
 
@@ -367,5 +446,63 @@ impl Section {
 
     pub fn is_empty(&self) -> bool {
         self.frags.iter().all(|f| f.size() == 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arch::Endian;
+
+    #[test]
+    fn whole_fields_are_written_in_target_byte_order() {
+        let k = FixupKind::data(4);
+        let mut buf = [0u8; 4];
+        k.write(Endian::Little, &mut buf, 0x1122_3344);
+        assert_eq!(buf, [0x44, 0x33, 0x22, 0x11]);
+        k.write(Endian::Big, &mut buf, 0x1122_3344);
+        assert_eq!(buf, [0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn scattered_fields_merge_into_the_instruction_word() {
+        // The shape every fixed-width RISC branch needs: keep the opcode bits
+        // already emitted, drop the value's low zero bits, and mask it into
+        // the field. This is AArch64's `b` — a 26-bit field of word offsets.
+        fn aarch64_b(word: u64, value: i64) -> u64 {
+            (word & !0x03ff_ffff) | (((value >> 2) as u64) & 0x03ff_ffff)
+        }
+        let k = FixupKind::pcrel(4, 0).with_field(28, 4).scatter(aarch64_b);
+
+        // `b .+8` starting from the opcode word 0x1400_0000.
+        let mut buf = 0x1400_0000u32.to_le_bytes();
+        k.write(Endian::Little, &mut buf, 8);
+        assert_eq!(u32::from_le_bytes(buf), 0x1400_0002);
+
+        // A negative offset must not corrupt the opcode bits above the field.
+        let mut buf = 0x1400_0000u32.to_le_bytes();
+        k.write(Endian::Little, &mut buf, -8);
+        assert_eq!(u32::from_le_bytes(buf), 0x17ff_fffe);
+    }
+
+    #[test]
+    fn field_width_and_alignment_are_checked_separately_from_size() {
+        // A 4-byte field that only carries 28 bits of value.
+        let k = FixupKind::pcrel(4, 0).with_field(28, 4);
+        assert!(k.fits(128 * 1024 * 1024 - 4));
+        assert!(!k.fits(128 * 1024 * 1024), "out of range must not fit");
+        assert!(k.fits(-(128 * 1024 * 1024)));
+        // Misaligned targets are rejected rather than rounded.
+        assert!(!k.fits(2));
+        assert!(k.fits(4));
+    }
+
+    #[test]
+    fn byte_fields_accept_both_signed_and_unsigned_spellings() {
+        let k = FixupKind::data(1);
+        assert!(k.fits(255));
+        assert!(k.fits(-1));
+        assert!(!k.fits(256));
+        assert!(!k.fits(-129));
     }
 }

@@ -401,13 +401,13 @@ impl Assembler {
                                 );
                                 continue;
                             }
-                            let bytes = self.arch.endian().bytes(v as u64, kind.size as usize);
+                            let endian = self.arch.endian();
                             if let FragKind::Bytes { variants, chosen } =
                                 &mut self.sections[si].frags[fi].kind
                             {
-                                let dst = &mut variants[*chosen].bytes;
-                                dst[off as usize..off as usize + kind.size as usize]
-                                    .copy_from_slice(&bytes);
+                                let dst = &mut variants[*chosen].bytes
+                                    [off as usize..off as usize + kind.size as usize];
+                                kind.write(endian, dst, v);
                             }
                         }
                         None => {
