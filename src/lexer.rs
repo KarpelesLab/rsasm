@@ -25,8 +25,16 @@ pub enum Dialect {
 #[derive(Clone, Debug)]
 pub struct LexConfig {
     pub dialect: Dialect,
-    /// Strings that begin a comment running to end of line.
+    /// Strings that begin a comment running to end of line, wherever they
+    /// appear.
     pub line_comment: Vec<&'static str>,
+    /// Strings that begin a comment only at the start of a line.
+    ///
+    /// This is how GAS reconciles `#` being a comment everywhere with `#` being
+    /// the immediate prefix on ARM, AArch64 and SPARC: on those targets `#` is
+    /// a comment only in the first column (where it is also what C
+    /// preprocessor line markers look like), and `mov r0, #1` keeps its `#`.
+    pub line_start_comment: Vec<&'static str>,
     /// Whether `/* ... */` is a comment.
     pub block_comment: bool,
     /// Characters that terminate a statement like a newline does.
@@ -50,6 +58,7 @@ impl LexConfig {
             Dialect::Gas => LexConfig {
                 dialect: d,
                 line_comment: vec!["#", "//"],
+                line_start_comment: vec![],
                 block_comment: true,
                 stmt_sep: vec![';'],
                 radix_suffix: false,
@@ -60,6 +69,7 @@ impl LexConfig {
             Dialect::Nasm => LexConfig {
                 dialect: d,
                 line_comment: vec![";"],
+                line_start_comment: vec![],
                 block_comment: false,
                 stmt_sep: vec![],
                 radix_suffix: true,
@@ -214,6 +224,9 @@ pub struct Lexer<'a> {
     /// Byte offset within `src`.
     pos: usize,
     pub config: LexConfig,
+    /// True until the first token of a physical line, so line-start comments
+    /// can be told apart from the same characters later in the line.
+    at_line_start: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -225,6 +238,7 @@ impl<'a> Lexer<'a> {
             base: f.start,
             pos: 0,
             config,
+            at_line_start: true,
         }
     }
 
@@ -299,6 +313,19 @@ impl<'a> Lexer<'a> {
                         continue;
                     }
                     let mut matched = false;
+                    let rest = &self.bytes[self.pos.min(self.bytes.len())..];
+                    if self.at_line_start
+                        && self
+                            .config
+                            .line_start_comment
+                            .iter()
+                            .any(|lc| rest.starts_with(lc.as_bytes()))
+                    {
+                        while !self.at_end() && self.peek() != b'\n' {
+                            self.pos += 1;
+                        }
+                        continue;
+                    }
                     for lc in &self.config.line_comment {
                         if self.bytes[self.pos.min(self.bytes.len())..].starts_with(lc.as_bytes()) {
                             while !self.at_end() && self.peek() != b'\n' {
@@ -324,6 +351,20 @@ impl<'a> Lexer<'a> {
         diags: &mut DiagBag,
     ) -> Token {
         let spaced = self.skip_trivia(diags);
+        let token = self.lex_one(spaced, interner, pool, diags);
+        // Only a physical newline starts a line. A `;` statement separator
+        // does not, which is what GAS does too.
+        self.at_line_start = token.kind == TokKind::Eol && self.src[..self.pos].ends_with('\n');
+        token
+    }
+
+    fn lex_one(
+        &mut self,
+        spaced: bool,
+        interner: &mut Interner,
+        pool: &mut LitPool,
+        diags: &mut DiagBag,
+    ) -> Token {
         let start = self.pos;
         let mk = |k: TokKind, this: &Self| Token {
             kind: k,
@@ -849,6 +890,69 @@ mod tests {
         let (k, _) = lex_all("nop ; nop", Dialect::Nasm);
         assert!(matches!(k[0], TokKind::Ident(_)));
         assert_eq!(k[1], TokKind::Eof);
+    }
+
+    #[test]
+    fn line_start_comments_only_count_in_the_first_column() {
+        // The ARM arrangement: `#` is an immediate prefix mid-line and a
+        // comment only at the start of a line.
+        let mut h = Harness {
+            sm: SourceMap::new(),
+            interner: Interner::new(),
+            diags: DiagBag::new(),
+            pool: LitPool::new(),
+        };
+        let f =
+            h.sm.add("t.s", "# 1 \"file.c\"\n  # indented\nmov #1 @ gone\n");
+        let mut cfg = LexConfig::for_dialect(Dialect::Gas);
+        cfg.line_comment = vec!["@"];
+        cfg.line_start_comment = vec!["#"];
+        let mut kinds = Vec::new();
+        {
+            let mut lx = Lexer::new(&h.sm, f, cfg);
+            loop {
+                let t = lx.next_token(&mut h.interner, &mut h.pool, &mut h.diags);
+                kinds.push(t.kind);
+                if t.kind == TokKind::Eof {
+                    break;
+                }
+            }
+        }
+        // Two comment-only lines, then `mov`, `#`, `1`, and the `@` comment.
+        assert_eq!(kinds[0], TokKind::Eol);
+        assert_eq!(kinds[1], TokKind::Eol);
+        assert!(matches!(kinds[2], TokKind::Ident(_)));
+        assert_eq!(kinds[3], TokKind::Punct(Punct::Hash));
+        assert_eq!(kinds[4], TokKind::Int(1));
+        assert_eq!(kinds[5], TokKind::Eol);
+    }
+
+    #[test]
+    fn a_statement_separator_does_not_start_a_line() {
+        // `a; # b` — GAS does not treat the `#` after `;` as first-column.
+        let mut h = Harness {
+            sm: SourceMap::new(),
+            interner: Interner::new(),
+            diags: DiagBag::new(),
+            pool: LitPool::new(),
+        };
+        let f = h.sm.add("t.s", "nop; #1\n");
+        let mut cfg = LexConfig::for_dialect(Dialect::Gas);
+        cfg.line_comment = vec!["@"];
+        cfg.line_start_comment = vec!["#"];
+        let mut kinds = Vec::new();
+        {
+            let mut lx = Lexer::new(&h.sm, f, cfg);
+            loop {
+                let t = lx.next_token(&mut h.interner, &mut h.pool, &mut h.diags);
+                kinds.push(t.kind);
+                if t.kind == TokKind::Eof {
+                    break;
+                }
+            }
+        }
+        assert_eq!(kinds[1], TokKind::Eol);
+        assert_eq!(kinds[2], TokKind::Punct(Punct::Hash));
     }
 
     #[test]

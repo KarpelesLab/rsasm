@@ -97,6 +97,18 @@ impl Architecture for Arm {
         40
     }
 
+    fn word_bytes(&self) -> u8 {
+        4
+    }
+
+    /// ARM writes immediates as `#1`, so `#` is a comment only in the first column and `@` takes its place elsewhere.
+    fn comments(&self) -> crate::arch::CommentSyntax {
+        crate::arch::CommentSyntax {
+            anywhere: &["@", "//"],
+            line_start: &["#"],
+        }
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
     }

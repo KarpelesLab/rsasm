@@ -296,7 +296,17 @@ impl Assembler {
     }
 
     pub fn assemble_file(&mut self, file: FileId) {
-        let config = LexConfig::for_dialect(self.options.dialect);
+        let mut config = LexConfig::for_dialect(self.options.dialect);
+        // GNU-style comment characters are the target's choice, so they come
+        // from whichever backend is active when this file starts. A `.arch`
+        // switch partway through a file does not re-lex the rest of it — the
+        // file is tokenized before its directives run — but it does apply to
+        // anything included or expanded after the switch.
+        if self.options.dialect == Dialect::Gas {
+            let c = self.arch.comments();
+            config.line_comment = c.anywhere.to_vec();
+            config.line_start_comment = c.line_start.to_vec();
+        }
         // The parser borrows the source map; statements are collected first so
         // the rest of the assembler can take `&mut self` freely.
         let mut statements = Vec::new();

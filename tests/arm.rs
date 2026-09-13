@@ -681,3 +681,40 @@ fn malformed_input_never_panics() {
         }
     }
 }
+
+// ---- GNU-style ARM spelling ----------------------------------------------
+//
+// Expected bytes are from `llvm-mc -triple=armv7`. Before comments became a
+// per-target setting, none of these could be written at all: `#` started a
+// comment, so `mov r0, #1` reached the backend as `mov r0,`.
+
+#[test]
+fn hash_immediates_are_not_comments() {
+    assert_eq!(hex(&text_for("arm", "mov r0, #1\n")), "01 00 a0 e3");
+    assert_eq!(
+        hex(&text_for("arm", "add r0, r1, r2, lsl #3\n")),
+        "82 01 81 e0"
+    );
+    assert_eq!(hex(&text_for("arm", "ldr r0, [r1, #-4]\n")), "04 00 11 e5");
+}
+
+#[test]
+fn at_sign_comments_and_first_column_hash_comments() {
+    assert_eq!(
+        hex(&text_for("arm", "mov r0, #1 @ load one\n")),
+        "01 00 a0 e3"
+    );
+    assert_eq!(
+        hex(&text_for("arm", "# 1 \"file.c\"\nmov r0, #2\n")),
+        "02 00 a0 e3"
+    );
+    assert_eq!(
+        hex(&text_for("arm", "   # indented\nmov r0, #3\n")),
+        "03 00 a0 e3"
+    );
+}
+
+#[test]
+fn word_is_four_bytes_on_arm() {
+    assert_eq!(hex(&text_for("arm", ".word 0x11223344\n")), "44 33 22 11");
+}

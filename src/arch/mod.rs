@@ -87,6 +87,28 @@ pub enum Syntax {
     Intel,
 }
 
+/// Which strings start a comment, for GNU-style source.
+///
+/// This is a per-target choice in GNU as, not a dialect-wide one, because the
+/// characters it would otherwise use are taken: ARM, AArch64 and SPARC all
+/// write immediates as `#1`, so on those targets `#` can only be a comment at
+/// the start of a line.
+#[derive(Copy, Clone, Debug)]
+pub struct CommentSyntax {
+    /// Start a comment anywhere on a line.
+    pub anywhere: &'static [&'static str],
+    /// Start a comment only in the first column (after leading whitespace).
+    pub line_start: &'static [&'static str],
+}
+
+impl CommentSyntax {
+    /// `#` and `//` everywhere: x86, RISC-V, MIPS and PowerPC.
+    pub const HASH: CommentSyntax = CommentSyntax {
+        anywhere: &["#", "//"],
+        line_start: &[],
+    };
+}
+
 /// Mutable, architecture-specific assembler state.
 ///
 /// Kept outside the [`Architecture`] object so backends stay `&self` and can be
@@ -190,6 +212,12 @@ pub trait Architecture {
     /// `foo@PLT`. `None` means the modifier is not recognised.
     fn modifier_reloc(&self, _name: &str, _size: u8, _pcrel: bool) -> Option<u32> {
         None
+    }
+
+    /// Comment characters in GNU-style source. Ignored for the NASM dialect,
+    /// which uses `;` on every target.
+    fn comments(&self) -> CommentSyntax {
+        CommentSyntax::HASH
     }
 
     /// Width of `.word` in bytes.

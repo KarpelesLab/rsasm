@@ -764,3 +764,13 @@ fn malformed_input_never_panics() {
         let _ = asm.diags.has_errors();
     }
 }
+
+/// Expected bytes are from `llvm-mc -triple=sparc`.
+#[test]
+fn bang_comments_and_first_column_hash_comments() {
+    assert_eq!(
+        hex(&text_for("sparc", "add %g1, 1, %g2 ! bump\n")),
+        "84 00 60 01"
+    );
+    assert_eq!(hex(&text_for("sparc", "# 1 \"x.c\"\nnop\n")), "01 00 00 00");
+}

@@ -81,6 +81,14 @@ impl Architecture for Sparc {
         }
     }
 
+    /// SPARC comments with `!`; `#` is a comment only in the first column.
+    fn comments(&self) -> crate::arch::CommentSyntax {
+        crate::arch::CommentSyntax {
+            anywhere: &["!", "//"],
+            line_start: &["#"],
+        }
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }
