@@ -21,6 +21,7 @@ pub mod assembler;
 pub mod cursor;
 pub mod diag;
 pub mod dialect;
+pub mod dialect_cc;
 pub mod directives;
 pub mod expr;
 pub mod intern;

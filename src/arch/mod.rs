@@ -189,6 +189,7 @@ impl AsmCtx<'_> {
             // `$` is an immediate marker in AT&T, not the location counter.
             dollar_is_here: self.dialect.dollar_is_here(),
             star_is_here: self.dialect.star_is_here(),
+            dialect: self.dialect,
         }
     }
 

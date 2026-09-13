@@ -37,6 +37,14 @@
 //! * A relative branch to a target outside its section is an error. See
 //!   [`reloc::rel8`] for why no relocation can be written for it.
 //!
+//! # CC-RL syntax
+//!
+//! Renesas's CC-RL writes operands with the same sigils GNU as uses, so with
+//! `-d ccrl` the one difference left for the backend is CC-RL's shorthand
+//! `[DE]` and `[HL]` for a zero displacement; see
+//! `insn::implicit_zero_displacement`. Its directives and expressions are the
+//! core's (`crate::dialect_cc`).
+//!
 //! # Not implemented
 //!
 //! The `%lo16`/`%hi16`/`%hi8`/`%code` relocation functions, `.3byte`, and the

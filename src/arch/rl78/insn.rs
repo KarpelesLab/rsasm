@@ -115,6 +115,38 @@ fn lookup<T: Copy>(table: &[(&str, T)], m: &str) -> Option<T> {
     table.iter().find(|(n, _)| *n == m).map(|(_, v)| *v)
 }
 
+/// CC-RL accepts `[DE]` and `[HL]` in a few operand positions where the
+/// instruction set only has `[DE+byte]` or `[HL+byte]`, and assembles them
+/// with a zero displacement (R20UT3123EJ0115 §5.2.9, page 537). GNU as has no
+/// such forms, so the list is taken as the manual gives it and no further.
+fn implicit_zero_displacement(cx: &mut AsmCtx<'_>, m: &str, ops: &mut [Operand]) {
+    let slot = match (m, &ops[..]) {
+        (
+            "mov",
+            [
+                _,
+                Operand {
+                    kind: Kind::Imm(_), ..
+                },
+            ],
+        ) => 0,
+        ("movs" | "inc" | "dec" | "incw" | "decw", [_, ..]) => 0,
+        ("cmps" | "addw" | "subw" | "cmpw", [_, _]) => 1,
+        _ => return,
+    };
+    let hl_only = m != "mov";
+    let op = &mut ops[slot];
+    if let Kind::Ind {
+        ptr: ptr @ (Ptr::De | Ptr::Hl),
+        off: off @ Offset::None,
+    } = &mut op.kind
+        && (*ptr == Ptr::Hl || !hl_only)
+    {
+        let e = cx.exprs.int(0, op.span);
+        *off = Offset::Disp(Expr { e, span: op.span });
+    }
+}
+
 pub fn assemble(
     cx: &mut AsmCtx<'_>,
     insn: &InsnRequest<'_>,
@@ -139,7 +171,10 @@ pub fn assemble(
         m,
         "set1" | "clr1" | "not1" | "mov1" | "and1" | "or1" | "xor1" | "bt" | "bf" | "btclr"
     );
-    let ops = operand::parse_all(cx, insn.operands, span, bits)?;
+    let mut ops = operand::parse_all(cx, insn.operands, span, bits)?;
+    if cx.dialect == crate::lexer::Dialect::CcRl {
+        implicit_zero_displacement(cx, m, &mut ops);
+    }
 
     if let Some(bytes) = lookup(IMPLIED, m) {
         arity(cx, &ops, span, m, 0)?;

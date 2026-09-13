@@ -46,6 +46,7 @@ impl Assembler {
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
         self.report_undefined_locals();
+        self.check_cc_bare_labels();
         self.pad_section_tails();
 
         let mut settled = false;

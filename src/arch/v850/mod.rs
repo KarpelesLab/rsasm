@@ -12,9 +12,11 @@
 //!   floating-point set. `v850e3v5` and `v850e2v4` name it too.
 //!
 //! The syntax is GNU as's, which is what could be checked; see
-//! `tools/xas-diff`. Renesas's own CC-RH assembler writes immediates and
-//! address operators differently, and with no CC-RH to compare against, none
-//! of its spellings are accepted rather than guessed at.
+//! `tools/xas-diff`. With `-d ccrh`, source written for Renesas's own CC-RH is
+//! accepted too, following its manual: label-reference sigils, its
+//! condition-suffixed mnemonics, and the instruction expansions that make its
+//! `mov 0x10, r10` a `movea`. See [`ccrh`], whose output is checked against
+//! the GNU-syntax sequence each expansion stands for.
 //!
 //! Instructions are 16, 32 or 48 bits, little-endian, and GNU as's choices
 //! between forms are followed exactly, because they are what existing object
@@ -24,6 +26,7 @@
 //! default; see [`reloc`].
 
 pub mod branch;
+pub mod ccrh;
 pub mod encode;
 pub mod fpu;
 pub mod insn;
@@ -154,6 +157,14 @@ impl Architecture for V850 {
     /// instruction set that matches them.
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
         match name {
+            // CC-RH's `$NOMACRO` and `$MACRO` turn its instruction expansions
+            // off and on (R20UT3516EJ0113 pages 471-472).
+            "$nomacro" if cx.dialect == crate::lexer::Dialect::CcRh => {
+                cx.state.features |= ccrh::FEATURE_NOMACRO
+            }
+            "$macro" if cx.dialect == crate::lexer::Dialect::CcRh => {
+                cx.state.features &= !ccrh::FEATURE_NOMACRO
+            }
             ".v850" => cx.state.features &= !FEATURE_RH850,
             ".v850e3v5" | ".v850e2v4" => cx.state.features |= FEATURE_RH850,
             ".v850e" | ".v850e1" | ".v850e2" | ".v850e2v3" => {
@@ -174,71 +185,91 @@ impl Architecture for V850 {
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
         let rh850 = cx.state.features & FEATURE_RH850 != 0;
+        if cx.dialect == crate::lexer::Dialect::CcRh {
+            return ccrh::assemble(cx, req, &mnemonic, rh850);
+        }
         let ranges = matches!(mnemonic.as_str(), "pushsp" | "popsp" | "dbpush");
         let args = operand::parse_operands(cx, req.operands, req.span, ranges)?;
+        encode_insn(
+            cx,
+            &mnemonic,
+            &args,
+            req.span,
+            req.mnemonic_span,
+            rh850,
+            |_| true,
+        )
+    }
+}
 
-        if let Some(cc) = branch::condition(&mnemonic) {
-            return branch::bcond(cx, &mnemonic, cc, &args, req.span, rh850);
+/// Encodes one instruction from parsed operands, trying only the table
+/// entries `allow` accepts: all of them for GNU syntax, and a chosen width
+/// for CC-RH's `mov32` or `ld23.w`.
+pub(crate) fn encode_insn(
+    cx: &mut AsmCtx<'_>,
+    mnemonic: &str,
+    args: &[operand::Arg],
+    span: crate::source::Span,
+    mnemonic_span: crate::source::Span,
+    rh850: bool,
+    allow: impl Fn(&insn::Entry) -> bool,
+) -> Option<Vec<Variant>> {
+    if let Some(cc) = branch::condition(mnemonic) {
+        return branch::bcond(cx, mnemonic, cc, args, span, rh850);
+    }
+    if mnemonic == "loop" {
+        if !rh850 {
+            cx.error(mnemonic_span, needs_rh850("loop"));
+            return None;
         }
-        if mnemonic == "loop" {
-            if !rh850 {
-                cx.error(req.mnemonic_span, needs_rh850("loop"));
-                return None;
-            }
-            return branch::loop_insn(cx, &args, req.span);
-        }
+        return branch::loop_insn(cx, args, span);
+    }
 
-        let mut best: Option<Miss> = None;
-        let mut any_entry = false;
-        let mut any_here = false;
-        for e in insn::entries(&mnemonic) {
-            any_entry = true;
-            if !e.cpu.allows(rh850) {
-                continue;
-            }
-            any_here = true;
-            match encode::match_entry(cx, e, &args, rh850, req.span) {
-                Ok(enc) => return Some(vec![enc.finish()]),
-                // On a tie the later entry's complaint wins: later entries
-                // are the wider forms, whose limits are the real ones.
-                Err(m) => {
-                    if best.as_ref().is_none_or(|b| m.progress >= b.progress) {
-                        best = Some(m);
-                    }
+    let mut best: Option<Miss> = None;
+    let mut any_entry = false;
+    let mut any_here = false;
+    for e in insn::entries(mnemonic).filter(|e| allow(e)) {
+        any_entry = true;
+        if !e.cpu.allows(rh850) {
+            continue;
+        }
+        any_here = true;
+        match encode::match_entry(cx, e, args, rh850, span) {
+            Ok(enc) => return Some(vec![enc.finish()]),
+            // On a tie the later entry's complaint wins: later entries
+            // are the wider forms, whose limits are the real ones.
+            Err(m) => {
+                if best.as_ref().is_none_or(|b| m.progress >= b.progress) {
+                    best = Some(m);
                 }
             }
         }
-
-        if !any_entry {
-            cx.error(
-                req.mnemonic_span,
-                format!("unknown instruction `{mnemonic}`"),
-            );
-            return None;
-        }
-        // Say so when the statement is fine on RH850, rather than reporting
-        // why the V850 forms did not fit.
-        if !rh850
-            && insn::entries(&mnemonic)
-                .filter(|e| e.cpu.allows(true))
-                .any(|e| encode::match_entry(cx, e, &args, true, req.span).is_ok())
-        {
-            let msg = if any_here {
-                format!(
-                    "this form of `{mnemonic}` needs the RH850 instruction set (`--arch rh850`)"
-                )
-            } else {
-                needs_rh850(&mnemonic)
-            };
-            cx.error(req.span, msg);
-            return None;
-        }
-        match best {
-            Some(m) => cx.error(m.span, m.msg),
-            None => cx.error(req.mnemonic_span, needs_rh850(&mnemonic)),
-        }
-        None
     }
+
+    if !any_entry {
+        cx.error(mnemonic_span, format!("unknown instruction `{mnemonic}`"));
+        return None;
+    }
+    // Say so when the statement is fine on RH850, rather than reporting
+    // why the V850 forms did not fit.
+    if !rh850
+        && insn::entries(mnemonic)
+            .filter(|e| allow(e) && e.cpu.allows(true))
+            .any(|e| encode::match_entry(cx, e, args, true, span).is_ok())
+    {
+        let msg = if any_here {
+            format!("this form of `{mnemonic}` needs the RH850 instruction set (`--arch rh850`)")
+        } else {
+            needs_rh850(mnemonic)
+        };
+        cx.error(span, msg);
+        return None;
+    }
+    match best {
+        Some(m) => cx.error(m.span, m.msg),
+        None => cx.error(mnemonic_span, needs_rh850(mnemonic)),
+    }
+    None
 }
 
 fn needs_rh850(mnemonic: &str) -> String {

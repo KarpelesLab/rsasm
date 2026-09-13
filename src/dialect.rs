@@ -8,9 +8,13 @@
 //!
 //! Every behaviour below was checked against a reference: vasm (in Devpac
 //! compatibility, `-no-opt -devpac`) and GNU as `--mri` for Motorola.
+//!
+//! The CC-RL, CC-RH and CC-RX dialects dot their directives and have far
+//! more of them; their tables and handlers are in [`crate::dialect_cc`].
 
 use crate::assembler::Assembler;
 use crate::cursor::Cursor;
+use crate::dialect_cc::CcDirective;
 use crate::lexer::{Dialect, Punct, TokKind};
 use crate::parser::Statement;
 use crate::section::{FragKind, Fragment, SectionFlags, SectionKind};
@@ -42,12 +46,17 @@ pub(crate) enum Alias {
     MotorolaSection,
     /// A Renesas `CSEG` / `DSEG` / `BSEG`.
     Segment(SectionKind, SectionFlags, &'static str),
+    /// A CC-RL, CC-RH or CC-RX directive with a handler of its own.
+    Cc(CcDirective),
 }
 
 /// Looks up `word` — already lowercased, with any leading dot removed — in a
 /// dialect's directive table.
 pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
     use Alias::*;
+    if dialect.renesas_cc() {
+        return crate::dialect_cc::lookup(dialect, word);
+    }
     let common = match word {
         "org" => Some(Gas(".org")),
         "include" => Some(Gas(".include")),
@@ -98,14 +107,38 @@ pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
             "bseg" => Segment(SectionKind::Nobits, SectionFlags::bss(), ".bss"),
             _ => return None,
         }),
-        Dialect::Gas | Dialect::Nasm => None,
+        Dialect::Gas | Dialect::Nasm | Dialect::CcRl | Dialect::CcRh | Dialect::CcRx => None,
     }
 }
 
 /// The block constructs, which the statement walker has to recognise before
 /// any directive runs because they consume the statements after them. Returns
 /// the GNU as spelling the walker already understands.
+///
+/// CC-RL and CC-RH end `.REPT` and `.IRP` with `.ENDM` too (CC-RL pages
+/// 529-530, CC-RH pages 463-464); the walker knows to look for it.
 pub(crate) fn block_keyword(dialect: Dialect, word: &str) -> Option<&'static str> {
+    if dialect.is_cc() {
+        return Some(match word {
+            "macro" => ".macro",
+            "endm" => ".endm",
+            "exitm" => ".exitm",
+            "rept" => ".rept",
+            "irp" => ".irp",
+            _ => return None,
+        });
+    }
+    // CC-RX ends a repeat with `.ENDR` (R20UT3248EJ0115 pages 488-489).
+    if dialect == Dialect::CcRx {
+        return Some(match word {
+            "macro" => ".macro",
+            "endm" => ".endm",
+            "exitm" => ".exitm",
+            "mrepeat" => ".rept",
+            "endr" => ".endr",
+            _ => return None,
+        });
+    }
     if !matches!(dialect, Dialect::Motorola | Dialect::Renesas) {
         return None;
     }
@@ -125,9 +158,11 @@ pub(crate) fn block_keyword(dialect: Dialect, word: &str) -> Option<&'static str
 pub(crate) fn is_conditional(dialect: Dialect, word: &str) -> bool {
     matches!(
         lookup(dialect, word),
-        Some(Alias::Gas(
-            ".if" | ".ifeq" | ".ifne" | ".ifdef" | ".ifndef" | ".else" | ".elseif" | ".endif"
-        ))
+        Some(
+            Alias::Gas(
+                ".if" | ".ifeq" | ".ifne" | ".ifdef" | ".ifndef" | ".else" | ".elseif" | ".endif"
+            ) | Alias::Cc(CcDirective::ElseIfN)
+        )
     )
 }
 
@@ -139,7 +174,7 @@ impl Assembler {
         match alias {
             Alias::Gas(name) => {
                 let n = self.interner.intern(name);
-                self.directive(stmt, n);
+                self.builtin_directive(stmt, n);
                 return;
             }
             Alias::Data(width) => self.alias_data(&mut cur, width, span),
@@ -175,6 +210,10 @@ impl Assembler {
                 // Relocation attributes (`CSEG AT 1000H`, `CSEG UNIT`) are not
                 // modelled; they place the segment, which is the linker's job.
                 cur.set_pos(cur.all().len());
+            }
+            Alias::Cc(d) => {
+                self.run_cc(stmt, d);
+                return;
             }
         }
         self.expect_end(&mut cur);
@@ -214,6 +253,10 @@ impl Assembler {
     fn alias_data(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
         self.motorola_align(width, span);
         if cur.at_end() {
+            return;
+        }
+        if self.options.dialect.is_cc() {
+            self.cc_data(cur, width, span);
             return;
         }
         if self.options.dialect == Dialect::Renesas && self.renesas_size_form(cur, width, span) {
@@ -300,7 +343,7 @@ impl Assembler {
         true
     }
 
-    fn alias_space(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
+    pub(crate) fn alias_space(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
         self.motorola_align(width, span);
         let Some(count) = self.parse_expr(cur) else {
             return;

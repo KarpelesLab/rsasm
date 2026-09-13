@@ -41,6 +41,19 @@
 //!   as uses the Renesas name `P`; and the ELF header's `e_flags` is 0 where
 //!   GNU as sets `E_FLAG_RX_ABI`. Both are the shared output code's to decide.
 //!
+//! # CC-RX source
+//!
+//! With `-d ccrx` the operands take the two things Renesas CC-RX adds
+//! (R20UT3248EJ0115 chapter 5): bit length specifiers, `#imm:8` and
+//! `dsp:16[r1]`, and the substitute register names `__PID_R0`-`__PID_R15`.
+//! CC-RX uses the width a specifier names even where a shorter form fits,
+//! while this backend always assembles the shortest, as GNU as does; so a
+//! specifier is accepted only where it names the width of that form, and
+//! refused otherwise. See `insn::check_bit_lengths`. For a branch to a
+//! target that is not resolved in the file, CC-RX keeps a conditional branch
+//! at 8 or 16 bits as GNU as does, where this backend gives the synthetic
+//! long form noted above.
+//!
 //! Only RXv1 is implemented, which is what GNU as accepts without `-mcpu`:
 //! the RXv2/RXv3 instructions (`movco`, `emaca`, `save`, the double-precision
 //! set, three-operand `xor`, register forms of `stz`/`stnz`) are refused with

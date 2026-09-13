@@ -173,6 +173,23 @@ pub fn parse_operands(
     whole: Span,
     ranges: bool,
 ) -> Option<Vec<Arg>> {
+    // CC-RH writes the address of a label inside a separator operator as
+    // `HIGHW1(#label)` (CC-RH page 499). Inside parentheses an address is the
+    // only thing a label can mean, so the `#` is dropped.
+    let stripped: Vec<Token>;
+    let toks = if cx.dialect == crate::lexer::Dialect::CcRh {
+        stripped = toks
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| {
+                !(t.is_punct(Punct::Hash) && *i > 0 && toks[i - 1].is_punct(Punct::LParen))
+            })
+            .map(|(_, t)| *t)
+            .collect();
+        &stripped[..]
+    } else {
+        toks
+    };
     let cur = Cursor::new(toks);
     if cur.at_end() {
         return Some(Vec::new());
@@ -404,8 +421,14 @@ impl Parser<'_, '_> {
     /// An expression, optionally behind a relocation function.
     fn immediate(&mut self, cur: &mut Cursor<'_>) -> Option<Imm> {
         let first = cur.peek();
-        let mut func = RelFn::None;
-        if let Some(n) = first.ident()
+        let ccrh = self.cx.dialect == crate::lexer::Dialect::CcRh;
+        let mut func = if ccrh {
+            self.ccrh_reference(cur)?
+        } else {
+            RelFn::None
+        };
+        if func == RelFn::None
+            && let Some(n) = first.ident()
             && cur.nth(1).is_punct(Punct::LParen)
             && let Some(f) = RelFn::from_name(self.name(n))
         {
@@ -413,10 +436,31 @@ impl Parser<'_, '_> {
             cur.advance();
         }
         let expr_start = cur.pos();
-        let expr = {
+        let mut expr = {
             let mut p = self.cx.expr_parser();
             p.parse(cur)?
         };
+        // CC-RH's `HIGHW1(x)`, `LOWW(x)` and `HIGHW(x)` of a value the
+        // assembler cannot fold are GNU as's `hi(x)`, `lo(x)` and `hi0(x)`:
+        // the manual describes the same three halves (CC-RH §5.8 (2)(i),
+        // page 499), and on RH850 each has its relocation.
+        if ccrh
+            && func == RelFn::None
+            && self.cx.constant(expr).is_none()
+            && let crate::expr::ExprKind::Unary(op, inner) = self.cx.exprs.get(expr).kind
+        {
+            use crate::expr::UnOp;
+            let f = match op {
+                UnOp::HighW1 => Some(RelFn::Hi),
+                UnOp::LowW => Some(RelFn::Lo),
+                UnOp::HighW => Some(RelFn::Hi0),
+                _ => None,
+            };
+            if let Some(f) = f {
+                func = f;
+                expr = inner;
+            }
+        }
         let consumed = &cur.all()[expr_start..cur.pos()];
         // The expression parser would read `r1` as a symbol. GNU as refuses
         // registers in expressions, and so does rsasm, rather than emit a
@@ -448,6 +492,61 @@ impl Parser<'_, '_> {
             ident,
             span: first.span.to(last),
         })
+    }
+
+    /// A CC-RH label reference sigil at the start of an operand (CC-RH §5.8
+    /// (2)(f), Table 5.21, pages 493-494), as the relocation function GNU as
+    /// spells the same reference with:
+    ///
+    /// - `#label`, the 32-bit absolute address, is `hilo(label)`, which the
+    ///   instruction expansions split into `hi()` and `lo()` where needed.
+    /// - `!label`, the address as a 16-bit value, is `zdaoff(label)`: an
+    ///   offset from address 0.
+    /// - `$label` and `%label` are offsets from `gp` and `ep`, for which the
+    ///   RH850 ELF ABI GNU binutils implements has no relocation; they are
+    ///   refused.
+    ///
+    /// `!` is also CC-RH's bitwise NOT, so it is only a reference in front of
+    /// a name that is not already a constant. Returns `None` after reporting
+    /// an error.
+    fn ccrh_reference(&mut self, cur: &mut Cursor<'_>) -> Option<RelFn> {
+        let tok = cur.peek();
+        let next = cur.nth(1);
+        if tok.is_punct(Punct::Hash) {
+            cur.advance();
+            return Some(RelFn::HiLo);
+        }
+        if tok.is_punct(Punct::Bang)
+            && let Some(n) = next.ident()
+            && reg::gpr(self.name(n)).is_none()
+            && !self
+                .cx
+                .symbols
+                .lookup(n)
+                .is_some_and(|id| match self.cx.symbols.get(id).value {
+                    crate::symbol::SymbolValue::Expr(e) => self.cx.constant(e).is_some(),
+                    _ => false,
+                })
+        {
+            cur.advance();
+            return Some(RelFn::ZdaOff);
+        }
+        if (tok.is_punct(Punct::Dollar) || tok.is_punct(Punct::Percent)) && next.ident().is_some() {
+            let (sigil, base) = if tok.is_punct(Punct::Dollar) {
+                ("$", "gp")
+            } else {
+                ("%", "ep")
+            };
+            self.cx.error(
+                tok.span.to(next.span),
+                format!(
+                    "`{sigil}label` is an offset from `{base}`, and the RH850 ELF ABI has no \
+                     relocation for it; address the data with `#label` or `!label` instead"
+                ),
+            );
+            return None;
+        }
+        Some(RelFn::None)
     }
 }
 
