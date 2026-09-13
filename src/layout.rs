@@ -485,13 +485,36 @@ impl Assembler {
                 return None;
             }
         };
-        if v.minus.is_some() {
-            self.diags.error(
-                span,
-                "the difference of two symbols in different sections cannot be relocated",
-            );
-            return None;
+        let mut kind = *kind;
+        let mut v = v;
+        if let Some(minus) = v.minus {
+            // `sym - label`, with the label in the fixup's own section, is
+            // `sym` relative to the field plus a known distance, which a
+            // plain data field can carry as a PC-relative relocation. This is
+            // how `.long target - .` jump tables and unwind data are written.
+            let here = self.section(section).addr as i64 + at as i64;
+            let pcrel = if !kind.pcrel
+                && kind.reloc != 0
+                && Some(kind.reloc) == self.arch.data_reloc(kind.size, false)
+                && self.symbol_section(minus) == Some(section)
+            {
+                self.arch.data_reloc(kind.size, true)
+            } else {
+                None
+            };
+            let (Some(r), Some(label)) = (pcrel, self.symbol_addr(minus)) else {
+                self.diags.error(
+                    span,
+                    "the difference of two symbols in different sections cannot be relocated",
+                );
+                return None;
+            };
+            v.addend += here - label;
+            v.minus = None;
+            kind.pcrel = true;
+            kind.reloc = r;
         }
+        let kind = &kind;
         let Some(target) = v.plus else {
             self.diags.error(span, "cannot resolve this value");
             return None;

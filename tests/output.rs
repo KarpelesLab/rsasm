@@ -97,6 +97,36 @@ fn sections_carry_the_right_types_and_flags() {
 }
 
 #[test]
+fn a_difference_from_a_label_in_the_same_section_is_pc_relative() {
+    // GNU as: `x + 0`, `x + 4`, `x + 4` and `.text + a`, all R_X86_64_PC32
+    // (type 2), with zeroed fields.
+    let asm = assemble(
+        ".data\n.long 0\n.long x-.\nL: .long x-.+4\n.long x-L\n.long y-L+2\n\
+         .text\ny: .long 0\n",
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let got: Vec<(u64, u32, String, i64)> = asm
+        .relocs
+        .iter()
+        .map(|r| (r.offset, r.kind, asm.display_name(r.symbol), r.addend))
+        .collect();
+    let want: Vec<(u64, u32, String, i64)> = vec![
+        (4, 2, "x".into(), 0),
+        (8, 2, "x".into(), 4),
+        (12, 2, "x".into(), 4),
+        (16, 2, ".text".into(), 10),
+    ];
+    assert_eq!(got, want);
+    assert_eq!(hex(&section(&asm, ".data")), "00 ".repeat(19) + "00");
+    // A label in another section still has no single-relocation form.
+    assert!(errors(".data\nL: .long 0\n.text\n.long x-L\n").contains("different sections"));
+}
+
+#[test]
 fn relocations_are_emitted_for_unresolved_references() {
     let asm = assemble("call printf@PLT\nmovq gvar(%rip), %rax\n.quad gvar\n");
     assert!(
