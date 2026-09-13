@@ -178,9 +178,17 @@ skip moveq #0,d0
  jsr -414(a6)
 fail moveq #0,d0
  rts
-gfxname dc.b $67,$72,$61,$70,$68,$69,$63,$73,0
+gfxname dc.b 'graphics.library',0
  even
 gfxbase dc.l 0
+=== quoted strings
+ dc.b 'text',0
+ dc.b 'it''s',0
+ dc.b 'a\n',0
+ dc.w 'ab'
+ dc.l 'abcd'
+ move.l #'abcd',d0
+ rts
 === copper wait loop
  lea $dff000,a5
 wait move.l 4(a5),d0

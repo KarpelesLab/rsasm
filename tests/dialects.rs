@@ -116,6 +116,19 @@ mod motorola {
     }
 
     #[test]
+    fn quoted_strings_follow_vasm_and_gnu_mri() {
+        assert_eq!(mot(" dc.b 'text',0\n"), "74 65 78 74 00");
+        // A doubled quote is a quote; a backslash is just a backslash.
+        assert_eq!(mot(" dc.b 'it''s'\n"), "69 74 27 73");
+        assert_eq!(mot(" dc.b 'a\\n'\n"), "61 5c 6e");
+        assert_eq!(mot(" dc.b \"a\"\"b\"\n"), "61 22 62");
+        // In wider data, or inside an expression, a quoted literal is a number.
+        assert_eq!(mot(" dc.w 'ab'\n"), "61 62");
+        assert_eq!(mot(" dc.l 'abcd'\n"), "61 62 63 64");
+        assert_eq!(mot(" dc.b 'a'+1\n"), "62");
+    }
+
+    #[test]
     fn rept_in_vendor_spelling() {
         assert_eq!(mot(" rept 3\n dc.b 7\n endr\n"), "07 07 07");
     }
@@ -128,6 +141,18 @@ mod renesas {
 
     fn ren(src: &str) -> String {
         hex(&text_dialect("x86-64", Renesas, src))
+    }
+
+    // No Renesas assembler is available as a reference; these follow the
+    // RA78K0 language manual (U17198E), DB and DW directives and §2.4.
+    #[test]
+    fn db_takes_quoted_strings_and_parenthesised_sizes() {
+        assert_eq!(ren("DB 'ABC',0\n"), "41 42 43 00");
+        assert_eq!(ren("DB 'A''B'\n"), "41 27 42");
+        assert_eq!(ren("DB (3+1)\n"), "00 00 00 00");
+        assert_eq!(ren("DW (2)\n"), "00 00 00 00");
+        // Parentheses that do not wrap the whole operand make a value.
+        assert_eq!(ren("DB (1)+1\n"), "02");
     }
 
     #[test]

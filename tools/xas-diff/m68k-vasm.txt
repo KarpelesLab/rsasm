@@ -201,3 +201,6 @@
  andi #$fe,ccr
  ori #$0700,sr
  eori #1,ccr
+ dc.b "a""b",0
+ dc.b "text",0
+ dc.b 'it''s',0

@@ -53,6 +53,13 @@ impl Dialect {
         matches!(self, Dialect::Nasm | Dialect::Renesas)
     }
 
+    /// Quotes inside a string are written twice (`'it''s'`), and a backslash
+    /// is an ordinary character. Devpac, vasm, GNU as `--mri` and the
+    /// Renesas manuals agree on both.
+    pub fn doubled_quotes(self) -> bool {
+        matches!(self, Dialect::Motorola | Dialect::Renesas)
+    }
+
     /// `*` in operand position is the location counter, as in `dc.l *`. It is
     /// still multiplication between two operands.
     pub fn star_is_here(self) -> bool {
@@ -810,9 +817,14 @@ impl<'a> Lexer<'a> {
             let c = self.peek();
             if c == b'"' {
                 self.pos += 1;
+                if self.config.dialect.doubled_quotes() && self.peek() == b'"' {
+                    buf.push(b'"');
+                    self.pos += 1;
+                    continue;
+                }
                 break;
             }
-            if c == b'\\' {
+            if c == b'\\' && !self.config.dialect.doubled_quotes() {
                 self.pos += 1;
                 self.read_escape(&mut buf, diags);
             } else {
@@ -843,9 +855,14 @@ impl<'a> Lexer<'a> {
                 }
                 if self.peek() == b'\'' {
                     self.pos += 1;
+                    if self.config.dialect.doubled_quotes() && self.peek() == b'\'' {
+                        buf.push(b'\'');
+                        self.pos += 1;
+                        continue;
+                    }
                     break;
                 }
-                if self.peek() == b'\\' {
+                if self.peek() == b'\\' && !self.config.dialect.doubled_quotes() {
                     self.pos += 1;
                     self.read_escape(&mut buf, diags);
                 } else {

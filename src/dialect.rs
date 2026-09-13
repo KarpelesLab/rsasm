@@ -216,14 +216,25 @@ impl Assembler {
         if cur.at_end() {
             return;
         }
+        if self.options.dialect == Dialect::Renesas && self.renesas_size_form(cur, width, span) {
+            return;
+        }
         loop {
             // A string is a run of bytes, where the dialect allows one: vasm
-            // takes `dc.b "hi",0`, and so does every Renesas `DB`.
+            // takes `dc.b "hi",0`, and so does every Renesas `DB`. Single
+            // quotes make a string too when the literal stands alone —
+            // `dc.b 'text',0` is how Motorola source spells it, and GNU as
+            // `--mri` takes no other — while `'AB'+1` stays a number.
             if let TokKind::Str(i) = cur.peek().kind
                 && width == 1
             {
                 cur.advance();
                 let bytes = self.pool.get(i).to_vec();
+                self.emit_bytes(&bytes, span);
+            } else if let Some(bytes) = self.standalone_quoted(cur)
+                && width == 1
+            {
+                cur.advance();
                 self.emit_bytes(&bytes, span);
             } else {
                 let Some(e) = self.parse_expr(cur) else {
@@ -235,6 +246,58 @@ impl Assembler {
                 break;
             }
         }
+    }
+
+    /// The bytes of a single-quoted literal at the cursor, if it is a whole
+    /// data item: followed by a comma or the end of the statement.
+    fn standalone_quoted(&self, cur: &Cursor<'_>) -> Option<Vec<u8>> {
+        let tok = cur.peek();
+        if !matches!(tok.kind, TokKind::Int(_)) {
+            return None;
+        }
+        let next = cur.nth(1);
+        let ends_item = next.is_eol() || matches!(next.kind, TokKind::Punct(Punct::Comma));
+        if !ends_item {
+            return None;
+        }
+        let inner = self
+            .sm
+            .span_text(tok.span)
+            .strip_prefix('\'')?
+            .strip_suffix('\'')?;
+        Some(inner.replace("''", "'").into_bytes())
+    }
+
+    /// `DB (4)` and `DW (4)`: a parenthesised operand is a count of zeroed
+    /// units, not a value (RA78K0 manual, DB and DW directives).
+    fn renesas_size_form(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) -> bool {
+        let toks = cur.rest();
+        let body: Vec<_> = toks.iter().take_while(|t| !t.is_eol()).collect();
+        let (Some(first), Some(last)) = (body.first(), body.last()) else {
+            return false;
+        };
+        if !matches!(first.kind, TokKind::Punct(Punct::LParen))
+            || !matches!(last.kind, TokKind::Punct(Punct::RParen))
+        {
+            return false;
+        }
+        // The opening parenthesis must close only at the end: `(1)+(2)` is a
+        // value.
+        let mut depth = 0i32;
+        for (i, t) in body.iter().enumerate() {
+            match t.kind {
+                TokKind::Punct(Punct::LParen) => depth += 1,
+                TokKind::Punct(Punct::RParen) => {
+                    depth -= 1;
+                    if depth == 0 && i + 1 != body.len() {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.alias_space(cur, width, span);
+        true
     }
 
     fn alias_space(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
