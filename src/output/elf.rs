@@ -106,17 +106,21 @@ impl Class {
 /// Whether this machine's psABI carries relocation addends in the relocation
 /// entry (`RELA`) or in the field being relocated (`REL`).
 ///
-/// This is a property of the ABI, not of the ELF class: i386, ARM and MIPS use
-/// `REL` while PowerPC, SPARC, RISC-V, AArch64 and x86-64 use `RELA`. It is
-/// keyed on the machine number because that is exactly what the psABI is
-/// specified against.
-pub fn uses_rela(machine: u16) -> bool {
-    !matches!(
-        machine,
-        3   // EM_386
-        | 40  // EM_ARM
-        | 8 // EM_MIPS
-    )
+/// Mostly a property of the machine, not of the ELF class: i386 and ARM use
+/// `REL` while PowerPC, SPARC, RISC-V, AArch64 and x86-64 use `RELA`. MIPS is
+/// the exception that needs the class: o32 is `REL` and n64 `RELA`.
+pub fn uses_rela(machine: u16, elf64: bool) -> bool {
+    match machine {
+        3 | 40 => false, // EM_386, EM_ARM
+        8 => elf64,      // EM_MIPS
+        _ => true,
+    }
+}
+
+/// Whether an object for `arch` is ELF64, which is decided by the target's
+/// initial mode rather than wherever the source leaves it.
+pub fn is_elf64(arch: &dyn crate::arch::Architecture) -> bool {
+    arch.pointer_bytes(&arch.initial_state()) == 8
 }
 
 /// A growable string table with deduplication of whole strings.
@@ -247,7 +251,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             )));
         }
     };
-    let rela = uses_rela(asm.arch.elf_machine());
+    let rela = uses_rela(asm.arch.elf_machine(), class == Class::Elf64);
     let rel_size = class.rel_size(rela);
 
     let mut shstrtab = StrTab::new();
@@ -409,6 +413,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         buf.out.extend_from_slice(&bytes);
     }
 
+    let mips64el = asm.arch.elf_machine() == 8 && class == Class::Elf64 && !big_endian;
     for (sid, idx) in &rela_for {
         buf.pad_to(class.table_align());
         shdrs[*idx as usize].offset = buf.len();
@@ -419,6 +424,13 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 // ELF32 packs the symbol index into the top 24 bits and the
                 // type into the low 8, not the 32/32 split ELF64 uses.
                 Class::Elf32 => buf.u32((sym << 8) | (r.kind & 0xff)),
+                // MIPS n64 splits the 64-bit info into a 32-bit symbol and
+                // four one-byte fields, the primary type last. Big-endian that
+                // is bit-for-bit the standard packing; little-endian it is not.
+                Class::Elf64 if mips64el => {
+                    buf.out.extend_from_slice(&sym.to_le_bytes());
+                    buf.out.extend_from_slice(&[0, 0, 0, r.kind as u8]);
+                }
                 Class::Elf64 => buf.u64(((sym as u64) << 32) | r.kind as u64),
             }
             // Under REL the addend lives in the field instead; the layout pass

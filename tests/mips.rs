@@ -591,3 +591,40 @@ fn unknown_set_options_are_diagnosed_but_assignments_still_work() {
     // `.set name, value` is still an assignment.
     assert_eq!(text_for("mips", ".set n, 7\n.byte n\n"), vec![7]);
 }
+
+/// The contents of the section named `name` in a little-endian ELF64 object.
+fn elf64le_section(b: &[u8], name: &str) -> Vec<u8> {
+    let u16at = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap()) as usize;
+    let u32at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
+    let u64at = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap()) as usize;
+    let (shoff, shnum, shstrndx) = (u64at(0x28), u16at(0x3c), u16at(0x3e));
+    let names = u64at(shoff + shstrndx * 64 + 0x18);
+    (0..shnum)
+        .map(|i| shoff + i * 64)
+        .find(|&sh| {
+            let at = names + u32at(sh);
+            b[at..].starts_with(name.as_bytes()) && b[at + name.len()] == 0
+        })
+        .map(|sh| b[u64at(sh + 0x18)..u64at(sh + 0x18) + u64at(sh + 0x20)].to_vec())
+        .unwrap_or_else(|| panic!("no section `{name}`"))
+}
+
+#[test]
+fn n64_objects_use_rela_with_the_mips64el_info_layout() {
+    // llvm-mc for `.quad ext+8` on mips64el: a `.rela.data` entry whose info
+    // is the symbol as a little-endian 32-bit word followed by the bytes
+    // `00 00 00 12` (R_MIPS_64 last), with addend 8 and a zero field.
+    let asm = assemble_for("mips64el", ".data\n.quad ext+8\n");
+    let elf = rsasm::output::elf::build(&asm).expect("ELF output");
+    assert_eq!(hex(&section(&asm, ".data")), "00 00 00 00 00 00 00 00");
+    let rela = elf64le_section(&elf, ".rela.data");
+    assert_eq!(rela.len(), 24);
+    assert_eq!(&rela[0..8], &[0; 8], "r_offset");
+    assert_ne!(&rela[8..12], &[0; 4], "r_sym");
+    assert_eq!(
+        &rela[12..16],
+        &[0, 0, 0, 0x12],
+        "r_ssym, r_type3, r_type2, r_type"
+    );
+    assert_eq!(&rela[16..24], &[8, 0, 0, 0, 0, 0, 0, 0], "r_addend");
+}

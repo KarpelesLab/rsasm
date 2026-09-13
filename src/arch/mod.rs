@@ -276,6 +276,17 @@ pub trait Architecture {
         2
     }
 
+    /// Whether a relocation of type `reloc` keeps its addend in the relocated
+    /// field, given whether the object's relocation sections are `RELA`.
+    ///
+    /// Under `REL` there is nowhere else to put it. A `RELA` target normally
+    /// writes it into the entry and leaves the field zero, but the SuperH
+    /// relocations are `partial_inplace` in BFD, whose linker then reads the
+    /// field and ignores the entry's addend; GNU as writes both accordingly.
+    fn addend_in_field(&self, _reloc: u32, rela: bool) -> bool {
+        !rela
+    }
+
     /// Whether `.align n` means 2^n bytes rather than n.
     ///
     /// GNU as decides this per target, for historical reasons only: x86 ELF,

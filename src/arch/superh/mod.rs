@@ -105,6 +105,13 @@ impl Architecture for SuperH {
         flags.exec
     }
 
+    /// `sh-elf-as` writes every addend into the field and zero into the
+    /// entry, except for `R_SH_DIR16`, the one data relocation BFD does not
+    /// mark `partial_inplace`.
+    fn addend_in_field(&self, reloc: u32, _rela: bool) -> bool {
+        reloc != reloc::DIR16
+    }
+
     /// GNU as for SH comments with `!` anywhere, and with `#` only at the
     /// start of a line, where it cannot be confused with an immediate.
     /// `//` is not a comment: `mov r1,r2 // x` is an error there.

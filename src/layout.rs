@@ -417,7 +417,10 @@ impl Assembler {
         // while the field is still reachable. Relocation numbering is ELF's
         // throughout, so asking the ELF writer which convention the target
         // uses is consistent rather than a layering slip.
-        let addend_in_field = !crate::output::elf::uses_rela(self.arch.elf_machine());
+        let rela = crate::output::elf::uses_rela(
+            self.arch.elf_machine(),
+            crate::output::elf::is_elf64(self.arch.as_ref()),
+        );
         for si in 0..self.sections.len() {
             let id = SectionId(si as u32);
             for fi in 0..self.sections[si].frags.len() {
@@ -449,8 +452,8 @@ impl Assembler {
                             }
                         }
                         None => {
-                            if let Some(r) = self.build_relocation(e, &kind, id, at, span) {
-                                if addend_in_field && r.addend != 0 {
+                            if let Some(mut r) = self.build_relocation(e, &kind, id, at, span) {
+                                if self.arch.addend_in_field(r.kind, rela) && r.addend != 0 {
                                     let endian = self.arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =
                                         &mut self.sections[si].frags[fi].kind
@@ -458,6 +461,9 @@ impl Assembler {
                                         let dst = &mut variants[*chosen].bytes
                                             [off as usize..off as usize + kind.size as usize];
                                         kind.write(endian, dst, r.addend);
+                                    }
+                                    if rela {
+                                        r.addend = 0;
                                     }
                                 }
                                 relocs.push(r);

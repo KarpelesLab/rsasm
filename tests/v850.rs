@@ -435,7 +435,7 @@ fn objects_are_em_v800_little_endian_rela() {
         let a = rsasm::arch::lookup(arch).expect("backend");
         // GNU as marks both as EM_V800, "Renesas V850 (using RH850 ABI)".
         assert_eq!(a.elf_machine(), 36);
-        assert!(rsasm::output::elf::uses_rela(a.elf_machine()));
+        assert!(rsasm::output::elf::uses_rela(a.elf_machine(), false));
         let asm = assemble_for(arch, " movhi hi(foo), r0, r1\n");
         let elf = rsasm::output::elf::build(&asm).expect("ELF output");
         assert_eq!(u16::from_le_bytes([elf[18], elf[19]]), 36);

@@ -682,3 +682,28 @@ fn a_flat_image_at_a_real_load_address_lays_out_the_same() {
         "00 09 d1 01 41 2b 00 09 89 ab cd ef"
     );
 }
+
+#[test]
+fn addends_live_in_the_field_except_for_dir16() {
+    // sh-elf-as: DIR32 `x + 0` over field 8, DIR16 `x + 3` over a zero field,
+    // DIR8 `x + 0` over field 1, REL32 `x + 0` over field 4.
+    let asm = assemble_for(
+        "sh",
+        ".data\n.long x+8\n.word x+3\n.byte x+1\n.byte 0\n.long x-.+4\n",
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let got: Vec<(u64, u32, i64)> = asm
+        .relocs
+        .iter()
+        .map(|r| (r.offset, r.kind, r.addend))
+        .collect();
+    assert_eq!(got, vec![(0, 1, 0), (4, 33, 3), (6, 34, 0), (8, 2, 0)]);
+    assert_eq!(
+        hex(&section(&asm, ".data")),
+        "00 00 00 08 00 00 01 00 00 00 00 04"
+    );
+}
