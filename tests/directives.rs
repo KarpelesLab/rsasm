@@ -291,3 +291,15 @@ fn word_is_four_bytes_on_mips() {
     assert_eq!(text_for("mips", ".word 1"), vec![0, 0, 0, 1]);
     assert_eq!(text_for("mipsel", ".word 1"), vec![1, 0, 0, 0]);
 }
+
+#[test]
+fn a_set_option_the_backend_does_not_know_is_explained() {
+    // `.set noreorder` means something on MIPS and nothing on x86; the error
+    // should say so rather than calling `.set` an unknown directive.
+    let e = errors(".set noreorder\n");
+    assert!(
+        e.contains("not an option the `x86-64` backend understands"),
+        "{e}"
+    );
+    assert!(e.contains(".set name, value"), "{e}");
+}

@@ -21,6 +21,7 @@ pub mod reg;
 pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::cursor::Cursor;
 use crate::section::Variant;
 use encode::Args;
 use operand::{Operand, OperandParser};
@@ -100,6 +101,52 @@ impl Architecture for Mips {
     /// like the unimplemented default and is not.
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         vec![0; len as usize]
+    }
+
+    /// `.set <option>`.
+    ///
+    /// rsasm assembles exactly what is written: it never moves an instruction
+    /// into a delay slot and never inserts a `nop` after a branch. That is
+    /// `.set noreorder`, so that option is accepted and changes nothing.
+    ///
+    /// `.set reorder` is refused rather than ignored, because the difference
+    /// is not cosmetic. Under `reorder` the assembler fills the delay slot,
+    /// so in `beq a, b, x` / `addiu t, t, 1` the `addiu` runs only when the
+    /// branch falls through. Under `noreorder` that same `addiu` *is* the
+    /// delay slot and runs on both paths. Accepting `reorder` while behaving
+    /// as `noreorder` would assemble a different program without a word.
+    fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        if name != ".set" {
+            return false;
+        }
+        let tok = cur.peek();
+        let Some(n) = tok.ident() else {
+            return false;
+        };
+        let opt = cx.name(n).to_ascii_lowercase();
+        match opt.as_str() {
+            "reorder" => {
+                cur.advance();
+                cx.error(
+                    tok.span,
+                    "`.set reorder` is not supported: rsasm never fills delay slots, so \
+                     code written for it would run the instruction after each branch on \
+                     both paths; fill the slots by hand and use `.set noreorder`",
+                );
+                true
+            }
+            // Options whose effect rsasm already has, or that only make an
+            // assembler stricter about what it accepts and never change an
+            // encoding, so accepting them silently is safe.
+            "noreorder" | "noat" | "at" | "nomacro" | "macro" | "push" | "pop" | "nomips16"
+            | "nomicromips" | "mips1" | "mips2" | "mips3" | "mips4" | "mips5" | "mips32"
+            | "mips32r2" | "mips32r6" | "mips64" | "mips64r2" | "mips64r6" | "hardfloat"
+            | "softfloat" | "nodsp" => {
+                cur.advance();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {

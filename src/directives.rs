@@ -92,6 +92,11 @@ impl Assembler {
             ".hidden" => self.dir_visibility(&mut cur, Visibility::Hidden, span),
             ".protected" => self.dir_visibility(&mut cur, Visibility::Protected, span),
             ".internal" => self.dir_visibility(&mut cur, Visibility::Internal, span),
+            // `.set word` with nothing after it is not an assignment: MIPS
+            // uses it for assembler options (`.set noreorder`). Only `.set`
+            // has that second meaning, so the other spellings go straight
+            // to the assignment.
+            ".set" if Self::is_set_option(&cur) => false,
             ".set" | ".equ" | ".equiv" => self.dir_set(&mut cur, span, text == ".equiv"),
             ".size" => self.dir_size(&mut cur, span),
             ".type" => self.dir_type(&mut cur, span),
@@ -183,6 +188,23 @@ impl Assembler {
             return;
         }
 
+        if text == ".set" {
+            let opt = match stmt.arg_cursor().rest().first().map(|t| t.kind) {
+                Some(TokKind::Ident(n)) => self.interner.get(n).to_string(),
+                _ => String::new(),
+            };
+            self.diags.emit(
+                crate::diag::Diagnostic::error(
+                    span,
+                    format!(
+                        "`.set {opt}` is not an option the `{}` backend understands",
+                        self.arch.name()
+                    ),
+                )
+                .with_help("to define a symbol, write `.set name, value`"),
+            );
+            return;
+        }
         self.diags
             .error(span, format!("unknown directive `{text}`"));
     }
@@ -570,6 +592,14 @@ impl Assembler {
             }
         }
         true
+    }
+
+    /// True for `.set word` — a single identifier and nothing else, which no
+    /// assignment can be. Returning `false` from the table sends it on to the
+    /// architecture's directive hook.
+    fn is_set_option(cur: &Cursor<'_>) -> bool {
+        let rest = cur.rest();
+        rest.len() == 1 && matches!(rest[0].kind, TokKind::Ident(_))
     }
 
     fn dir_set(&mut self, cur: &mut Cursor<'_>, span: Span, once_only: bool) -> bool {

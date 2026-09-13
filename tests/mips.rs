@@ -563,3 +563,29 @@ fn malformed_input_never_panics() {
         }
     }
 }
+
+#[test]
+fn set_noreorder_is_accepted_and_matches_the_oracle() {
+    // With `.set noreorder`, llvm-mc stops inserting a `nop` after the branch,
+    // so the `addiu` really is the delay slot and the bytes match exactly.
+    // Expected bytes are from `llvm-mc -triple=mips`.
+    let out = text_for(
+        "mips",
+        ".set noreorder\nbeq $1, $2, x\naddiu $3, $3, 1\nx:\n",
+    );
+    assert_eq!(hex(&out), "10 22 00 01 24 63 00 01");
+}
+
+#[test]
+fn set_reorder_is_refused_because_it_would_change_the_program() {
+    let e = errors_for("mips", ".set reorder\nnop\n");
+    assert!(e.contains("never fills delay slots"), "{e}");
+}
+
+#[test]
+fn unknown_set_options_are_diagnosed_but_assignments_still_work() {
+    let e = errors_for("mips", ".set bogus\n");
+    assert!(e.contains("not an option"), "{e}");
+    // `.set name, value` is still an assignment.
+    assert_eq!(text_for("mips", ".set n, 7\n.byte n\n"), vec![7]);
+}
