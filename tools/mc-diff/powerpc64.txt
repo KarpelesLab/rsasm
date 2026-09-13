@@ -1,0 +1,398 @@
+# PowerPC 64-bit corpus.
+#
+# One instruction per line, each assembled on its own and therefore at address
+# zero. That matters for branches: llvm-mc reads a bare number in a branch
+# operand as a displacement, while rsasm (like GNU as) reads it as an address.
+# At address zero the two agree; anything needing a real branch distance lives
+# in powerpc64-programs.txt, where labels make the intent unambiguous.
+#
+# Registers are written as bare numbers throughout because llvm-mc's PowerPC
+# parser does not accept the `r3` spelling. rsasm accepts both; the named form
+# is covered in tests/powerpc.rs.
+
+# ---- fixed-point arithmetic, XO-form
+add 3, 4, 5
+add. 3, 4, 5
+addo 3, 4, 5
+addo. 3, 4, 5
+add 0, 0, 0
+add 31, 31, 31
+addc 3, 4, 5
+addc. 3, 4, 5
+adde 3, 4, 5
+addme 3, 4
+addze 3, 4
+subf 3, 4, 5
+subf. 3, 4, 5
+subfo. 3, 4, 5
+subfc 3, 4, 5
+subfe 3, 4, 5
+subfme 3, 4
+subfze 3, 4
+neg 3, 4
+neg. 3, 4
+nego 3, 4
+mullw 3, 4, 5
+mullw. 3, 4, 5
+mulld 3, 4, 5
+mulhw 3, 4, 5
+mulhwu 3, 4, 5
+mulhd 3, 4, 5
+mulhdu 3, 4, 5
+divw 3, 4, 5
+divw. 3, 4, 5
+divwu 3, 4, 5
+divd 3, 4, 5
+divdu 3, 4, 5
+divdo. 3, 4, 5
+
+# ---- fixed-point arithmetic, D-form
+addi 3, 4, 100
+addi 3, 4, -100
+addi 3, 0, 100
+addis 3, 4, -1
+addis 3, 4, 65535
+# Only the high-half loaders accept an unsigned spelling.
+addis 3, 4, 40000
+lis 3, 40000
+addi 3, 4, 32767
+addic 3, 4, 7
+addic. 3, 4, 7
+subfic 3, 4, 7
+mulli 3, 4, 7
+li 3, 0
+li 3, -1
+li 3, -32768
+li 3, 32767
+lis 3, 4660
+lis 3, -1
+la 3, 8(4)
+la 3, -8(31)
+subi 3, 4, 100
+subi 3, 4, -32767
+subis 3, 4, 100
+subic 3, 4, 100
+subic. 3, 4, 100
+sub 3, 4, 5
+subc 3, 4, 5
+
+# ---- relocation modifiers applied to constants
+lis 3, 0x8000@ha
+lis 3, 0x12348000@ha
+lis 3, 0x12348000@h
+addi 3, 3, 0x12348000@l
+ori 3, 3, 0x12348000@l
+lwz 3, 0x12348000@l(4)
+li 3, 0x1234@l
+ld 3, 0x12348004@l(4)
+
+# ---- logical
+and 3, 4, 5
+and. 3, 4, 5
+or 3, 4, 5
+xor 3, 4, 5
+nand 3, 4, 5
+nor 3, 4, 5
+eqv 3, 4, 5
+andc 3, 4, 5
+orc 3, 4, 5
+andi. 3, 4, 255
+andis. 3, 4, 255
+ori 3, 4, 255
+ori 3, 4, 65535
+oris 3, 4, 255
+xori 3, 4, 255
+xoris 3, 4, 255
+extsb 3, 4
+extsb. 3, 4
+extsh 3, 4
+extsw 3, 4
+cntlzw 3, 4
+cntlzw. 3, 4
+cntlzd 3, 4
+popcntw 3, 4
+popcntd 3, 4
+mr 3, 4
+mr. 3, 4
+not 3, 4
+nop
+
+# ---- shifts
+slw 3, 4, 5
+srw 3, 4, 5
+sraw 3, 4, 5
+srawi 3, 4, 5
+srawi. 3, 4, 31
+sld 3, 4, 5
+srd 3, 4, 5
+srad 3, 4, 5
+sradi 3, 4, 40
+sradi. 3, 4, 63
+
+# ---- rotate and mask, the characteristic PowerPC forms
+rlwinm 3, 4, 5, 6, 7
+rlwinm. 3, 4, 5, 6, 7
+rlwinm 3, 4, 0, 0, 31
+rlwinm 3, 4, 31, 31, 31
+rlwimi 3, 4, 5, 6, 7
+rlwimi. 3, 4, 5, 6, 7
+rlwnm 3, 4, 5, 6, 7
+rldicl 3, 4, 5, 6
+rldicl 3, 4, 40, 33
+rldicl. 3, 4, 63, 63
+rldicr 3, 4, 5, 6
+rldicr 3, 4, 40, 33
+rldic 3, 4, 5, 6
+rldic. 3, 4, 40, 33
+rldimi 3, 4, 5, 6
+rldimi 3, 4, 40, 33
+rldcl 3, 4, 5, 6
+rldcl 3, 4, 5, 33
+rldcr 3, 4, 5, 6
+rldcr. 3, 4, 5, 33
+
+# ---- extended rotate mnemonics, which is how these are actually written
+slwi 3, 4, 5
+slwi 3, 4, 0
+slwi. 3, 4, 31
+srwi 3, 4, 5
+srwi 3, 4, 0
+clrlwi 3, 4, 5
+clrrwi 3, 4, 5
+rotlwi 3, 4, 5
+rotrwi 3, 4, 5
+rotlw 3, 4, 5
+extlwi 3, 4, 5, 6
+extrwi 3, 4, 5, 6
+inslwi 3, 4, 5, 6
+insrwi 3, 4, 5, 6
+sldi 3, 4, 5
+sldi 3, 4, 63
+srdi 3, 4, 5
+clrldi 3, 4, 5
+clrldi 3, 4, 63
+clrrdi 3, 4, 5
+rotldi 3, 4, 5
+rotrdi 3, 4, 5
+rotld 3, 4, 5
+extldi 3, 4, 5, 6
+extrdi 3, 4, 5, 6
+insrdi 3, 4, 5, 6
+
+# ---- load and store, D-form
+lbz 3, 8(4)
+lbzu 3, 8(4)
+lhz 3, 8(4)
+lhzu 3, 8(4)
+lha 3, -8(4)
+lhau 3, 8(4)
+lwz 3, 8(4)
+lwz 3, 0(0)
+lwz 3, -32768(31)
+lwz 3, 32767(4)
+lwzu 3, 8(4)
+stb 3, 8(4)
+stbu 3, 8(4)
+sth 3, 8(4)
+sthu 3, 8(4)
+stw 3, 8(4)
+stwu 3, 8(4)
+lmw 3, 8(4)
+stmw 3, 8(4)
+
+# ---- load and store, DS-form (the displacement is a multiple of four)
+ld 3, 16(4)
+ld 3, -32768(31)
+ldu 3, 16(4)
+lwa 3, 8(4)
+std 3, 16(4)
+stdu 3, 16(4)
+
+# ---- load and store, X-form
+lbzx 3, 4, 5
+lbzux 3, 4, 5
+lhzx 3, 4, 5
+lhax 3, 4, 5
+lwzx 3, 4, 5
+lwzux 3, 4, 5
+lwax 3, 4, 5
+ldx 3, 4, 5
+ldux 3, 4, 5
+stbx 3, 4, 5
+sthx 3, 4, 5
+stwx 3, 4, 5
+stwux 3, 4, 5
+stdx 3, 4, 5
+stdux 3, 4, 5
+lhbrx 3, 4, 5
+lwbrx 3, 4, 5
+sthbrx 3, 4, 5
+stwbrx 3, 4, 5
+lwarx 3, 4, 5
+stwcx. 3, 4, 5
+ldarx 3, 4, 5
+stdcx. 3, 4, 5
+
+# ---- branches
+b 0
+b 4
+b 0x1000
+b 0x1fffffc
+ba 0x1000
+bl 0x1000
+bla 0x1000
+bc 12, 0, 0x100
+bc 4, 2, 0x100
+bca 12, 0, 0x100
+bcl 12, 0, 0x100
+bcla 12, 0, 0x100
+beq 0x100
+bne 0x100
+blt 0x100
+bgt 0x100
+ble 0x100
+bge 0x100
+bso 0x100
+bns 0x100
+beq 7, 0x100
+bne 7, 0x100
+blt 2, 0x100
+bgt 1, 0x100
+beql 0x100
+bnel 0x100
+bt 5, 0x100
+bf 5, 0x100
+bdnz 0x100
+bdz 0x100
+bdnzt 0, 0x100
+bdnzf 0, 0x100
+bdzt 0, 0x100
+blr
+blrl
+bctr
+bctrl
+bclr 20, 0
+bclr 20, 0, 0
+bclr 20, 0, 3
+bcctr 20, 0
+bclrl 20, 0
+beqlr
+bnelr
+beqlr 7
+beqctr
+bnectr
+bdnzlr
+bdzlr
+
+# ---- comparison
+cmp 0, 0, 3, 4
+cmp 7, 1, 3, 4
+cmpi 0, 0, 3, 100
+cmpl 0, 1, 3, 4
+cmpli 0, 1, 3, 100
+cmpw 3, 4
+cmpw 7, 3, 4
+cmpwi 3, 100
+cmpwi 3, -1
+cmpwi 7, 3, 100
+cmpd 3, 4
+cmpdi 3, 100
+cmplw 3, 4
+cmplwi 3, 65535
+cmpld 3, 4
+cmpldi 3, 100
+
+# ---- condition register logic
+crand 3, 4, 5
+crandc 3, 4, 5
+creqv 3, 4, 5
+crnand 3, 4, 5
+crnor 3, 4, 5
+cror 3, 4, 5
+crorc 3, 4, 5
+crxor 3, 4, 5
+crnot 3, 4
+crmove 3, 4
+crclr 3
+crset 3
+mcrf 3, 4
+
+# ---- system and special registers
+mfspr 3, 8
+mfspr 3, 9
+mfspr 3, 1
+mtspr 8, 3
+mtspr 9, 3
+mflr 3
+mtlr 3
+mfctr 3
+mtctr 3
+mfxer 3
+mtxer 3
+mftb 3
+mfcr 3
+mtcrf 255, 3
+mtcrf 1, 3
+mtcr 3
+mfmsr 3
+mtmsr 3
+sync
+lwsync
+isync
+eieio
+sc
+sc 1
+trap
+tw 4, 3, 4
+twi 4, 3, 100
+tweq 3, 4
+twne 3, 4
+dcbz 3, 4
+icbi 3, 4
+
+# ---- floating point
+lfs 1, 8(4)
+lfsu 1, 8(4)
+lfd 1, 8(4)
+lfdu 1, 8(4)
+stfs 1, 8(4)
+stfsu 1, 8(4)
+stfd 1, 8(4)
+stfdu 1, 8(4)
+lfsx 1, 4, 5
+lfdx 1, 4, 5
+stfsx 1, 4, 5
+stfdx 1, 4, 5
+fadd 1, 2, 3
+fadd. 1, 2, 3
+fadds 1, 2, 3
+fsub 1, 2, 3
+fsubs 1, 2, 3
+fmul 1, 2, 3
+fmuls 1, 2, 3
+fdiv 1, 2, 3
+fdivs 1, 2, 3
+fsqrt 1, 2
+fsqrts 1, 2
+fmadd 1, 2, 3, 4
+fmadds 1, 2, 3, 4
+fmsub 1, 2, 3, 4
+fnmadd 1, 2, 3, 4
+fnmsub 1, 2, 3, 4
+fsel 1, 2, 3, 4
+fmr 1, 2
+fmr. 1, 2
+fneg 1, 2
+fabs 1, 2
+fnabs 1, 2
+frsp 1, 2
+fctiw 1, 2
+fctiwz 1, 2
+fctid 1, 2
+fctidz 1, 2
+fcfid 1, 2
+fcmpu 0, 1, 2
+fcmpo 7, 1, 2
+mffs 1
+mtfsf 1, 2
+fadd 31, 30, 29
