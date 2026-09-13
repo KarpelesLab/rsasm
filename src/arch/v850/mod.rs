@@ -1,34 +1,74 @@
-//! NEC/Renesas V850 and its successor RH850 (the v850e3v5 instruction set). `EM_V850`.
+//! NEC/Renesas V850, and its successor RH850 (the V850E3V5 instruction set).
 //!
-//! Placeholder. The backend is registered so that `.arch` and `--arch` can
-//! name it and report something useful, but it assembles nothing yet.
+//! Two targets share one backend:
+//!
+//! - `v850` is the original V850 instruction set and nothing more, which is
+//!   what `v850-elf-as` assembles when given no `-m` option. The V850E and
+//!   V850E2 additions (`callt`, `prepare`, `switch`, the 32-bit `mul`, ...)
+//!   are refused, with a note that RH850 has them.
+//! - `rh850` is GNU as's `-mv850e3v5`: everything V850E1, V850E2 and V850E2V3
+//!   added, the RH850 instructions (`bins`, `rotl`, `loop`, `pushsp`, the
+//!   17-bit branches, the 48-bit loads and stores), and the FPU-3
+//!   floating-point set. `v850e3v5` and `v850e2v4` name it too.
+//!
+//! The syntax is GNU as's, which is what could be checked; see
+//! `tools/xas-diff`. Renesas's own CC-RH assembler writes immediates and
+//! address operators differently, and with no CC-RH to compare against, none
+//! of its spellings are accepted rather than guessed at.
+//!
+//! Instructions are 16, 32 or 48 bits, little-endian, and GNU as's choices
+//! between forms are followed exactly, because they are what existing object
+//! code contains: `mov 16, r1` takes 48 bits on RH850 because 16 does not fit
+//! the 5-bit form, and a conditional branch grows from 2 to 4 to 6 bytes as
+//! its target moves away. Objects use the RH850 ELF ABI, as GNU as's do by
+//! default; see [`reloc`].
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+pub mod branch;
+pub mod encode;
+pub mod fpu;
+pub mod insn;
+pub mod operand;
+pub mod reg;
+pub mod reloc;
+
+use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, Syntax};
+use crate::cursor::Cursor;
 use crate::section::Variant;
+use encode::Miss;
 
 pub const NAMES: &[&str] = &["v850", "rh850"];
 
+/// `ArchState::features` bit selecting the RH850 instruction set.
+pub const FEATURE_RH850: u64 = 1;
+
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
-    let canonical = match name {
-        "v850" => "v850",
-        "rh850" => "rh850",
-        "v850e" | "v850e2v3" | "v850e3v5" => "v850",
+    let (canonical, rh850) = match name {
+        "v850" => ("v850", false),
+        "rh850" | "v850e3v5" | "v850e2v4" => ("rh850", true),
         _ => return None,
     };
-    Some(Box::new(Stub { name: canonical }))
+    Some(Box::new(V850 {
+        name: canonical,
+        rh850,
+    }))
 }
 
-struct Stub {
+pub struct V850 {
     name: &'static str,
+    rh850: bool,
 }
 
-impl Architecture for Stub {
+impl Architecture for V850 {
     fn name(&self) -> &'static str {
         self.name
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &["v850e", "v850e2v3", "v850e3v5"]
+        if self.rh850 {
+            &["v850e3v5", "v850e2v4"]
+        } else {
+            &[]
+        }
     }
 
     fn endian(&self) -> Endian {
@@ -43,40 +83,144 @@ impl Architecture for Stub {
         ArchState {
             bits: 32,
             syntax: Syntax::Att,
-            features: 0,
+            features: if self.rh850 { FEATURE_RH850 } else { 0 },
             intel_register_prefix: false,
         }
     }
 
-    fn supports_syntax(&self, _syntax: Syntax) -> bool {
-        true
+    fn supports_syntax(&self, syntax: Syntax) -> bool {
+        syntax == Syntax::Att
     }
 
+    /// `EM_V800`, not `EM_V850` (87).
+    ///
+    /// GNU as 2.47 marks both V850 and RH850 objects as `EM_V800` with the
+    /// RH850 ABI unless told `-mgcc-abi`, and the relocation numbers in
+    /// [`reloc`] are that ABI's. The two go together: GNU ld picks the
+    /// relocation table by machine, so an `EM_V850` object with these numbers
+    /// would be misread.
     fn elf_machine(&self) -> u16 {
-        87
+        36
     }
 
-    fn default_dialect(&self) -> crate::lexer::Dialect {
-        crate::lexer::Dialect::Gas
+    fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
+        reloc::data(size, pcrel)
     }
 
-    fn align_unit(&self) -> u64 {
-        1
+    /// `#` starts a comment anywhere; `//` does not, as in GNU as for V850.
+    fn comments(&self) -> CommentSyntax {
+        CommentSyntax {
+            anywhere: &["#"],
+            line_start: &[],
+        }
     }
 
-    fn data_reloc(&self, _size: u8, _pcrel: bool) -> Option<u32> {
-        None
+    /// GNU as for V850 makes `.word` 32 bits.
+    fn word_bytes(&self) -> u8 {
+        4
     }
 
+    /// The V850 `nop` is `mov r0, r0`, whose encoding is two zero bytes, so
+    /// zero fill is nop fill. Every instruction is an even number of bytes,
+    /// so an odd count can only follow data, where one zero byte is as good
+    /// as any.
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         vec![0; len as usize]
     }
 
-    fn assemble(&self, cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>) -> Option<Vec<Variant>> {
-        cx.error(
-            insn.span,
-            format!("the `{}` backend is not implemented yet", self.name),
-        );
+    /// `.v850` and `.v850e3v5` (or `.v850e2v4`), which switch the instruction
+    /// set the way GNU as's pseudo-ops of those names do. The intermediate
+    /// cores are refused rather than mapped to either, since rsasm has no
+    /// instruction set that matches them.
+    fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        match name {
+            ".v850" => cx.state.features &= !FEATURE_RH850,
+            ".v850e3v5" | ".v850e2v4" => cx.state.features |= FEATURE_RH850,
+            ".v850e" | ".v850e1" | ".v850e2" | ".v850e2v3" => {
+                let span = cur.remaining_span();
+                cx.error(
+                    span,
+                    format!(
+                        "`{name}` is not supported; rsasm assembles either the V850 \
+                         (`.v850`) or the RH850 (`.v850e3v5`) instruction set"
+                    ),
+                );
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
+        let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
+        let rh850 = cx.state.features & FEATURE_RH850 != 0;
+        let ranges = matches!(mnemonic.as_str(), "pushsp" | "popsp" | "dbpush");
+        let args = operand::parse_operands(cx, req.operands, req.span, ranges)?;
+
+        if let Some(cc) = branch::condition(&mnemonic) {
+            return branch::bcond(cx, &mnemonic, cc, &args, req.span, rh850);
+        }
+        if mnemonic == "loop" {
+            if !rh850 {
+                cx.error(req.mnemonic_span, needs_rh850("loop"));
+                return None;
+            }
+            return branch::loop_insn(cx, &args, req.span);
+        }
+
+        let mut best: Option<Miss> = None;
+        let mut any_entry = false;
+        let mut any_here = false;
+        for e in insn::entries(&mnemonic) {
+            any_entry = true;
+            if !e.cpu.allows(rh850) {
+                continue;
+            }
+            any_here = true;
+            match encode::match_entry(cx, e, &args, rh850, req.span) {
+                Ok(enc) => return Some(vec![enc.finish()]),
+                // On a tie the later entry's complaint wins: later entries
+                // are the wider forms, whose limits are the real ones.
+                Err(m) => {
+                    if best.as_ref().is_none_or(|b| m.progress >= b.progress) {
+                        best = Some(m);
+                    }
+                }
+            }
+        }
+
+        if !any_entry {
+            cx.error(
+                req.mnemonic_span,
+                format!("unknown instruction `{mnemonic}`"),
+            );
+            return None;
+        }
+        // Say so when the statement is fine on RH850, rather than reporting
+        // why the V850 forms did not fit.
+        if !rh850
+            && insn::entries(&mnemonic)
+                .filter(|e| e.cpu.allows(true))
+                .any(|e| encode::match_entry(cx, e, &args, true, req.span).is_ok())
+        {
+            let msg = if any_here {
+                format!(
+                    "this form of `{mnemonic}` needs the RH850 instruction set (`--arch rh850`)"
+                )
+            } else {
+                needs_rh850(&mnemonic)
+            };
+            cx.error(req.span, msg);
+            return None;
+        }
+        match best {
+            Some(m) => cx.error(m.span, m.msg),
+            None => cx.error(req.mnemonic_span, needs_rh850(&mnemonic)),
+        }
         None
     }
+}
+
+fn needs_rh850(mnemonic: &str) -> String {
+    format!("`{mnemonic}` is an RH850 instruction; it needs `--arch rh850`, not `v850`")
 }
