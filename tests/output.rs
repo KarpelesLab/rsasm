@@ -278,6 +278,8 @@ fn x86_64_still_uses_rela_with_a_clean_field() {
 }
 
 #[test]
+// Needs a target narrower than 32 bits, which only the retro backend has.
+#[cfg(feature = "retro")]
 fn a_target_narrower_than_elf_allows_is_refused_clearly() {
     let asm = assemble_for("z80", "");
     let e = output::elf::build(&asm).expect_err("z80 has no ELF class");
