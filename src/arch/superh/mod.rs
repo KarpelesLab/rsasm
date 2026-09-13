@@ -14,9 +14,14 @@
 //! `sh` and `shl` accept the whole SH-1 to SH-4A instruction set with the FPU,
 //! which is what GNU as does by default. The aliases `sh1`, `sh2`, `sh2e`,
 //! `sh3`, `sh3e`, `sh4` and `sh4a` select a big-endian `sh` restricted to that
-//! CPU's instructions, so `.arch sh2` rejects an FPU instruction. SH-2A's
-//! 32-bit instructions and the SH-DSP extensions are not assembled.
+//! CPU's instructions, as `sh-elf-as --isa=sh2` and so on do (`--isa=sh` for
+//! `sh1`), so `.arch sh2` rejects an FPU instruction. SH-2A's 32-bit
+//! instructions and the SH-DSP extensions are not assembled.
+//!
+//! The ELF header names the least capable CPU that has every instruction the
+//! file uses, which [`cpu`] works out the way GNU as does.
 
+pub mod cpu;
 pub mod encode;
 pub mod insn;
 pub mod operand;
@@ -28,37 +33,35 @@ use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRe
 use crate::cursor::Cursor;
 use crate::lexer::{Punct, TokKind};
 use crate::section::Variant;
-use insn::isa;
 use operand::OperandParser;
 
 pub const NAMES: &[&str] = &["sh", "shl"];
 
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
-    use isa::{DFPU, FPU, SH2, SH3, SH4};
-    let (canonical, endian, features) = match name {
-        "sh" | "superh" => ("sh", Endian::Big, isa::ALL),
-        "shl" => ("shl", Endian::Little, isa::ALL),
-        "sh1" => ("sh", Endian::Big, 0),
-        "sh2" => ("sh", Endian::Big, SH2),
-        "sh2e" => ("sh", Endian::Big, SH2 | FPU),
-        "sh3" => ("sh", Endian::Big, SH2 | SH3),
-        "sh3e" => ("sh", Endian::Big, SH2 | SH3 | FPU),
-        "sh4" => ("sh", Endian::Big, SH2 | SH3 | SH4 | FPU | DFPU),
-        "sh4a" => ("sh", Endian::Big, isa::ALL),
+    let (canonical, endian, cpus) = match name {
+        "sh" | "superh" => ("sh", Endian::Big, cpu::DEFAULT),
+        "shl" => ("shl", Endian::Little, cpu::DEFAULT),
+        "sh1" => ("sh", Endian::Big, cpu::SH1),
+        "sh2" => ("sh", Endian::Big, cpu::SH2),
+        "sh2e" => ("sh", Endian::Big, cpu::SH2E),
+        "sh3" => ("sh", Endian::Big, cpu::SH3),
+        "sh3e" => ("sh", Endian::Big, cpu::SH3E),
+        "sh4" => ("sh", Endian::Big, cpu::SH4),
+        "sh4a" => ("sh", Endian::Big, cpu::SH4A),
         _ => return None,
     };
     Some(Box::new(SuperH {
         name: canonical,
         endian,
-        features,
+        cpus,
     }))
 }
 
 pub struct SuperH {
     name: &'static str,
     endian: Endian,
-    /// The [`insn::isa`] bits this target accepts.
-    features: u64,
+    /// The [`cpu`] set this target starts from: every CPU, or just one.
+    cpus: u32,
 }
 
 impl Architecture for SuperH {
@@ -82,7 +85,7 @@ impl Architecture for SuperH {
         ArchState {
             bits: 32,
             syntax: Syntax::Att,
-            features: self.features,
+            features: u64::from(self.cpus),
             intel_register_prefix: false,
             used: 0,
         }
@@ -96,6 +99,13 @@ impl Architecture for SuperH {
     /// `EM_SH`, as `sh-elf-readelf -h` reports for both byte orders.
     fn elf_machine(&self) -> u16 {
         42
+    }
+
+    /// The `EF_SH_*` machine of the least capable CPU that has every
+    /// instruction in the file, as `sh-elf-as` picks it: SH-1 for a file of
+    /// data alone, SH-4 for one that uses `fipr`. Byte order plays no part.
+    fn elf_flags(&self, state: &ArchState) -> u32 {
+        cpu::elf_flags(cpu::remaining(state))
     }
 
     fn align_is_log2(&self) -> bool {

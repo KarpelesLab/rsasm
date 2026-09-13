@@ -564,6 +564,474 @@ fn an_external_long_gets_r_sh_dir32() {
     assert_eq!(asm.relocs[0].offset, 4);
 }
 
+// ---- e_flags ------------------------------------------------------------------
+//
+// GNU as for SH writes the least capable CPU that has every instruction in the
+// file into `e_flags`. Every value in the tables below is what `sh-elf-as`
+// wrote for that source, and `sh-elf-as -little` wrote the same; for the CPU
+// names, what `sh-elf-as --isa=<cpu>` wrote (`--isa=sh` for `sh1`).
+
+/// `e_flags` of the ELF object `arch` makes of `src`.
+#[track_caller]
+fn e_flags(arch: &str, src: &str) -> u32 {
+    let asm = assemble_for(arch, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let elf = rsasm::output::elf::build(&asm).expect("ELF output");
+    let b: [u8; 4] = elf[0x24..0x28].try_into().unwrap();
+    if elf[5] == 2 {
+        u32::from_be_bytes(b)
+    } else {
+        u32::from_le_bytes(b)
+    }
+}
+
+/// Follows each form in the tables, so a PC-relative load has a literal to
+/// load and a branch somewhere to go.
+const LITERAL: &str = "\n.space 4\n.align 2\nlit: .long 0";
+
+#[test]
+fn every_form_marks_the_least_capable_cpu_that_has_it() {
+    for (form, want) in EVERY_FORM {
+        let src = format!("{form}{LITERAL}");
+        for arch in ["sh", "shl"] {
+            assert_eq!(e_flags(arch, &src), *want, "{arch}: {form}");
+        }
+    }
+}
+
+#[test]
+fn two_forms_mark_the_least_capable_cpu_that_has_both() {
+    // One form for each pair of distinct CPU sets the table uses, both ways
+    // round: `movca.l` with `ldtlb` is an SH-4 without an FPU, which neither
+    // says on its own.
+    for (a, b, want) in SET_PAIRS {
+        for src in [format!("{a}\n{b}{LITERAL}"), format!("{b}\n{a}{LITERAL}")] {
+            for arch in ["sh", "shl"] {
+                assert_eq!(e_flags(arch, &src), *want, "{arch}: {src}");
+            }
+        }
+    }
+}
+
+#[test]
+fn data_labels_and_sections_do_not_count() {
+    // A file with no instructions is SH-1, and instructions count wherever
+    // they are.
+    for (src, want) in WHOLE_FILES {
+        for arch in ["sh", "shl"] {
+            assert_eq!(e_flags(arch, src), *want, "{arch}: {src}");
+        }
+    }
+}
+
+#[test]
+fn a_cpu_name_marks_that_cpu_whatever_the_file_uses() {
+    for (arch, src, want) in CPU_NAMES {
+        assert_eq!(e_flags(arch, src), *want, "{arch}: {src}");
+    }
+}
+
+#[test]
+fn fsqrt_needs_an_sh3e() {
+    // `sh-elf-as --isa=sh2e` and `--isa=sh3` both refuse `fsqrt fr1`: the
+    // SH-2E FPU has no square root, though it has `fadd` and the rest.
+    let e = errors_for("sh2e", "fsqrt fr1");
+    assert!(e.contains("SH-3E"), "{e}");
+    let e = errors_for("sh3", "fsqrt fr1");
+    assert!(e.contains("SH-3E"), "{e}");
+    assert_eq!(hex(&text_for("sh2e", "fadd fr2, fr4")), "f4 20");
+}
+
+const EVERY_FORM: &[(&str, u32)] = &[
+    ("mov #4,r2", 0x1),
+    ("mov r3,r2", 0x1),
+    ("mov.b r3,@r4", 0x1),
+    ("mov.b r3,@-r4", 0x1),
+    ("mov.b r3,@(r0,r4)", 0x1),
+    ("mov.b r0,@(3,r5)", 0x1),
+    ("mov.b r0,@(5,gbr)", 0x1),
+    ("mov.b @r5,r2", 0x1),
+    ("mov.b @r5+,r2", 0x1),
+    ("mov.b @(r0,r5),r2", 0x1),
+    ("mov.b @(3,r5),r0", 0x1),
+    ("mov.b @(5,gbr),r0", 0x1),
+    ("mov.w r3,@r4", 0x1),
+    ("mov.w r3,@-r4", 0x1),
+    ("mov.w r3,@(r0,r4)", 0x1),
+    ("mov.w r0,@(6,r5)", 0x1),
+    ("mov.w r0,@(10,gbr)", 0x1),
+    ("mov.w @r5,r2", 0x1),
+    ("mov.w @r5+,r2", 0x1),
+    ("mov.w @(r0,r5),r2", 0x1),
+    ("mov.w @(6,r5),r0", 0x1),
+    ("mov.w @(10,gbr),r0", 0x1),
+    ("mov.w lit,r2", 0x1),
+    ("mov.l r3,@r4", 0x1),
+    ("mov.l r3,@-r4", 0x1),
+    ("mov.l r3,@(r0,r4)", 0x1),
+    ("mov.l r3,@(8,r4)", 0x1),
+    ("mov.l r0,@(20,gbr)", 0x1),
+    ("mov.l @r5,r2", 0x1),
+    ("mov.l @r5+,r2", 0x1),
+    ("mov.l @(r0,r5),r2", 0x1),
+    ("mov.l @(12,r5),r2", 0x1),
+    ("mov.l @(20,gbr),r0", 0x1),
+    ("mov.l lit,r2", 0x1),
+    ("mova lit,r0", 0x1),
+    ("movt r2", 0x1),
+    ("swap.b r3,r2", 0x1),
+    ("swap.w r3,r2", 0x1),
+    ("xtrct r3,r2", 0x1),
+    ("movca.l r0,@r4", 0x12),
+    ("movli.l @r4,r0", 0x11),
+    ("movco.l r0,@r4", 0x11),
+    ("movua.l @r4,r0", 0x11),
+    ("movua.l @r4+,r0", 0x11),
+    ("add #4,r2", 0x1),
+    ("add r3,r2", 0x1),
+    ("addc r3,r2", 0x1),
+    ("addv r3,r2", 0x1),
+    ("sub r3,r2", 0x1),
+    ("subc r3,r2", 0x1),
+    ("subv r3,r2", 0x1),
+    ("cmp/eq #4,r0", 0x1),
+    ("cmp/eq r3,r2", 0x1),
+    ("cmp/hs r3,r2", 0x1),
+    ("cmp/ge r3,r2", 0x1),
+    ("cmp/hi r3,r2", 0x1),
+    ("cmp/gt r3,r2", 0x1),
+    ("cmp/pz r2", 0x1),
+    ("cmp/pl r2", 0x1),
+    ("cmp/str r3,r2", 0x1),
+    ("div0s r3,r2", 0x1),
+    ("div0u", 0x1),
+    ("div1 r3,r2", 0x1),
+    ("dmuls.l r3,r2", 0x2),
+    ("dmulu.l r3,r2", 0x2),
+    ("mul.l r3,r2", 0x2),
+    ("muls.w r3,r2", 0x1),
+    ("muls r3,r2", 0x1),
+    ("mulu.w r3,r2", 0x1),
+    ("mulu r3,r2", 0x1),
+    ("mac.w @r5+,@r4+", 0x1),
+    ("mac.l @r5+,@r4+", 0x2),
+    ("neg r3,r2", 0x1),
+    ("negc r3,r2", 0x1),
+    ("dt r2", 0x2),
+    ("exts.b r3,r2", 0x1),
+    ("exts.w r3,r2", 0x1),
+    ("extu.b r3,r2", 0x1),
+    ("extu.w r3,r2", 0x1),
+    ("and #4,r0", 0x1),
+    ("and r3,r2", 0x1),
+    ("and.b #4,@(r0,gbr)", 0x1),
+    ("or #4,r0", 0x1),
+    ("or r3,r2", 0x1),
+    ("or.b #4,@(r0,gbr)", 0x1),
+    ("xor #4,r0", 0x1),
+    ("xor r3,r2", 0x1),
+    ("xor.b #4,@(r0,gbr)", 0x1),
+    ("tst #4,r0", 0x1),
+    ("tst r3,r2", 0x1),
+    ("tst.b #4,@(r0,gbr)", 0x1),
+    ("not r3,r2", 0x1),
+    ("tas.b @r4", 0x1),
+    ("shal r2", 0x1),
+    ("shar r2", 0x1),
+    ("shll r2", 0x1),
+    ("shlr r2", 0x1),
+    ("shll2 r2", 0x1),
+    ("shlr2 r2", 0x1),
+    ("shll8 r2", 0x1),
+    ("shlr8 r2", 0x1),
+    ("shll16 r2", 0x1),
+    ("shlr16 r2", 0x1),
+    ("rotl r2", 0x1),
+    ("rotr r2", 0x1),
+    ("rotcl r2", 0x1),
+    ("rotcr r2", 0x1),
+    ("shad r3,r2", 0x16),
+    ("shld r3,r2", 0x16),
+    ("bt lit", 0x1),
+    ("bf lit", 0x1),
+    ("bt/s lit", 0x2),
+    ("bt.s lit", 0x2),
+    ("bf/s lit", 0x2),
+    ("bf.s lit", 0x2),
+    ("bra lit", 0x1),
+    ("bsr lit", 0x1),
+    ("braf r2", 0x2),
+    ("bsrf r2", 0x2),
+    ("jmp @r4", 0x1),
+    ("jsr @r4", 0x1),
+    ("rts", 0x1),
+    ("rte", 0x1),
+    ("trapa #4", 0x1),
+    ("nop", 0x1),
+    ("sleep", 0x1),
+    ("clrmac", 0x1),
+    ("clrt", 0x1),
+    ("sett", 0x1),
+    ("clrs", 0x14),
+    ("sets", 0x14),
+    ("ldtlb", 0x3),
+    ("pref @r4", 0x16),
+    ("ocbi @r4", 0x12),
+    ("ocbp @r4", 0x12),
+    ("ocbwb @r4", 0x12),
+    ("icbi @r4", 0x11),
+    ("prefi @r4", 0x11),
+    ("synco", 0x11),
+    ("ldc r2,sr", 0x1),
+    ("ldc r2,gbr", 0x1),
+    ("ldc r2,vbr", 0x1),
+    ("ldc r2,ssr", 0x14),
+    ("ldc r2,spc", 0x14),
+    ("ldc r2,sgr", 0x12),
+    ("ldc r2,dbr", 0x12),
+    ("ldc r2,r3_bank", 0x14),
+    ("ldc.l @r4+,sr", 0x1),
+    ("ldc.l @r4+,gbr", 0x1),
+    ("ldc.l @r4+,vbr", 0x1),
+    ("ldc.l @r4+,ssr", 0x14),
+    ("ldc.l @r4+,spc", 0x14),
+    ("ldc.l @r4+,sgr", 0x12),
+    ("ldc.l @r4+,dbr", 0x12),
+    ("ldc.l @r4+,r3_bank", 0x14),
+    ("stc sr,r2", 0x1),
+    ("stc gbr,r2", 0x1),
+    ("stc vbr,r2", 0x1),
+    ("stc ssr,r2", 0x14),
+    ("stc spc,r2", 0x14),
+    ("stc sgr,r2", 0x12),
+    ("stc dbr,r2", 0x12),
+    ("stc r3_bank,r2", 0x14),
+    ("stc.l sr,@-r4", 0x1),
+    ("stc.l gbr,@-r4", 0x1),
+    ("stc.l vbr,@-r4", 0x1),
+    ("stc.l ssr,@-r4", 0x14),
+    ("stc.l spc,@-r4", 0x14),
+    ("stc.l sgr,@-r4", 0x12),
+    ("stc.l dbr,@-r4", 0x12),
+    ("stc.l r3_bank,@-r4", 0x14),
+    ("lds r2,mach", 0x1),
+    ("lds r2,macl", 0x1),
+    ("lds r2,pr", 0x1),
+    ("lds r2,fpul", 0xb),
+    ("lds r2,fpscr", 0xb),
+    ("lds.l @r4+,mach", 0x1),
+    ("lds.l @r4+,macl", 0x1),
+    ("lds.l @r4+,pr", 0x1),
+    ("lds.l @r4+,fpul", 0xb),
+    ("lds.l @r4+,fpscr", 0xb),
+    ("sts mach,r2", 0x1),
+    ("sts macl,r2", 0x1),
+    ("sts pr,r2", 0x1),
+    ("sts fpul,r2", 0xb),
+    ("sts fpscr,r2", 0xb),
+    ("sts.l mach,@-r4", 0x1),
+    ("sts.l macl,@-r4", 0x1),
+    ("sts.l pr,@-r4", 0x1),
+    ("sts.l fpul,@-r4", 0xb),
+    ("sts.l fpscr,@-r4", 0xb),
+    ("fabs fr2", 0xb),
+    ("fabs dr2", 0x17),
+    ("fadd fr3,fr2", 0xb),
+    ("fadd dr4,dr2", 0x17),
+    ("fsub fr3,fr2", 0xb),
+    ("fsub dr4,dr2", 0x17),
+    ("fmul fr3,fr2", 0xb),
+    ("fmul dr4,dr2", 0x17),
+    ("fdiv fr3,fr2", 0xb),
+    ("fdiv dr4,dr2", 0x17),
+    ("fcmp/eq fr3,fr2", 0xb),
+    ("fcmp/eq dr4,dr2", 0x17),
+    ("fcmp/gt fr3,fr2", 0xb),
+    ("fcmp/gt dr4,dr2", 0x17),
+    ("fneg fr2", 0xb),
+    ("fneg dr2", 0x17),
+    ("fsqrt fr2", 0x18),
+    ("fsqrt dr2", 0x17),
+    ("fldi0 fr2", 0xb),
+    ("fldi1 fr2", 0xb),
+    ("flds fr2,fpul", 0xb),
+    ("fsts fpul,fr2", 0xb),
+    ("float fpul,fr2", 0xb),
+    ("float fpul,dr2", 0x17),
+    ("ftrc fr2,fpul", 0xb),
+    ("ftrc dr2,fpul", 0x17),
+    ("fcnvds dr2,fpul", 0x17),
+    ("fcnvsd fpul,dr2", 0x17),
+    ("fmac fr0,fr3,fr2", 0xb),
+    ("fsca fpul,dr2", 0x9),
+    ("fsrra fr2", 0x9),
+    ("fipr fv8,fv4", 0x9),
+    ("ftrv xmtrx,fv4", 0x9),
+    ("frchg", 0x9),
+    ("fschg", 0x17),
+    ("fpchg", 0xc),
+    ("fmov fr3,fr2", 0xb),
+    ("fmov @r5,fr2", 0xb),
+    ("fmov fr3,@r4", 0xb),
+    ("fmov @r5+,fr2", 0xb),
+    ("fmov fr3,@-r4", 0xb),
+    ("fmov @(r0,r5),fr2", 0xb),
+    ("fmov fr3,@(r0,r4)", 0xb),
+    ("fmov dr4,dr2", 0x17),
+    ("fmov @r5,dr2", 0x17),
+    ("fmov dr4,@r4", 0x17),
+    ("fmov @r5+,dr2", 0x17),
+    ("fmov dr4,@-r4", 0x17),
+    ("fmov @(r0,r5),dr2", 0x17),
+    ("fmov dr4,@(r0,r4)", 0x17),
+    ("fmov.s @r5,fr2", 0xb),
+    ("fmov.s fr3,@r4", 0xb),
+    ("fmov.s @r5+,fr2", 0xb),
+    ("fmov.s fr3,@-r4", 0xb),
+    ("fmov.s @(r0,r5),fr2", 0xb),
+    ("fmov.s fr3,@(r0,r4)", 0xb),
+    ("fmov.d @r5,dr2", 0x17),
+    ("fmov.d dr4,@r4", 0x17),
+    ("fmov.d @r5+,dr2", 0x17),
+    ("fmov.d dr4,@-r4", 0x17),
+    ("fmov.d @(r0,r5),dr2", 0x17),
+    ("fmov.d dr4,@(r0,r4)", 0x17),
+];
+
+const SET_PAIRS: &[(&str, &str, u32)] = &[
+    ("mov #4,r2", "movca.l r0,@r4", 0x12),
+    ("mov #4,r2", "movli.l @r4,r0", 0x11),
+    ("mov #4,r2", "dmuls.l r3,r2", 0x2),
+    ("mov #4,r2", "shad r3,r2", 0x16),
+    ("mov #4,r2", "clrs", 0x14),
+    ("mov #4,r2", "ldtlb", 0x3),
+    ("mov #4,r2", "lds r2,fpul", 0xb),
+    ("mov #4,r2", "fabs dr2", 0x17),
+    ("mov #4,r2", "fsqrt fr2", 0x18),
+    ("mov #4,r2", "fsca fpul,dr2", 0x9),
+    ("mov #4,r2", "fpchg", 0xc),
+    ("movca.l r0,@r4", "movli.l @r4,r0", 0x11),
+    ("movca.l r0,@r4", "dmuls.l r3,r2", 0x12),
+    ("movca.l r0,@r4", "shad r3,r2", 0x12),
+    ("movca.l r0,@r4", "clrs", 0x12),
+    ("movca.l r0,@r4", "ldtlb", 0x10),
+    ("movca.l r0,@r4", "lds r2,fpul", 0x9),
+    ("movca.l r0,@r4", "fabs dr2", 0x9),
+    ("movca.l r0,@r4", "fsqrt fr2", 0x9),
+    ("movca.l r0,@r4", "fsca fpul,dr2", 0x9),
+    ("movca.l r0,@r4", "fpchg", 0xc),
+    ("movli.l @r4,r0", "dmuls.l r3,r2", 0x11),
+    ("movli.l @r4,r0", "shad r3,r2", 0x11),
+    ("movli.l @r4,r0", "clrs", 0x11),
+    ("movli.l @r4,r0", "ldtlb", 0x11),
+    ("movli.l @r4,r0", "lds r2,fpul", 0xc),
+    ("movli.l @r4,r0", "fabs dr2", 0xc),
+    ("movli.l @r4,r0", "fsqrt fr2", 0xc),
+    ("movli.l @r4,r0", "fsca fpul,dr2", 0xc),
+    ("movli.l @r4,r0", "fpchg", 0xc),
+    ("dmuls.l r3,r2", "shad r3,r2", 0x16),
+    ("dmuls.l r3,r2", "clrs", 0x14),
+    ("dmuls.l r3,r2", "ldtlb", 0x3),
+    ("dmuls.l r3,r2", "lds r2,fpul", 0xb),
+    ("dmuls.l r3,r2", "fabs dr2", 0x17),
+    ("dmuls.l r3,r2", "fsqrt fr2", 0x18),
+    ("dmuls.l r3,r2", "fsca fpul,dr2", 0x9),
+    ("dmuls.l r3,r2", "fpchg", 0xc),
+    ("shad r3,r2", "clrs", 0x14),
+    ("shad r3,r2", "ldtlb", 0x3),
+    ("shad r3,r2", "lds r2,fpul", 0x18),
+    ("shad r3,r2", "fabs dr2", 0x17),
+    ("shad r3,r2", "fsqrt fr2", 0x18),
+    ("shad r3,r2", "fsca fpul,dr2", 0x9),
+    ("shad r3,r2", "fpchg", 0xc),
+    ("clrs", "ldtlb", 0x3),
+    ("clrs", "lds r2,fpul", 0x8),
+    ("clrs", "fabs dr2", 0x9),
+    ("clrs", "fsqrt fr2", 0x8),
+    ("clrs", "fsca fpul,dr2", 0x9),
+    ("clrs", "fpchg", 0xc),
+    ("ldtlb", "lds r2,fpul", 0x8),
+    ("ldtlb", "fabs dr2", 0x9),
+    ("ldtlb", "fsqrt fr2", 0x8),
+    ("ldtlb", "fsca fpul,dr2", 0x9),
+    ("ldtlb", "fpchg", 0xc),
+    ("lds r2,fpul", "fabs dr2", 0x17),
+    ("lds r2,fpul", "fsqrt fr2", 0x18),
+    ("lds r2,fpul", "fsca fpul,dr2", 0x9),
+    ("lds r2,fpul", "fpchg", 0xc),
+    ("fabs dr2", "fsqrt fr2", 0x17),
+    ("fabs dr2", "fsca fpul,dr2", 0x9),
+    ("fabs dr2", "fpchg", 0xc),
+    ("fsqrt fr2", "fsca fpul,dr2", 0x9),
+    ("fsqrt fr2", "fpchg", 0xc),
+    ("fsca fpul,dr2", "fpchg", 0xc),
+];
+
+const WHOLE_FILES: &[(&str, u32)] = &[
+    ("", 0x1),
+    (".long 1", 0x1),
+    (".data\n.long 1\n.byte 2", 0x1),
+    ("l: .align 2", 0x1),
+    (".section .foo,\"ax\"\n.word 9", 0x1),
+    (".text\n.space 16", 0x1),
+    (".bss\n.space 4", 0x1),
+    ("x = 3", 0x1),
+    (
+        "nop\n.section .t2,\"ax\"\nmovca.l r0,@r1\n.data\n.long 0",
+        0x12,
+    ),
+    (".section .t2,\"ax\"\nfsqrt fr1\n.text\nldtlb", 0x8),
+    ("ldtlb\nmovca.l r0,@r1", 0x10),
+    ("clrs\nfmov.s @r1,fr2", 0x8),
+    ("movli.l @r1,r0\nfadd fr2,fr4\n.long 0", 0xc),
+    ("dt r1\npref @r2\nfsqrt fr3", 0x18),
+    ("bt/s far\nnop\n.space 1000\nfar: rts\nnop", 0x2),
+    ("bt far\n.space 1000\nfar: rts\nnop", 0x1),
+];
+
+const CPU_NAMES: &[(&str, &str, u32)] = &[
+    ("sh1", "", 0x1),
+    ("sh1", "nop", 0x1),
+    ("sh2", "", 0x2),
+    ("sh2", "nop", 0x2),
+    ("sh2", "dt r1", 0x2),
+    ("sh2e", "", 0xb),
+    ("sh2e", "nop", 0xb),
+    ("sh2e", "dt r1", 0xb),
+    ("sh2e", "fadd fr2,fr4", 0xb),
+    ("sh3", "", 0x3),
+    ("sh3", "nop", 0x3),
+    ("sh3", "dt r1", 0x3),
+    ("sh3", "ldtlb", 0x3),
+    ("sh3e", "", 0x8),
+    ("sh3e", "nop", 0x8),
+    ("sh3e", "dt r1", 0x8),
+    ("sh3e", "ldtlb", 0x8),
+    ("sh3e", "fadd fr2,fr4", 0x8),
+    ("sh3e", "fsqrt fr1", 0x8),
+    ("sh4", "", 0x9),
+    ("sh4", "nop", 0x9),
+    ("sh4", "dt r1", 0x9),
+    ("sh4", "ldtlb", 0x9),
+    ("sh4", "fadd fr2,fr4", 0x9),
+    ("sh4", "fsqrt fr1", 0x9),
+    ("sh4", "movca.l r0,@r1", 0x9),
+    ("sh4", "fipr fv0,fv4", 0x9),
+    ("sh4a", "", 0xc),
+    ("sh4a", "nop", 0xc),
+    ("sh4a", "dt r1", 0xc),
+    ("sh4a", "ldtlb", 0xc),
+    ("sh4a", "fadd fr2,fr4", 0xc),
+    ("sh4a", "fsqrt fr1", 0xc),
+    ("sh4a", "movca.l r0,@r1", 0xc),
+    ("sh4a", "fipr fv0,fv4", 0xc),
+    ("sh4a", "synco", 0xc),
+];
+
 // ---- diagnostics ----------------------------------------------------------------
 
 #[test]
