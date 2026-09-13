@@ -629,7 +629,7 @@ fn branch_range_and_alignment_are_checked() {
     text_for("sparc", "ba . + 0x7ffffc");
     // A target that is not a multiple of four cannot be encoded at all.
     let e = errors_for("sparc", "ba . + 1");
-    assert!(e.contains("out of range"), "{e}");
+    assert!(e.contains("not a multiple of 4"), "{e}");
 }
 
 #[test]

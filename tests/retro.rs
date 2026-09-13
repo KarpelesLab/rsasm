@@ -410,7 +410,8 @@ fn branch_displacements_are_measured_from_the_next_instruction() {
 fn a_branch_out_of_range_is_diagnosed() {
     let err = errors_for("6502", "bne 1f\n.space 128, 0xea\n1:\n");
     assert!(err.contains("out of range"), "got: {err}");
-    assert!(err.contains("PC-relative"), "got: {err}");
+    // The message names the real limit rather than the field's byte width.
+    assert!(err.contains("(-128 to 127)"), "got: {err}");
 }
 
 #[test]

@@ -303,3 +303,39 @@ fn a_set_option_the_backend_does_not_know_is_explained() {
     );
     assert!(e.contains(".set name, value"), "{e}");
 }
+
+#[test]
+fn an_unknown_relocation_modifier_in_data_is_an_error() {
+    // It used to fall back to the plain data relocation, which is a different
+    // program: `.quad foo@bogus` became an absolute reference to `foo`.
+    let e = errors(".quad foo@bogus\n");
+    assert!(e.contains("`@bogus` is not a relocation modifier"), "{e}");
+    // A modifier the target does know still selects its relocation.
+    let asm = assemble(".quad foo@GOTPCREL\n");
+    assert!(!asm.diags.has_errors());
+    assert_eq!(asm.relocs[0].kind, 9, "R_X86_64_GOTPCREL");
+}
+
+#[test]
+fn flat_output_sizes_see_real_addresses() {
+    // During layout a flat image's labels used to sit at their offset within
+    // the section rather than at base + offset, so this went negative.
+    let asm = assemble_flat(
+        "start:\n.space start + 4 - 0x8000, 0xaa\n.byte 0xbb\n",
+        0x8000,
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(section(&asm, ".text"), vec![0xaa, 0xaa, 0xaa, 0xaa, 0xbb]);
+}
+
+#[test]
+fn range_errors_name_the_actual_limit() {
+    // A short jump that cannot be relaxed further, forced through `.byte`
+    // arithmetic, so the message comes from the core.
+    let e = errors("a:\n.byte a - b\n.space 300\nb:\n");
+    assert!(e.contains("out of range (-128 to 255)"), "{e}");
+}

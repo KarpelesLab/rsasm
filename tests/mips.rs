@@ -288,7 +288,9 @@ fn a_jump_target_is_a_word_index_not_a_displacement() {
 #[test]
 fn a_misaligned_jump_target_is_an_error() {
     let e = errors_for("mips", "j 0x400001");
-    assert!(e.contains("out of range"), "{e}");
+    // Misalignment is its own problem, not a range problem, and the message
+    // says which.
+    assert!(e.contains("not a multiple of 4"), "{e}");
 }
 
 #[test]
@@ -461,7 +463,7 @@ fn an_unreachable_branch_is_an_error_not_a_truncation() {
 #[test]
 fn a_misaligned_branch_target_is_an_error() {
     let e = errors_for("mips", "b odd\n.space 1\nodd: nop");
-    assert!(e.contains("out of range"), "{e}");
+    assert!(e.contains("not a multiple of 4"), "{e}");
 }
 
 #[test]

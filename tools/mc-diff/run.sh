@@ -31,6 +31,7 @@ mips|mips|mips|
 mipsel|mipsel|mipsel|
 mips64|mips64|mips64|
 sparc|sparc|sparc|
+sparcv9|sparcv9|sparcv9|
 "
 
 command -v llvm-mc >/dev/null || { echo "llvm-mc not found; skipping" >&2; exit 0; }

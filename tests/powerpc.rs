@@ -495,7 +495,7 @@ fn out_of_range_branches_are_diagnosed() {
     assert!(errors_for("powerpc64", far_cond).contains("out of range"));
     // A target that is not word-aligned cannot be encoded at all.
     let odd = "b target\n.byte 0\ntarget: blr\n";
-    assert!(errors_for("powerpc64", odd).contains("out of range"));
+    assert!(errors_for("powerpc64", odd).contains("not a multiple of 4"));
 }
 
 #[test]

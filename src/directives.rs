@@ -300,7 +300,29 @@ impl Assembler {
             self.cur_section().emit_bytes(&bytes, span);
             return;
         }
-        let reloc = self.arch.data_reloc(size, false).unwrap_or(0);
+        let mut reloc = self.arch.data_reloc(size, false).unwrap_or(0);
+        // A modifier the target does not recognise used to fall back to the
+        // plain data relocation, so `.long foo@got` quietly became an
+        // absolute reference to `foo`. That is a different program, so it is
+        // an error instead.
+        if let Some(m) = self.find_modifier(e) {
+            let name = self.interner.get(m).to_string();
+            match self.arch.modifier_reloc(&name, size, false) {
+                Some(r) => reloc = r,
+                None => {
+                    let espan = self.exprs.span(e);
+                    self.diags.error(
+                        espan,
+                        format!(
+                            "`@{name}` is not a relocation modifier the `{}` backend supports \
+                             in a {size}-byte data field",
+                            self.arch.name()
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
         let kind = crate::section::FixupKind::data(size).with_reloc(reloc);
         let espan = self.exprs.span(e);
         self.cur_section().emit_fixup(size, e, kind, espan);

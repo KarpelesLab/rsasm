@@ -49,6 +49,15 @@ impl Assembler {
 
         let mut settled = false;
         for _ in 0..MAX_PASSES {
+            // Addresses are assigned from the previous pass's sizes before
+            // this pass computes new ones. For relocatable output every
+            // section sits at zero and this changes nothing; for a flat image
+            // it is what lets `.space start + 4 - 0x8000`, or a zero-page
+            // choice on the 6502, see where a label really is rather than its
+            // offset within the section. The loop only ends on a pass where no
+            // size changed, and addresses are a function of sizes, so the
+            // addresses that pass used are the final ones.
+            self.assign_addresses();
             let sizes_changed = self.assign_offsets();
             let relaxed = self.relax();
             if !sizes_changed && !relaxed {
@@ -231,9 +240,16 @@ impl Assembler {
                     let at = frag_off + *off as u64;
                     match self.fixup_value(*e, kind, id, at) {
                         Some(v) => kind.fits(v as i128),
-                        // An unresolved reference needs a relocation, and only
-                        // a wide field can carry one.
-                        None => kind.size >= 4 && kind.reloc != 0,
+                        // An unresolved reference takes the widest form on
+                        // offer. Nothing is known about how far away its
+                        // target will be, so any shorter form is a guess the
+                        // linker may not be able to honour: a RISC-V `c.j`
+                        // carries a relocation, but reaches only ±2 KiB.
+                        // llvm-mc makes the same choice (checked: `j sym` to
+                        // an undefined `sym` is a full `R_RISCV_JAL`). The
+                        // widest variant is never bumped past, since `relax`
+                        // stops at the last one.
+                        None => false,
                     }
                 });
                 if !all_fit {
@@ -397,14 +413,7 @@ impl Assembler {
                     match self.fixup_value(e, &kind, id, at) {
                         Some(v) => {
                             if !kind.fits(v as i128) {
-                                self.diags.error(
-                                    span,
-                                    format!(
-                                        "value {v} is out of range for a {}-byte {}field",
-                                        kind.size,
-                                        if kind.pcrel { "PC-relative " } else { "" }
-                                    ),
-                                );
+                                self.diags.error(span, range_message(&kind, v));
                                 continue;
                             }
                             let endian = self.arch.endian();
@@ -515,7 +524,7 @@ impl Assembler {
     }
 
     /// The first `@`-modifier appearing in an expression, if any.
-    fn find_modifier(&self, e: ExprRef) -> Option<crate::intern::Name> {
+    pub(crate) fn find_modifier(&self, e: ExprRef) -> Option<crate::intern::Name> {
         match &self.exprs.get(e).kind {
             ExprKind::Modifier(n, _) => Some(*n),
             ExprKind::Unary(_, a) => self.find_modifier(*a),
@@ -587,6 +596,34 @@ impl Assembler {
             }
         }
         out
+    }
+}
+
+/// Explains why a value does not fit its field, naming the actual limit.
+///
+/// A field's byte width is rarely the constraint that matters: a MIPS branch
+/// lives in a four-byte word but holds ±128 KiB in steps of four. Saying
+/// "out of range for a 4-byte field" sends the reader to the wrong limit, and
+/// calling a misaligned target "out of range" sends them to the wrong problem.
+fn range_message(kind: &FixupKind, v: i64) -> String {
+    let what = if kind.pcrel { "offset" } else { "value" };
+    let align = kind.value_align as i128;
+    if align > 1 && (v as i128) % align != 0 {
+        return format!("{what} {v} is not a multiple of {align}");
+    }
+    let (lo, hi) = kind.range();
+    format!("{what} {v} is out of range ({} to {})", show(lo), show(hi))
+}
+
+/// Prints a bound in whichever base reads better: small limits in decimal,
+/// the large ones as the power-of-two-ish hex they really are.
+fn show(n: i128) -> String {
+    if n.unsigned_abs() < 0x1_0000 {
+        n.to_string()
+    } else if n < 0 {
+        format!("-{:#x}", n.unsigned_abs())
+    } else {
+        format!("{n:#x}")
     }
 }
 
