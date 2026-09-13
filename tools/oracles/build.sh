@@ -25,13 +25,25 @@ BINUTILS_SHA256=154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 VASM_URL="http://sun.hasenbraten.de/vasm/release/vasm.tar.gz"
 VASM_SHA256=c84b2de1cbb87831795fe64a85c5d9a7002a766e3a7c30b0a2d7d5e99d878f49
 
-# GNU as, one build per target: gas is single-target by construction.
-#   m68k-elf  Motorola 68000 family
-#   v850-elf  V850 and RH850 (v850e3v5)
-#   rl78-elf  Renesas RL78
-#   rx-elf    Renesas RX
-#   sh-elf    SuperH
-BINUTILS_TARGETS="m68k-elf v850-elf rl78-elf rx-elf sh-elf"
+# GNU as and ld, one build per target: gas is single-target by construction.
+# The linkers are what the link tests use to check that relocations mean what
+# rsasm intends, which comparing bytes against another assembler cannot show.
+#   m68k-elf              Motorola 68000 family
+#   v850-elf              V850 and RH850 (v850e3v5)
+#   rl78-elf              Renesas RL78
+#   rx-elf                Renesas RX
+#   sh-elf                SuperH
+#   avr-elf               Microchip AVR
+#   msp430-elf            TI MSP430
+# Linkers (and a second assembler) for the targets llvm-mc checks:
+#   arm-none-eabi         ARM and Thumb
+#   aarch64-elf           AArch64
+#   riscv64-elf           RISC-V, 32- and 64-bit
+#   powerpc64-linux-gnu   PowerPC, 32/64-bit, both byte orders
+#   mips64-elf            MIPS, 32/64-bit, both byte orders
+#   sparc64-elf           SPARC V8 and V9
+#   x86_64-elf            x86-64, i386
+BINUTILS_TARGETS="m68k-elf v850-elf rl78-elf rx-elf sh-elf avr-elf msp430-elf arm-none-eabi aarch64-elf riscv64-elf powerpc64-linux-gnu mips64-elf sparc64-elf x86_64-elf"
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 # RSASM_ORACLES overrides the install directory, so several checkouts or a CI
@@ -60,7 +72,7 @@ fetch() { # url dest sha256
 
 build_binutils() { # target
   local t=$1
-  if [ -x "$out/bin/$t-as" ]; then echo "$t-as already built"; return; fi
+  if [ -x "$out/bin/$t-as" ] && [ -x "$out/bin/$t-ld" ]; then echo "$t already built"; return; fi
   fetch "$BINUTILS_URL" "$src/binutils-$BINUTILS_VERSION.tar.xz" "$BINUTILS_SHA256"
   [ -d "$src/binutils-$BINUTILS_VERSION" ] || tar -xJf "$src/binutils-$BINUTILS_VERSION.tar.xz" -C "$src"
   local b="$out/build/binutils-$t"
@@ -72,12 +84,12 @@ build_binutils() { # target
       --target="$t" --prefix="$out" \
       --disable-nls --disable-werror --disable-gdb --disable-gdbserver \
       --disable-sim --disable-readline --disable-libdecnumber \
-      --disable-gprof --disable-gprofng --disable-ld --disable-gold \
+      --disable-gprof --disable-gprofng --enable-ld --disable-gold \
       --without-zstd --without-debuginfod > configure.log 2>&1
-    make -j"$jobs" all-gas all-binutils > make.log 2>&1
-    make install-gas install-binutils > install.log 2>&1
+    make -j"$jobs" all-gas all-binutils all-ld > make.log 2>&1
+    make install-gas install-binutils install-ld > install.log 2>&1
   ) || { echo "build of $t failed; see $b/*.log" >&2; return 1; }
-  echo "built $t-as"
+  echo "built $t-as and $t-ld"
 }
 
 build_vasm() {
