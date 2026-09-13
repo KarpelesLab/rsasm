@@ -14,7 +14,9 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-bin="$root/target/oracles/bin"
+# RSASM_ORACLES points somewhere else, so a worktree or a CI cache can share one
+# build of the references instead of rebuilding binutils per checkout.
+bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 
 # key | rsasm arch | rsasm dialect | reference command | how to get the code
 #

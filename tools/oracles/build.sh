@@ -27,7 +27,9 @@ VASM_URL="http://sun.hasenbraten.de/vasm/release/vasm.tar.gz"
 BINUTILS_TARGETS="m68k-elf v850-elf rl78-elf rx-elf sh-elf"
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-out="$root/target/oracles"
+# RSASM_ORACLES overrides the install directory, so several checkouts or a CI
+# cache can share a single build.
+out="${RSASM_ORACLES:-$root/target/oracles}"
 src="$out/src"
 mkdir -p "$src" "$out/bin"
 jobs=$(nproc 2>/dev/null || echo 4)

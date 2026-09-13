@@ -9,7 +9,9 @@ $ tools/xas-diff/run.sh           # every target with a corpus
 $ tools/xas-diff/run.sh m68k-mot  # just one
 ```
 
-The references are GNU binutils 2.47 and vasm, built into `target/oracles/`.
+The references are GNU binutils 2.47 and vasm, built into `target/oracles/`,
+or wherever `RSASM_ORACLES` points — useful for sharing one build between
+worktrees, since binutils takes minutes per target.
 See `tools/oracles/build.sh` for why the versions are pinned.
 
 ## Targets
