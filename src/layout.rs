@@ -22,10 +22,23 @@ const MAX_PASSES: u32 = 32;
 /// call back into the assembler without holding a borrow on the fragment.
 enum Task {
     Fixed(u64),
-    Align { align: u64, max_skip: Option<u64> },
-    Org { target: ExprRef, span: Span },
-    Space { size: ExprRef, span: Span },
-    Leb { value: ExprRef, signed: bool, span: Span },
+    Align {
+        align: u64,
+        max_skip: Option<u64>,
+    },
+    Org {
+        target: ExprRef,
+        span: Span,
+    },
+    Space {
+        size: ExprRef,
+        span: Span,
+    },
+    Leb {
+        value: ExprRef,
+        signed: bool,
+        span: Span,
+    },
 }
 
 impl Assembler {
@@ -101,14 +114,25 @@ impl Assembler {
             FragKind::Bytes { variants, chosen } => {
                 Task::Fixed(variants[*chosen].bytes.len() as u64)
             }
-            FragKind::Align { align, max_skip, .. } => {
-                Task::Align { align: *align, max_skip: *max_skip }
-            }
-            FragKind::Org { target, .. } => Task::Org { target: *target, span: f.span },
-            FragKind::Space { size, .. } => Task::Space { size: *size, span: f.span },
-            FragKind::Leb128 { value, signed, .. } => {
-                Task::Leb { value: *value, signed: *signed, span: f.span }
-            }
+            FragKind::Align {
+                align, max_skip, ..
+            } => Task::Align {
+                align: *align,
+                max_skip: *max_skip,
+            },
+            FragKind::Org { target, .. } => Task::Org {
+                target: *target,
+                span: f.span,
+            },
+            FragKind::Space { size, .. } => Task::Space {
+                size: *size,
+                span: f.span,
+            },
+            FragKind::Leb128 { value, signed, .. } => Task::Leb {
+                value: *value,
+                signed: *signed,
+                span: f.span,
+            },
         }
     }
 
@@ -117,7 +141,11 @@ impl Assembler {
         match task {
             Task::Fixed(n) => (n, None),
             Task::Align { align, max_skip } => {
-                let pad = if align <= 1 { 0 } else { off.next_multiple_of(align) - off };
+                let pad = if align <= 1 {
+                    0
+                } else {
+                    off.next_multiple_of(align) - off
+                };
                 // `.align n,,max` skips the padding entirely when it would
                 // cost more than `max` bytes.
                 match max_skip {
@@ -128,7 +156,8 @@ impl Assembler {
             Task::Org { target, span } => {
                 let id = SectionId(si as u32);
                 let Some(t) = self.resolve_section_relative(target, id) else {
-                    self.diags.error(span, "`.org` target must resolve to a fixed offset");
+                    self.diags
+                        .error(span, "`.org` target must resolve to a fixed offset");
                     return (0, None);
                 };
                 if t < off as i64 {
@@ -142,7 +171,8 @@ impl Assembler {
             }
             Task::Space { size, span } => {
                 let Some(n) = self.eval_absolute_quiet(size) else {
-                    self.diags.error(span, "`.space` size must be an absolute value");
+                    self.diags
+                        .error(span, "`.space` size must be an absolute value");
                     return (0, None);
                 };
                 if n < 0 {
@@ -151,15 +181,24 @@ impl Assembler {
                 }
                 (n as u64, None)
             }
-            Task::Leb { value, signed, span } => {
+            Task::Leb {
+                value,
+                signed,
+                span,
+            } => {
                 let v = match self.eval_absolute_quiet(value) {
                     Some(v) => v,
                     None => {
-                        self.diags.error(span, "LEB128 value must be an absolute value");
+                        self.diags
+                            .error(span, "LEB128 value must be an absolute value");
                         0
                     }
                 };
-                let encoded = if signed { sleb128(v) } else { uleb128(v as u64) };
+                let encoded = if signed {
+                    sleb128(v)
+                } else {
+                    uleb128(v as u64)
+                };
                 (encoded.len() as u64, Some(encoded))
             }
         }
@@ -178,15 +217,15 @@ impl Assembler {
                 if nvariants <= 1 || chosen + 1 >= nvariants {
                     continue;
                 }
-                let fixups: Vec<(u32, ExprRef, FixupKind)> =
-                    match &self.sections[si].frags[fi].kind {
-                        FragKind::Bytes { variants, .. } => variants[chosen]
-                            .fixups
-                            .iter()
-                            .map(|f| (f.offset, f.expr, f.kind))
-                            .collect(),
-                        _ => continue,
-                    };
+                let fixups: Vec<(u32, ExprRef, FixupKind)> = match &self.sections[si].frags[fi].kind
+                {
+                    FragKind::Bytes { variants, .. } => variants[chosen]
+                        .fixups
+                        .iter()
+                        .map(|f| (f.offset, f.expr, f.kind))
+                        .collect(),
+                    _ => continue,
+                };
                 let id = SectionId(si as u32);
                 let all_fit = fixups.iter().all(|(off, e, kind)| {
                     let at = frag_off + *off as u64;
@@ -279,7 +318,10 @@ impl Assembler {
         if v.is_absolute() {
             return Some(v.addend);
         }
-        if v.plus.is_some_and(|p| self.symbol_section(p) == Some(section)) && v.minus.is_none() {
+        if v.plus
+            .is_some_and(|p| self.symbol_section(p) == Some(section))
+            && v.minus.is_none()
+        {
             let addr = self.resolve_value(v)?;
             return Some(addr - self.section(section).addr as i64);
         }
@@ -299,9 +341,10 @@ impl Assembler {
         // the same section, so that the two section bases cancel.
         if kind.pcrel {
             if let Some(p) = v.plus
-                && self.symbol_section(p) != Some(section) {
-                    return None;
-                }
+                && self.symbol_section(p) != Some(section)
+            {
+                return None;
+            }
             let target = self.resolve_value(v)?;
             let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
             return Some(target - here);
@@ -434,17 +477,23 @@ impl Assembler {
         // Local symbols are relocated against their section, which is what
         // linkers expect and what keeps local labels out of the symbol table.
         let sym = self.symbols.get(target);
-        let symbol = if sym.binding == Binding::Local && matches!(sym.value, SymbolValue::Label { .. })
-        {
-            let sec = self.symbol_section(target).expect("label has a section");
-            addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
-            self.section_symbol(sec)
-        } else {
-            self.symbols.get_mut(target).used = true;
-            target
-        };
+        let symbol =
+            if sym.binding == Binding::Local && matches!(sym.value, SymbolValue::Label { .. }) {
+                let sec = self.symbol_section(target).expect("label has a section");
+                addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
+                self.section_symbol(sec)
+            } else {
+                self.symbols.get_mut(target).used = true;
+                target
+            };
 
-        Some(Relocation { section, offset: at, symbol, addend, kind: reloc })
+        Some(Relocation {
+            section,
+            offset: at,
+            symbol,
+            addend,
+            kind: reloc,
+        })
     }
 
     /// The first `@`-modifier appearing in an expression, if any.
@@ -513,7 +562,9 @@ impl Assembler {
         let mut out = Vec::with_capacity(s.size as usize);
         for f in &s.frags {
             match &f.kind {
-                FragKind::Bytes { variants, chosen } => out.extend_from_slice(&variants[*chosen].bytes),
+                FragKind::Bytes { variants, chosen } => {
+                    out.extend_from_slice(&variants[*chosen].bytes)
+                }
                 _ => out.resize(out.len() + f.size() as usize, 0),
             }
         }

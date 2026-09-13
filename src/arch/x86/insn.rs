@@ -86,7 +86,14 @@ pub struct Def {
 
 impl Def {
     fn new(ops: Vec<Op>, opcode: Vec<u8>, modrm: ModRm, opsize: u8) -> Def {
-        Def { ops, pfx: 0, opcode, modrm, opsize, flags: 0 }
+        Def {
+            ops,
+            pfx: 0,
+            opcode,
+            modrm,
+            opsize,
+            flags: 0,
+        }
     }
 
     fn flags(mut self, f: u16) -> Def {
@@ -100,6 +107,7 @@ fn d(ops: Vec<Op>, opcode: &[u8], modrm: ModRm, opsize: u8) -> Def {
 }
 
 /// The 16 condition codes, in `tttn` order, with every accepted spelling.
+#[rustfmt::skip]
 pub const CONDITIONS: &[(&str, u8)] = &[
     ("o", 0x0),
     ("no", 0x1),
@@ -145,18 +153,48 @@ fn alu_group(table: &mut HashMap<&'static str, Vec<Def>>, mnem: &'static str, ba
     defs.push(d(vec![Op::Rm(1), Op::Imm(1)], &[0x80], ModRm::Ext(ext), 8));
     for w in WIDTHS {
         let bits = opsize_bits(w);
-        defs.push(d(vec![Op::Rm(w), Op::Imm8s], &[0x83], ModRm::Ext(ext), bits));
+        defs.push(d(
+            vec![Op::Rm(w), Op::Imm8s],
+            &[0x83],
+            ModRm::Ext(ext),
+            bits,
+        ));
     }
     // `op al, imm8` and `op eAX, imm32` are one byte shorter than the ModRM
     // forms, so they are tried before them but after imm8-sign-extended.
-    defs.push(d(vec![Op::Fixed("al"), Op::Imm(1)], &[base + 4], ModRm::None, 8));
-    defs.push(d(vec![Op::Fixed("ax"), Op::Imm(2)], &[base + 5], ModRm::None, 16));
-    defs.push(d(vec![Op::Fixed("eax"), Op::Imm(4)], &[base + 5], ModRm::None, 32));
-    defs.push(d(vec![Op::Fixed("rax"), Op::Imm(4)], &[base + 5], ModRm::None, 64));
+    defs.push(d(
+        vec![Op::Fixed("al"), Op::Imm(1)],
+        &[base + 4],
+        ModRm::None,
+        8,
+    ));
+    defs.push(d(
+        vec![Op::Fixed("ax"), Op::Imm(2)],
+        &[base + 5],
+        ModRm::None,
+        16,
+    ));
+    defs.push(d(
+        vec![Op::Fixed("eax"), Op::Imm(4)],
+        &[base + 5],
+        ModRm::None,
+        32,
+    ));
+    defs.push(d(
+        vec![Op::Fixed("rax"), Op::Imm(4)],
+        &[base + 5],
+        ModRm::None,
+        64,
+    ));
     for w in WIDTHS {
         let bits = opsize_bits(w);
         let imm = if w == 2 { 2 } else { 4 };
-        defs.push(d(vec![Op::Rm(w), Op::Imm(imm)], &[0x81], ModRm::Ext(ext), bits));
+        defs.push(d(
+            vec![Op::Rm(w), Op::Imm(imm)],
+            &[0x81],
+            ModRm::Ext(ext),
+            bits,
+        ));
     }
 
     table.insert(mnem, defs);
@@ -166,13 +204,28 @@ fn alu_group(table: &mut HashMap<&'static str, Vec<Def>>, mnem: &'static str, ba
 fn shift_group(table: &mut HashMap<&'static str, Vec<Def>>, mnems: &[&'static str], ext: u8) {
     let mut defs = Vec::new();
     defs.push(d(vec![Op::Rm(1), Op::One], &[0xd0], ModRm::Ext(ext), 8));
-    defs.push(d(vec![Op::Rm(1), Op::Fixed("cl")], &[0xd2], ModRm::Ext(ext), 8));
+    defs.push(d(
+        vec![Op::Rm(1), Op::Fixed("cl")],
+        &[0xd2],
+        ModRm::Ext(ext),
+        8,
+    ));
     defs.push(d(vec![Op::Rm(1), Op::Imm(1)], &[0xc0], ModRm::Ext(ext), 8));
     for w in WIDTHS {
         let bits = opsize_bits(w);
         defs.push(d(vec![Op::Rm(w), Op::One], &[0xd1], ModRm::Ext(ext), bits));
-        defs.push(d(vec![Op::Rm(w), Op::Fixed("cl")], &[0xd3], ModRm::Ext(ext), bits));
-        defs.push(d(vec![Op::Rm(w), Op::Imm(1)], &[0xc1], ModRm::Ext(ext), bits));
+        defs.push(d(
+            vec![Op::Rm(w), Op::Fixed("cl")],
+            &[0xd3],
+            ModRm::Ext(ext),
+            bits,
+        ));
+        defs.push(d(
+            vec![Op::Rm(w), Op::Imm(1)],
+            &[0xc1],
+            ModRm::Ext(ext),
+            bits,
+        ));
     }
     // A shift with no count means "by one".
     defs.push(d(vec![Op::Rm(1)], &[0xd0], ModRm::Ext(ext), 8));
@@ -230,13 +283,33 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
             let bits = opsize_bits(w);
             defs.push(d(vec![Op::Rm(w), Op::R(w)], &[0x85], ModRm::Reg, bits));
         }
-        defs.push(d(vec![Op::Fixed("ax"), Op::Imm(2)], &[0xa9], ModRm::None, 16));
-        defs.push(d(vec![Op::Fixed("eax"), Op::Imm(4)], &[0xa9], ModRm::None, 32));
-        defs.push(d(vec![Op::Fixed("rax"), Op::Imm(4)], &[0xa9], ModRm::None, 64));
+        defs.push(d(
+            vec![Op::Fixed("ax"), Op::Imm(2)],
+            &[0xa9],
+            ModRm::None,
+            16,
+        ));
+        defs.push(d(
+            vec![Op::Fixed("eax"), Op::Imm(4)],
+            &[0xa9],
+            ModRm::None,
+            32,
+        ));
+        defs.push(d(
+            vec![Op::Fixed("rax"), Op::Imm(4)],
+            &[0xa9],
+            ModRm::None,
+            64,
+        ));
         for w in WIDTHS {
             let bits = opsize_bits(w);
             let imm = if w == 2 { 2 } else { 4 };
-            defs.push(d(vec![Op::Rm(w), Op::Imm(imm)], &[0xf7], ModRm::Ext(0), bits));
+            defs.push(d(
+                vec![Op::Rm(w), Op::Imm(imm)],
+                &[0xf7],
+                ModRm::Ext(0),
+                bits,
+            ));
         }
         t.insert("test", defs);
     }
@@ -279,10 +352,20 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
     for (mnem, op) in [("movzx", 0xb6u8), ("movsx", 0xbeu8)] {
         let mut defs = Vec::new();
         for dst in [2u8, 4, 8] {
-            defs.push(d(vec![Op::R(dst), Op::Rm(1)], &[0x0f, op], ModRm::Reg, opsize_bits(dst)));
+            defs.push(d(
+                vec![Op::R(dst), Op::Rm(1)],
+                &[0x0f, op],
+                ModRm::Reg,
+                opsize_bits(dst),
+            ));
         }
         for dst in [4u8, 8] {
-            defs.push(d(vec![Op::R(dst), Op::Rm(2)], &[0x0f, op + 1], ModRm::Reg, opsize_bits(dst)));
+            defs.push(d(
+                vec![Op::R(dst), Op::Rm(2)],
+                &[0x0f, op + 1],
+                ModRm::Reg,
+                opsize_bits(dst),
+            ));
         }
         t.insert(mnem, defs);
     }
@@ -295,7 +378,14 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
     t.insert("lea", {
         WIDTHS
             .iter()
-            .map(|&w| d(vec![Op::R(w), Op::M(0)], &[0x8d], ModRm::Reg, opsize_bits(w)))
+            .map(|&w| {
+                d(
+                    vec![Op::R(w), Op::M(0)],
+                    &[0x8d],
+                    ModRm::Reg,
+                    opsize_bits(w),
+                )
+            })
             .collect()
     });
 
@@ -303,9 +393,19 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
         // `xchg rax, rax` is spelled `nop`, and `xchg ax, ax` is `66 90`;
         // both are shorter than the ModRM forms, so they come first.
         let mut defs = vec![
-            d(vec![Op::Fixed("rax"), Op::Fixed("rax")], &[0x90], ModRm::None, 64)
-                .flags(NO_REX_W),
-            d(vec![Op::Fixed("ax"), Op::Fixed("ax")], &[0x90], ModRm::None, 16),
+            d(
+                vec![Op::Fixed("rax"), Op::Fixed("rax")],
+                &[0x90],
+                ModRm::None,
+                64,
+            )
+            .flags(NO_REX_W),
+            d(
+                vec![Op::Fixed("ax"), Op::Fixed("ax")],
+                &[0x90],
+                ModRm::None,
+                16,
+            ),
         ];
         // `xchg rAX, r` has a one-byte encoding.
         for (w, acc) in [(2u8, "ax"), (4, "eax"), (8, "rax")] {
@@ -322,8 +422,18 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
         defs.push(d(vec![Op::Rm(1), Op::R(1)], &[0x86], ModRm::Reg, 8));
         defs.push(d(vec![Op::R(1), Op::Rm(1)], &[0x86], ModRm::Reg, 8));
         for w in WIDTHS {
-            defs.push(d(vec![Op::Rm(w), Op::R(w)], &[0x87], ModRm::Reg, opsize_bits(w)));
-            defs.push(d(vec![Op::R(w), Op::Rm(w)], &[0x87], ModRm::Reg, opsize_bits(w)));
+            defs.push(d(
+                vec![Op::Rm(w), Op::R(w)],
+                &[0x87],
+                ModRm::Reg,
+                opsize_bits(w),
+            ));
+            defs.push(d(
+                vec![Op::R(w), Op::Rm(w)],
+                &[0x87],
+                ModRm::Reg,
+                opsize_bits(w),
+            ));
         }
         defs
     });
@@ -335,9 +445,24 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
         for w in WIDTHS {
             let bits = opsize_bits(w);
             let imm = if w == 2 { 2 } else { 4 };
-            defs.push(d(vec![Op::R(w), Op::Rm(w), Op::Imm8s], &[0x6b], ModRm::Reg, bits));
-            defs.push(d(vec![Op::R(w), Op::Rm(w), Op::Imm(imm)], &[0x69], ModRm::Reg, bits));
-            defs.push(d(vec![Op::R(w), Op::Rm(w)], &[0x0f, 0xaf], ModRm::Reg, bits));
+            defs.push(d(
+                vec![Op::R(w), Op::Rm(w), Op::Imm8s],
+                &[0x6b],
+                ModRm::Reg,
+                bits,
+            ));
+            defs.push(d(
+                vec![Op::R(w), Op::Rm(w), Op::Imm(imm)],
+                &[0x69],
+                ModRm::Reg,
+                bits,
+            ));
+            defs.push(d(
+                vec![Op::R(w), Op::Rm(w)],
+                &[0x0f, 0xaf],
+                ModRm::Reg,
+                bits,
+            ));
             defs.push(d(vec![Op::Rm(w)], &[0xf7], ModRm::Ext(5), bits));
         }
         defs
@@ -407,13 +532,23 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
             ],
         );
         let setcc: &'static str = Box::leak(format!("set{suffix}").into_boxed_str());
-        t.insert(setcc, vec![d(vec![Op::Rm(1)], &[0x0f, 0x90 + tttn], ModRm::Ext(0), 8)]);
+        t.insert(
+            setcc,
+            vec![d(vec![Op::Rm(1)], &[0x0f, 0x90 + tttn], ModRm::Ext(0), 8)],
+        );
         let cmovcc: &'static str = Box::leak(format!("cmov{suffix}").into_boxed_str());
         t.insert(
             cmovcc,
             WIDTHS
                 .iter()
-                .map(|&w| d(vec![Op::R(w), Op::Rm(w)], &[0x0f, 0x40 + tttn], ModRm::Reg, opsize_bits(w)))
+                .map(|&w| {
+                    d(
+                        vec![Op::R(w), Op::Rm(w)],
+                        &[0x0f, 0x40 + tttn],
+                        ModRm::Reg,
+                        opsize_bits(w),
+                    )
+                })
                 .collect(),
         );
     }
@@ -466,7 +601,12 @@ fn build() -> HashMap<&'static str, Vec<Def>> {
     // `nop` with an operand is the canonical multi-byte no-op.
     if let Some(defs) = t.get_mut("nop") {
         for w in [2u8, 4] {
-            defs.push(d(vec![Op::Rm(w)], &[0x0f, 0x1f], ModRm::Ext(0), opsize_bits(w)));
+            defs.push(d(
+                vec![Op::Rm(w)],
+                &[0x0f, 0x1f],
+                ModRm::Ext(0),
+                opsize_bits(w),
+            ));
         }
     }
 
@@ -493,7 +633,9 @@ mod tests {
 
     #[test]
     fn table_covers_the_expected_groups() {
-        for m in ["add", "sub", "mov", "lea", "jmp", "je", "setne", "cmovg", "imul", "shl", "ret"] {
+        for m in [
+            "add", "sub", "mov", "lea", "jmp", "je", "setne", "cmovg", "imul", "shl", "ret",
+        ] {
             assert!(is_mnemonic(m), "missing `{m}`");
         }
         assert!(!is_mnemonic("nosuchinsn"));
@@ -509,8 +651,14 @@ mod tests {
     #[test]
     fn alu_prefers_sign_extended_imm8() {
         let defs = lookup("add").unwrap();
-        let i8_pos = defs.iter().position(|x| x.ops == [Op::Rm(4), Op::Imm8s]).unwrap();
-        let i32_pos = defs.iter().position(|x| x.ops == [Op::Rm(4), Op::Imm(4)]).unwrap();
+        let i8_pos = defs
+            .iter()
+            .position(|x| x.ops == [Op::Rm(4), Op::Imm8s])
+            .unwrap();
+        let i32_pos = defs
+            .iter()
+            .position(|x| x.ops == [Op::Rm(4), Op::Imm(4)])
+            .unwrap();
         assert!(i8_pos < i32_pos, "imm8 form must be matched first");
     }
 }

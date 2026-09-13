@@ -125,6 +125,7 @@ pub enum Punct {
 }
 
 impl Punct {
+    #[rustfmt::skip]
     pub fn as_str(self) -> &'static str {
         use Punct::*;
         match self {
@@ -218,7 +219,13 @@ pub struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     pub fn new(sm: &'a SourceMap, file: FileId, config: LexConfig) -> Lexer<'a> {
         let f = sm.file(file);
-        Lexer { src: &f.src, bytes: f.src.as_bytes(), base: f.start, pos: 0, config }
+        Lexer {
+            src: &f.src,
+            bytes: f.src.as_bytes(),
+            base: f.start,
+            pos: 0,
+            config,
+        }
     }
 
     /// Current global position.
@@ -301,7 +308,12 @@ impl<'a> Lexer<'a> {
         self.pos != start
     }
 
-    pub fn next_token(&mut self, interner: &mut Interner, pool: &mut LitPool, diags: &mut DiagBag) -> Token {
+    pub fn next_token(
+        &mut self,
+        interner: &mut Interner,
+        pool: &mut LitPool,
+        diags: &mut DiagBag,
+    ) -> Token {
         let spaced = self.skip_trivia(diags);
         let start = self.pos;
         let mk = |k: TokKind, this: &Self| Token {
@@ -367,8 +379,13 @@ impl<'a> Lexer<'a> {
         let c = self.peek();
         if let Some(p) = two(c, self.peek_at(1)) {
             self.pos += 2;
-            return Token { kind: TokKind::Punct(p), span: self.span_from(start), preceded_by_space: spaced };
+            return Token {
+                kind: TokKind::Punct(p),
+                span: self.span_from(start),
+                preceded_by_space: spaced,
+            };
         }
+        #[rustfmt::skip]
         let p = match c {
             b',' => Comma, b':' => Colon, b'(' => LParen, b')' => RParen,
             b'[' => LBracket, b']' => RBracket, b'{' => LBrace, b'}' => RBrace,
@@ -387,10 +404,20 @@ impl<'a> Lexer<'a> {
             }
         };
         self.pos += 1;
-        Token { kind: TokKind::Punct(p), span: self.span_from(start), preceded_by_space: spaced }
+        Token {
+            kind: TokKind::Punct(p),
+            span: self.span_from(start),
+            preceded_by_space: spaced,
+        }
     }
 
-    fn lex_number(&mut self, start: usize, spaced: bool, _interner: &mut Interner, diags: &mut DiagBag) -> Token {
+    fn lex_number(
+        &mut self,
+        start: usize,
+        spaced: bool,
+        _interner: &mut Interner,
+        diags: &mut DiagBag,
+    ) -> Token {
         let mk = |k: TokKind, this: &Self| Token {
             kind: k,
             span: this.span_from(start),
@@ -404,15 +431,22 @@ impl<'a> Lexer<'a> {
                 p += 1;
             }
             let after = self.bytes.get(p).copied().unwrap_or(0);
-            if (after == b'f' || after == b'b') && !is_ident_cont(self.bytes.get(p + 1).copied().unwrap_or(0)) {
+            if (after == b'f' || after == b'b')
+                && !is_ident_cont(self.bytes.get(p + 1).copied().unwrap_or(0))
+            {
                 let digits = &self.src[self.pos..p];
                 // Only plain decimal runs are local labels; `0x1f` is a number.
                 if (!digits.starts_with('0') || digits.len() == 1)
-                    && let Ok(n) = digits.parse::<u32>() {
-                        let dir = if after == b'f' { LocalDir::Forward } else { LocalDir::Backward };
-                        self.pos = p + 1;
-                        return mk(TokKind::LocalRef(n, dir), self);
-                    }
+                    && let Ok(n) = digits.parse::<u32>()
+                {
+                    let dir = if after == b'f' {
+                        LocalDir::Forward
+                    } else {
+                        LocalDir::Backward
+                    };
+                    self.pos = p + 1;
+                    return mk(TokKind::LocalRef(n, dir), self);
+                }
             }
         }
 
@@ -430,10 +464,11 @@ impl<'a> Lexer<'a> {
             // Only treat it as a prefix if a valid digit actually follows,
             // so NASM's `0b` (binary zero) still lexes as a suffixed literal.
             if let Some(r) = prefix_radix
-                && ((self.peek_at(2) as char).is_digit(r) || self.peek_at(2) == b'_') {
-                    radix = r;
-                    digits_start = self.pos + 2;
-                }
+                && ((self.peek_at(2) as char).is_digit(r) || self.peek_at(2) == b'_')
+            {
+                radix = r;
+                digits_start = self.pos + 2;
+            }
         }
         let prefixed = digits_start != self.pos;
         self.pos = digits_start;
@@ -449,25 +484,29 @@ impl<'a> Lexer<'a> {
 
         if !prefixed {
             if self.config.radix_suffix
-                && let Some(last) = run.as_bytes().last().copied() {
-                    let suffix_radix = match last | 0x20 {
-                        b'h' => Some(16),
-                        b'b' | b'y' => Some(2),
-                        b'o' | b'q' => Some(8),
-                        b'd' | b't' => Some(10),
-                        _ => None,
-                    };
-                    if let Some(sr) = suffix_radix {
-                        let body = &run[..run.len() - 1];
-                        let ok = !body.is_empty()
-                            && body.chars().all(|c| c == '_' || c.is_digit(sr));
-                        if ok {
-                            radix = sr;
-                            run = body;
-                        }
+                && let Some(last) = run.as_bytes().last().copied()
+            {
+                let suffix_radix = match last | 0x20 {
+                    b'h' => Some(16),
+                    b'b' | b'y' => Some(2),
+                    b'o' | b'q' => Some(8),
+                    b'd' | b't' => Some(10),
+                    _ => None,
+                };
+                if let Some(sr) = suffix_radix {
+                    let body = &run[..run.len() - 1];
+                    let ok = !body.is_empty() && body.chars().all(|c| c == '_' || c.is_digit(sr));
+                    if ok {
+                        radix = sr;
+                        run = body;
                     }
                 }
-            if radix == 10 && self.config.octal_leading_zero && run.len() > 1 && run.starts_with('0') {
+            }
+            if radix == 10
+                && self.config.octal_leading_zero
+                && run.len() > 1
+                && run.starts_with('0')
+            {
                 radix = 8;
                 run = &run[1..];
             }
@@ -494,7 +533,10 @@ impl<'a> Lexer<'a> {
                 ));
                 return mk(TokKind::Int(0), self);
             };
-            match value.checked_mul(radix as u64).and_then(|v| v.checked_add(d as u64)) {
+            match value
+                .checked_mul(radix as u64)
+                .and_then(|v| v.checked_add(d as u64))
+            {
                 Some(v) => value = v,
                 None => overflow = true,
             }
@@ -502,18 +544,30 @@ impl<'a> Lexer<'a> {
 
         if overflow {
             let span = self.span_from(start);
-            diags.emit(Diagnostic::error(span, "integer literal out of range for 64 bits"));
+            diags.emit(Diagnostic::error(
+                span,
+                "integer literal out of range for 64 bits",
+            ));
             return mk(TokKind::Int(0), self);
         }
         mk(TokKind::Int(value), self)
     }
 
-    fn lex_string(&mut self, start: usize, spaced: bool, pool: &mut LitPool, diags: &mut DiagBag) -> Token {
+    fn lex_string(
+        &mut self,
+        start: usize,
+        spaced: bool,
+        pool: &mut LitPool,
+        diags: &mut DiagBag,
+    ) -> Token {
         self.pos += 1; // opening quote
         let mut buf = Vec::new();
         loop {
             if self.at_end() || self.peek() == b'\n' {
-                diags.emit(Diagnostic::error(self.span_from(start), "unterminated string literal"));
+                diags.emit(Diagnostic::error(
+                    self.span_from(start),
+                    "unterminated string literal",
+                ));
                 break;
             }
             let c = self.peek();
@@ -530,7 +584,11 @@ impl<'a> Lexer<'a> {
             }
         }
         let idx = pool.add(buf);
-        Token { kind: TokKind::Str(idx), span: self.span_from(start), preceded_by_space: spaced }
+        Token {
+            kind: TokKind::Str(idx),
+            span: self.span_from(start),
+            preceded_by_space: spaced,
+        }
     }
 
     fn lex_char(&mut self, start: usize, spaced: bool, diags: &mut DiagBag) -> Token {
@@ -565,7 +623,11 @@ impl<'a> Lexer<'a> {
             if self.at_end() || self.peek() == b'\n' {
                 let span = self.span_from(start);
                 diags.emit(Diagnostic::error(span, "unterminated character literal"));
-                return Token { kind: TokKind::Int(0), span, preceded_by_space: spaced };
+                return Token {
+                    kind: TokKind::Int(0),
+                    span,
+                    preceded_by_space: spaced,
+                };
             }
             if self.peek() == b'\\' {
                 self.pos += 1;
@@ -585,14 +647,21 @@ impl<'a> Lexer<'a> {
         for &b in buf.iter().take(8) {
             v = (v << 8) | b as u64;
         }
-        Token { kind: TokKind::Int(v), span: self.span_from(start), preceded_by_space: spaced }
+        Token {
+            kind: TokKind::Int(v),
+            span: self.span_from(start),
+            preceded_by_space: spaced,
+        }
     }
 
     /// Reads one escape sequence, the leading backslash already consumed.
     fn read_escape(&mut self, buf: &mut Vec<u8>, diags: &mut DiagBag) {
         let esc_start = self.pos - 1;
         if self.at_end() {
-            diags.emit(Diagnostic::error(self.span_from(esc_start), "trailing backslash"));
+            diags.emit(Diagnostic::error(
+                self.span_from(esc_start),
+                "trailing backslash",
+            ));
             return;
         }
         let c = self.peek();
@@ -720,8 +789,12 @@ mod tests {
         assert_eq!(
             &k[..7],
             &[
-                TokKind::Int(31), TokKind::Int(10), TokKind::Int(15), TokKind::Int(42),
-                TokKind::Int(0), TokKind::Int(1000),
+                TokKind::Int(31),
+                TokKind::Int(10),
+                TokKind::Int(15),
+                TokKind::Int(42),
+                TokKind::Int(0),
+                TokKind::Int(1000),
                 // A bare leading zero is octal in GAS.
                 TokKind::Int(8),
             ]
@@ -734,8 +807,12 @@ mod tests {
         assert_eq!(
             &k[..7],
             &[
-                TokKind::Int(255), TokKind::Int(10), TokKind::Int(15), TokKind::Int(99),
-                TokKind::Int(10), TokKind::Int(255),
+                TokKind::Int(255),
+                TokKind::Int(10),
+                TokKind::Int(15),
+                TokKind::Int(99),
+                TokKind::Int(10),
+                TokKind::Int(255),
                 // NASM has no leading-zero octal rule.
                 TokKind::Int(10),
             ]
@@ -775,7 +852,9 @@ mod tests {
     #[test]
     fn string_escapes() {
         let (k, h) = lex_all(r#" "a\nb\x41\101\\" "#, Dialect::Gas);
-        let TokKind::Str(i) = k[0] else { panic!("not a string: {:?}", k[0]) };
+        let TokKind::Str(i) = k[0] else {
+            panic!("not a string: {:?}", k[0])
+        };
         assert_eq!(h.pool.get(i), b"a\nbAA\\");
         assert!(!h.diags.has_errors());
     }

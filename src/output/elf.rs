@@ -61,7 +61,10 @@ struct StrTab {
 
 impl StrTab {
     fn new() -> StrTab {
-        StrTab { bytes: vec![0], seen: HashMap::new() }
+        StrTab {
+            bytes: vec![0],
+            seen: HashMap::new(),
+        }
     }
 
     fn add(&mut self, s: &str) -> u32 {
@@ -153,8 +156,7 @@ struct OutSym {
 pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     if asm.arch.pointer_bytes(&asm.arch_state) != 8 {
         return Err(OutputError::Unsupported(
-            "ELF32 output is not implemented yet; only 64-bit targets can be written as ELF"
-                .into(),
+            "ELF32 output is not implemented yet; only 64-bit targets can be written as ELF".into(),
         ));
     }
 
@@ -165,7 +167,10 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // Index 0 is the null header; then one per assembler section that has
     // content, then a .rela for each of those with relocations, then the
     // symbol and string tables.
-    let mut shdrs: Vec<Shdr> = vec![Shdr { ty: SHT_NULL, ..Shdr::default() }];
+    let mut shdrs: Vec<Shdr> = vec![Shdr {
+        ty: SHT_NULL,
+        ..Shdr::default()
+    }];
     let mut sec_index: HashMap<SectionId, u16> = HashMap::new();
     let mut emitted: Vec<SectionId> = Vec::new();
 
@@ -212,7 +217,9 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
     let mut rela_for: Vec<(SectionId, u16)> = Vec::new();
     for &sid in &emitted {
-        let Some(list) = relocs_by_section.get(&sid) else { continue };
+        let Some(list) = relocs_by_section.get(&sid) else {
+            continue;
+        };
         if list.is_empty() {
             continue;
         }
@@ -282,7 +289,10 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
 
     // ---- lay the file out -------------------------------------------------
     let big_endian = asm.arch.endian() == crate::arch::Endian::Big;
-    let mut buf = Buf { out: Vec::new(), big_endian };
+    let mut buf = Buf {
+        out: Vec::new(),
+        big_endian,
+    };
     buf.out.resize(EHDR_SIZE as usize, 0);
 
     for &sid in &emitted {
@@ -296,7 +306,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         buf.pad_to(shdrs[i].addralign.max(1));
         shdrs[i].offset = buf.len();
         let bytes = asm.section_bytes(sid);
-        debug_assert_eq!(bytes.len() as u64, s.size, "section bytes disagree with layout");
+        debug_assert_eq!(
+            bytes.len() as u64,
+            s.size,
+            "section bytes disagree with layout"
+        );
         buf.out.extend_from_slice(&bytes);
     }
 
@@ -350,7 +364,10 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
 
     // ---- header -----------------------------------------------------------
-    let mut hdr = Buf { out: Vec::new(), big_endian };
+    let mut hdr = Buf {
+        out: Vec::new(),
+        big_endian,
+    };
     let mut ident = [0u8; EI_NIDENT];
     ident[0..4].copy_from_slice(b"\x7fELF");
     ident[4] = ELFCLASS64;
@@ -427,7 +444,9 @@ fn collect_symbols(
 
         let (shndx, value) = match &sym.value {
             SymbolValue::Label { section, .. } => {
-                let Some(&idx) = sec_index.get(section) else { continue };
+                let Some(&idx) = sec_index.get(section) else {
+                    continue;
+                };
                 (idx, asm.symbol_addr(id).unwrap_or(0) as u64)
             }
             SymbolValue::Common { align, .. } => (SHN_COMMON, *align),
@@ -468,9 +487,21 @@ fn collect_symbols(
         };
 
         // A section symbol is named by its section, not by a string of its own.
-        let name = if sym.ty == SymType::Section { 0 } else { strtab.add(raw) };
+        let name = if sym.ty == SymType::Section {
+            0
+        } else {
+            strtab.add(raw)
+        };
 
-        let out = OutSym { id, name, info: (bind << 4) | ty, other, shndx, value, size };
+        let out = OutSym {
+            id,
+            name,
+            info: (bind << 4) | ty,
+            other,
+            shndx,
+            value,
+            size,
+        };
         // An undefined symbol is always global: the linker has to find it.
         if bind == STB_LOCAL && sym.is_defined() {
             locals.push(out);

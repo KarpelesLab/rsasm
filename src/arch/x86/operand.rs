@@ -156,22 +156,35 @@ impl OperandParser<'_, '_> {
                 let mut m = self.att_memory(cur, start)?;
                 m.seg = Some(r);
                 let span = start.to(m.span);
-                return Some(Operand { kind: OperandKind::Mem(m), size_hint: None, span });
+                return Some(Operand {
+                    kind: OperandKind::Mem(m),
+                    size_hint: None,
+                    span,
+                });
             }
-            return Some(Operand { kind: OperandKind::Reg(r), size_hint: Some(r.size), span: start });
+            return Some(Operand {
+                kind: OperandKind::Reg(r),
+                size_hint: Some(r.size),
+                span: start,
+            });
         }
 
         // Anything else is a memory operand: `disp`, `disp(...)` or `(...)`.
         let m = self.att_memory(cur, start)?;
         let span = start.to(m.span);
-        Some(Operand { kind: OperandKind::Mem(m), size_hint: None, span })
+        Some(Operand {
+            kind: OperandKind::Mem(m),
+            size_hint: None,
+            span,
+        })
     }
 
     fn att_register(&mut self, cur: &mut Cursor<'_>) -> Option<Reg> {
         let pct = cur.advance(); // `%`
         let tok = cur.peek();
         let TokKind::Ident(n) = tok.kind else {
-            self.cx.error(pct.span.to(tok.span), "expected a register name after `%`");
+            self.cx
+                .error(pct.span.to(tok.span), "expected a register name after `%`");
             return None;
         };
         cur.advance();
@@ -179,7 +192,8 @@ impl OperandParser<'_, '_> {
         match reg::lookup(&text) {
             Some(r) => Some(r),
             None => {
-                self.cx.error(pct.span.to(tok.span), format!("unknown register `%{text}`"));
+                self.cx
+                    .error(pct.span.to(tok.span), format!("unknown register `%{text}`"));
                 None
             }
         }
@@ -242,7 +256,8 @@ impl OperandParser<'_, '_> {
 
         let close = cur.peek();
         if cur.eat_punct(Punct::RParen).is_none() {
-            self.cx.error(close.span, "expected `)` to close a memory operand");
+            self.cx
+                .error(close.span, "expected `)` to close a memory operand");
             return None;
         }
         m.span = start.to(close.span);
@@ -268,9 +283,10 @@ impl OperandParser<'_, '_> {
                 if looks_like_ptr {
                     cur.advance();
                     if let TokKind::Ident(m) = cur.peek().kind
-                        && self.cx.interner.get(m).eq_ignore_ascii_case("ptr") {
-                            cur.advance();
-                        }
+                        && self.cx.interner.get(m).eq_ignore_ascii_case("ptr")
+                    {
+                        cur.advance();
+                    }
                     size_hint = Some(sz);
                 }
             }
@@ -287,7 +303,11 @@ impl OperandParser<'_, '_> {
                     let mut m = self.intel_memory(cur, start)?;
                     m.seg = Some(r);
                     let span = start.to(m.span);
-                    return Some(Operand { kind: OperandKind::Mem(m), size_hint, span });
+                    return Some(Operand {
+                        kind: OperandKind::Mem(m),
+                        size_hint,
+                        span,
+                    });
                 }
                 return Some(Operand {
                     kind: OperandKind::Reg(r),
@@ -300,7 +320,11 @@ impl OperandParser<'_, '_> {
         if cur.check_punct(Punct::LBracket) {
             let m = self.intel_memory(cur, start)?;
             let span = start.to(m.span);
-            return Some(Operand { kind: OperandKind::Mem(m), size_hint, span });
+            return Some(Operand {
+                kind: OperandKind::Mem(m),
+                size_hint,
+                span,
+            });
         }
 
         // Otherwise an immediate or branch target; the matcher decides which.
@@ -316,7 +340,8 @@ impl OperandParser<'_, '_> {
     fn intel_memory(&mut self, cur: &mut Cursor<'_>, start: Span) -> Option<Mem> {
         let open = cur.peek();
         if cur.eat_punct(Punct::LBracket).is_none() {
-            self.cx.error(open.span, "expected `[` to start a memory operand");
+            self.cx
+                .error(open.span, "expected `[` to start a memory operand");
             return None;
         }
         let mut m = Mem::empty(start);
@@ -335,7 +360,9 @@ impl OperandParser<'_, '_> {
             if let Some(e) = term {
                 let e = if negate_next {
                     let span = self.cx.exprs.span(e);
-                    self.cx.exprs.alloc(ExprKind::Unary(crate::expr::UnOp::Neg, e), span)
+                    self.cx
+                        .exprs
+                        .alloc(ExprKind::Unary(crate::expr::UnOp::Neg, e), span)
                 } else {
                     e
                 };
@@ -343,7 +370,9 @@ impl OperandParser<'_, '_> {
                     None => e,
                     Some(prev) => {
                         let span = self.cx.exprs.span(prev).to(self.cx.exprs.span(e));
-                        self.cx.exprs.alloc(ExprKind::Binary(crate::expr::BinOp::Add, prev, e), span)
+                        self.cx
+                            .exprs
+                            .alloc(ExprKind::Binary(crate::expr::BinOp::Add, prev, e), span)
                     }
                 });
             }
@@ -361,10 +390,12 @@ impl OperandParser<'_, '_> {
                     let t = cur.peek();
                     if t.span == term_start {
                         // No progress: bail rather than spin.
-                        self.cx.error(t.span, "expected `+`, `-` or `]` in memory operand");
+                        self.cx
+                            .error(t.span, "expected `+`, `-` or `]` in memory operand");
                         return None;
                     }
-                    self.cx.error(t.span, "expected `+`, `-` or `]` in memory operand");
+                    self.cx
+                        .error(t.span, "expected `+`, `-` or `]` in memory operand");
                     return None;
                 }
             }
@@ -395,7 +426,10 @@ impl OperandParser<'_, '_> {
             if let Some(r) = reg::lookup(&text) {
                 let tok = cur.advance();
                 if negated {
-                    self.cx.error(tok.span, "a register cannot be subtracted in a memory operand");
+                    self.cx.error(
+                        tok.span,
+                        "a register cannot be subtracted in a memory operand",
+                    );
                     return None;
                 }
                 if r.class == RegClass::Rip {
@@ -403,7 +437,10 @@ impl OperandParser<'_, '_> {
                     return Some(None);
                 }
                 if r.class != RegClass::Gpr {
-                    self.cx.error(tok.span, "only general-purpose registers may address memory");
+                    self.cx.error(
+                        tok.span,
+                        "only general-purpose registers may address memory",
+                    );
                     return None;
                 }
                 // `reg * scale` makes it the index.
@@ -417,11 +454,17 @@ impl OperandParser<'_, '_> {
                         return None;
                     };
                     if m.index.is_some() {
-                        self.cx.error(tok.span, "a memory operand may have only one index register");
+                        self.cx.error(
+                            tok.span,
+                            "a memory operand may have only one index register",
+                        );
                         return None;
                     }
                     if !r.valid_index() {
-                        self.cx.error(tok.span, format!("`{}` cannot be used as an index register", reg::name_of(r)));
+                        self.cx.error(
+                            tok.span,
+                            format!("`{}` cannot be used as an index register", reg::name_of(r)),
+                        );
                         return None;
                     }
                     m.index = Some(r);
@@ -440,14 +483,21 @@ impl OperandParser<'_, '_> {
                             m.index = m.base;
                             m.base = Some(r);
                         } else {
-                            self.cx.error(tok.span, format!("`{}` cannot be used as an index register", reg::name_of(r)));
+                            self.cx.error(
+                                tok.span,
+                                format!(
+                                    "`{}` cannot be used as an index register",
+                                    reg::name_of(r)
+                                ),
+                            );
                             return None;
                         }
                     } else {
                         m.index = Some(r);
                     }
                 } else {
-                    self.cx.error(tok.span, "too many registers in a memory operand");
+                    self.cx
+                        .error(tok.span, "too many registers in a memory operand");
                     return None;
                 }
                 m.addr_size = r.size;
@@ -458,27 +508,31 @@ impl OperandParser<'_, '_> {
         // `scale * reg`
         if let TokKind::Int(v) = cur.peek().kind
             && cur.nth(1).is_punct(Punct::Star)
-                && let TokKind::Ident(n) = cur.nth(2).kind {
-                    let text = self.cx.interner.get(n).to_ascii_lowercase();
-                    if let Some(r) = reg::lookup(&text) {
-                        let tok = cur.peek();
-                        if !matches!(v, 1 | 2 | 4 | 8) {
-                            self.cx.error(tok.span, "scale must be 1, 2, 4 or 8");
-                            return None;
-                        }
-                        if !r.valid_index() {
-                            self.cx.error(tok.span, format!("`{}` cannot be used as an index register", reg::name_of(r)));
-                            return None;
-                        }
-                        cur.advance();
-                        cur.advance();
-                        cur.advance();
-                        m.index = Some(r);
-                        m.scale = v as u8;
-                        m.addr_size = r.size;
-                        return Some(None);
-                    }
+            && let TokKind::Ident(n) = cur.nth(2).kind
+        {
+            let text = self.cx.interner.get(n).to_ascii_lowercase();
+            if let Some(r) = reg::lookup(&text) {
+                let tok = cur.peek();
+                if !matches!(v, 1 | 2 | 4 | 8) {
+                    self.cx.error(tok.span, "scale must be 1, 2, 4 or 8");
+                    return None;
                 }
+                if !r.valid_index() {
+                    self.cx.error(
+                        tok.span,
+                        format!("`{}` cannot be used as an index register", reg::name_of(r)),
+                    );
+                    return None;
+                }
+                cur.advance();
+                cur.advance();
+                cur.advance();
+                m.index = Some(r);
+                m.scale = v as u8;
+                m.addr_size = r.size;
+                return Some(None);
+            }
+        }
 
         // Everything else contributes to the displacement. Parse at a
         // precedence above `+`/`-` so those stay term separators.
@@ -496,7 +550,8 @@ impl OperandParser<'_, '_> {
             p.parse(&mut sub_cur)?
         };
         if !sub_cur.at_end() && !sub_cur.is_empty() {
-            self.cx.error(sub_cur.peek().span, "unexpected token in memory operand");
+            self.cx
+                .error(sub_cur.peek().span, "unexpected token in memory operand");
             return None;
         }
         Some(e)

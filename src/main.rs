@@ -112,7 +112,10 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                     _ => return Err(format!("unknown dialect `{v}`")),
                 };
             }
-            "-I" => a.options.include_paths.push(PathBuf::from(next(&mut i, "-I")?)),
+            "-I" => a
+                .options
+                .include_paths
+                .push(PathBuf::from(next(&mut i, "-I")?)),
             "-D" => {
                 let v = next(&mut i, "-D")?;
                 match v.split_once('=') {
@@ -122,7 +125,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             }
             "--base" => {
                 let v = next(&mut i, "--base")?;
-                let n = parse_int(&v).ok_or_else(|| format!("`--base` needs a number, got `{v}`"))?;
+                let n =
+                    parse_int(&v).ok_or_else(|| format!("`--base` needs a number, got `{v}`"))?;
                 a.options.base_addr = n;
                 a.options.relocatable = false;
             }
@@ -160,7 +164,10 @@ fn parse_int(s: &str) -> Option<u64> {
 fn run(args: Args) -> Result<ExitCode, String> {
     let arch = match &args.arch {
         Some(name) => arch::lookup(name).ok_or_else(|| {
-            format!("unknown architecture `{name}`; this build supports: {}", arch::available().join(", "))
+            format!(
+                "unknown architecture `{name}`; this build supports: {}",
+                arch::available().join(", ")
+            )
         })?,
         None => arch::default_arch()
             .ok_or_else(|| "this build has no architecture backends enabled".to_string())?,
@@ -202,7 +209,14 @@ fn run(args: Args) -> Result<ExitCode, String> {
 
     if args.hex {
         for chunk in bytes.chunks(16) {
-            println!("{}", chunk.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+            println!(
+                "{}",
+                chunk
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
         }
         return Ok(ExitCode::SUCCESS);
     }

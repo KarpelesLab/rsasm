@@ -33,7 +33,9 @@ impl Assembler {
             ".popsection" => {
                 match self.pop_section() {
                     Some(id) => self.cur = id,
-                    None => self.diags.error(span, "`.popsection` without a matching `.pushsection`"),
+                    None => self
+                        .diags
+                        .error(span, "`.popsection` without a matching `.pushsection`"),
                 }
                 true
             }
@@ -62,7 +64,14 @@ impl Assembler {
             ".org" => {
                 if let Some(e) = self.parse_expr(&mut cur) {
                     let fill = self.optional_byte(&mut cur, 0);
-                    self.push_frag(FragKind::Org { target: e, fill, size: 0 }, span);
+                    self.push_frag(
+                        FragKind::Org {
+                            target: e,
+                            fill,
+                            size: 0,
+                        },
+                        span,
+                    );
                 }
                 true
             }
@@ -98,12 +107,16 @@ impl Assembler {
 
             // ---- diagnostics ----------------------------------------------
             ".error" | ".err" => {
-                let msg = self.optional_string(&mut cur).unwrap_or_else(|| ".error directive".into());
+                let msg = self
+                    .optional_string(&mut cur)
+                    .unwrap_or_else(|| ".error directive".into());
                 self.diags.error(span, msg);
                 true
             }
             ".warning" => {
-                let msg = self.optional_string(&mut cur).unwrap_or_else(|| ".warning directive".into());
+                let msg = self
+                    .optional_string(&mut cur)
+                    .unwrap_or_else(|| ".warning directive".into());
                 self.diags.warning(span, msg);
                 true
             }
@@ -131,14 +144,31 @@ impl Assembler {
 
         // Give the architecture a chance before reporting it unknown.
         let mut cur = stmt.arg_cursor();
-        let Assembler { arch, interner, exprs, diags, pool, symbols, arch_state, .. } = self;
-        let mut cx = crate::arch::AsmCtx { interner, exprs, diags, pool, symbols, state: arch_state };
+        let Assembler {
+            arch,
+            interner,
+            exprs,
+            diags,
+            pool,
+            symbols,
+            arch_state,
+            ..
+        } = self;
+        let mut cx = crate::arch::AsmCtx {
+            interner,
+            exprs,
+            diags,
+            pool,
+            symbols,
+            state: arch_state,
+        };
         if arch.directive(&mut cx, &text, &mut cur) {
             self.expect_end(&mut cur);
             return;
         }
 
-        self.diags.error(span, format!("unknown directive `{text}`"));
+        self.diags
+            .error(span, format!("unknown directive `{text}`"));
     }
 
     // ---- helpers ----------------------------------------------------------
@@ -153,13 +183,17 @@ impl Assembler {
             return default;
         }
         match self.parse_expr(cur) {
-            Some(e) => self.eval_absolute(e, "fill value").unwrap_or(default as i64) as u8,
+            Some(e) => self
+                .eval_absolute(e, "fill value")
+                .unwrap_or(default as i64) as u8,
             None => default,
         }
     }
 
     fn optional_string(&mut self, cur: &mut Cursor<'_>) -> Option<String> {
-        let TokKind::Str(i) = cur.peek().kind else { return None };
+        let TokKind::Str(i) = cur.peek().kind else {
+            return None;
+        };
         cur.advance();
         Some(String::from_utf8_lossy(self.pool.get(i)).into_owned())
     }
@@ -167,7 +201,8 @@ impl Assembler {
     fn expect_string(&mut self, cur: &mut Cursor<'_>, what: &str) -> Option<Vec<u8>> {
         let tok = cur.peek();
         let TokKind::Str(i) = tok.kind else {
-            self.diags.error(tok.span, format!("expected a string {what}"));
+            self.diags
+                .error(tok.span, format!("expected a string {what}"));
             return None;
         };
         cur.advance();
@@ -195,7 +230,9 @@ impl Assembler {
             return true;
         }
         loop {
-            let Some(e) = self.parse_expr(cur) else { return true };
+            let Some(e) = self.parse_expr(cur) else {
+                return true;
+            };
             self.emit_value(size, e, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
@@ -217,10 +254,8 @@ impl Assembler {
             let kind = crate::section::FixupKind::data(size);
             if !kind.fits(v as i128) {
                 let espan = self.exprs.span(e);
-                self.diags.error(
-                    espan,
-                    format!("value {v} does not fit in {size} byte(s)"),
-                );
+                self.diags
+                    .error(espan, format!("value {v} does not fit in {size} byte(s)"));
                 return;
             }
             let bytes = self.arch.endian().bytes(v as u64, size as usize);
@@ -238,7 +273,9 @@ impl Assembler {
             return true;
         }
         loop {
-            let Some(mut bytes) = self.expect_string(cur, "literal") else { return true };
+            let Some(mut bytes) = self.expect_string(cur, "literal") else {
+                return true;
+            };
             if terminate {
                 bytes.push(0);
             }
@@ -252,9 +289,18 @@ impl Assembler {
 
     fn dir_leb(&mut self, cur: &mut Cursor<'_>, signed: bool, span: Span) -> bool {
         loop {
-            let Some(e) = self.parse_expr(cur) else { return true };
+            let Some(e) = self.parse_expr(cur) else {
+                return true;
+            };
             if !self.check_nobits(span) {
-                self.push_frag(FragKind::Leb128 { value: e, signed, encoded: vec![0] }, span);
+                self.push_frag(
+                    FragKind::Leb128 {
+                        value: e,
+                        signed,
+                        encoded: vec![0],
+                    },
+                    span,
+                );
             }
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
@@ -264,7 +310,9 @@ impl Assembler {
     }
 
     fn dir_space(&mut self, cur: &mut Cursor<'_>, span: Span, zero_only: bool) -> bool {
-        let Some(size) = self.parse_expr(cur) else { return true };
+        let Some(size) = self.parse_expr(cur) else {
+            return true;
+        };
         let fill = if zero_only {
             self.exprs.int(0, span)
         } else if cur.eat_punct(Punct::Comma).is_some() {
@@ -275,34 +323,52 @@ impl Assembler {
         } else {
             self.exprs.int(0, span)
         };
-        self.push_frag(FragKind::Space { size, fill, resolved: 0 }, span);
+        self.push_frag(
+            FragKind::Space {
+                size,
+                fill,
+                resolved: 0,
+            },
+            span,
+        );
         true
     }
 
     fn dir_fill(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
-        let Some(count_e) = self.parse_expr(cur) else { return true };
-        let Some(count) = self.eval_absolute(count_e, "`.fill` count") else { return true };
+        let Some(count_e) = self.parse_expr(cur) else {
+            return true;
+        };
+        let Some(count) = self.eval_absolute(count_e, "`.fill` count") else {
+            return true;
+        };
         let mut size: i64 = 1;
         let mut value: i64 = 0;
         if cur.eat_punct(Punct::Comma).is_some() {
-            let Some(e) = self.parse_expr(cur) else { return true };
+            let Some(e) = self.parse_expr(cur) else {
+                return true;
+            };
             size = self.eval_absolute(e, "`.fill` size").unwrap_or(1);
             if cur.eat_punct(Punct::Comma).is_some() {
-                let Some(e) = self.parse_expr(cur) else { return true };
+                let Some(e) = self.parse_expr(cur) else {
+                    return true;
+                };
                 value = self.eval_absolute(e, "`.fill` value").unwrap_or(0);
             }
         }
         if count < 0 || size < 0 {
-            self.diags.error(span, "`.fill` count and size must not be negative");
+            self.diags
+                .error(span, "`.fill` count and size must not be negative");
             return true;
         }
         if !(0..=8).contains(&size) {
-            self.diags.error(span, "`.fill` size must be between 0 and 8");
+            self.diags
+                .error(span, "`.fill` size must be between 0 and 8");
             return true;
         }
         let total = (count as u64).saturating_mul(size as u64);
         if total > (1 << 28) {
-            self.diags.error(span, "`.fill` would emit more than 256 MiB");
+            self.diags
+                .error(span, "`.fill` would emit more than 256 MiB");
             return true;
         }
         let unit = self.arch.endian().bytes(value as u64, size as usize);
@@ -315,7 +381,9 @@ impl Assembler {
     }
 
     fn dir_incbin(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
-        let Some(name) = self.expect_string(cur, "file name") else { return true };
+        let Some(name) = self.expect_string(cur, "file name") else {
+            return true;
+        };
         let name = String::from_utf8_lossy(&name).into_owned();
         let Some(path) = self.find_include(&name) else {
             self.diags.error(span, format!("cannot find `{name}`"));
@@ -323,7 +391,9 @@ impl Assembler {
         };
         match std::fs::read(&path) {
             Ok(data) => self.emit_bytes(&data, span),
-            Err(e) => self.diags.error(span, format!("cannot read `{}`: {e}", path.display())),
+            Err(e) => self
+                .diags
+                .error(span, format!("cannot read `{}`: {e}", path.display())),
         }
         true
     }
@@ -331,8 +401,12 @@ impl Assembler {
     // ---- layout -----------------------------------------------------------
 
     fn dir_align(&mut self, cur: &mut Cursor<'_>, span: Span, power_of_two: bool) -> bool {
-        let Some(e) = self.parse_expr(cur) else { return true };
-        let Some(n) = self.eval_absolute(e, "alignment") else { return true };
+        let Some(e) = self.parse_expr(cur) else {
+            return true;
+        };
+        let Some(n) = self.eval_absolute(e, "alignment") else {
+            return true;
+        };
         if n < 0 || n > 60 && power_of_two {
             self.diags.error(span, "alignment is out of range");
             return true;
@@ -344,7 +418,8 @@ impl Assembler {
                 return true;
             }
             if !(n as u64).is_power_of_two() {
-                self.diags.error(span, format!("alignment {n} is not a power of two"));
+                self.diags
+                    .error(span, format!("alignment {n} is not a power of two"));
                 return true;
             }
             n as u64
@@ -357,9 +432,12 @@ impl Assembler {
                 fill_expr = self.parse_expr(cur);
             }
             if cur.eat_punct(Punct::Comma).is_some()
-                && let Some(e) = self.parse_expr(cur) {
-                    max_skip = self.eval_absolute(e, "`.align` maximum skip").map(|v| v.max(0) as u64);
-                }
+                && let Some(e) = self.parse_expr(cur)
+            {
+                max_skip = self
+                    .eval_absolute(e, "`.align` maximum skip")
+                    .map(|v| v.max(0) as u64);
+            }
         }
 
         // Executable sections pad with real no-ops so the padding stays
@@ -369,7 +447,15 @@ impl Assembler {
             None if self.section(self.cur).flags.exec => Vec::new(),
             None => vec![0],
         };
-        self.push_frag(FragKind::Align { align, fill, max_skip, pad: 0 }, span);
+        self.push_frag(
+            FragKind::Align {
+                align,
+                fill,
+                max_skip,
+                pad: 0,
+            },
+            span,
+        );
         self.section_mut(self.cur).align = self.section(self.cur).align.max(align);
         true
     }
@@ -395,7 +481,11 @@ impl Assembler {
         };
 
         let text = self.interner.get(name).to_string();
-        let mut kind = if text.starts_with(".bss") { SectionKind::Nobits } else { SectionKind::Progbits };
+        let mut kind = if text.starts_with(".bss") {
+            SectionKind::Nobits
+        } else {
+            SectionKind::Progbits
+        };
         let mut flags = default_flags_for(&text);
         let mut entsize = 0u64;
 
@@ -417,9 +507,13 @@ impl Assembler {
                     };
                 }
                 if cur.eat_punct(Punct::Comma).is_some()
-                    && let Some(e) = self.parse_expr(cur) {
-                        entsize = self.eval_absolute(e, "section entry size").unwrap_or(0).max(0) as u64;
-                    }
+                    && let Some(e) = self.parse_expr(cur)
+                {
+                    entsize = self
+                        .eval_absolute(e, "section entry size")
+                        .unwrap_or(0)
+                        .max(0) as u64;
+                }
             }
         }
 
@@ -436,7 +530,9 @@ impl Assembler {
 
     fn dir_binding(&mut self, cur: &mut Cursor<'_>, binding: Binding, _span: Span) -> bool {
         loop {
-            let Some((name, span)) = self.expect_name(cur) else { return true };
+            let Some((name, span)) = self.expect_name(cur) else {
+                return true;
+            };
             let id = self.symbols.intern(name, span);
             self.symbols.get_mut(id).binding = binding;
             if cur.eat_punct(Punct::Comma).is_none() {
@@ -448,7 +544,9 @@ impl Assembler {
 
     fn dir_visibility(&mut self, cur: &mut Cursor<'_>, vis: Visibility, _span: Span) -> bool {
         loop {
-            let Some((name, span)) = self.expect_name(cur) else { return true };
+            let Some((name, span)) = self.expect_name(cur) else {
+                return true;
+            };
             let id = self.symbols.intern(name, span);
             self.symbols.get_mut(id).visibility = vis;
             if cur.eat_punct(Punct::Comma).is_none() {
@@ -459,12 +557,16 @@ impl Assembler {
     }
 
     fn dir_set(&mut self, cur: &mut Cursor<'_>, span: Span, once_only: bool) -> bool {
-        let Some((name, nspan)) = self.expect_name(cur) else { return true };
+        let Some((name, nspan)) = self.expect_name(cur) else {
+            return true;
+        };
         if cur.eat_punct(Punct::Comma).is_none() {
             self.diags.error(span, "expected `,` after the symbol name");
             return true;
         }
-        let Some(e) = self.parse_expr(cur) else { return true };
+        let Some(e) = self.parse_expr(cur) else {
+            return true;
+        };
         let id = self.symbols.intern(name, nspan);
         if once_only && self.symbols.get(id).is_defined() {
             let prev = self.symbols.get(id).def_span;
@@ -483,19 +585,25 @@ impl Assembler {
     }
 
     fn dir_size(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
-        let Some((name, nspan)) = self.expect_name(cur) else { return true };
+        let Some((name, nspan)) = self.expect_name(cur) else {
+            return true;
+        };
         if cur.eat_punct(Punct::Comma).is_none() {
             self.diags.error(span, "expected `,` after the symbol name");
             return true;
         }
-        let Some(e) = self.parse_expr(cur) else { return true };
+        let Some(e) = self.parse_expr(cur) else {
+            return true;
+        };
         let id = self.symbols.intern(name, nspan);
         self.symbols.get_mut(id).size = Some(e);
         true
     }
 
     fn dir_type(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
-        let Some((name, nspan)) = self.expect_name(cur) else { return true };
+        let Some((name, nspan)) = self.expect_name(cur) else {
+            return true;
+        };
         if cur.eat_punct(Punct::Comma).is_none() {
             self.diags.error(span, "expected `,` after the symbol name");
             return true;
@@ -504,7 +612,9 @@ impl Assembler {
         if cur.eat_punct(Punct::At).is_none() {
             cur.eat_punct(Punct::Percent);
         }
-        let Some((tname, tspan)) = self.expect_name(cur) else { return true };
+        let Some((tname, tspan)) = self.expect_name(cur) else {
+            return true;
+        };
         let t = self.interner.get(tname).to_ascii_lowercase();
         let ty = match t.trim_start_matches("stt_") {
             "function" | "func" => SymType::Func,
@@ -513,7 +623,8 @@ impl Assembler {
             "tls_object" | "tls" => SymType::Tls,
             "common" => SymType::Object,
             other => {
-                self.diags.error(tspan, format!("unknown symbol type `{other}`"));
+                self.diags
+                    .error(tspan, format!("unknown symbol type `{other}`"));
                 return true;
             }
         };
@@ -524,25 +635,38 @@ impl Assembler {
     }
 
     fn dir_comm(&mut self, cur: &mut Cursor<'_>, span: Span, local: bool) -> bool {
-        let Some((name, nspan)) = self.expect_name(cur) else { return true };
+        let Some((name, nspan)) = self.expect_name(cur) else {
+            return true;
+        };
         if cur.eat_punct(Punct::Comma).is_none() {
             self.diags.error(span, "expected `,` and a size");
             return true;
         }
-        let Some(e) = self.parse_expr(cur) else { return true };
-        let Some(size) = self.eval_absolute(e, "`.comm` size") else { return true };
+        let Some(e) = self.parse_expr(cur) else {
+            return true;
+        };
+        let Some(size) = self.eval_absolute(e, "`.comm` size") else {
+            return true;
+        };
         let mut align = 1u64;
         if cur.eat_punct(Punct::Comma).is_some()
-            && let Some(e) = self.parse_expr(cur) {
-                align = self.eval_absolute(e, "`.comm` alignment").unwrap_or(1).max(1) as u64;
-            }
+            && let Some(e) = self.parse_expr(cur)
+        {
+            align = self
+                .eval_absolute(e, "`.comm` alignment")
+                .unwrap_or(1)
+                .max(1) as u64;
+        }
         if size < 0 {
             self.diags.error(span, "`.comm` size must not be negative");
             return true;
         }
         let id = self.symbols.intern(name, nspan);
         let sym = self.symbols.get_mut(id);
-        sym.value = SymbolValue::Common { size: size as u64, align };
+        sym.value = SymbolValue::Common {
+            size: size as u64,
+            align,
+        };
         sym.def_span = nspan;
         sym.ty = SymType::Object;
         if !local {
@@ -557,12 +681,22 @@ impl Assembler {
         // A conditional nested inside a false branch is pushed inactive
         // without evaluating its condition, which may not even be resolvable.
         if !self.cond_active() {
-            self.push_cond(Cond { active: false, taken: true, seen_else: false, span });
+            self.push_cond(Cond {
+                active: false,
+                taken: true,
+                seen_else: false,
+                span,
+            });
             cur.set_pos(cur.all().len());
             return true;
         }
         let value = self.eval_condition(cur, kind);
-        self.push_cond(Cond { active: value, taken: value, seen_else: false, span });
+        self.push_cond(Cond {
+            active: value,
+            taken: value,
+            seen_else: false,
+            span,
+        });
         true
     }
 
@@ -584,8 +718,12 @@ impl Assembler {
                 if kind == ".ifb" { blank } else { !blank }
             }
             _ => {
-                let Some(e) = self.parse_expr(cur) else { return false };
-                let Some(v) = self.eval_absolute(e, "`.if` condition") else { return false };
+                let Some(e) = self.parse_expr(cur) else {
+                    return false;
+                };
+                let Some(v) = self.eval_absolute(e, "`.if` condition") else {
+                    return false;
+                };
                 match kind {
                     ".ifeq" => v == 0,
                     ".ifne" => v != 0,
@@ -659,10 +797,13 @@ impl Assembler {
     }
 
     fn dir_include(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
-        let Some(name) = self.expect_string(cur, "file name") else { return true };
+        let Some(name) = self.expect_string(cur, "file name") else {
+            return true;
+        };
         let name = String::from_utf8_lossy(&name).into_owned();
         let Some(path) = self.find_include(&name) else {
-            self.diags.error(span, format!("cannot find include file `{name}`"));
+            self.diags
+                .error(span, format!("cannot find include file `{name}`"));
             return true;
         };
         self.include(&path, span);

@@ -41,7 +41,10 @@ fn space_fill_and_zero() {
     assert_eq!(text(".space 3, 0xaa"), vec![0xaa; 3]);
     assert_eq!(text(".zero 2"), vec![0, 0]);
     // `.fill count, size, value` writes `count` items of `size` bytes.
-    assert_eq!(text(".fill 3, 2, 0x4142"), vec![0x42, 0x41, 0x42, 0x41, 0x42, 0x41]);
+    assert_eq!(
+        text(".fill 3, 2, 0x4142"),
+        vec![0x42, 0x41, 0x42, 0x41, 0x42, 0x41]
+    );
     assert_eq!(text(".fill 4"), vec![0; 4]);
 }
 
@@ -58,7 +61,10 @@ fn alignment() {
     assert_eq!(text(".short 1\n.balign 2, 0\n.byte 2"), vec![1, 0, 2]);
     // The maximum-skip form gives up rather than pad too far.
     assert_eq!(text(".byte 1\n.balign 8, 0, 2\n.byte 2"), vec![1, 2]);
-    assert_eq!(text(".byte 1\n.balign 4, 0, 8\n.byte 2"), vec![1, 0, 0, 0, 2]);
+    assert_eq!(
+        text(".byte 1\n.balign 4, 0, 8\n.byte 2"),
+        vec![1, 0, 0, 0, 2]
+    );
     // A data section pads with zeroes by default.
     let asm = assemble(".data\n.byte 1\n.balign 4\n.byte 2");
     assert_eq!(section(&asm, ".data"), vec![1, 0, 0, 0, 2]);
@@ -84,7 +90,10 @@ fn executable_sections_pad_with_no_ops() {
 #[test]
 fn org_moves_the_location_counter() {
     assert_eq!(text(".byte 1\n.org 4\n.byte 2"), vec![1, 0, 0, 0, 2]);
-    assert_eq!(text(".byte 1\n.org 4, 0xff\n.byte 2"), vec![1, 0xff, 0xff, 0xff, 2]);
+    assert_eq!(
+        text(".byte 1\n.org 4, 0xff\n.byte 2"),
+        vec![1, 0xff, 0xff, 0xff, 2]
+    );
     assert_eq!(text(".byte 1\n. = . + 3\n.byte 2"), vec![1, 0, 0, 0, 2]);
     assert!(errors(".byte 1\n.byte 2\n.org 1").contains("cannot move backwards"));
 }
@@ -145,13 +154,12 @@ fn conditional_assembly() {
         vec![2]
     );
     // Only the first true branch runs.
-    assert_eq!(
-        text(".if 1\n.byte 1\n.elseif 1\n.byte 2\n.endif"),
-        vec![1]
-    );
+    assert_eq!(text(".if 1\n.byte 1\n.elseif 1\n.byte 2\n.endif"), vec![1]);
     // A false outer branch keeps its inner branches off, whatever they say.
     assert_eq!(
-        text(".if 0\n  .if 1\n    .byte 1\n  .else\n    .byte 2\n  .endif\n.else\n  .byte 3\n.endif"),
+        text(
+            ".if 0\n  .if 1\n    .byte 1\n  .else\n    .byte 2\n  .endif\n.else\n  .byte 3\n.endif"
+        ),
         vec![3]
     );
     assert!(errors(".if 1\n.byte 1").contains("unterminated"));
@@ -176,7 +184,11 @@ fn sections() {
 
     // A custom section keeps the flags it was given.
     let asm = assemble(".section .mine,\"ax\",@progbits\nnop\n");
-    let s = asm.sections.iter().find(|s| asm.interner.get(s.name) == ".mine").unwrap();
+    let s = asm
+        .sections
+        .iter()
+        .find(|s| asm.interner.get(s.name) == ".mine")
+        .unwrap();
     assert!(s.flags.alloc && s.flags.exec && !s.flags.write);
 }
 
@@ -185,7 +197,11 @@ fn bss_rejects_data() {
     assert!(errors(".bss\n.byte 1").contains("allocates no file space"));
     // But it still tracks size.
     let asm = assemble(".bss\n.space 16");
-    let s = asm.sections.iter().find(|s| asm.interner.get(s.name) == ".bss").unwrap();
+    let s = asm
+        .sections
+        .iter()
+        .find(|s| asm.interner.get(s.name) == ".bss")
+        .unwrap();
     assert_eq!(s.size, 16);
 }
 
@@ -208,7 +224,10 @@ fn diagnostics_point_at_the_problem() {
     assert!(e.contains("does not fit in 1 byte"), "{e}");
 
     let e = errors(".arch nosucharch");
-    assert!(e.contains("unknown architecture") && e.contains("x86-64"), "{e}");
+    assert!(
+        e.contains("unknown architecture") && e.contains("x86-64"),
+        "{e}"
+    );
 }
 
 #[test]

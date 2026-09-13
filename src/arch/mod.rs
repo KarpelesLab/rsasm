@@ -11,8 +11,8 @@ use crate::expr::{ExprArena, ExprParser};
 use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
 use crate::section::Variant;
-use crate::symbol::SymbolTable;
 use crate::source::Span;
+use crate::symbol::SymbolTable;
 
 #[cfg(feature = "x86")]
 pub mod x86;
@@ -187,6 +187,8 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
 /// Every architecture name this build can assemble, for `--list-arch` and for
 /// the "unknown architecture" diagnostic.
 pub fn available() -> Vec<&'static str> {
+    // `mut` is only needed when at least one backend feature is on.
+    #[allow(unused_mut)]
     let mut v = Vec::new();
     #[cfg(feature = "x86")]
     v.extend_from_slice(x86::NAMES);

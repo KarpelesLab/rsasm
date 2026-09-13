@@ -57,8 +57,14 @@ fn immediate_width_selection() {
     enc("movq $1, %rax", "48 c7 c0 01 00 00 00");
     enc("movq $-1, %rax", "48 c7 c0 ff ff ff ff");
     // Only a value that does not fit in 32 bits needs the 10-byte form.
-    enc("movq $0x1122334455667788, %rax", "48 b8 88 77 66 55 44 33 22 11");
-    enc("movabsq $0x1122334455667788, %rax", "48 b8 88 77 66 55 44 33 22 11");
+    enc(
+        "movq $0x1122334455667788, %rax",
+        "48 b8 88 77 66 55 44 33 22 11",
+    );
+    enc(
+        "movabsq $0x1122334455667788, %rax",
+        "48 b8 88 77 66 55 44 33 22 11",
+    );
     // `add` prefers the sign-extended imm8 encoding whenever it fits.
     enc("addq $1, %rax", "48 83 c0 01");
     enc("addq $128, %rax", "48 05 80 00 00 00");
@@ -93,9 +99,15 @@ fn rip_relative_addressing() {
     enc("leaq (%rip), %rax", "48 8d 05 00 00 00 00");
     // A symbol becomes the distance from the end of the instruction.
     enc("leaq foo(%rip), %rax\nfoo: nop", "48 8d 05 00 00 00 00 90");
-    enc("nop\nfoo: nop\nleaq foo(%rip), %rax", "90 90 48 8d 05 f8 ff ff ff");
+    enc(
+        "nop\nfoo: nop\nleaq foo(%rip), %rax",
+        "90 90 48 8d 05 f8 ff ff ff",
+    );
     // The bias accounts for an immediate following the displacement.
-    enc("movl $1, foo(%rip)\nfoo: .long 0", "c7 05 00 00 00 00 01 00 00 00 00 00 00 00");
+    enc(
+        "movl $1, foo(%rip)\nfoo: .long 0",
+        "c7 05 00 00 00 00 01 00 00 00 00 00 00 00",
+    );
 }
 
 #[test]
@@ -190,21 +202,41 @@ fn relaxation_settles_when_branches_push_each_other_apart() {
     // branches ended up costing.
     assert!(out.len() >= 120 + 2 + 4);
     // Both branches must land on their targets: decode the second one.
-    assert_eq!(out[0], 0xeb, "first jump should still be short: {}", hex(&out));
+    assert_eq!(
+        out[0],
+        0xeb,
+        "first jump should still be short: {}",
+        hex(&out)
+    );
 }
 
 #[test]
 fn intel_syntax() {
     enc(".intel_syntax noprefix\nmov rax, rbx", "48 89 d8");
     enc(".intel_syntax noprefix\nadd rax, 1", "48 83 c0 01");
-    enc(".intel_syntax noprefix\nmov qword ptr [rbx+8], rax", "48 89 43 08");
-    enc(".intel_syntax noprefix\nmov eax, dword ptr [rbx+rcx*4+16]", "8b 44 8b 10");
-    enc(".intel_syntax noprefix\nlea rax, [rip+2]", "48 8d 05 02 00 00 00");
+    enc(
+        ".intel_syntax noprefix\nmov qword ptr [rbx+8], rax",
+        "48 89 43 08",
+    );
+    enc(
+        ".intel_syntax noprefix\nmov eax, dword ptr [rbx+rcx*4+16]",
+        "8b 44 8b 10",
+    );
+    enc(
+        ".intel_syntax noprefix\nlea rax, [rip+2]",
+        "48 8d 05 02 00 00 00",
+    );
     enc(".intel_syntax noprefix\nmov rax, [rbx]", "48 8b 03");
     enc(".intel_syntax noprefix\nmov rax, [rbx+rcx]", "48 8b 04 0b");
-    enc(".intel_syntax noprefix\nmov rax, [rcx*4]", "48 8b 04 8d 00 00 00 00");
+    enc(
+        ".intel_syntax noprefix\nmov rax, [rcx*4]",
+        "48 8b 04 8d 00 00 00 00",
+    );
     enc(".intel_syntax noprefix\nmov rax, [rbx-8]", "48 8b 43 f8");
-    enc(".intel_syntax noprefix\nmov rax, [0x1000]", "48 8b 04 25 00 10 00 00");
+    enc(
+        ".intel_syntax noprefix\nmov rax, [0x1000]",
+        "48 8b 04 25 00 10 00 00",
+    );
 }
 
 #[test]

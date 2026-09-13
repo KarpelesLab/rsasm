@@ -89,7 +89,13 @@ impl SourceFile {
                 line_starts.push(start + i as u32 + 1);
             }
         }
-        SourceFile { id, name, src, start, line_starts }
+        SourceFile {
+            id,
+            name,
+            src,
+            start,
+            line_starts,
+        }
     }
 
     pub fn end(&self) -> u32 {
@@ -112,14 +118,23 @@ impl SourceFile {
         let idx = self.line_index(pos);
         let line_start = self.line_starts[idx];
         let text = &self.src[(line_start - self.start) as usize..(pos - self.start) as usize];
-        LineCol { line: idx as u32 + 1, col: text.chars().count() as u32 + 1 }
+        LineCol {
+            line: idx as u32 + 1,
+            col: text.chars().count() as u32 + 1,
+        }
     }
 
     /// Text of the 1-based line `line`, without its trailing newline.
     pub fn line_text(&self, line: u32) -> &str {
         let idx = (line - 1) as usize;
-        let Some(&lo) = self.line_starts.get(idx) else { return "" };
-        let hi = self.line_starts.get(idx + 1).copied().unwrap_or_else(|| self.end());
+        let Some(&lo) = self.line_starts.get(idx) else {
+            return "";
+        };
+        let hi = self
+            .line_starts
+            .get(idx + 1)
+            .copied()
+            .unwrap_or_else(|| self.end());
         let s = &self.src[(lo - self.start) as usize..(hi - self.start) as usize];
         let s = s.strip_suffix('\n').unwrap_or(s);
         s.strip_suffix('\r').unwrap_or(s)
@@ -140,7 +155,10 @@ pub struct SourceMap {
 impl SourceMap {
     pub fn new() -> SourceMap {
         // Position 0 is reserved so that `Span::DUMMY` never aliases real text.
-        SourceMap { files: Vec::new(), next_start: 1 }
+        SourceMap {
+            files: Vec::new(),
+            next_start: 1,
+        }
     }
 
     /// Registers already-loaded text under a display name.
@@ -150,7 +168,8 @@ impl SourceMap {
         let start = self.next_start;
         // +1 so adjacent files never share a boundary position.
         self.next_start = start + src.len() as u32 + 1;
-        self.files.push(SourceFile::new(id, name.into(), src, start));
+        self.files
+            .push(SourceFile::new(id, name.into(), src, start));
         id
     }
 
@@ -180,7 +199,9 @@ impl SourceMap {
 
     /// The text covered by `span`. Empty if the span is dummy or malformed.
     pub fn span_text(&self, span: Span) -> &str {
-        let Some(f) = self.lookup(span.lo) else { return "" };
+        let Some(f) = self.lookup(span.lo) else {
+            return "";
+        };
         let lo = (span.lo - f.start) as usize;
         let hi = ((span.hi - f.start) as usize).min(f.src.len());
         if lo > hi {

@@ -271,7 +271,8 @@ impl Assembler {
         {
             let sm = &self.sm;
             let mut parser = Parser::new(sm, file, config);
-            while let Some(s) = parser.next_statement(&mut self.interner, &mut self.pool, &mut self.diags)
+            while let Some(s) =
+                parser.next_statement(&mut self.interner, &mut self.pool, &mut self.diags)
             {
                 statements.push(s);
                 if self.diags.saturated() {
@@ -286,7 +287,8 @@ impl Assembler {
             }
         }
         for c in std::mem::take(&mut self.cond) {
-            self.diags.error(c.span, "unterminated `.if`, expected `.endif`");
+            self.diags
+                .error(c.span, "unterminated `.if`, expected `.endif`");
         }
     }
 
@@ -340,7 +342,8 @@ impl Assembler {
         let file = match self.sm.load(path) {
             Ok(f) => f,
             Err(e) => {
-                self.diags.error(span, format!("cannot read `{}`: {e}", path.display()));
+                self.diags
+                    .error(span, format!("cannot read `{}`: {e}", path.display()));
                 return;
             }
         };
@@ -367,8 +370,17 @@ impl Assembler {
         if !self.cond_active() {
             if let Some(Body::Directive { name, .. }) = &stmt.body {
                 let text = self.interner.get(*name);
-                if matches!(text, ".if" | ".ifdef" | ".ifndef" | ".ifeq" | ".ifne" | ".else" | ".elseif" | ".endif")
-                {
+                if matches!(
+                    text,
+                    ".if"
+                        | ".ifdef"
+                        | ".ifndef"
+                        | ".ifeq"
+                        | ".ifne"
+                        | ".else"
+                        | ".elseif"
+                        | ".endif"
+                ) {
                     self.directive(stmt, *name);
                 }
             }
@@ -419,7 +431,14 @@ impl Assembler {
         if self.exprs.len() == mark {
             return;
         }
-        let Assembler { exprs, symbols, interner, here_sym, diags, .. } = self;
+        let Assembler {
+            exprs,
+            symbols,
+            interner,
+            here_sym,
+            diags,
+            ..
+        } = self;
         let here = *here_sym;
         expr::bind_positional(exprs, mark, |kind, span| match kind {
             ExprKind::Here => match here {
@@ -468,7 +487,11 @@ impl Assembler {
     /// Evaluates an expression against the current symbol table.
     pub fn eval(&mut self, e: ExprRef) -> Result<Value, EvalError> {
         let Assembler { exprs, symbols, .. } = self;
-        let mut env = Env { exprs, symbols, depth: 0 };
+        let mut env = Env {
+            exprs,
+            symbols,
+            depth: 0,
+        };
         expr::eval(exprs, e, &mut env)
     }
 
@@ -500,13 +523,18 @@ impl Assembler {
     /// `.set` in terms of a label.
     pub fn symbol_target_section(&self, id: SymbolId) -> Option<(SectionId, u64)> {
         let v = self.eval_ref_symbol(id).ok()?;
-        let (Some(p), None) = (v.plus, v.minus) else { return None };
+        let (Some(p), None) = (v.plus, v.minus) else {
+            return None;
+        };
         let addr = self.symbol_addr(p)?.wrapping_add(v.addend);
         let section = match self.symbols.get(p).value {
             SymbolValue::Label { section, .. } => section,
             _ => return None,
         };
-        Some((section, addr.saturating_sub(self.section(section).addr as i64) as u64))
+        Some((
+            section,
+            addr.saturating_sub(self.section(section).addr as i64) as u64,
+        ))
     }
 
     fn eval_ref_symbol(&self, id: SymbolId) -> Result<Value, EvalError> {
@@ -521,7 +549,8 @@ impl Assembler {
                 Some(n) => Some(n),
                 None => {
                     let span = self.exprs.span(e);
-                    self.diags.error(span, format!("{what} must be an absolute value"));
+                    self.diags
+                        .error(span, format!("{what} must be an absolute value"));
                     None
                 }
             },
@@ -564,14 +593,24 @@ impl Assembler {
     pub(crate) fn check_nobits(&mut self, span: Span) -> bool {
         if self.section(self.cur).kind == SectionKind::Nobits {
             let name = self.interner.get(self.section(self.cur).name).to_string();
-            self.diags.error(span, format!("cannot emit data into `{name}`, which allocates no file space"));
+            self.diags.error(
+                span,
+                format!("cannot emit data into `{name}`, which allocates no file space"),
+            );
             return true;
         }
         false
     }
 
     fn emit_org(&mut self, target: ExprRef, fill: u8, span: Span) {
-        self.cur_section().push(Fragment::new(FragKind::Org { target, fill, size: 0 }, span));
+        self.cur_section().push(Fragment::new(
+            FragKind::Org {
+                target,
+                fill,
+                size: 0,
+            },
+            span,
+        ));
     }
 
     /// Symbols that were referenced but never given a definition anywhere.
@@ -579,7 +618,8 @@ impl Assembler {
         let missing: Vec<(SymbolId, u32)> = self.symbols.undefined_locals().collect();
         for (id, n) in missing {
             let span = self.symbols.get(id).first_use;
-            self.diags.error(span, format!("no local label `{n}:` after this point"));
+            self.diags
+                .error(span, format!("no local label `{n}:` after this point"));
         }
     }
 
@@ -593,8 +633,24 @@ impl Assembler {
         };
         // Disjoint field borrows keep the architecture object accessible while
         // it mutates the interner, expression arena and diagnostics.
-        let Assembler { arch, interner, exprs, diags, pool, symbols, arch_state, .. } = self;
-        let mut cx = AsmCtx { interner, exprs, diags, pool, symbols, state: arch_state };
+        let Assembler {
+            arch,
+            interner,
+            exprs,
+            diags,
+            pool,
+            symbols,
+            arch_state,
+            ..
+        } = self;
+        let mut cx = AsmCtx {
+            interner,
+            exprs,
+            diags,
+            pool,
+            symbols,
+            state: arch_state,
+        };
         let variants = arch.assemble(&mut cx, &req);
         let Some(variants) = variants else { return };
         if self.check_nobits(stmt.span) {
@@ -646,7 +702,10 @@ impl EvalCtx for Env<'_> {
     }
 
     fn local_ref(&mut self, n: u32, _: LocalDir, span: Span) -> Result<Value, EvalError> {
-        Err(EvalError::new(span, format!("local label `{n}` was not resolved")))
+        Err(EvalError::new(
+            span,
+            format!("local label `{n}` was not resolved"),
+        ))
     }
 
     fn modifier(&mut self, _name: Name, inner: Value, _span: Span) -> Result<Value, EvalError> {

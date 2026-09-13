@@ -57,6 +57,9 @@ struct Entry {
 }
 
 /// Every register this backend understands, keyed by lowercase name.
+///
+/// Laid out one line per group so it reads the way the manuals tabulate it.
+#[rustfmt::skip]
 static REGS: &[Entry] = &{
     // Built as a literal list rather than generated, so the table reads the
     // way the manuals do.
@@ -128,7 +131,15 @@ fn index() -> &'static HashMap<&'static str, Reg> {
     INDEX.get_or_init(|| {
         REGS.iter()
             .map(|e| {
-                (e.name, Reg { class: e.class, num: e.num, size: e.size, rex_required: e.rex_required })
+                (
+                    e.name,
+                    Reg {
+                        class: e.class,
+                        num: e.num,
+                        size: e.size,
+                        rex_required: e.rex_required,
+                    },
+                )
             })
             .collect()
     })
@@ -158,7 +169,15 @@ mod tests {
 
     #[test]
     fn looks_up_by_size() {
-        assert_eq!(lookup("rax").unwrap(), Reg { class: RegClass::Gpr, num: 0, size: 8, rex_required: false });
+        assert_eq!(
+            lookup("rax").unwrap(),
+            Reg {
+                class: RegClass::Gpr,
+                num: 0,
+                size: 8,
+                rex_required: false
+            }
+        );
         assert_eq!(lookup("eax").unwrap().size, 4);
         assert_eq!(lookup("ax").unwrap().size, 2);
         assert_eq!(lookup("al").unwrap().size, 1);

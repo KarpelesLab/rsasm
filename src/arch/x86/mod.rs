@@ -12,7 +12,7 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{Def, Op, DEF64, NOTACC};
+use insn::{DEF64, Def, NOTACC, Op};
 use operand::{Operand, OperandKind, OperandParser};
 
 pub const NAMES: &[&str] = &["x86-64", "i386", "i8086"];
@@ -68,13 +68,17 @@ impl Architecture for X86 {
 
     fn elf_machine(&self) -> u16 {
         match self.bits {
-            64 => 62,  // EM_X86_64
-            _ => 3,    // EM_386
+            64 => 62, // EM_X86_64
+            _ => 3,   // EM_386
         }
     }
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
-        if pcrel { reloc::pcrel(size) } else { reloc::abs(size) }
+        if pcrel {
+            reloc::pcrel(size)
+        } else {
+            reloc::abs(size)
+        }
     }
 
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
@@ -246,7 +250,10 @@ fn assemble_inner(
 
     // A relative branch gets one variant per displacement width, smallest
     // first, so the layout pass can shorten it once addresses are known.
-    let is_rel = matches[0].ops.first().is_some_and(|o| matches!(o, Op::Rel(_)));
+    let is_rel = matches[0]
+        .ops
+        .first()
+        .is_some_and(|o| matches!(o, Op::Rel(_)));
     let chosen: Vec<&Def> = if is_rel {
         let mut v: Vec<&Def> = matches
             .iter()
@@ -290,7 +297,11 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     // An exact table entry always wins, so the string instruction `movsb` is
     // never mistaken for `movs` with a `b` suffix.
     if let Some(defs) = insn::lookup(mnemonic) {
-        return Some(Resolved { defs, opsize: None, rm_width: None });
+        return Some(Resolved {
+            defs,
+            opsize: None,
+            rm_width: None,
+        });
     }
     if syntax != Syntax::Att {
         return None;
@@ -298,31 +309,37 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     let b = mnemonic.as_bytes();
 
     // `movzbl`, `movswq`, `movslq`: source width then destination width.
-    if b.len() == 6 && (mnemonic.starts_with("movz") || mnemonic.starts_with("movs"))
+    if b.len() == 6
+        && (mnemonic.starts_with("movz") || mnemonic.starts_with("movs"))
         && let (Some(src), Some(dst)) = (suffix_width(b[4]), suffix_width(b[5]))
-            && src < dst {
-                let base = if mnemonic.starts_with("movz") {
-                    "movzx"
-                } else if src == 4 {
-                    // 32-to-64 sign extension has its own opcode.
-                    "movsxd"
-                } else {
-                    "movsx"
-                };
-                if let Some(defs) = insn::lookup(base) {
-                    return Some(Resolved {
-                        defs,
-                        opsize: Some(dst * 8),
-                        rm_width: Some(src),
-                    });
-                }
-            }
+        && src < dst
+    {
+        let base = if mnemonic.starts_with("movz") {
+            "movzx"
+        } else if src == 4 {
+            // 32-to-64 sign extension has its own opcode.
+            "movsxd"
+        } else {
+            "movsx"
+        };
+        if let Some(defs) = insn::lookup(base) {
+            return Some(Resolved {
+                defs,
+                opsize: Some(dst * 8),
+                rm_width: Some(src),
+            });
+        }
+    }
 
     // A single trailing size letter.
     let (stem, last) = mnemonic.split_at(mnemonic.len().checked_sub(1)?);
     let w = suffix_width(last.as_bytes()[0])?;
     let defs = insn::lookup(stem)?;
-    Some(Resolved { defs, opsize: Some(w * 8), rm_width: None })
+    Some(Resolved {
+        defs,
+        opsize: Some(w * 8),
+        rm_width: None,
+    })
 }
 
 /// Every definition that accepts `ops`, in table (preference) order.
@@ -339,9 +356,10 @@ fn select<'d>(
             continue;
         }
         if let Some(want) = resolved.opsize
-            && def.opsize != want {
-                continue;
-            }
+            && def.opsize != want
+        {
+            continue;
+        }
         if let Some(want) = resolved.rm_width {
             let rm = def.ops.iter().find_map(|o| match o {
                 Op::Rm(w) | Op::M(w) => Some(*w),
@@ -354,7 +372,12 @@ fn select<'d>(
         if def.flags & NOTACC != 0 && all_accumulator(ops) {
             continue;
         }
-        if def.ops.iter().zip(ops).all(|(p, o)| op_matches(cx, bits, def, p, o)) {
+        if def
+            .ops
+            .iter()
+            .zip(ops)
+            .all(|(p, o)| op_matches(cx, bits, def, p, o))
+        {
             out.push(def);
         }
     }
@@ -364,7 +387,11 @@ fn select<'d>(
         for def in defs {
             if def.ops.len() == ops.len()
                 && def.opsize == 0
-                && def.ops.iter().zip(ops).all(|(p, o)| op_matches(cx, bits, def, p, o))
+                && def
+                    .ops
+                    .iter()
+                    .zip(ops)
+                    .all(|(p, o)| op_matches(cx, bits, def, p, o))
             {
                 out.push(def);
             }
@@ -375,7 +402,10 @@ fn select<'d>(
 
 /// True when every operand is a register and all of them are the accumulator.
 fn all_accumulator(ops: &[Operand]) -> bool {
-    !ops.is_empty() && ops.iter().all(|o| o.reg().is_some_and(|r| r.is_gpr() && r.num == 0))
+    !ops.is_empty()
+        && ops
+            .iter()
+            .all(|o| o.reg().is_some_and(|r| r.is_gpr() && r.num == 0))
 }
 
 fn fits_unsigned_or_signed(v: i64, width: u8) -> bool {
@@ -399,7 +429,9 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             matches!(o.kind, OperandKind::Mem(_)) && (w == 0 || o.size_hint.is_none_or(|h| h == w))
         }
         Op::Imm(w) => {
-            let OperandKind::Imm(e) = &o.kind else { return false };
+            let OperandKind::Imm(e) = &o.kind else {
+                return false;
+            };
             match cx.constant(*e) {
                 Some(v) => {
                     // A 32-bit immediate in a 64-bit operation is sign-extended
@@ -415,11 +447,15 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             }
         }
         Op::Imm8s => {
-            let OperandKind::Imm(e) = &o.kind else { return false };
+            let OperandKind::Imm(e) = &o.kind else {
+                return false;
+            };
             cx.constant(*e).is_some_and(|v| (-128..=127).contains(&v))
         }
         Op::One => {
-            let OperandKind::Imm(e) = &o.kind else { return false };
+            let OperandKind::Imm(e) = &o.kind else {
+                return false;
+            };
             cx.constant(*e) == Some(1)
         }
         Op::Fixed(name) => o.reg() == reg::lookup(name),

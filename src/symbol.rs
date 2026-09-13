@@ -112,7 +112,10 @@ impl SymbolTable {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
-        self.syms.iter().enumerate().map(|(i, s)| (SymbolId(i as u32), s))
+        self.syms
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (SymbolId(i as u32), s))
     }
 
     pub fn lookup(&self, name: Name) -> Option<SymbolId> {
@@ -213,15 +216,19 @@ impl SymbolTable {
             used: false,
         });
         let slots = self.locals.entry(n).or_default();
-        debug_assert_eq!(slots.slots.len(), idx, "local label slots must be filled in order");
+        debug_assert_eq!(
+            slots.slots.len(),
+            idx,
+            "local label slots must be filled in order"
+        );
         slots.slots.push(id);
         id
     }
 
     /// Numeric local labels that were referenced forward but never defined.
     pub fn undefined_locals(&self) -> impl Iterator<Item = (SymbolId, u32)> + '_ {
-        self.locals.iter().flat_map(|(&n, s)| {
-            s.slots[s.defined..].iter().map(move |&id| (id, n))
-        })
+        self.locals
+            .iter()
+            .flat_map(|(&n, s)| s.slots[s.defined..].iter().map(move |&id| (id, n)))
     }
 }

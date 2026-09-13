@@ -7,7 +7,11 @@ use rsasm::output;
 
 fn elf(src: &str) -> Vec<u8> {
     let asm = assemble(src);
-    assert!(!asm.diags.has_errors(), "{}", asm.diags.render(&asm.sm, false));
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
     output::elf::build(&asm).expect("ELF output")
 }
 
@@ -61,9 +65,14 @@ fn elf_header_is_well_formed() {
 
 #[test]
 fn sections_carry_the_right_types_and_flags() {
-    let b = elf(".text\nnop\n.data\n.byte 1\n.bss\n.space 8\n.section .note.x,\"\",@note\n.byte 0\n");
+    let b =
+        elf(".text\nnop\n.data\n.byte 1\n.bss\n.space 8\n.section .note.x,\"\",@note\n.byte 0\n");
     let secs = sections_of(&b);
-    let find = |n: &str| secs.iter().find(|s| s.0 == n).unwrap_or_else(|| panic!("no {n}"));
+    let find = |n: &str| {
+        secs.iter()
+            .find(|s| s.0 == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+    };
 
     // SHT_PROGBITS = 1, SHT_NOBITS = 8, SHT_NOTE = 7.
     // SHF_ALLOC = 2, SHF_EXECINSTR = 4, SHF_WRITE = 1.
@@ -84,7 +93,11 @@ fn sections_carry_the_right_types_and_flags() {
 #[test]
 fn relocations_are_emitted_for_unresolved_references() {
     let asm = assemble("call printf@PLT\nmovq gvar(%rip), %rax\n.quad gvar\n");
-    assert!(!asm.diags.has_errors(), "{}", asm.diags.render(&asm.sm, false));
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
     assert_eq!(asm.relocs.len(), 3);
     // R_X86_64_PLT32 = 4, PC32 = 2, 64 = 1.
     let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
@@ -95,7 +108,11 @@ fn relocations_are_emitted_for_unresolved_references() {
     assert_eq!(asm.relocs[2].addend, 0);
     // The object must actually contain a .rela.text.
     let b = output::elf::build(&asm).unwrap();
-    assert!(sections_of(&b).iter().any(|s| s.0 == ".rela.text" && s.1 == 4));
+    assert!(
+        sections_of(&b)
+            .iter()
+            .any(|s| s.0 == ".rela.text" && s.1 == 4)
+    );
 }
 
 #[test]
@@ -106,7 +123,10 @@ fn local_references_relocate_against_their_section() {
     assert_eq!(asm.relocs.len(), 1);
     let r = &asm.relocs[0];
     assert_eq!(r.addend, 1, "the label's offset becomes the addend");
-    assert_eq!(rsasm::symbol::SymType::Section, asm.symbols.get(r.symbol).ty);
+    assert_eq!(
+        rsasm::symbol::SymType::Section,
+        asm.symbols.get(r.symbol).ty
+    );
 }
 
 #[test]

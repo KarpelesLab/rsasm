@@ -1,7 +1,7 @@
 //! Instruction encoding: prefixes, REX, opcode, ModRM/SIB, displacement and
 //! immediate.
 
-use super::insn::{Def, ModRm, Op, DEF64, IMM64, NO64, NO_REX_W, ONLY64, PLUSREG};
+use super::insn::{DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, ONLY64, Op, PLUSREG};
 use super::operand::{Mem, Operand, OperandKind};
 use super::reg::{self, Reg, RegClass};
 use super::reloc;
@@ -55,9 +55,11 @@ pub fn rel_expr(o: &Operand) -> Option<ExprRef> {
 /// The register or memory operand behind an indirect branch target.
 pub fn indirect_inner(o: &Operand) -> Option<Operand> {
     match &o.kind {
-        OperandKind::Indirect(inner) => {
-            Some(Operand { kind: (**inner).clone(), size_hint: o.size_hint, span: o.span })
-        }
+        OperandKind::Indirect(inner) => Some(Operand {
+            kind: (**inner).clone(),
+            size_hint: o.size_hint,
+            span: o.span,
+        }),
         // Intel syntax writes indirect branches without a sigil.
         OperandKind::Reg(_) | OperandKind::Mem(_) => Some(o.clone()),
         _ => None,
@@ -82,7 +84,12 @@ fn rm_register(o: &Operand) -> Option<Reg> {
 }
 
 fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
-    let mut roles = Roles { rm: None, reg: None, imm: None, rel: None };
+    let mut roles = Roles {
+        rm: None,
+        reg: None,
+        imm: None,
+        rel: None,
+    };
     let takes_reg_field = def.modrm == ModRm::Reg || def.flags & PLUSREG != 0;
     for (pat, o) in def.ops.iter().zip(ops) {
         match *pat {
@@ -153,7 +160,10 @@ pub fn encode(
         Some(seg) => match segment_prefix(seg) {
             Some(p) => Some(p),
             None => {
-                cx.error(span, format!("`{}` is not a valid segment override", reg::name_of(seg)));
+                cx.error(
+                    span,
+                    format!("`{}` is not a valid segment override", reg::name_of(seg)),
+                );
                 return None;
             }
         },
@@ -173,7 +183,10 @@ pub fn encode(
             } else {
                 cx.error(
                     m.span,
-                    format!("{}-bit addressing is not available in {bits}-bit mode", m.addr_size * 8),
+                    format!(
+                        "{}-bit addressing is not available in {bits}-bit mode",
+                        m.addr_size * 8
+                    ),
                 );
                 return None;
             }
@@ -194,9 +207,8 @@ pub fn encode(
     }
 
     // ---- REX --------------------------------------------------------------
-    let rex_w = def.opsize == 64
-        && def.flags & NO_REX_W == 0
-        && !(bits == 64 && def.flags & DEF64 != 0);
+    let rex_w =
+        def.opsize == 64 && def.flags & NO_REX_W == 0 && !(bits == 64 && def.flags & DEF64 != 0);
     if def.opsize == 64 && bits != 64 && def.flags & DEF64 == 0 {
         cx.error(span, "64-bit operands require 64-bit mode");
         return None;
@@ -209,15 +221,22 @@ pub fn encode(
     let plus_reg = def.flags & PLUSREG != 0;
     let rex_r = !plus_reg && roles.reg.is_some_and(|r| r.needs_rex_ext());
     let rex_b = rm_reg.is_some_and(|r| r.needs_rex_ext())
-        || mem.as_ref().and_then(|m| m.base).is_some_and(|r| r.needs_rex_ext())
+        || mem
+            .as_ref()
+            .and_then(|m| m.base)
+            .is_some_and(|r| r.needs_rex_ext())
         || (plus_reg && roles.reg.is_some_and(|r| r.needs_rex_ext()));
-    let rex_x = mem.as_ref().and_then(|m| m.index).is_some_and(|r| r.needs_rex_ext());
+    let rex_x = mem
+        .as_ref()
+        .and_then(|m| m.index)
+        .is_some_and(|r| r.needs_rex_ext());
 
     // spl/bpl/sil/dil only exist with a REX prefix present, even an empty one.
-    let forced_rex = roles.reg.is_some_and(|r| r.rex_required) || rm_reg.is_some_and(|r| r.rex_required);
+    let forced_rex =
+        roles.reg.is_some_and(|r| r.rex_required) || rm_reg.is_some_and(|r| r.rex_required);
     // ah/ch/dh/bh cannot coexist with REX.
-    let has_high_byte =
-        roles.reg.is_some_and(|r| r.class == RegClass::GprHigh) || rm_reg.is_some_and(|r| r.class == RegClass::GprHigh);
+    let has_high_byte = roles.reg.is_some_and(|r| r.class == RegClass::GprHigh)
+        || rm_reg.is_some_and(|r| r.class == RegClass::GprHigh);
 
     let need_rex = rex_w || rex_r || rex_b || rex_x || forced_rex;
     if need_rex {
@@ -275,7 +294,15 @@ pub fn encode(
                 cx.error(span, "internal: encoding needs an r/m operand");
                 return None;
             };
-            encode_rm(cx, bits, &mut bytes, &mut disp_fixup, reg_field, rm_operand, mem.as_ref())?;
+            encode_rm(
+                cx,
+                bits,
+                &mut bytes,
+                &mut disp_fixup,
+                reg_field,
+                rm_operand,
+                mem.as_ref(),
+            )?;
         }
     }
 
@@ -300,7 +327,12 @@ pub fn encode(
                 };
                 let mut kind = FixupKind::data(width).with_reloc(r);
                 kind.signed = sign_extended;
-                fixups.push(Fixup { offset, expr: e, kind, span: cx.exprs.span(e) });
+                fixups.push(Fixup {
+                    offset,
+                    expr: e,
+                    kind,
+                    span: cx.exprs.span(e),
+                });
             }
         }
     }
@@ -314,7 +346,12 @@ pub fn encode(
         } else {
             FixupKind::data(4).with_reloc(reloc::ABS32S)
         };
-        fixups.push(Fixup { offset: offset as u32, expr: e, kind, span: dspan });
+        fixups.push(Fixup {
+            offset: offset as u32,
+            expr: e,
+            kind,
+            span: dspan,
+        });
     }
 
     // ---- relative branch target -------------------------------------------
@@ -352,7 +389,13 @@ fn encode_rm(
     }
 
     let Some(m) = mem else {
-        cx.error(rm_operand.span, format!("expected a register or memory operand, found {}", rm_operand.describe()));
+        cx.error(
+            rm_operand.span,
+            format!(
+                "expected a register or memory operand, found {}",
+                rm_operand.describe()
+            ),
+        );
         return None;
     };
 
@@ -363,7 +406,10 @@ fn encode_rm(
             return None;
         }
         if m.base.is_some() || m.index.is_some() {
-            cx.error(m.span, "RIP-relative addressing cannot be combined with other registers");
+            cx.error(
+                m.span,
+                "RIP-relative addressing cannot be combined with other registers",
+            );
             return None;
         }
         bytes.push(((reg_field & 7) << 3) | 0b101);
@@ -497,6 +543,7 @@ pub fn nop_bytes(bits: u8, len: usize) -> Vec<u8> {
     if bits < 32 {
         return vec![0x90; len];
     }
+    #[rustfmt::skip]
     const NOPS: [&[u8]; 12] = [
         &[],
         &[0x90],

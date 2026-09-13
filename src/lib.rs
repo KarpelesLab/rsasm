@@ -13,17 +13,17 @@
 //! ([`arch`]), which produces [`section`] fragments that [`layout`] resolves
 //! into bytes and relocations for [`output`].
 
-pub mod diag;
-pub mod intern;
-pub mod lexer;
-pub mod source;
-pub mod cursor;
-pub mod expr;
-pub mod section;
-pub mod symbol;
 pub mod arch;
-pub mod parser;
 pub mod assembler;
+pub mod cursor;
+pub mod diag;
 pub mod directives;
+pub mod expr;
+pub mod intern;
 pub mod layout;
+pub mod lexer;
 pub mod output;
+pub mod parser;
+pub mod section;
+pub mod source;
+pub mod symbol;

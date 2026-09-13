@@ -35,16 +35,31 @@ pub struct SectionFlags {
 
 impl SectionFlags {
     pub fn text() -> SectionFlags {
-        SectionFlags { alloc: true, exec: true, ..Default::default() }
+        SectionFlags {
+            alloc: true,
+            exec: true,
+            ..Default::default()
+        }
     }
     pub fn data() -> SectionFlags {
-        SectionFlags { alloc: true, write: true, ..Default::default() }
+        SectionFlags {
+            alloc: true,
+            write: true,
+            ..Default::default()
+        }
     }
     pub fn rodata() -> SectionFlags {
-        SectionFlags { alloc: true, ..Default::default() }
+        SectionFlags {
+            alloc: true,
+            ..Default::default()
+        }
     }
     pub fn bss() -> SectionFlags {
-        SectionFlags { alloc: true, write: true, ..Default::default() }
+        SectionFlags {
+            alloc: true,
+            write: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -70,11 +85,23 @@ pub struct FixupKind {
 
 impl FixupKind {
     pub fn data(size: u8) -> FixupKind {
-        FixupKind { size, pcrel: false, signed: false, adjust: 0, reloc: 0 }
+        FixupKind {
+            size,
+            pcrel: false,
+            signed: false,
+            adjust: 0,
+            reloc: 0,
+        }
     }
 
     pub fn pcrel(size: u8, adjust: i8) -> FixupKind {
-        FixupKind { size, pcrel: true, signed: true, adjust, reloc: 0 }
+        FixupKind {
+            size,
+            pcrel: true,
+            signed: true,
+            adjust,
+            reloc: 0,
+        }
     }
 
     pub fn with_reloc(mut self, reloc: u32) -> FixupKind {
@@ -126,7 +153,10 @@ pub struct Variant {
 
 impl Variant {
     pub fn new(bytes: Vec<u8>) -> Variant {
-        Variant { bytes, fixups: Vec::new() }
+        Variant {
+            bytes,
+            fixups: Vec::new(),
+        }
     }
 }
 
@@ -135,15 +165,35 @@ pub enum FragKind {
     /// Literal bytes. Instructions that can be encoded several ways list all
     /// candidates smallest-first; layout raises `chosen` until every fixup
     /// fits, and never lowers it, so the loop terminates.
-    Bytes { variants: Vec<Variant>, chosen: usize },
+    Bytes {
+        variants: Vec<Variant>,
+        chosen: usize,
+    },
     /// Pad to a multiple of `align`, at most `max_skip` bytes.
-    Align { align: u64, fill: Vec<u8>, max_skip: Option<u64>, /* filled by layout */ pad: u64 },
+    Align {
+        align: u64,
+        fill: Vec<u8>,
+        max_skip: Option<u64>,
+        /* filled by layout */ pad: u64,
+    },
     /// Advance the location counter to an absolute offset within the section.
-    Org { target: ExprRef, fill: u8, size: u64 },
+    Org {
+        target: ExprRef,
+        fill: u8,
+        size: u64,
+    },
     /// `.space` / `.skip`: `size` bytes of `fill`.
-    Space { size: ExprRef, fill: ExprRef, resolved: u64 },
+    Space {
+        size: ExprRef,
+        fill: ExprRef,
+        resolved: u64,
+    },
     /// A variable-length integer whose width depends on its value.
-    Leb128 { value: ExprRef, signed: bool, encoded: Vec<u8> },
+    Leb128 {
+        value: ExprRef,
+        signed: bool,
+        encoded: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -156,7 +206,11 @@ pub struct Fragment {
 
 impl Fragment {
     pub fn new(kind: FragKind, span: Span) -> Fragment {
-        Fragment { kind, span, offset: 0 }
+        Fragment {
+            kind,
+            span,
+            offset: 0,
+        }
     }
 
     /// Current size in bytes, based on the last layout decision.
@@ -243,14 +297,18 @@ impl Section {
     /// data-heavy files.
     pub fn emit_bytes(&mut self, bytes: &[u8], span: Span) {
         if let Some(i) = self.open_data
-            && let FragKind::Bytes { variants, .. } = &mut self.frags[i].kind {
-                variants[0].bytes.extend_from_slice(bytes);
-                self.frags[i].span = self.frags[i].span.to(span);
-                return;
-            }
+            && let FragKind::Bytes { variants, .. } = &mut self.frags[i].kind
+        {
+            variants[0].bytes.extend_from_slice(bytes);
+            self.frags[i].span = self.frags[i].span.to(span);
+            return;
+        }
         let idx = self.frags.len();
         self.frags.push(Fragment::new(
-            FragKind::Bytes { variants: vec![Variant::new(bytes.to_vec())], chosen: 0 },
+            FragKind::Bytes {
+                variants: vec![Variant::new(bytes.to_vec())],
+                chosen: 0,
+            },
             span,
         ));
         self.open_data = Some(idx);
@@ -269,23 +327,42 @@ impl Section {
             None => {
                 let i = self.frags.len();
                 self.frags.push(Fragment::new(
-                    FragKind::Bytes { variants: vec![Variant::default()], chosen: 0 },
+                    FragKind::Bytes {
+                        variants: vec![Variant::default()],
+                        chosen: 0,
+                    },
                     span,
                 ));
                 self.open_data = Some(i);
                 (i, 0)
             }
         };
-        let FragKind::Bytes { variants, .. } = &mut self.frags[idx].kind else { unreachable!() };
+        let FragKind::Bytes { variants, .. } = &mut self.frags[idx].kind else {
+            unreachable!()
+        };
         variants[0].bytes.extend_from_slice(&placeholder);
-        variants[0].fixups.push(Fixup { offset: base, expr, kind, span });
+        variants[0].fixups.push(Fixup {
+            offset: base,
+            expr,
+            kind,
+            span,
+        });
         self.frags[idx].span = self.frags[idx].span.to(span);
     }
 
     /// Appends a pre-encoded instruction with one or more size variants.
     pub fn emit_variants(&mut self, variants: Vec<Variant>, span: Span) -> u32 {
-        debug_assert!(!variants.is_empty(), "an instruction needs at least one encoding");
-        self.push(Fragment::new(FragKind::Bytes { variants, chosen: 0 }, span))
+        debug_assert!(
+            !variants.is_empty(),
+            "an instruction needs at least one encoding"
+        );
+        self.push(Fragment::new(
+            FragKind::Bytes {
+                variants,
+                chosen: 0,
+            },
+            span,
+        ))
     }
 
     pub fn is_empty(&self) -> bool {

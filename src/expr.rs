@@ -61,6 +61,7 @@ impl BinOp {
         }
     }
 
+    #[rustfmt::skip]
     fn symbol(self) -> &'static str {
         use BinOp::*;
         match self {
@@ -152,11 +153,19 @@ pub struct Value {
 
 impl Value {
     pub fn abs(v: i64) -> Value {
-        Value { addend: v, plus: None, minus: None }
+        Value {
+            addend: v,
+            plus: None,
+            minus: None,
+        }
     }
 
     pub fn sym(s: SymbolId, addend: i64) -> Value {
-        Value { addend, plus: Some(s), minus: None }
+        Value {
+            addend,
+            plus: Some(s),
+            minus: None,
+        }
     }
 
     pub fn is_absolute(&self) -> bool {
@@ -194,7 +203,10 @@ pub struct EvalError {
 
 impl EvalError {
     pub fn new(span: Span, msg: impl Into<String>) -> EvalError {
-        EvalError { span, msg: msg.into() }
+        EvalError {
+            span,
+            msg: msg.into(),
+        }
     }
 
     pub fn into_diagnostic(self) -> Diagnostic {
@@ -222,7 +234,10 @@ pub fn eval(arena: &ExprArena, r: ExprRef, cx: &mut dyn EvalCtx) -> Result<Value
                 if *op == UnOp::Plus {
                     return Ok(v);
                 }
-                return Err(EvalError::new(span, "operand of unary operator must be an absolute value"));
+                return Err(EvalError::new(
+                    span,
+                    "operand of unary operator must be an absolute value",
+                ));
             };
             Ok(Value::abs(match op {
                 UnOp::Neg => a.wrapping_neg(),
@@ -247,25 +262,39 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
         Add => {
             return match (l.plus, l.minus, r.plus, r.minus) {
                 // Cancel `a - b` against `+ b`.
-                (lp, Some(lm), Some(rp), None) if lm == rp => {
-                    Ok(Value { addend: l.addend.wrapping_add(r.addend), plus: lp, minus: None })
-                }
-                (Some(lp), None, _, Some(rm)) if lp == rm => {
-                    Ok(Value { addend: l.addend.wrapping_add(r.addend), plus: r.plus, minus: None })
-                }
+                (lp, Some(lm), Some(rp), None) if lm == rp => Ok(Value {
+                    addend: l.addend.wrapping_add(r.addend),
+                    plus: lp,
+                    minus: None,
+                }),
+                (Some(lp), None, _, Some(rm)) if lp == rm => Ok(Value {
+                    addend: l.addend.wrapping_add(r.addend),
+                    plus: r.plus,
+                    minus: None,
+                }),
                 (lp, lm, rp, rm) => {
                     let (plus, minus) = match (lp, rp) {
                         (Some(_), Some(_)) => {
                             return Err(EvalError::new(span, "cannot add two relocatable symbols"));
                         }
-                        (a, b) => (a.or(b), match (lm, rm) {
-                            (Some(_), Some(_)) => {
-                                return Err(EvalError::new(span, "cannot subtract two relocatable symbols here"));
-                            }
-                            (a, b) => a.or(b),
-                        }),
+                        (a, b) => (
+                            a.or(b),
+                            match (lm, rm) {
+                                (Some(_), Some(_)) => {
+                                    return Err(EvalError::new(
+                                        span,
+                                        "cannot subtract two relocatable symbols here",
+                                    ));
+                                }
+                                (a, b) => a.or(b),
+                            },
+                        ),
                     };
-                    Ok(Value { addend: l.addend.wrapping_add(r.addend), plus, minus })
+                    Ok(Value {
+                        addend: l.addend.wrapping_add(r.addend),
+                        plus,
+                        minus,
+                    })
                 }
             };
         }
@@ -284,10 +313,15 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
                         })
                     }
                 }
-                (lp, lm, None, None) => {
-                    Ok(Value { addend: l.addend.wrapping_sub(r.addend), plus: lp, minus: lm })
-                }
-                _ => Err(EvalError::new(span, "unsupported combination of relocatable values in `-`")),
+                (lp, lm, None, None) => Ok(Value {
+                    addend: l.addend.wrapping_sub(r.addend),
+                    plus: lp,
+                    minus: lm,
+                }),
+                _ => Err(EvalError::new(
+                    span,
+                    "unsupported combination of relocatable values in `-`",
+                )),
             };
         }
         _ => {}
@@ -318,10 +352,18 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
         // Shift counts of 64 or more produce 0, matching GAS rather than
         // panicking or wrapping the count around.
         Shl => {
-            if (b as u64) >= 64 { 0 } else { ((a as u64) << b) as i64 }
+            if (b as u64) >= 64 {
+                0
+            } else {
+                ((a as u64) << b) as i64
+            }
         }
         Shr => {
-            if (b as u64) >= 64 { 0 } else { ((a as u64) >> b) as i64 }
+            if (b as u64) >= 64 {
+                0
+            } else {
+                ((a as u64) >> b) as i64
+            }
         }
         And => a & b,
         Or => a | b,
@@ -351,7 +393,11 @@ pub struct SymbolEnv<'a> {
 
 impl<'a> SymbolEnv<'a> {
     pub fn new(exprs: &'a ExprArena, symbols: &'a SymbolTable) -> SymbolEnv<'a> {
-        SymbolEnv { exprs, symbols, depth: 0 }
+        SymbolEnv {
+            exprs,
+            symbols,
+            depth: 0,
+        }
     }
 
     /// Evaluates `e`, or returns `None` if anything in it is still unknown.
@@ -399,7 +445,10 @@ impl EvalCtx for SymbolEnv<'_> {
     }
 
     fn local_ref(&mut self, n: u32, _: LocalDir, span: Span) -> Result<Value, EvalError> {
-        Err(EvalError::new(span, format!("local label `{n}` is not resolved yet")))
+        Err(EvalError::new(
+            span,
+            format!("local label `{n}` is not resolved yet"),
+        ))
     }
 
     fn modifier(&mut self, _name: Name, inner: Value, _span: Span) -> Result<Value, EvalError> {
@@ -504,7 +553,8 @@ impl<'a> ExprParser<'a> {
                     self.interner.intern_lower(&self.interner_get(n))
                 }
                 _ => {
-                    self.diags.error(at.span.to(tok.span), "expected a relocation name after `@`");
+                    self.diags
+                        .error(at.span.to(tok.span), "expected a relocation name after `@`");
                     break;
                 }
             };
@@ -557,7 +607,10 @@ impl<'a> ExprParser<'a> {
                 cur.advance();
                 if cur.check_punct(Punct::Dollar) {
                     let t2 = cur.advance();
-                    return Some(self.arena.alloc(ExprKind::SectionStart, tok.span.to(t2.span)));
+                    return Some(
+                        self.arena
+                            .alloc(ExprKind::SectionStart, tok.span.to(t2.span)),
+                    );
                 }
                 Some(self.arena.alloc(ExprKind::Here, tok.span))
             }
@@ -575,7 +628,8 @@ impl<'a> ExprParser<'a> {
             }
             _ => {
                 let what = describe(cur, tok.kind);
-                self.diags.error(tok.span, format!("expected an expression, found {what}"));
+                self.diags
+                    .error(tok.span, format!("expected an expression, found {what}"));
                 None
             }
         }
@@ -593,7 +647,9 @@ fn describe(_cur: &Cursor<'_>, k: TokKind) -> String {
 
 fn peek_binop(cur: &Cursor<'_>) -> Option<BinOp> {
     use BinOp::*;
-    let TokKind::Punct(p) = cur.peek().kind else { return None };
+    let TokKind::Punct(p) = cur.peek().kind else {
+        return None;
+    };
     Some(match p {
         Punct::Plus => Add,
         Punct::Minus => Sub,
@@ -634,7 +690,10 @@ mod tests {
     impl EvalCtx for TestCtx {
         fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError> {
             let s = self.names.get(&name).cloned().unwrap_or_default();
-            self.syms.get(&s).copied().ok_or_else(|| EvalError::new(span, format!("undefined: {s}")))
+            self.syms
+                .get(&s)
+                .copied()
+                .ok_or_else(|| EvalError::new(span, format!("undefined: {s}")))
         }
         fn symbol_value(&mut self, _: SymbolId, span: Span) -> Result<Value, EvalError> {
             Err(EvalError::new(span, "no such symbol"))
@@ -693,7 +752,11 @@ mod tests {
             }
             map.insert(n.to_string(), *v);
         }
-        let mut cx = TestCtx { syms: map, names, here: 0x1000 };
+        let mut cx = TestCtx {
+            syms: map,
+            names,
+            here: 0x1000,
+        };
         eval(&arena, r, &mut cx).map_err(|e| e.msg)
     }
 
@@ -718,17 +781,39 @@ mod tests {
     fn symbol_plus_constant_stays_relocatable() {
         let a = SymbolId(7);
         let v = eval_str("foo + 8", &[("foo", Value::sym(a, 0))]).unwrap();
-        assert_eq!(v, Value { addend: 8, plus: Some(a), minus: None });
+        assert_eq!(
+            v,
+            Value {
+                addend: 8,
+                plus: Some(a),
+                minus: None
+            }
+        );
     }
 
     #[test]
     fn difference_of_symbols() {
         let a = SymbolId(1);
         let b = SymbolId(2);
-        let v = eval_str("foo - bar", &[("foo", Value::sym(a, 4)), ("bar", Value::sym(b, 1))]).unwrap();
-        assert_eq!(v, Value { addend: 3, plus: Some(a), minus: Some(b) });
+        let v = eval_str(
+            "foo - bar",
+            &[("foo", Value::sym(a, 4)), ("bar", Value::sym(b, 1))],
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            Value {
+                addend: 3,
+                plus: Some(a),
+                minus: Some(b)
+            }
+        );
         // Same symbol on both sides collapses to a constant.
-        let v = eval_str("foo - bar", &[("foo", Value::sym(a, 9)), ("bar", Value::sym(a, 2))]).unwrap();
+        let v = eval_str(
+            "foo - bar",
+            &[("foo", Value::sym(a, 9)), ("bar", Value::sym(a, 2))],
+        )
+        .unwrap();
         assert_eq!(v, Value::abs(7));
     }
 
@@ -736,7 +821,11 @@ mod tests {
     fn rejects_nonsense_relocatable_arithmetic() {
         let a = SymbolId(1);
         let b = SymbolId(2);
-        let e = eval_str("foo + bar", &[("foo", Value::sym(a, 0)), ("bar", Value::sym(b, 0))]).unwrap_err();
+        let e = eval_str(
+            "foo + bar",
+            &[("foo", Value::sym(a, 0)), ("bar", Value::sym(b, 0))],
+        )
+        .unwrap_err();
         assert!(e.contains("cannot add two relocatable"), "{e}");
         let e = eval_str("foo * 2", &[("foo", Value::sym(a, 0))]).unwrap_err();
         assert!(e.contains("absolute"), "{e}");
@@ -744,7 +833,11 @@ mod tests {
 
     #[test]
     fn division_by_zero_is_an_error() {
-        assert!(eval_str("1 / 0", &[]).unwrap_err().contains("division by zero"));
+        assert!(
+            eval_str("1 / 0", &[])
+                .unwrap_err()
+                .contains("division by zero")
+        );
     }
 
     #[test]

@@ -27,7 +27,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
 
     let lo = chosen.iter().map(|s| s.addr).min().expect("non-empty");
-    let hi = chosen.iter().map(|s| s.addr + s.size).max().expect("non-empty");
+    let hi = chosen
+        .iter()
+        .map(|s| s.addr + s.size)
+        .max()
+        .expect("non-empty");
     let mut out = vec![0u8; (hi - lo) as usize];
     for s in &chosen {
         if s.kind == SectionKind::Nobits {

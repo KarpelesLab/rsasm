@@ -59,7 +59,10 @@ pub struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     pub fn new(sm: &'a SourceMap, file: FileId, config: LexConfig) -> Parser<'a> {
-        Parser { lexer: Lexer::new(sm, file, config), peeked: None }
+        Parser {
+            lexer: Lexer::new(sm, file, config),
+            peeked: None,
+        }
     }
 
     /// The live lexer configuration. Directives mutate this to change how the
@@ -142,7 +145,13 @@ impl<'a> Parser<'a> {
         }
 
         let body = self.classify(&toks, &mut i, interner, diags);
-        Statement { labels, body, toks, args: i, span }
+        Statement {
+            labels,
+            body,
+            toks,
+            args: i,
+            span,
+        }
     }
 
     fn classify(
@@ -169,7 +178,10 @@ impl<'a> Parser<'a> {
         // `sym = expr` is an assignment, not an instruction called `sym`.
         if toks.get(*i + 1).is_some_and(|t| t.is_punct(Punct::Eq)) {
             *i += 2;
-            return Some(Body::Assign { name, span: first.span });
+            return Some(Body::Assign {
+                name,
+                span: first.span,
+            });
         }
 
         *i += 1;
@@ -196,9 +208,15 @@ impl<'a> Parser<'a> {
             None => name,
         };
         if is_directive {
-            Some(Body::Directive { name: lowered, span: first.span })
+            Some(Body::Directive {
+                name: lowered,
+                span: first.span,
+            })
         } else {
-            Some(Body::Insn { mnemonic: lowered, span: first.span })
+            Some(Body::Insn {
+                mnemonic: lowered,
+                span: first.span,
+            })
         }
     }
 }
@@ -237,7 +255,9 @@ mod tests {
         let (st, h) = parse("foo: bar: movq %rax, %rbx\n");
         assert_eq!(st.len(), 1);
         assert_eq!(st[0].labels.len(), 2);
-        let Some(Body::Insn { mnemonic, .. }) = st[0].body else { panic!("{:?}", st[0].body) };
+        let Some(Body::Insn { mnemonic, .. }) = st[0].body else {
+            panic!("{:?}", st[0].body)
+        };
         assert_eq!(h.interner.get(mnemonic), "movq");
         assert_eq!(st[0].arg_cursor().rest().len(), 5);
     }
@@ -246,14 +266,18 @@ mod tests {
     fn recognises_directives_and_numeric_labels() {
         let (st, h) = parse("1: .byte 1, 2\n");
         assert!(matches!(st[0].labels[0], LabelDef::Numeric(1, _)));
-        let Some(Body::Directive { name, .. }) = st[0].body else { panic!() };
+        let Some(Body::Directive { name, .. }) = st[0].body else {
+            panic!()
+        };
         assert_eq!(h.interner.get(name), ".byte");
     }
 
     #[test]
     fn assignment_beats_instruction() {
         let (st, h) = parse("count = 4 * 2\n");
-        let Some(Body::Assign { name, .. }) = st[0].body else { panic!("{:?}", st[0].body) };
+        let Some(Body::Assign { name, .. }) = st[0].body else {
+            panic!("{:?}", st[0].body)
+        };
         assert_eq!(h.interner.get(name), "count");
         assert_eq!(st[0].arg_cursor().rest().len(), 3);
     }
@@ -281,9 +305,13 @@ mod tests {
     #[test]
     fn mnemonics_fold_case_but_labels_do_not() {
         let (st, h) = parse("Foo: NOP\n");
-        let Some(Body::Insn { mnemonic, .. }) = st[0].body else { panic!() };
+        let Some(Body::Insn { mnemonic, .. }) = st[0].body else {
+            panic!()
+        };
         assert_eq!(h.interner.get(mnemonic), "nop");
-        let LabelDef::Named(n, _) = st[0].labels[0] else { panic!() };
+        let LabelDef::Named(n, _) = st[0].labels[0] else {
+            panic!()
+        };
         assert_eq!(h.interner.get(n), "Foo");
     }
 

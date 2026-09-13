@@ -49,7 +49,13 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn new(severity: Severity, span: Span, msg: impl Into<String>) -> Diagnostic {
-        Diagnostic { severity, msg: msg.into(), span, notes: Vec::new(), help: None }
+        Diagnostic {
+            severity,
+            msg: msg.into(),
+            span,
+            notes: Vec::new(),
+            help: None,
+        }
     }
 
     pub fn error(span: Span, msg: impl Into<String>) -> Diagnostic {
@@ -61,7 +67,10 @@ impl Diagnostic {
     }
 
     pub fn with_note(mut self, span: Span, msg: impl Into<String>) -> Diagnostic {
-        self.notes.push(SubDiag { span, msg: msg.into() });
+        self.notes.push(SubDiag {
+            span,
+            msg: msg.into(),
+        });
         self
     }
 
@@ -82,7 +91,11 @@ pub struct DiagBag {
 
 impl DiagBag {
     pub fn new() -> DiagBag {
-        DiagBag { diags: Vec::new(), errors: 0, max_errors: 0 }
+        DiagBag {
+            diags: Vec::new(),
+            errors: 0,
+            max_errors: 0,
+        }
     }
 
     pub fn emit(&mut self, d: Diagnostic) {
@@ -142,13 +155,22 @@ impl DiagBag {
 
 fn render_one(out: &mut String, d: &Diagnostic, sm: &SourceMap, color: bool) {
     let (bold, reset, sev_col) = if color {
-        ("\x1b[1m", "\x1b[0m", format!("\x1b[1;{}m", d.severity.color()))
+        (
+            "\x1b[1m",
+            "\x1b[0m",
+            format!("\x1b[1;{}m", d.severity.color()),
+        )
     } else {
         ("", "", String::new())
     };
     let sev_reset = if color { "\x1b[0m" } else { "" };
 
-    let _ = writeln!(out, "{sev_col}{}{sev_reset}{bold}: {}{reset}", d.severity.label(), d.msg);
+    let _ = writeln!(
+        out,
+        "{sev_col}{}{sev_reset}{bold}: {}{reset}",
+        d.severity.label(),
+        d.msg
+    );
     render_snippet(out, d.span, None, sm, color);
     for n in &d.notes {
         let _ = writeln!(out, "  {bold}note{reset}: {}", n.msg);
@@ -163,12 +185,18 @@ fn render_snippet(out: &mut String, span: Span, _label: Option<&str>, sm: &Sourc
     if span.is_dummy() {
         return;
     }
-    let Some(file) = sm.lookup(span.lo) else { return };
+    let Some(file) = sm.lookup(span.lo) else {
+        return;
+    };
     let start = file.line_col(span.lo);
     let end_pos = span.hi.max(span.lo).min(file.end());
     let end = file.line_col(end_pos);
 
-    let (dim, reset) = if color { ("\x1b[1;34m", "\x1b[0m") } else { ("", "") };
+    let (dim, reset) = if color {
+        ("\x1b[1;34m", "\x1b[0m")
+    } else {
+        ("", "")
+    };
     let gutter_w = end.line.to_string().len().max(1);
     let pad = " ".repeat(gutter_w);
 
@@ -186,18 +214,30 @@ fn render_snippet(out: &mut String, span: Span, _label: Option<&str>, sm: &Sourc
     let _ = writeln!(out, "{pad} {dim}|{reset}");
     for line in start.line..=last {
         let text = file.line_text(line);
-        let _ = writeln!(out, "{dim}{line:>gutter_w$} |{reset} {text}", gutter_w = gutter_w);
+        let _ = writeln!(
+            out,
+            "{dim}{line:>gutter_w$} |{reset} {text}",
+            gutter_w = gutter_w
+        );
 
         // Underline the covered part of this line.
         let from = if line == start.line { start.col } else { 1 };
-        let to = if line == end.line { end.col } else { text.chars().count() as u32 + 1 };
+        let to = if line == end.line {
+            end.col
+        } else {
+            text.chars().count() as u32 + 1
+        };
         let width = to.saturating_sub(from).max(1) as usize;
         let lead: String = text
             .chars()
             .take((from - 1) as usize)
             .map(|c| if c == '\t' { '\t' } else { ' ' })
             .collect();
-        let caret = if color { format!("\x1b[1;31m{}\x1b[0m", "^".repeat(width)) } else { "^".repeat(width) };
+        let caret = if color {
+            format!("\x1b[1;31m{}\x1b[0m", "^".repeat(width))
+        } else {
+            "^".repeat(width)
+        };
         let _ = writeln!(out, "{pad} {dim}|{reset} {lead}{caret}");
     }
     if end.line > last {
