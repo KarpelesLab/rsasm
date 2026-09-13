@@ -242,13 +242,12 @@ impl Section {
     /// safe. Merging keeps fragment counts (and therefore layout cost) low for
     /// data-heavy files.
     pub fn emit_bytes(&mut self, bytes: &[u8], span: Span) {
-        if let Some(i) = self.open_data {
-            if let FragKind::Bytes { variants, .. } = &mut self.frags[i].kind {
+        if let Some(i) = self.open_data
+            && let FragKind::Bytes { variants, .. } = &mut self.frags[i].kind {
                 variants[0].bytes.extend_from_slice(bytes);
                 self.frags[i].span = self.frags[i].span.to(span);
                 return;
             }
-        }
         let idx = self.frags.len();
         self.frags.push(Fragment::new(
             FragKind::Bytes { variants: vec![Variant::new(bytes.to_vec())], chosen: 0 },

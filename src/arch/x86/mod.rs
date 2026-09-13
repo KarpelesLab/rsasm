@@ -298,9 +298,9 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     let b = mnemonic.as_bytes();
 
     // `movzbl`, `movswq`, `movslq`: source width then destination width.
-    if b.len() == 6 && (mnemonic.starts_with("movz") || mnemonic.starts_with("movs")) {
-        if let (Some(src), Some(dst)) = (suffix_width(b[4]), suffix_width(b[5])) {
-            if src < dst {
+    if b.len() == 6 && (mnemonic.starts_with("movz") || mnemonic.starts_with("movs"))
+        && let (Some(src), Some(dst)) = (suffix_width(b[4]), suffix_width(b[5]))
+            && src < dst {
                 let base = if mnemonic.starts_with("movz") {
                     "movzx"
                 } else if src == 4 {
@@ -317,8 +317,6 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
                     });
                 }
             }
-        }
-    }
 
     // A single trailing size letter.
     let (stem, last) = mnemonic.split_at(mnemonic.len().checked_sub(1)?);
@@ -340,11 +338,10 @@ fn select<'d>(
         if def.ops.len() != ops.len() {
             continue;
         }
-        if let Some(want) = resolved.opsize {
-            if def.opsize != want {
+        if let Some(want) = resolved.opsize
+            && def.opsize != want {
                 continue;
             }
-        }
         if let Some(want) = resolved.rm_width {
             let rm = def.ops.iter().find_map(|o| match o {
                 Op::Rm(w) | Op::M(w) => Some(*w),

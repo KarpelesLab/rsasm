@@ -267,11 +267,10 @@ impl OperandParser<'_, '_> {
                     || next.is_punct(Punct::LBracket);
                 if looks_like_ptr {
                     cur.advance();
-                    if let TokKind::Ident(m) = cur.peek().kind {
-                        if self.cx.interner.get(m).eq_ignore_ascii_case("ptr") {
+                    if let TokKind::Ident(m) = cur.peek().kind
+                        && self.cx.interner.get(m).eq_ignore_ascii_case("ptr") {
                             cur.advance();
                         }
-                    }
                     size_hint = Some(sz);
                 }
             }
@@ -457,9 +456,9 @@ impl OperandParser<'_, '_> {
         }
 
         // `scale * reg`
-        if let TokKind::Int(v) = cur.peek().kind {
-            if cur.nth(1).is_punct(Punct::Star) {
-                if let TokKind::Ident(n) = cur.nth(2).kind {
+        if let TokKind::Int(v) = cur.peek().kind
+            && cur.nth(1).is_punct(Punct::Star)
+                && let TokKind::Ident(n) = cur.nth(2).kind {
                     let text = self.cx.interner.get(n).to_ascii_lowercase();
                     if let Some(r) = reg::lookup(&text) {
                         let tok = cur.peek();
@@ -480,8 +479,6 @@ impl OperandParser<'_, '_> {
                         return Some(None);
                     }
                 }
-            }
-        }
 
         // Everything else contributes to the displacement. Parse at a
         // precedence above `+`/`-` so those stay term separators.

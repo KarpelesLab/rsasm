@@ -115,7 +115,7 @@ impl Buf {
         self.u64(v as u64);
     }
     fn pad_to(&mut self, align: u64) {
-        while self.out.len() as u64 % align != 0 {
+        while !(self.out.len() as u64).is_multiple_of(align) {
             self.out.push(0);
         }
     }

@@ -298,11 +298,10 @@ impl Assembler {
         // A PC-relative reference only resolves locally when its target is in
         // the same section, so that the two section bases cancel.
         if kind.pcrel {
-            if let Some(p) = v.plus {
-                if self.symbol_section(p) != Some(section) {
+            if let Some(p) = v.plus
+                && self.symbol_section(p) != Some(section) {
                     return None;
                 }
-            }
             let target = self.resolve_value(v)?;
             let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
             return Some(target - here);

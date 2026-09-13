@@ -479,8 +479,7 @@ impl<'a> ExprParser<'a> {
 
     fn parse_bp(&mut self, cur: &mut Cursor<'_>, min_prec: u8) -> Option<ExprRef> {
         let mut lhs = self.parse_prefix(cur)?;
-        loop {
-            let Some(op) = peek_binop(cur) else { break };
+        while let Some(op) = peek_binop(cur) {
             let prec = op.precedence();
             if prec < min_prec {
                 break;
@@ -623,7 +622,7 @@ mod tests {
     use super::*;
     use crate::lexer::{Dialect, LexConfig, Lexer, LitPool};
     use crate::source::SourceMap;
-    use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
+    use crate::symbol::SymbolId;
     use std::collections::HashMap;
 
     struct TestCtx {

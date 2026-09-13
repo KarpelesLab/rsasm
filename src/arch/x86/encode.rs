@@ -64,33 +64,35 @@ pub fn indirect_inner(o: &Operand) -> Option<Operand> {
     }
 }
 
+/// Works out which operand fills which encoding slot.
+///
+/// The pattern says everything needed: the first r/m-capable operand goes to
+/// ModRM.rm, a register operand goes to ModRM.reg (or the low bits of a `+r`
+/// opcode), and immediates and branch targets go to their own fields.
+/// The register behind an r/m operand, if it is a register rather than memory.
+fn rm_register(o: &Operand) -> Option<Reg> {
+    match &o.kind {
+        OperandKind::Reg(r) => Some(*r),
+        OperandKind::Indirect(inner) => match &**inner {
+            OperandKind::Reg(r) => Some(*r),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
     let mut roles = Roles { rm: None, reg: None, imm: None, rel: None };
-    // `indirect_inner` may synthesise an operand, so it is stored separately.
+    let takes_reg_field = def.modrm == ModRm::Reg || def.flags & PLUSREG != 0;
     for (pat, o) in def.ops.iter().zip(ops) {
-        match pat {
-            Op::Rm(_) | Op::M(_) => {
-                if roles.rm.is_none() {
-                    roles.rm = Some(o);
-                }
-            }
-            Op::IndirectRm(_) => {
-                if roles.rm.is_none() {
-                    roles.rm = Some(o);
-                }
-            }
-            Op::R(_) => {
-                if def.modrm == ModRm::Reg && roles.reg.is_none() && roles.rm.is_some() {
-                    roles.reg = o.reg();
-                } else if roles.reg.is_none() && (def.flags & PLUSREG != 0 || def.modrm == ModRm::Reg) {
-                    roles.reg = o.reg();
-                } else if roles.rm.is_none() {
-                    roles.rm = Some(o);
-                }
-            }
+        match *pat {
+            Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) if roles.rm.is_none() => roles.rm = Some(o),
+            Op::R(_) if takes_reg_field && roles.reg.is_none() => roles.reg = o.reg(),
+            // An encoding with no reg field puts its register in r/m instead.
+            Op::R(_) if roles.rm.is_none() => roles.rm = Some(o),
             Op::Imm(w) => {
                 if let OperandKind::Imm(e) = &o.kind {
-                    roles.imm = Some((*e, *w));
+                    roles.imm = Some((*e, w));
                 }
             }
             Op::Imm8s => {
@@ -100,32 +102,12 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             }
             Op::Rel(w) => {
                 if let Some(e) = rel_expr(o) {
-                    roles.rel = Some((e, *w));
+                    roles.rel = Some((e, w));
                 }
             }
-            Op::One | Op::Fixed(_) => {}
-        }
-    }
-    roles
-}
-
-/// Re-runs role assignment for `/r` forms where the register operand comes
-/// before the r/m operand in the pattern (`add r32, r/m32`).
-fn assign_roles_ordered<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
-    let mut rm = None;
-    let mut reg = None;
-    for (pat, o) in def.ops.iter().zip(ops) {
-        match pat {
-            Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) if rm.is_none() => rm = Some(o),
-            Op::R(_) if def.modrm == ModRm::Reg && reg.is_none() => reg = o.reg(),
-            Op::R(_) if def.flags & PLUSREG != 0 && reg.is_none() => reg = o.reg(),
-            Op::R(_) if rm.is_none() => rm = Some(o),
             _ => {}
         }
     }
-    let mut roles = assign_roles(def, ops);
-    roles.rm = rm;
-    roles.reg = reg;
     roles
 }
 
@@ -146,7 +128,7 @@ pub fn encode(
         return None;
     }
 
-    let roles = assign_roles_ordered(def, ops);
+    let roles = assign_roles(def, ops);
     let mut bytes: Vec<u8> = Vec::with_capacity(8);
     let mut fixups: Vec<Fixup> = Vec::new();
 
@@ -220,14 +202,7 @@ pub fn encode(
         return None;
     }
 
-    let rm_reg = roles.rm.and_then(|o| match &o.kind {
-        OperandKind::Reg(r) => Some(*r),
-        OperandKind::Indirect(inner) => match &**inner {
-            OperandKind::Reg(r) => Some(*r),
-            _ => None,
-        },
-        _ => None,
-    });
+    let rm_reg = roles.rm.and_then(rm_register);
 
     // With a `+r` opcode the register lives in the opcode's low three bits,
     // so its fourth bit is REX.B rather than REX.R.
@@ -300,7 +275,7 @@ pub fn encode(
                 cx.error(span, "internal: encoding needs an r/m operand");
                 return None;
             };
-            encode_rm(cx, bits, &mut bytes, &mut disp_fixup, reg_field, rm_operand, rm_reg, mem.as_ref())?;
+            encode_rm(cx, bits, &mut bytes, &mut disp_fixup, reg_field, rm_operand, mem.as_ref())?;
         }
     }
 
@@ -368,11 +343,10 @@ fn encode_rm(
     disp_fixup: &mut Option<(usize, ExprRef, Span, bool)>,
     reg_field: u8,
     rm_operand: &Operand,
-    rm_reg: Option<Reg>,
     mem: Option<&Mem>,
 ) -> Option<()> {
     // Register direct.
-    if let Some(r) = rm_reg {
+    if let Some(r) = rm_register(rm_operand) {
         bytes.push(0xc0 | ((reg_field & 7) << 3) | (r.num & 7));
         return Some(());
     }
@@ -424,7 +398,7 @@ fn encode_rm(
             // 64-bit mode has no ModRM form for a bare disp32, so the SIB
             // escape with no base and no index is used instead.
             bytes.push(((reg_field & 7) << 3) | 0b100);
-            bytes.push((0b00 << 6) | (0b100 << 3) | 0b101);
+            bytes.push((0b100 << 3) | 0b101);
         } else {
             bytes.push(((reg_field & 7) << 3) | 0b101);
         }

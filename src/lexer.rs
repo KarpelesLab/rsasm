@@ -407,13 +407,12 @@ impl<'a> Lexer<'a> {
             if (after == b'f' || after == b'b') && !is_ident_cont(self.bytes.get(p + 1).copied().unwrap_or(0)) {
                 let digits = &self.src[self.pos..p];
                 // Only plain decimal runs are local labels; `0x1f` is a number.
-                if !digits.starts_with('0') || digits.len() == 1 {
-                    if let Ok(n) = digits.parse::<u32>() {
+                if (!digits.starts_with('0') || digits.len() == 1)
+                    && let Ok(n) = digits.parse::<u32>() {
                         let dir = if after == b'f' { LocalDir::Forward } else { LocalDir::Backward };
                         self.pos = p + 1;
                         return mk(TokKind::LocalRef(n, dir), self);
                     }
-                }
             }
         }
 
@@ -430,12 +429,11 @@ impl<'a> Lexer<'a> {
             };
             // Only treat it as a prefix if a valid digit actually follows,
             // so NASM's `0b` (binary zero) still lexes as a suffixed literal.
-            if let Some(r) = prefix_radix {
-                if (self.peek_at(2) as char).to_digit(r).is_some() || self.peek_at(2) == b'_' {
+            if let Some(r) = prefix_radix
+                && ((self.peek_at(2) as char).is_digit(r) || self.peek_at(2) == b'_') {
                     radix = r;
                     digits_start = self.pos + 2;
                 }
-            }
         }
         let prefixed = digits_start != self.pos;
         self.pos = digits_start;
@@ -450,8 +448,8 @@ impl<'a> Lexer<'a> {
         let mut run = &self.src[run_start..self.pos];
 
         if !prefixed {
-            if self.config.radix_suffix {
-                if let Some(last) = run.as_bytes().last().copied() {
+            if self.config.radix_suffix
+                && let Some(last) = run.as_bytes().last().copied() {
                     let suffix_radix = match last | 0x20 {
                         b'h' => Some(16),
                         b'b' | b'y' => Some(2),
@@ -462,14 +460,13 @@ impl<'a> Lexer<'a> {
                     if let Some(sr) = suffix_radix {
                         let body = &run[..run.len() - 1];
                         let ok = !body.is_empty()
-                            && body.chars().all(|c| c == '_' || c.to_digit(sr).is_some());
+                            && body.chars().all(|c| c == '_' || c.is_digit(sr));
                         if ok {
                             radix = sr;
                             run = body;
                         }
                     }
                 }
-            }
             if radix == 10 && self.config.octal_leading_zero && run.len() > 1 && run.starts_with('0') {
                 radix = 8;
                 run = &run[1..];

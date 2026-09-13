@@ -356,11 +356,10 @@ impl Assembler {
             if !cur.check_punct(Punct::Comma) {
                 fill_expr = self.parse_expr(cur);
             }
-            if cur.eat_punct(Punct::Comma).is_some() {
-                if let Some(e) = self.parse_expr(cur) {
+            if cur.eat_punct(Punct::Comma).is_some()
+                && let Some(e) = self.parse_expr(cur) {
                     max_skip = self.eval_absolute(e, "`.align` maximum skip").map(|v| v.max(0) as u64);
                 }
-            }
         }
 
         // Executable sections pad with real no-ops so the padding stays
@@ -417,11 +416,10 @@ impl Assembler {
                         _ => SectionKind::Progbits,
                     };
                 }
-                if cur.eat_punct(Punct::Comma).is_some() {
-                    if let Some(e) = self.parse_expr(cur) {
+                if cur.eat_punct(Punct::Comma).is_some()
+                    && let Some(e) = self.parse_expr(cur) {
                         entsize = self.eval_absolute(e, "section entry size").unwrap_or(0).max(0) as u64;
                     }
-                }
             }
         }
 
@@ -534,11 +532,10 @@ impl Assembler {
         let Some(e) = self.parse_expr(cur) else { return true };
         let Some(size) = self.eval_absolute(e, "`.comm` size") else { return true };
         let mut align = 1u64;
-        if cur.eat_punct(Punct::Comma).is_some() {
-            if let Some(e) = self.parse_expr(cur) {
+        if cur.eat_punct(Punct::Comma).is_some()
+            && let Some(e) = self.parse_expr(cur) {
                 align = self.eval_absolute(e, "`.comm` alignment").unwrap_or(1).max(1) as u64;
             }
-        }
         if size < 0 {
             self.diags.error(span, "`.comm` size must not be negative");
             return true;
