@@ -1,0 +1,256 @@
+# m68k, GNU syntax, against `m68k-elf-as` (which assumes a 68020).
+#
+# Registers need the `%` sigil here: without it `d0` is a symbol. Comments
+# start with `|`, and `#` is the immediate prefix.
+#
+# Left out on purpose, because rsasm and GNU as legitimately differ:
+#   - GNU as substitutes instructions: `movel #1,%d0` becomes `moveq`,
+#     `addw #1,%d0` becomes `addq`, and `cmp`/`and`/`or #imm,%dn` become the
+#     `I` forms. rsasm assembles what is written.
+#   - `label` as an absolute address, which GNU as turns into a PC-relative
+#     reference when the label is in the same section.
+
+# ---- the Amiga DMACON idiom ----
+movew #0x7fff,0xdff096
+movw #0x7fff,0xDFF096
+move.w #0x7fff,0xdff096
+
+# ---- register spellings and sizes ----
+movew %d0,%d1
+move.w %d0,%d1
+movw %d0,%d1
+movl %d0,%d1
+moveb %d0,%d1
+move %d0,%d1
+movb %d0,%d1
+movew %sp@,%d0
+movew %fp@,%d0
+movew %a6@,%d0
+movew %a7@,%d0
+movel %d0,%a1
+movew %d0,%a1
+moveal %d0,%a1
+movea %d0,%a1
+movew #1,%d0 | a comment
+movew #1+2*3,%d0
+movew #-1,%d0
+movew #0xffff,%d0
+moveb #0xff,%d0
+moveb #-128,%d0
+movew #'A',%d0
+movel #0x12345678,%d7
+
+# ---- MIT addressing modes ----
+movew %d0,%a0@
+movew %d0,%a0@+
+movew %d0,%a0@-
+movew %d0,%a0@(8)
+movew %d0,%a0@(-8)
+movew %d0,%a0@(8,%d1:w)
+movew %d0,%a0@(8,%d1:l)
+movew %d0,%a0@(8,%d1:w:4)
+movew %d0,%a0@(8,%d1:l:4)
+movew %d0,%a0@(%d1:w)
+movew %d0,%a1@(0,%a2:l)
+movew %a0@(8),%d0
+movew %a0@+,%d0
+movew %a0@-,%d0
+movew %pc@(8),%d0
+movew %pc@(8,%d0:w),%d0
+
+# ---- Motorola addressing modes, which GNU as also takes ----
+movew %d0,(%a0)
+movew %d0,(%a0)+
+movew %d0,-(%a0)
+movew %d0,8(%a0,%d1.w)
+movew %d0,8(%a0,%d1)
+movew %d0,(8,%a0,%d1.l*4)
+movew %d0,(%d1.w,%a0)
+movew %d0,(%a0,%d1.w)
+movew %d0,(%a1,%a2.l)
+movew 8(%pc),%d0
+movew %d0,-(%sp)
+movel %sp@+,%d0
+
+# ---- absolute addresses ----
+movew %d0,0x400
+movew %d0,0x400:w
+movew %d0,(0x400).w
+movew %d0,(0x400).l
+movew %d0,0x400:l
+movew %d0,0x8000
+movew %d0,0xffff8000
+movew %d0,-2
+movel 0x12345678,%d0
+
+# ---- MOVEQ, MOVEM, MOVEC, special registers ----
+moveq #1,%d0
+moveql #-128,%d0
+moveq #127,%d7
+moveml %d0-%d3/%a0-%a2,%sp@-
+moveml %d0-%d3/%a0-%a2,-(%sp)
+movem.l %d0-%d3/%a0-%a2,%sp@-
+moveml %sp@+,%d0-%d3/%a0-%a2
+moveml #0x3,%a0@
+movemw %d0/%d2,%a0@
+moveml %a0@(8),%d0-%a6
+movel %usp,%a0
+movel %a0,%usp
+movew %sr,%d0
+movew %d0,%ccr
+movew %d0,%sr
+movew #0x2700,%sr
+movew %ccr,%d0
+movec %d0,%vbr
+movecl %vbr,%a0
+
+# ---- LEA, PEA, EXG, SWAP, CLR, EXT ----
+leal %a0@,%a1
+lea %a0@(4),%a1
+lea %a0@(0),%a1
+pea %a0@
+peal %a0@(-4)
+exg %d0,%d1
+exg %a0,%a1
+exg %a1,%d0
+swap %d0
+swapw %d0
+clrb %d0
+clrw %d0
+clrl %a0@
+clr %d0
+extw %d0
+extl %d0
+extbl %d0
+
+# ---- arithmetic ----
+addw %d0,%d1
+addl %d0,%a1
+addal %d0,%a1
+addaw %d0,%a1
+addib #1,%d0
+addiw #1,%a0@
+addil #0x10000,%a0@(4)
+addqw #1,%d0
+addqb #1,%d0
+addq #8,%a0@+
+addql #1,%a7
+addxb %d0,%d1
+addxl %a0@-,%a1@-
+addxl -(%a0),-(%a1)
+subw %d0,%d1
+subl %a0@+,%d1
+subw %d1,%a0@
+subqw #1,%d0
+subil #1,%d0
+subxw %d0,%d1
+subaw %a0@,%a0
+cmpw %d0,%d1
+cmpb %a0@,%d0
+cmpal %a0,%a1
+cmpl %a0,%d1
+cmpmb %a0@+,%a1@+
+cmpib #1,%d0
+cmpiw #1,%a0@
+andw %d0,%d1
+andiw #1,%d0
+andw %d0,%a0@
+orl %d0,%d1
+oriw #1,%d0
+orb #1,%a0@
+eorw %d0,%d1
+eoriw #1,%d0
+eorl #1,%d0
+notw %d0
+negl %d0
+negxb %d0
+abcd %d0,%d1
+sbcd %a0@-,%a1@-
+nbcd %a0@
+muls %d0,%d1
+mulsw %d0,%d1
+mulul %d0,%d1
+mulsl %d0,%d2:%d1
+divu %d0,%d1
+divuw %d0,%d1
+divul %d0,%d1
+divsl %d0,%d1
+divsl %d0,%d2:%d1
+divsll %d0,%d2:%d1
+tstw %d0
+tstl %a0
+tstb %a0@(1)
+tas %d0
+tasb %d0
+chkw %d0,%d1
+chkl %d0,%d1
+chk %d0,%d1
+
+# ---- shifts and bits ----
+aslw #1,%d0
+lsll %d1,%d0
+lsrw %a0@
+rolb #1,%d0
+roxrw %d0,%d1
+lsl #1,%d0
+asrl #8,%d7
+rorw %a0@(2)
+btst #3,%d0
+btstb #3,%a0@
+btstl #3,%d0
+bset %d1,%d0
+bclr #1,%a0@
+bchg %d0,%a0@
+bset #31,%d7
+
+# ---- Scc, jumps, traps ----
+seq %d0
+seqb %d0
+st %d0
+sf %d0
+scc %d0
+sne %a0@
+jmp %a0@
+jmp %a0@(4)
+jmp 0x400:w
+jsr %a6@(-198)
+jsr -198(%a6)
+jsr 0x12345678
+rts
+rte
+rtr
+rtd #4
+trap #15
+trapv
+link %a6,#-4
+linkw %a6,#-4
+linkl %a6,#-4
+unlk %a6
+nop
+reset
+stop #0x2700
+illegal
+bkpt #1
+andiw #0xf8ff,%sr
+andi #0xf8ff,%sr
+andib #0xfe,%ccr
+andi #0xfe,%ccr
+oriw #0x700,%sr
+eorib #1,%ccr
+
+# ---- 68020 ----
+cmp2l %a0@,%d0
+chk2w %a0@,%d0
+bfextu %d0{#1:#8},%d1
+bftst %a0@{%d1:%d2}
+bfins %d1,%a0@{#0:#32}
+bfset %a0@(4){#3:#5}
+movew %d0,%a0@(8:w,%d1:w)
+movew %d0,%a0@(0x10000,%d1:w)
+movew %d0,%a0@(8)@(4)
+movew %d0,([8,%a0],%d1.w,4)
+movew %d0,([8,%a0,%d1.w],4)
+movew %d0,(8,%d1.w)
+movew (%d1),%d0
+movew %d0,(%d1.w*2)
+movew %a0@(0x12345),%d0
