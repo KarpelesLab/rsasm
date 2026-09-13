@@ -609,6 +609,12 @@ impl Matcher<'_, '_> {
             Val::Symbolic => {
                 let kind = if imm.func == RelFn::None {
                     FixupKind::data(2).with_reloc(reloc)
+                } else if imm.func == RelFn::ZdaOff {
+                    // An offset from address 0 is the address itself, which
+                    // GNU ld requires to fit a signed 16-bit field
+                    // (`R_V810_HWORD` in bfd/elf32-v850.c), rather than
+                    // truncating it the way `lo()` is.
+                    FixupKind::data(2).signed().with_reloc(reloc)
                 } else {
                     // The function picks bits out of a wider value, so the
                     // value itself is not range-checked.

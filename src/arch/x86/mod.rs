@@ -6,7 +6,7 @@ pub mod operand;
 pub mod reg;
 pub mod reloc;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Syntax};
 use crate::cursor::Cursor;
 use crate::lexer::TokKind;
 use crate::section::Variant;
@@ -96,6 +96,16 @@ impl Architecture for X86 {
                 let _ = (size, pcrel);
                 None
             }
+        }
+    }
+
+    /// `@PLT` is `L + A - P`, and in a static image the PLT entry `L` is the
+    /// function itself; `@GOT` and `@GOTPCREL` need a GOT.
+    fn flat_modifier(&self, name: &str) -> FlatModifier {
+        if name == "plt" {
+            FlatModifier::PcRelative
+        } else {
+            FlatModifier::LinkerOnly
         }
     }
 

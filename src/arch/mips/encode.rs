@@ -13,7 +13,7 @@ use super::reg::{self, Reg};
 use super::reloc;
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 // ---- field placement ------------------------------------------------------
@@ -83,13 +83,14 @@ pub fn branch_fixup() -> FixupKind {
 /// range-checked as a full 64-bit address: `jal 0x80001000` from kernel code
 /// at 0x80000000 is perfectly legal, even though the target does not fit in 28
 /// bits. What would *not* be legal is a target in a different 256 MB region
-/// from the delay slot, and that check needs the instruction's own address,
-/// which a fixup's range test is never given; it is not diagnosed. Alignment
-/// still is.
+/// from the delay slot, for a label. That check needs the instruction's own
+/// address, so rsasm makes it only in a flat image, where it does what GNU ld
+/// does at link time; alignment is always checked.
 pub fn jump_fixup() -> FixupKind {
     FixupKind::data(4)
         .with_field(64, 4)
         .with_reloc(reloc::R26)
+        .link(LinkValue::Region(28))
         .scatter(field_target26)
 }
 

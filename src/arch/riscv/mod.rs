@@ -27,7 +27,7 @@ pub mod pseudo;
 pub mod reg;
 pub mod reloc;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Syntax};
 use crate::cursor::Cursor;
 use crate::lexer::TokKind;
 use crate::section::Variant;
@@ -146,6 +146,15 @@ impl Architecture for Riscv {
         // `call foo@plt` is accepted for compatibility; it only renames the
         // relocation on the `auipc`/`jalr` pair.
         (name == "plt" && size == 8 && pcrel).then_some(reloc::CALL_PLT)
+    }
+
+    /// A static image has no PLT, so `call foo@plt` calls `foo`.
+    fn flat_modifier(&self, name: &str) -> FlatModifier {
+        if name == "plt" {
+            FlatModifier::Plain
+        } else {
+            FlatModifier::LinkerOnly
+        }
     }
 
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {

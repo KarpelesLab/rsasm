@@ -4,7 +4,7 @@
 use super::reloc;
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 /// One 32-bit instruction word, little-endian, with no fixup.
@@ -107,15 +107,17 @@ pub fn fixup_adr() -> FixupKind {
 /// `page(target)`.
 ///
 /// The fixup is deliberately *not* marked PC-relative. Page arithmetic needs
-/// both addresses, not their difference, and the core only ever hands a fixup
-/// the difference — so an `adrp` must always reach the linker, which is also
-/// what GNU as and llvm-mc do even for a target in the same section. Leaving
-/// the fixup absolute makes the core give up on any section-relative symbol
-/// and emit `R_AARCH64_ADR_PREL_PG_HI21`, which is the correct output.
+/// both addresses, not their difference, so an `adrp` must always reach the
+/// linker, which is also what GNU as and llvm-mc do even for a target in the
+/// same section. Leaving the fixup absolute makes the core give up on any
+/// section-relative symbol and emit `R_AARCH64_ADR_PREL_PG_HI21`, which is
+/// the correct output; in a flat image, where both addresses are known, the
+/// core does the page arithmetic the linker would have.
 pub fn fixup_adrp() -> FixupKind {
     FixupKind::data(4)
         .with_field(33, 1)
         .with_reloc(reloc::ADR_PREL_PG_HI21)
+        .link(LinkValue::Page(12))
         .scatter(scatter_adrp)
 }
 
@@ -125,9 +127,11 @@ fn scatter_adrp(w: u64, v: i64) -> u64 {
 }
 
 /// `adrp x0, :got:sym`: the page of the symbol's GOT slot. Only the linker
-/// knows where that is.
+/// knows where that is, so a flat image refuses it.
 pub fn fixup_got_page() -> FixupKind {
-    fixup_adrp().with_reloc(reloc::ADR_GOT_PAGE)
+    fixup_adrp()
+        .with_reloc(reloc::ADR_GOT_PAGE)
+        .link(LinkValue::LinkerOnly("a GOT entry"))
 }
 
 // ---- `:lo12:` fields --------------------------------------------------------
@@ -175,7 +179,9 @@ pub fn fixup_lo12_ldst(scale: u32) -> FixupKind {
 
 /// `ldr x0, [x0, :got_lo12:sym]`.
 pub fn fixup_got_lo12() -> FixupKind {
-    fixup_lo12_ldst(3).with_reloc(reloc::LD64_GOT_LO12_NC)
+    fixup_lo12_ldst(3)
+        .with_reloc(reloc::LD64_GOT_LO12_NC)
+        .link(LinkValue::LinkerOnly("a GOT entry"))
 }
 
 // ---- the logical (bitmask) immediate ---------------------------------------

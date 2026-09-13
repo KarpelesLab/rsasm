@@ -1,0 +1,17 @@
+Lines before the first snippet are not assembled.
+
+Cases llvm-mc refuses to assemble, checked against GNU as instead. `adrp` of
+a symbol with an absolute value takes that address's page, while `adrp` of a
+bare number counts pages from here. (GNU as 2.47 has an internal error on
+`:lo12:` of a bare number, so the load names a `.set` symbol.)
+
+=== adrp and :lo12: of absolute addresses @ 0x400ff8
+        .set    konst, 0x12345
+        .set    slot, 0x5008
+        nop
+        adrp    x0, konst
+        add     x0, x0, :lo12:konst
+        adrp    x1, 0x5000
+        adrp    x4, -0x3000
+        ldr     x2, [x1, :lo12:slot]
+        adrp    x3, 0x400000

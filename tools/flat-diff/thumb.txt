@@ -1,0 +1,25 @@
+Lines before the first snippet are not assembled.
+
+Sections start with `.p2align 2`; see mips.txt.
+
+=== branches into another section
+        .text
+        .p2align 2
+entry:
+        bl      helper
+        b.w     helper
+        .section .text.helper, "ax"
+        .p2align 2
+helper:
+        bl      entry
+        bx      lr
+
+=== data across sections
+        .text
+        .p2align 2
+entry:
+        bx      lr
+        .data
+        .p2align 2
+        .word   entry
+        .word   entry - .

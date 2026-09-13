@@ -127,6 +127,20 @@ impl CommentSyntax {
     };
 }
 
+/// What a relocation modifier makes of a value in a flat binary; see
+/// [`Architecture::flat_modifier`].
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum FlatModifier {
+    /// The value itself. `call foo@PLT` in an image with no PLT calls `foo`.
+    Plain,
+    /// The value relative to the field, even in a field that is otherwise
+    /// absolute: x86-64's `R_X86_64_PLT32` is `L + A - P`, so `.long foo@PLT`
+    /// in a static image is the distance to `foo`.
+    PcRelative,
+    /// Something only a linker creates, such as a GOT entry; refused.
+    LinkerOnly,
+}
+
 /// Mutable, architecture-specific assembler state.
 ///
 /// Kept outside the [`Architecture`] object so backends stay `&self` and can be
@@ -240,6 +254,16 @@ pub trait Architecture {
     /// `foo@PLT`. `None` means the modifier is not recognised.
     fn modifier_reloc(&self, _name: &str, _size: u8, _pcrel: bool) -> Option<u32> {
         None
+    }
+
+    /// What a source-level `@` modifier means in a flat binary, where there is
+    /// no relocation for it to choose and no linker to build what it names.
+    /// Only asked about modifiers on fixups whose [`FixupKind::link`] is
+    /// plain; the default refuses them all.
+    ///
+    /// [`FixupKind::link`]: crate::section::FixupKind::link
+    fn flat_modifier(&self, _name: &str) -> FlatModifier {
+        FlatModifier::LinkerOnly
     }
 
     /// Comment characters in GNU-style source. Ignored for the NASM dialect,

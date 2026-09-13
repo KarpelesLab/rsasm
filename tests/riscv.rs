@@ -529,8 +529,9 @@ fn load_address_of_a_number_is_li() {
 }
 
 /// Without a linker, a pair resolves across sections exactly as within one,
-/// while a GOT slot or a hand-written `%pcrel_lo` has nothing to resolve
-/// against and is refused rather than filled in wrong.
+/// while a GOT slot has nothing to resolve against and is refused rather than
+/// filled in wrong. (A hand-written `%pcrel_lo(1b)` is paired with its `auipc`
+/// and resolved; `tests/flat.rs` checks it against GNU ld.)
 #[test]
 fn pairs_in_flat_binaries() {
     // The same-section case, with llvm-mc's bytes from the test above: where
@@ -549,11 +550,7 @@ fn pairs_in_flat_binaries() {
     assert!(!asm.diags.has_errors());
     assert!(asm.relocs.is_empty());
 
-    for src in [
-        "lga a0, x\nx: ret",
-        ".option pic\nla a0, x\nx: ret",
-        "1: auipc a0, %pcrel_hi(x)\naddi a0, a0, %pcrel_lo(1b)\nx: ret",
-    ] {
+    for src in ["lga a0, x\nx: ret", ".option pic\nla a0, x\nx: ret"] {
         let asm = assemble_flat_for("riscv64", src, 0);
         let e = asm.diags.render(&asm.sm, false);
         assert!(e.contains("linker"), "`{src}` should be refused:\n{e}");

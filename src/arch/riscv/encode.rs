@@ -8,7 +8,7 @@
 
 use super::reloc;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, RelocSymbol, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, RelocSymbol, Variant};
 use crate::source::Span;
 
 // ---- field placement ------------------------------------------------------
@@ -163,11 +163,12 @@ pub fn kind_hi20(pcrel: bool) -> FixupKind {
 
 /// `%pcrel_lo(label)`, which names the `auipc` that carries the high half.
 ///
-/// Only the linker can pair the two halves up, so the field is always left to
-/// it, and the relocation names the label itself: lld finds the `auipc` from
-/// the symbol's value and ignores an addend, so the usual section-plus-offset
-/// would point it at the start of the section. A flat binary has no linker,
-/// and this is an error there.
+/// In relocatable output the linker pairs the two halves up, and the
+/// relocation names the label itself: lld finds the `auipc` from the symbol's
+/// value and ignores an addend, so the usual section-plus-offset would point
+/// it at the start of the section. In a flat binary the core does the
+/// pairing: the field receives the low bits of the `auipc`'s own PC-relative
+/// value, not anything computed from the label's address.
 pub fn kind_lo12(store: bool) -> FixupKind {
     let (reloc, f): (u32, fn(u64, i64) -> u64) = if store {
         (reloc::PCREL_LO12_S, lo12_s)
@@ -178,7 +179,7 @@ pub fn kind_lo12(store: bool) -> FixupKind {
         .with_reloc(reloc)
         .scatter(f)
         .with_reloc_symbol(RelocSymbol::Symbol)
-        .linker_only()
+        .link(LinkValue::PairedLow)
 }
 
 /// The low half of an `auipc` pair a pseudo-instruction expanded to, such as

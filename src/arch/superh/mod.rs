@@ -29,7 +29,9 @@ pub mod pcrel;
 pub mod reg;
 pub mod reloc;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, Syntax};
+use crate::arch::{
+    ArchState, Architecture, AsmCtx, CommentSyntax, Endian, FlatModifier, InsnRequest, Syntax,
+};
 use crate::cursor::Cursor;
 use crate::lexer::{Punct, TokKind};
 use crate::section::Variant;
@@ -151,6 +153,10 @@ impl Architecture for SuperH {
 
     fn modifier_reloc(&self, name: &str, size: u8, _pcrel: bool) -> Option<u32> {
         reloc::modifier(name, size)
+    }
+
+    fn flat_modifier(&self, name: &str) -> FlatModifier {
+        reloc::flat_modifier(name)
     }
 
     /// `nop` is `0009`. An odd pad gets a zero byte first, which is what

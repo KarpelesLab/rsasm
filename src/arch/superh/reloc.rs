@@ -11,6 +11,8 @@
 //! `R_SH_DIR8WPL` for `mov.l undefined,rn` at offset 0, depends on where the
 //! instruction sits and is not reproduced.
 
+use crate::arch::FlatModifier;
+
 pub const DIR32: u32 = 1;
 pub const REL32: u32 = 2;
 pub const DIR16: u32 = 33;
@@ -65,4 +67,15 @@ pub fn modifier(name: &str, size: u8) -> Option<u32> {
         "funcdesc" => FUNCDESC,
         _ => return None,
     })
+}
+
+/// What a modifier makes of a value in a flat binary. `R_SH_PLT32` and
+/// `R_SH_REL32` are both PC-relative, and a static image's PLT entry is the
+/// function itself; everything else names a GOT, a TLS block or a function
+/// descriptor, which only a linker makes.
+pub fn flat_modifier(name: &str) -> FlatModifier {
+    match name.to_ascii_lowercase().as_str() {
+        "plt" | "pcrel" => FlatModifier::PcRelative,
+        _ => FlatModifier::LinkerOnly,
+    }
 }
