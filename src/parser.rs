@@ -68,70 +68,99 @@ impl Statement {
     }
 }
 
-pub struct Parser<'a> {
-    lexer: Lexer<'a>,
-    /// One token of lookahead held across `next_statement` calls.
-    peeked: Option<Token>,
+/// Reads a file one statement at a time.
+///
+/// Between statements it holds a position in the file rather than a borrow
+/// of the [`SourceMap`], so the assembler can carry out each statement before
+/// the next one is lexed: an `.include` or a macro expansion adds a file to
+/// the map, and an `.arch` switch changes the rules the rest of the file is
+/// lexed by, through [`Parser::config_mut`].
+pub struct Parser {
+    file: FileId,
+    /// Byte offset in the file at which the next statement is read.
+    offset: usize,
+    /// The rules the next statement is lexed by. Only `None` while a
+    /// statement is being read, when the lexer holds them.
+    config: Option<LexConfig>,
+    /// An empty token buffer to read the next statement into.
+    spare: Vec<Token>,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(sm: &'a SourceMap, file: FileId, config: LexConfig) -> Parser<'a> {
+impl Parser {
+    pub fn new(file: FileId, config: LexConfig) -> Parser {
         Parser {
-            lexer: Lexer::new(sm, file, config),
-            peeked: None,
+            file,
+            offset: 0,
+            config: Some(config),
+            spare: Vec::new(),
         }
     }
 
-    /// The live lexer configuration. Directives mutate this to change how the
-    /// rest of the file is tokenized.
+    /// The lexer configuration the rest of the file is read with. Changing it
+    /// takes effect from the next statement on.
     pub fn config_mut(&mut self) -> &mut LexConfig {
-        &mut self.lexer.config
+        self.config.as_mut().expect("not reading a statement")
+    }
+
+    pub fn file(&self) -> FileId {
+        self.file
+    }
+
+    /// Byte offset in the file just past the last statement read, and its
+    /// terminator.
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// Hands back a statement that has been dealt with, so the next one is
+    /// read into its token buffer rather than a new allocation.
+    pub fn recycle(&mut self, stmt: Statement) {
+        let mut toks = stmt.toks;
+        toks.clear();
+        self.spare = toks;
     }
 
     pub fn dialect(&self) -> Dialect {
-        self.lexer.config.dialect
-    }
-
-    fn bump(&mut self, interner: &mut Interner, pool: &mut LitPool, diags: &mut DiagBag) -> Token {
-        match self.peeked.take() {
-            Some(t) => t,
-            None => self.lexer.next_token(interner, pool, diags),
-        }
+        self.config
+            .as_ref()
+            .expect("not reading a statement")
+            .dialect
     }
 
     /// Reads the next non-empty statement, or `None` at end of file.
+    ///
+    /// The statement ends at its terminator, so a comment after it is read
+    /// with it, by the rules it was written for.
     pub fn next_statement(
         &mut self,
+        sm: &SourceMap,
         interner: &mut Interner,
         pool: &mut LitPool,
         diags: &mut DiagBag,
     ) -> Option<Statement> {
+        let config = self.config.take().expect("not reading a statement");
+        let mut lexer = Lexer::at(sm, self.file, config, self.offset);
+        let mut toks = std::mem::take(&mut self.spare);
         loop {
-            let mut toks = Vec::new();
-            loop {
-                let t = self.bump(interner, pool, diags);
-                match t.kind {
-                    TokKind::Eof => {
-                        if toks.is_empty() {
-                            return None;
-                        }
-                        // Put the EOF back so the next call also sees it.
-                        self.peeked = Some(t);
-                        break;
-                    }
-                    TokKind::Eol => break,
-                    _ => toks.push(t),
-                }
+            let t = lexer.next_token(interner, pool, diags);
+            match t.kind {
+                // The lexer does not move past the end of file, so the next
+                // call finds it again and returns `None`.
+                TokKind::Eof => break,
+                // A blank line.
+                TokKind::Eol if toks.is_empty() => {}
+                TokKind::Eol => break,
+                _ => toks.push(t),
             }
-            if toks.is_empty() {
-                continue;
-            }
-            return Some(self.build(toks, interner, diags));
         }
-    }
-
-    fn build(&self, toks: Vec<Token>, interner: &mut Interner, diags: &mut DiagBag) -> Statement {
-        build_statement(toks, self.lexer.config.dialect, interner, diags)
+        self.offset = lexer.offset();
+        self.config = Some(lexer.config);
+        if toks.is_empty() {
+            self.spare = toks;
+            return None;
+        }
+        let dialect = self.dialect();
+        Some(build_statement(toks, dialect, interner, diags))
     }
 }
 
@@ -430,8 +459,9 @@ mod tests {
         let f = h.sm.add("t.s", src);
         let mut out = Vec::new();
         {
-            let mut p = Parser::new(&h.sm, f, LexConfig::for_dialect(Dialect::Gas));
-            while let Some(s) = p.next_statement(&mut h.interner, &mut h.pool, &mut h.diags) {
+            let mut p = Parser::new(f, LexConfig::for_dialect(Dialect::Gas));
+            while let Some(s) = p.next_statement(&h.sm, &mut h.interner, &mut h.pool, &mut h.diags)
+            {
                 out.push(s);
             }
         }

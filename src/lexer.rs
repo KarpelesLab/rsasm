@@ -1,11 +1,12 @@
 //! Tokenizer.
 //!
 //! The lexer is pull-based and its [`LexConfig`] is mutable between tokens.
-//! That matters because directives such as `.intel_syntax` or `.arch` change
-//! how the *rest* of the file is spelled: `;` is a statement separator in GAS
-//! but a comment in NASM, `1b` is a local-label reference in GAS but a binary
-//! literal in NASM. A batch tokenizer would have to guess; a pull lexer simply
-//! asks the config again for every token.
+//! That matters because directives such as `.arch` change how the *rest* of
+//! the file is spelled: `#` starts a comment on x86 but an immediate on m68k,
+//! `|` a comment on m68k but an operator elsewhere. A batch tokenizer would
+//! have to guess; a pull lexer simply asks the config again for every token,
+//! and the [`crate::parser::Parser`] reads a file one statement at a time so
+//! the directive has run before the next statement is lexed.
 
 use crate::diag::{DiagBag, Diagnostic};
 use crate::intern::{Interner, Name};
@@ -453,15 +454,29 @@ pub struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn new(sm: &'a SourceMap, file: FileId, config: LexConfig) -> Lexer<'a> {
+        Lexer::at(sm, file, config, 0)
+    }
+
+    /// A lexer that starts `offset` bytes into `file`, in the state a lexer
+    /// that had read up to there would be in. `offset` has to be a place a
+    /// token or trivia could start, such as just past an end of line.
+    pub fn at(sm: &'a SourceMap, file: FileId, config: LexConfig, offset: usize) -> Lexer<'a> {
         let f = sm.file(file);
         Lexer {
             src: &f.src,
             bytes: f.src.as_bytes(),
             base: f.start,
-            pos: 0,
+            pos: offset,
             config,
-            at_line_start: true,
+            // What `next_token` would have set: a newline starts a line, a
+            // `;` does not.
+            at_line_start: offset == 0 || f.src[..offset].ends_with('\n'),
         }
+    }
+
+    /// Byte offset within the file of the next character to be read.
+    pub fn offset(&self) -> usize {
+        self.pos
     }
 
     /// Current global position.

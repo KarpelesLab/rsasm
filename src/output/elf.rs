@@ -240,8 +240,9 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // The class belongs to the object, not to whatever mode the file ended
     // in: an x86-64 file whose last stretch is `.code32` is still an ELF64
     // object, and writing ELF32 with EM_X86_64 would instead claim the x32
-    // ABI. A target's initial state is its object class.
-    let class = match asm.arch.pointer_bytes(&asm.arch.initial_state()) {
+    // ABI. A target's initial state is its object class. Nor does `.arch`
+    // change it: the object is for the target the assembler started with.
+    let class = match asm.target().pointer_bytes(&asm.target().initial_state()) {
         8 => Class::Elf64,
         4 => Class::Elf32,
         n => {
@@ -251,7 +252,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             )));
         }
     };
-    let rela = uses_rela(asm.arch.elf_machine(), class == Class::Elf64);
+    let rela = uses_rela(asm.target().elf_machine(), class == Class::Elf64);
     let rel_size = class.rel_size(rela);
 
     let mut shstrtab = StrTab::new();
@@ -386,7 +387,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
 
     // ---- lay the file out -------------------------------------------------
-    let big_endian = asm.arch.endian() == crate::arch::Endian::Big;
+    let big_endian = asm.target().endian() == crate::arch::Endian::Big;
     let mut buf = Buf {
         out: Vec::new(),
         big_endian,
@@ -413,7 +414,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         buf.out.extend_from_slice(&bytes);
     }
 
-    let mips64el = asm.arch.elf_machine() == 8 && class == Class::Elf64 && !big_endian;
+    let mips64el = asm.target().elf_machine() == 8 && class == Class::Elf64 && !big_endian;
     for (sid, idx) in &rela_for {
         buf.pad_to(class.table_align());
         shdrs[*idx as usize].offset = buf.len();
@@ -512,12 +513,13 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     ident[6] = EV_CURRENT;
     hdr.out.extend_from_slice(&ident);
     hdr.u16(ET_REL);
-    hdr.u16(asm.arch.elf_machine());
+    hdr.u16(asm.target().elf_machine());
     hdr.u32(EV_CURRENT as u32);
     hdr.addr(0); // e_entry
     hdr.addr(0); // e_phoff
     hdr.addr(shoff);
-    hdr.u32(asm.arch.elf_flags(&asm.arch_state));
+    let (arch, state) = asm.target_state();
+    hdr.u32(arch.elf_flags(state));
     hdr.u16(class.ehdr_size() as u16);
     hdr.u16(0); // e_phentsize
     hdr.u16(0); // e_phnum

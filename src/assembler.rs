@@ -73,6 +73,13 @@ enum RepeatKind {
     Irpc,
 }
 
+/// A file being assembled, read a statement at a time.
+struct Reader {
+    parser: Parser,
+    /// The [`Assembler::lex_epoch`] the parser's lexing rules were taken at.
+    epoch: u64,
+}
+
 /// One level of `.if` / `.else` / `.endif`.
 pub(crate) struct Cond {
     /// Whether code in the current branch is being assembled.
@@ -99,7 +106,19 @@ pub struct Assembler {
     section_stack: Vec<(SectionId, Option<SectionId>)>,
     pub arch: Box<dyn Architecture>,
     pub arch_state: ArchState,
+    /// Every backend that has been active, in the order `.arch` made them
+    /// so, with the state each was left in; a section's
+    /// [`Section::arch_marks`] index this. Slot 0 is the backend the
+    /// assembler was created with, and the active one's slot is `None`,
+    /// since it lives in `arch` and `arch_state`.
+    arch_slots: Vec<Option<(Box<dyn Architecture>, ArchState)>>,
+    /// The active backend's slot in `arch_slots`.
+    arch_slot: u32,
     pub options: Options,
+    /// Bumped whenever the lexing rules may have changed, which only an
+    /// `.arch` switch does, so a file being read knows to take them again
+    /// without comparing configurations on every statement.
+    lex_epoch: u64,
     /// The anonymous label standing in for `.` in the current statement.
     here_sym: Option<SymbolId>,
     cond: Vec<Cond>,
@@ -158,7 +177,10 @@ impl Assembler {
             section_stack: Vec::new(),
             arch,
             arch_state,
+            arch_slots: vec![None],
+            arch_slot: 0,
             options,
+            lex_epoch: 0,
             here_sym: None,
             cond: Vec::new(),
             include_depth: 0,
@@ -213,6 +235,7 @@ impl Assembler {
         let id = SectionId(self.sections.len() as u32);
         let mut s = Section::new(id, name, kind, flags);
         s.align = align.max(1);
+        s.mark_arch(self.arch_slot);
         self.sections.push(s);
         self.section_ids.insert(name, id);
         id
@@ -337,35 +360,12 @@ impl Assembler {
     /// it, such as one statement rewritten by CC-RX `.DEFINE`, and may open a
     /// conditional that one closes.
     fn assemble_file_in(&mut self, file: FileId, own_conditionals: bool) {
-        let mut config = LexConfig::for_dialect(self.options.dialect);
-        // GNU-style comment characters are the target's choice, so they come
-        // from whichever backend is active when this file starts. A `.arch`
-        // switch partway through a file does not re-lex the rest of it — the
-        // file is tokenized before its directives run — but it does apply to
-        // anything included or expanded after the switch.
-        if self.options.dialect == Dialect::Gas {
-            let c = self.arch.comments();
-            config.line_comment = c.anywhere.to_vec();
-            config.line_start_comment = c.line_start.to_vec();
-            self.arch.tune_lexer(&mut config);
-        }
-        // The parser borrows the source map; statements are collected first so
-        // the rest of the assembler can take `&mut self` freely.
-        let mut statements = Vec::new();
-        {
-            let sm = &self.sm;
-            let mut parser = Parser::new(sm, file, config);
-            while let Some(s) =
-                parser.next_statement(&mut self.interner, &mut self.pool, &mut self.diags)
-            {
-                statements.push(s);
-                if self.diags.saturated() {
-                    break;
-                }
-            }
-        }
+        let mut reader = Reader {
+            parser: Parser::new(file, self.lex_config()),
+            epoch: self.lex_epoch,
+        };
         let depth = self.cond.len();
-        self.run(&statements);
+        self.run(&mut reader);
         // Only the conditionals this file opened are its to close. One a
         // macro left open by `.exitm` ends with the expansion.
         if own_conditionals && self.cond.len() > depth {
@@ -378,85 +378,121 @@ impl Assembler {
         }
     }
 
-    /// Walks a statement list, expanding the block constructs as it goes.
+    /// The lexing rules for source read from now on: the dialect's, and in
+    /// the GNU dialect the active backend's comment characters and tuning.
+    fn lex_config(&self) -> LexConfig {
+        let mut config = LexConfig::for_dialect(self.options.dialect);
+        if self.options.dialect == Dialect::Gas {
+            let c = self.arch.comments();
+            config.line_comment = c.anywhere.to_vec();
+            config.line_start_comment = c.line_start.to_vec();
+            self.arch.tune_lexer(&mut config);
+        }
+        config
+    }
+
+    /// The next statement of `reader`'s file, lexed by the rules in force
+    /// now. A statement is read only once the one before it has been carried
+    /// out, so an `.arch` switch, in the file itself or in anything it
+    /// includes or expands, applies from the next statement on.
+    fn next_statement(&mut self, reader: &mut Reader) -> Option<Statement> {
+        if self.diags.saturated() {
+            return None;
+        }
+        if reader.epoch != self.lex_epoch {
+            *reader.parser.config_mut() = self.lex_config();
+            reader.epoch = self.lex_epoch;
+        }
+        reader.parser.next_statement(
+            &self.sm,
+            &mut self.interner,
+            &mut self.pool,
+            &mut self.diags,
+        )
+    }
+
+    /// Walks a file's statements, expanding the block constructs as it goes.
     ///
     /// `.macro` and the repeat directives consume statements that follow
-    /// them, so this cannot be a plain `for` loop: the index has to be
-    /// reachable from the handlers.
-    fn run(&mut self, statements: &[Statement]) {
-        let mut i = 0usize;
-        while i < statements.len() {
-            let stmt = &statements[i];
-            i += 1;
-
-            if self.options.dialect == Dialect::CcRx
-                && let Some(text) = self.ccrx_apply_defines(stmt)
-            {
-                if self.macro_depth >= 64 {
-                    self.diags.error(
-                        stmt.span,
-                        "`.DEFINE` replacement nested too deeply; is it recursive?",
-                    );
-                    return;
-                }
-                let file = self.sm.add("<.DEFINE>".to_string(), text);
-                self.macro_depth += 1;
-                self.assemble_file_in(file, false);
-                self.macro_depth -= 1;
-                if self.exiting_macro || self.end_of_source || self.diags.saturated() {
-                    return;
-                }
-                continue;
-            }
-
-            // A block construct inside a false conditional is not a block at
-            // all; its statements are skipped one by one like everything else.
-            if self.cond_active() {
-                match self.block_kind(stmt) {
-                    Some(BlockKind::Macro) => {
-                        i = self.define_macro(stmt, statements, i);
-                        continue;
-                    }
-                    Some(BlockKind::Repeat(kind)) => {
-                        i = self.expand_repeat(stmt, kind, statements, i);
-                        continue;
-                    }
-                    Some(BlockKind::EndMacro) => {
-                        self.diags
-                            .error(stmt.span, "`.endm` without a matching `.macro`");
-                        continue;
-                    }
-                    Some(BlockKind::EndRepeat) => {
-                        self.diags.error(
-                            stmt.span,
-                            "`.endr` without a matching `.rept`, `.irp` or `.irpc`",
-                        );
-                        continue;
-                    }
-                    Some(BlockKind::ExitMacro) => {
-                        if self.macro_depth == 0 {
-                            self.diags.error(stmt.span, "`.exitm` outside a macro");
-                        } else {
-                            self.exiting_macro = true;
-                        }
-                        return;
-                    }
-                    None => {
-                        if self.try_expand_macro(stmt) {
-                            if self.exiting_macro || self.end_of_source || self.diags.saturated() {
-                                return;
-                            }
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            self.process(stmt);
-            if self.exiting_macro || self.end_of_source || self.diags.saturated() {
+    /// them, so the handlers read from `reader` too.
+    fn run(&mut self, reader: &mut Reader) {
+        while let Some(stmt) = self.next_statement(reader) {
+            let more = self.run_statement(&stmt, reader);
+            // Reusing the token buffer keeps an allocation and a free per
+            // statement from interleaving with the fragments this one made,
+            // which layout walks later: that is worth about a tenth of the
+            // time on a large file.
+            reader.parser.recycle(stmt);
+            if !more {
                 return;
             }
         }
+    }
+
+    /// Carries out one statement for [`Assembler::run`]. Returns whether the
+    /// walk goes on to the next one.
+    fn run_statement(&mut self, stmt: &Statement, reader: &mut Reader) -> bool {
+        if self.options.dialect == Dialect::CcRx
+            && let Some(text) = self.ccrx_apply_defines(stmt)
+        {
+            if self.macro_depth >= 64 {
+                self.diags.error(
+                    stmt.span,
+                    "`.DEFINE` replacement nested too deeply; is it recursive?",
+                );
+                return false;
+            }
+            let file = self.sm.add("<.DEFINE>".to_string(), text);
+            self.macro_depth += 1;
+            self.assemble_file_in(file, false);
+            self.macro_depth -= 1;
+            return !(self.exiting_macro || self.end_of_source || self.diags.saturated());
+        }
+
+        // A block construct inside a false conditional is not a block at
+        // all; its statements are skipped one by one like everything else.
+        if self.cond_active() {
+            match self.block_kind(stmt) {
+                Some(BlockKind::Macro) => {
+                    self.define_macro(stmt, reader);
+                    return true;
+                }
+                Some(BlockKind::Repeat(kind)) => {
+                    self.expand_repeat(stmt, kind, reader);
+                    return true;
+                }
+                Some(BlockKind::EndMacro) => {
+                    self.diags
+                        .error(stmt.span, "`.endm` without a matching `.macro`");
+                    return true;
+                }
+                Some(BlockKind::EndRepeat) => {
+                    self.diags.error(
+                        stmt.span,
+                        "`.endr` without a matching `.rept`, `.irp` or `.irpc`",
+                    );
+                    return true;
+                }
+                Some(BlockKind::ExitMacro) => {
+                    if self.macro_depth == 0 {
+                        self.diags.error(stmt.span, "`.exitm` outside a macro");
+                    } else {
+                        self.exiting_macro = true;
+                    }
+                    return false;
+                }
+                None => {
+                    if self.try_expand_macro(stmt) {
+                        return !(self.exiting_macro
+                            || self.end_of_source
+                            || self.diags.saturated());
+                    }
+                }
+            }
+        }
+
+        self.process(stmt);
+        !(self.exiting_macro || self.end_of_source || self.diags.saturated())
     }
 
     /// The directive a statement names, in GNU as spelling.
@@ -503,44 +539,45 @@ impl Assembler {
         })
     }
 
-    /// Collects the statements of a block, returning its source text and the
-    /// index just past its terminator.
+    /// Reads the statements of a block up to its terminator, returning the
+    /// source text between the two.
     ///
     /// `opens` and `closes` name the directives that nest, so a `.rept` inside
-    /// a `.macro` body does not end the macro.
+    /// a `.macro` body does not end the macro. That is all the statements are
+    /// read for: the body is kept as text and lexed again where it is
+    /// expanded, by the rules in force there, so a macro defined before an
+    /// `.arch` switch and used after it reads as the new target's source. Only
+    /// where the block ends is decided by the rules in force here.
     fn capture_block(
         &mut self,
-        statements: &[Statement],
-        from: usize,
+        reader: &mut Reader,
         opens: &[&str],
         closes: &[&str],
         open_span: Span,
-    ) -> Option<(String, usize)> {
+    ) -> Option<String> {
+        // Whole lines, from just past the opening statement: in Motorola
+        // source the indentation is what makes `dc.b` an instruction rather
+        // than a label, and a comment by the rules here may be code by the
+        // rules the body is expanded under.
+        let lo = self.sm.file(reader.parser.file()).start + reader.parser.offset() as u32;
+        let mut last = lo;
         let mut depth = 1usize;
-        let mut i = from;
-        while i < statements.len() {
-            if let Some(name) = self.directive_name(&statements[i]) {
+        while let Some(stmt) = self.next_statement(reader) {
+            if let Some(name) = self.directive_name(&stmt) {
                 if opens.contains(&name) {
                     depth += 1;
                 } else if closes.contains(&name) {
                     depth -= 1;
                     if depth == 0 {
-                        let body = if i > from {
-                            // From the start of the first body *line*, not its
-                            // first token: in Motorola source the indentation
-                            // is what makes `dc.b` an instruction rather than
-                            // a label, and the body is re-lexed on expansion.
-                            let lo = self.sm.line_start_of(statements[from].span.lo);
-                            let hi = statements[i - 1].span.hi;
-                            self.sm.span_text(Span::new(lo, hi)).to_string()
-                        } else {
-                            String::new()
-                        };
-                        return Some((body, i + 1));
+                        // Up to the terminator's line, or to the terminator
+                        // itself where a body statement shares that line.
+                        let line = self.sm.line_start_of(stmt.span.lo);
+                        let hi = if line >= last { line } else { stmt.span.lo };
+                        return Some(self.sm.span_text(Span::new(lo, hi)).to_string());
                     }
                 }
             }
-            i += 1;
+            last = stmt.span.hi;
         }
         self.diags.error(
             open_span,
@@ -562,7 +599,7 @@ impl Assembler {
         }
     }
 
-    fn define_macro(&mut self, stmt: &Statement, statements: &[Statement], from: usize) -> usize {
+    fn define_macro(&mut self, stmt: &Statement, reader: &mut Reader) {
         let header = self.arg_text(stmt);
         let (mut name_text, mut params_text) = macros::split_macro_header(&header);
         let cc = self.options.dialect.renesas_cc();
@@ -591,19 +628,18 @@ impl Assembler {
             name_text = n;
         }
         let (opens, closes) = self.block_delimiters(false);
-        let Some((body, next)) = self.capture_block(statements, from, opens, closes, stmt.span)
-        else {
-            return statements.len();
+        let Some(body) = self.capture_block(reader, opens, closes, stmt.span) else {
+            return;
         };
         if name_text.is_empty() {
             self.diags.error(stmt.span, "`.macro` needs a name");
-            return next;
+            return;
         }
         let params = match macros::parse_params(params_text) {
             Ok(p) => p,
             Err(msg) => {
                 self.diags.error(stmt.span, msg);
-                return next;
+                return;
             }
         };
         let name = self.interner.intern(&name_text.to_ascii_lowercase());
@@ -614,7 +650,7 @@ impl Assembler {
                     .with_note(prev_span, "previous definition is here")
                     .with_help("use `.purgem` to remove it first"),
             );
-            return next;
+            return;
         }
         self.macros.insert(
             name,
@@ -625,21 +661,13 @@ impl Assembler {
                 def_span: stmt.span,
             },
         );
-        next
     }
 
-    fn expand_repeat(
-        &mut self,
-        stmt: &Statement,
-        kind: RepeatKind,
-        statements: &[Statement],
-        from: usize,
-    ) -> usize {
+    fn expand_repeat(&mut self, stmt: &Statement, kind: RepeatKind, reader: &mut Reader) {
         let header = self.arg_text(stmt);
         let (opens, closes) = self.block_delimiters(true);
-        let Some((body, next)) = self.capture_block(statements, from, opens, closes, stmt.span)
-        else {
-            return statements.len();
+        let Some(body) = self.capture_block(reader, opens, closes, stmt.span) else {
+            return;
         };
 
         // Each iteration is substituted separately and the results
@@ -654,7 +682,7 @@ impl Assembler {
                     self.eval_text_count(&header, stmt.span)
                 };
                 let Some(count) = count else {
-                    return next;
+                    return;
                 };
                 for n in 0..count {
                     if cc {
@@ -677,7 +705,7 @@ impl Assembler {
                 if var.is_empty() {
                     self.diags
                         .error(stmt.span, "`.irp` needs a symbol name and a list of values");
-                    return next;
+                    return;
                 }
                 let rest = rest.trim().trim_start_matches(',').trim();
                 let values: Vec<String> = if kind == RepeatKind::Irp {
@@ -710,7 +738,6 @@ impl Assembler {
             RepeatKind::Irpc => "irpc",
         };
         self.expand(label, text, stmt.span);
-        next
     }
 
     /// A CC-RL/CC-RH `.REPT` count, which is an absolute expression rather
@@ -1024,15 +1051,81 @@ impl Assembler {
     }
 
     /// Switches the active architecture backend mid-file.
+    ///
+    /// The backend switched away from is kept, with its state, for the
+    /// fragments it emitted: layout resolves their fixups in its byte order
+    /// and pads their alignment with its no-ops, whatever is active by then.
     pub(crate) fn switch_arch(&mut self, arch: Box<dyn Architecture>) {
         let syntax = self.arch_state.syntax;
-        self.arch_state = arch.initial_state();
+        let mut state = arch.initial_state();
         // A syntax choice is the user's, not the architecture's, so it carries
         // across a `.arch` switch when the new backend supports it.
         if arch.supports_syntax(syntax) {
-            self.arch_state.syntax = syntax;
+            state.syntax = syntax;
         }
-        self.arch = arch;
+        // What the source has used so far is recorded for the header of an
+        // object for that machine (SuperH's `e_flags`), so it carries over
+        // from the last backend for the same machine, as `.arch sh4` after
+        // `sh` code does, rather than starting again.
+        let machine = arch.elf_machine();
+        if let Some(slot) = (0..self.arch_slots.len())
+            .rev()
+            .find(|&s| self.slot_arch(s).0.elf_machine() == machine)
+        {
+            state.used = self.slot_arch(slot).1.used;
+        }
+        let old = (
+            std::mem::replace(&mut self.arch, arch),
+            std::mem::replace(&mut self.arch_state, state),
+        );
+        self.arch_slots[self.arch_slot as usize] = Some(old);
+        self.arch_slot = self.arch_slots.len() as u32;
+        self.arch_slots.push(None);
+        for s in &mut self.sections {
+            s.mark_arch(self.arch_slot);
+        }
+        // Comment characters and number spellings are the backend's, so every
+        // file being read takes its rules again from its next statement.
+        self.lex_epoch += 1;
+    }
+
+    /// A backend `.arch` made active at some point, with its state: the
+    /// current one's, or the one it had when the source switched away.
+    fn slot_arch(&self, slot: usize) -> (&dyn Architecture, &ArchState) {
+        match &self.arch_slots[slot] {
+            Some((arch, state)) => (arch.as_ref(), state),
+            None => (self.arch.as_ref(), &self.arch_state),
+        }
+    }
+
+    /// The backend that emitted fragment `fi` of section `si`, and its state.
+    pub(crate) fn frag_arch(&self, si: usize, fi: usize) -> (&dyn Architecture, &ArchState) {
+        self.slot_arch(self.sections[si].arch_slot(fi) as usize)
+    }
+
+    /// Whether any backend the source used may shrink an instruction during
+    /// relaxation; see [`Architecture::relaxation_may_shrink`].
+    pub(crate) fn any_arch_shrinks(&self) -> bool {
+        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxation_may_shrink())
+    }
+
+    /// The backend the output is for: the one the assembler was created
+    /// with, whatever `.arch` switched to since. An object file has one
+    /// machine, class and byte order.
+    pub fn target(&self) -> &dyn Architecture {
+        self.slot_arch(0).0
+    }
+
+    /// The last backend for the target's machine to be active, and its state,
+    /// which is what describes the object's contents in its header (see
+    /// [`ArchState::used`]).
+    pub fn target_state(&self) -> (&dyn Architecture, &ArchState) {
+        let machine = self.target().elf_machine();
+        let slot = (0..self.arch_slots.len())
+            .rev()
+            .find(|&s| self.slot_arch(s).0.elf_machine() == machine)
+            .unwrap_or(0);
+        self.slot_arch(slot)
     }
 
     fn process(&mut self, stmt: &Statement) {

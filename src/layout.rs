@@ -60,7 +60,7 @@ impl Assembler {
 
         let mut settled = false;
         let mut history = HashMap::new();
-        let limit = if self.arch.relaxation_may_shrink() {
+        let limit = if self.any_arch_shrinks() {
             MAX_PASSES_SHRINKING
         } else {
             MAX_PASSES
@@ -102,7 +102,10 @@ impl Assembler {
     fn pad_section_tails(&mut self) {
         for si in 0..self.sections.len() {
             let s = &self.sections[si];
-            if s.align <= 1 || !self.arch.pads_section_tail(&s.flags) {
+            // A section that ends in another backend's code is padded as
+            // that backend's GNU as would.
+            let (arch, _) = self.frag_arch(si, s.frags.len());
+            if s.align <= 1 || !arch.pads_section_tail(&s.flags) {
                 continue;
             }
             let fill = if s.flags.exec { Vec::new() } else { vec![0] };
@@ -256,7 +259,7 @@ impl Assembler {
     /// reaches. `history` is only used by [`Self::repick`], for targets whose
     /// sizes may also shrink.
     fn relax(&mut self, history: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
-        if self.arch.relaxation_may_shrink() {
+        if self.any_arch_shrinks() {
             return self.repick(history);
         }
         let mut changed = false;
@@ -305,7 +308,14 @@ impl Assembler {
                 let size = match &self.sections[si].frags[fi].kind {
                     FragKind::Bytes { variants, chosen } if variants.len() > 1 => {
                         let (n, chosen) = (variants.len(), *chosen);
-                        let first_fit = (0..n)
+                        // In a file that also has code for a backend that
+                        // does not shrink, that code keeps growing only.
+                        let lowest = if self.frag_arch(si, fi).0.relaxation_may_shrink() {
+                            0
+                        } else {
+                            chosen
+                        };
+                        let first_fit = (lowest..n)
                             .find(|&k| self.variant_fits(si, fi, k, stretch))
                             .unwrap_or(n - 1);
                         let counts = history.entry((si, fi)).or_insert((0, 0));
@@ -379,7 +389,7 @@ impl Assembler {
         }
         let fits = fixups.iter().all(|(off, e, kind)| {
             let at = frag_off + *off as u64;
-            match self.fixup_value(*e, kind, id, at) {
+            match self.fixup_value(*e, kind, id, fi, at) {
                 Some(v) => kind.fits(v as i128),
                 // An unresolved reference takes the widest form on offer.
                 // Nothing is known about how far away its target will be, so
@@ -485,6 +495,7 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
     ) -> Option<i64> {
         let v = self.eval(e).ok()?;
@@ -498,7 +509,13 @@ impl Assembler {
             if self.options.relocatable
                 && match v.plus {
                     Some(p) => self.symbol_section(p) != Some(section),
-                    None => v.minus.is_none() && self.arch.pcrel_number_is_address(),
+                    None => {
+                        v.minus.is_none()
+                            && self
+                                .frag_arch(section.0 as usize, fi)
+                                .0
+                                .pcrel_number_is_address()
+                    }
                 }
             {
                 return None;
@@ -535,8 +552,8 @@ impl Assembler {
         // throughout, so asking the ELF writer which convention the target
         // uses is consistent rather than a layering slip.
         let rela = crate::output::elf::uses_rela(
-            self.arch.elf_machine(),
-            crate::output::elf::is_elf64(self.arch.as_ref()),
+            self.target().elf_machine(),
+            crate::output::elf::is_elf64(self.target()),
         );
         for si in 0..self.sections.len() {
             let id = SectionId(si as u32);
@@ -553,13 +570,13 @@ impl Assembler {
                     };
                 for (off, e, kind, span) in list {
                     let at = frag_off + off as u64;
-                    match self.fixup_value(e, &kind, id, at) {
+                    match self.fixup_value(e, &kind, id, fi, at) {
                         Some(v) => {
                             if !kind.fits(v as i128) {
                                 self.diags.error(span, range_message(&kind, v));
                                 continue;
                             }
-                            let endian = self.arch.endian();
+                            let endian = self.frag_arch(si, fi).0.endian();
                             if let FragKind::Bytes { variants, chosen } =
                                 &mut self.sections[si].frags[fi].kind
                             {
@@ -569,9 +586,10 @@ impl Assembler {
                             }
                         }
                         None => {
-                            if let Some(mut r) = self.build_relocation(e, &kind, id, at, span) {
-                                if self.arch.addend_in_field(r.kind, rela) && r.addend != 0 {
-                                    let endian = self.arch.endian();
+                            if let Some(mut r) = self.build_relocation(e, &kind, id, fi, at, span) {
+                                let (arch, _) = self.frag_arch(si, fi);
+                                if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
+                                    let endian = arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =
                                         &mut self.sections[si].frags[fi].kind
                                     {
@@ -598,9 +616,11 @@ impl Assembler {
         e: ExprRef,
         kind: &FixupKind,
         section: SectionId,
+        fi: usize,
         at: u64,
         span: Span,
     ) -> Option<Relocation> {
+        let si = section.0 as usize;
         let v = match self.eval(e) {
             Ok(v) => v,
             Err(err) => {
@@ -618,10 +638,10 @@ impl Assembler {
             let here = self.section(section).addr as i64 + at as i64;
             let pcrel = if !kind.pcrel
                 && kind.reloc != 0
-                && Some(kind.reloc) == self.arch.data_reloc(kind.size, false)
+                && Some(kind.reloc) == self.frag_arch(si, fi).0.data_reloc(kind.size, false)
                 && self.symbol_section(minus) == Some(section)
             {
-                self.arch.data_reloc(kind.size, true)
+                self.frag_arch(si, fi).0.data_reloc(kind.size, true)
             } else {
                 None
             };
@@ -653,13 +673,35 @@ impl Assembler {
             self.diags.error(span, format!("undefined symbol `{name}`"));
             return None;
         }
+        // Relocation numbers mean something only to one machine, and the
+        // linker applies them in the object's byte order and word size, so
+        // code for another target in the file cannot be relocated.
+        let (arch, out) = (self.frag_arch(si, fi).0, self.target());
+        if arch.elf_machine() != out.elf_machine()
+            || arch.endian() != out.endian()
+            || crate::output::elf::is_elf64(arch) != crate::output::elf::is_elf64(out)
+        {
+            let msg = format!(
+                "this reference, in code for `{}`, needs a relocation, which an object \
+                 for `{}` cannot hold",
+                arch.name(),
+                out.name()
+            );
+            self.diags.emit(
+                crate::diag::Diagnostic::error(span, msg)
+                    .with_help("resolve it within the file, or assemble this code on its own"),
+            );
+            return None;
+        }
 
         // A modifier anywhere in the expression selects the relocation.
         let reloc = self
             .find_modifier(e)
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
-                self.arch.modifier_reloc(&name, kind.size, kind.pcrel)
+                self.frag_arch(si, fi)
+                    .0
+                    .modifier_reloc(&name, kind.size, kind.pcrel)
             })
             .unwrap_or(kind.reloc);
         if reloc == 0 {
@@ -739,7 +781,8 @@ impl Assembler {
                     FragKind::Bytes { .. } => continue,
                     FragKind::Align { fill, .. } => {
                         if fill.is_empty() && exec {
-                            self.arch.nop_fill(&self.arch_state, size as u64)
+                            let (arch, state) = self.frag_arch(si, fi);
+                            arch.nop_fill(state, size as u64)
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()
