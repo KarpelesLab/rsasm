@@ -357,7 +357,8 @@ impl Asm<'_, '_> {
                 let (reg, target) = self.two(&ops)?;
                 let n = self.dreg(reg, "counter")?;
                 let e = self.target(target)?;
-                Some(branch::dbcc(c, n, e, target.span))
+                let constant = self.cx.constant(e).is_some();
+                Some(branch::dbcc(c, n, self.cpu, e, constant, target.span))
             }
             Jmp(base) => {
                 let op = self.single(&ops)?;
@@ -1051,7 +1052,8 @@ impl Asm<'_, '_> {
             _ => BranchSize::Relax,
         };
         let e = self.target(op)?;
-        Some(branch::bcc(cond, bsize, self.cpu, e, op.span))
+        let constant = self.cx.constant(e).is_some();
+        Some(branch::bcc(cond, bsize, self.cpu, e, constant, op.span))
     }
 
     fn link(&mut self, ops: &[Operand], sz: Option<Sz>) -> Option<Vec<Variant>> {

@@ -182,6 +182,11 @@ impl Matcher<'_, '_> {
                 g,
                 Imm | Big | Abs | AReg(_) | FReg(_) | Ctl(_) | List(_) | Full { memind: true, .. }
             ),
+            b'p' => match g {
+                DReg(_) | AReg(_) | Ind(_) | Inc(_) | Dec(_) => true,
+                Disp { .. } => !g.pc(),
+                _ => false,
+            },
             b'q' => match g {
                 DReg(_) | Ind(_) | Inc(_) | Dec(_) => true,
                 Disp { .. } => !g.pc(),
@@ -457,7 +462,9 @@ impl Encoder<'_, '_> {
     fn operand(&mut self, k: u8, p: u8, op: &Operand) -> Option<()> {
         match k {
             b'*' | b'~' | b'%' | b';' | b'@' | b'!' | b'&' | b'$' | b'?' | b'/' | b'<'
-            | b'>' | b'b' | b'q' | b'v' | b'w' | b'y' | b'z' | b'|' => self.general(k, p, op),
+            | b'>' | b'b' | b'p' | b'q' | b'v' | b'w' | b'y' | b'z' | b'|' => {
+                self.general(k, p, op)
+            }
             b'#' | b'^' => self.immediate(p, op),
             b'+' | b'-' | b'A' | b'a' => {
                 let n = match op.mode {
@@ -542,7 +549,7 @@ impl Encoder<'_, '_> {
             b'x' => {
                 let v = self.value(op, -1, 7, "a `mov3q` immediate")?;
                 // -1 is written as 0.
-                self.install(p, (v & 7) as u16);
+                self.install(p, v.max(0) as u16);
                 Some(())
             }
             b'M' => {
@@ -692,18 +699,13 @@ impl Encoder<'_, '_> {
                 {
                     return self.err(span, format!("immediate {v} is out of range"));
                 }
-                let (bytes, mut fixups) = match c {
+                let (bytes, fixups) = match c {
                     Some(v) if p == b'l' => ((v as u32).to_be_bytes().to_vec(), Vec::new()),
                     Some(v) => ((v as u16).to_be_bytes().to_vec(), Vec::new()),
+                    // A byte's relocation is on the low byte of its word.
+                    None if p == b'b' => encode::immediate(self.cx, e, Sz::B, span)?,
                     None => encode::immediate(self.cx, e, size, span)?,
                 };
-                if p == b'b' {
-                    // A byte's relocation is on the low byte of its word.
-                    for f in &mut fixups {
-                        f.offset = 1;
-                        f.kind = FixupKind::data(1).with_reloc(reloc::R_68K_8);
-                    }
-                }
                 self.inserted.insert(0, Part::words(bytes, fixups));
                 Some(())
             }

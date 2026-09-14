@@ -292,10 +292,29 @@ pub fn immediate(
             .map(|b| (b, Vec::new()))
         }
         None => Some(match size {
-            Sz::B => (vec![0, 0], vec![fixup(1, e, abs_kind(1), span)]),
+            // GNU as writes the whole addend as the word and relocates its
+            // low byte, so the high byte of `#sym-2` is `ff`.
+            Sz::B => {
+                let high = ((addend(cx, e) as i16) >> 8) as u8;
+                (vec![high, 0], vec![fixup(1, e, abs_kind(1), span)])
+            }
             Sz::W => (vec![0, 0], vec![fixup(0, e, abs_kind(2), span)]),
             Sz::L => (vec![0; 4], vec![fixup(0, e, abs_kind(4), span)]),
         }),
+    }
+}
+
+/// The number added to the symbols of an expression as written, `-2` in
+/// `ext-2`, whether or not the symbols are defined yet.
+fn addend(cx: &AsmCtx<'_>, e: ExprRef) -> i64 {
+    use crate::expr::{BinOp, ExprKind, UnOp};
+    match cx.exprs.get(e).kind {
+        ExprKind::Int(n) => n as i64,
+        ExprKind::Binary(BinOp::Add, a, b) => addend(cx, a).wrapping_add(addend(cx, b)),
+        ExprKind::Binary(BinOp::Sub, a, b) => addend(cx, a).wrapping_sub(addend(cx, b)),
+        ExprKind::Unary(UnOp::Neg, a) => addend(cx, a).wrapping_neg(),
+        ExprKind::Unary(UnOp::Plus, a) => addend(cx, a),
+        _ => 0,
     }
 }
 
@@ -337,8 +356,52 @@ impl Field {
     }
 }
 
+/// ColdFire's index register is always a long, and scaled by 8 only on the
+/// cores with an FPU. An index written without a size is a long there in
+/// Motorola source too, where it is otherwise a word.
+fn coldfire_index(cx: &mut AsmCtx<'_>, ix: &mut Index, cpu: Cpu) -> Option<()> {
+    if ix.scale == 8 && !cpu.has(super::table::feature::CFLOAT) {
+        cx.error(
+            ix.span,
+            format!(
+                "an index scaled by 8 needs a ColdFire with an FPU; this target is a {}",
+                cpu.describe()
+            ),
+        );
+        return None;
+    }
+    if ix.sized && !ix.long {
+        cx.error(ix.span, "a ColdFire index register is a long");
+        return None;
+    }
+    ix.long = true;
+    Some(())
+}
+
 /// Encodes an effective address to its alternatives, smallest first.
 pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
+    let adjusted;
+    let op = match &op.mode {
+        Mode::Indexed {
+            base,
+            disp,
+            index: Some(ix),
+        } if ecx.cpu.coldfire() => {
+            let mut ix = *ix;
+            coldfire_index(cx, &mut ix, ecx.cpu)?;
+            adjusted = Operand {
+                mode: Mode::Indexed {
+                    base: *base,
+                    disp: *disp,
+                    index: Some(ix),
+                },
+                span: op.span,
+                brace: Vec::new(),
+            };
+            &adjusted
+        }
+        _ => op,
+    };
     let span = op.span;
     Some(match &op.mode {
         Mode::DReg(n) => vec![Alt::field(0, *n)],
@@ -806,25 +869,24 @@ fn mem_indirect(
     _span: Span,
 ) -> Option<Alt> {
     let pc = base == Base::Pc;
-    let size_of = |cx: &mut AsmCtx<'_>, v: &Value, pc: bool| match v.width {
-        Some(w) => w == Width::L,
-        None if pc => true,
-        None => cx.constant(v.e).is_none_or(|n| !fits_i16(n)),
+    // GNU as sizes both displacements alike: a value not known yet is 32
+    // bits, a constant the shortest of null, word and long that holds it.
+    let field = |cx: &mut AsmCtx<'_>, v: &Option<Value>, pc: bool| {
+        let Some(v) = v else {
+            return Field::Null;
+        };
+        let target = pc && pc_is_target(cx, v);
+        let long = match (v.width, cx.constant(v.e)) {
+            (Some(w), _) => w == Width::L,
+            (None, _) if target => true,
+            (None, Some(0)) => return Field::Null,
+            (None, Some(n)) => !fits_i16(n),
+            (None, None) => true,
+        };
+        disp_field(cx, v, long, target)
     };
-    let bd_field = match bd {
-        None => Field::Null,
-        Some(v) => {
-            let long = size_of(cx, v, pc);
-            disp_field(cx, v, long, pc && pc_is_target(cx, v))
-        }
-    };
-    let od_field = match od {
-        None => Field::Null,
-        Some(v) => {
-            let long = size_of(cx, v, false);
-            disp_field(cx, v, long, false)
-        }
-    };
+    let bd_field = field(cx, bd, pc);
+    let od_field = field(cx, od, false);
     let od_bits = od_field.bd_bits();
     let iis = match index {
         Some((_, IndexAt::Post)) => 4 | od_bits,
