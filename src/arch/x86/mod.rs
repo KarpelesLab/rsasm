@@ -118,7 +118,10 @@ impl Architecture for X86 {
             }
             // A modifier with no relocation at this width is an error, not a
             // plain reference to the symbol.
-            return Some(self.modifier_reloc(name, kind.size, kind.pcrel).unwrap_or(0));
+            return Some(
+                self.modifier_reloc(name, kind.size, kind.pcrel)
+                    .unwrap_or(0),
+            );
         }
         self.modifier_reloc(name, kind.size, kind.pcrel)
     }
@@ -407,7 +410,25 @@ fn assemble_inner(
         );
         return None;
     }
-    let gcc16 = cx.state.features & CODE16GCC != 0;
+    // `.code16gcc` widens what GCC's 32-bit code expects of the stack: the
+    // pushes and pops, calls and returns, and the frame instructions. Jumps
+    // and `iret` stay 16-bit.
+    let gcc16 = cx.state.features & CODE16GCC != 0
+        && matches!(
+            mnemonic,
+            "push"
+                | "pop"
+                | "pushf"
+                | "popf"
+                | "pusha"
+                | "popa"
+                | "call"
+                | "ret"
+                | "lret"
+                | "retf"
+                | "enter"
+                | "leave"
+        );
     let matches = prefer_default_size(bits, gcc16, stack, matches, &resolved);
     // A stack instruction with only immediates is the mode's size, and an
     // immediate that does not fit it is not a reason to pick another one:
@@ -968,9 +989,10 @@ fn prefer_default_size<'d>(
 ) -> Vec<&'d Def> {
     let first = matches[0];
     // A row with no operand size, such as a relative branch that also reads
-    // as an indirect one through memory, is preferred as it stands.
+    // as an indirect one through memory, is preferred as it stands, except
+    // where `.code16gcc` asks for a 32-bit call.
     if resolved.opsize.is_some()
-        || first.opsize == 0
+        || first.opsize == 0 && !(gcc16 && bits == 16)
         || matches.iter().all(|d| d.opsize == first.opsize)
     {
         return matches;
@@ -988,7 +1010,7 @@ fn prefer_default_size<'d>(
 fn default_operand_size(bits: u8, gcc16: bool, stack: bool) -> u8 {
     match bits {
         64 if stack => 64,
-        16 if !(gcc16 && stack) => 16,
+        16 if !gcc16 => 16,
         _ => 32,
     }
 }
@@ -1002,12 +1024,9 @@ fn ambiguous_memory_size(matches: &[&Def], ops: &[Operand]) -> bool {
         return false;
     };
     let width = |d: &Def| match d.ops[slot] {
-        Op::Rm(w)
-        | Op::M(w)
-        | Op::Moffs(w)
-        | Op::IndirectRm(w)
-        | Op::StrSrc(w)
-        | Op::StrDst(w) => w,
+        Op::Rm(w) | Op::M(w) | Op::Moffs(w) | Op::IndirectRm(w) | Op::StrSrc(w) | Op::StrDst(w) => {
+            w
+        }
         _ => 0,
     };
     let first = width(matches[0]);

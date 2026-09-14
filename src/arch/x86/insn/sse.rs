@@ -685,6 +685,13 @@ fn install_integer(t: &mut Tbl) {
             )
             .pfx(0x66),
             d(
+                vec![Op::V(Vk::Xmm), Op::R(8), Op::Imm(1)],
+                &[0x0f, 0xc4],
+                ModRm::Reg,
+                0,
+            )
+            .pfx(0x66),
+            d(
                 vec![Op::V(Vk::Xmm), Op::M(2), Op::Imm(1)],
                 &[0x0f, 0xc4],
                 ModRm::Reg,
@@ -811,7 +818,7 @@ fn install_scalar_bit_ops(t: &mut Tbl) {
     // or doubleword source is read at the operand size, so `crc32w` has a
     // `66` outside 16-bit mode and `crc32l` in it; a byte source has none.
     for (mnem, src, opcode, opsize) in [
-        ("crc32b", 1u8, 0xf0u8, 0u8),
+        ("crc32b", 1u8, 0xf0u8, 8u8),
         ("crc32w", 2, 0xf1, 16),
         ("crc32l", 4, 0xf1, 32),
         ("crc32q", 8, 0xf1, 64),

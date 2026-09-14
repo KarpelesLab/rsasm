@@ -123,20 +123,16 @@ fn unary_group(table: &mut Tbl, mnem: &'static str, ext: u8) {
     for w in WIDTHS {
         defs.push(d(vec![Op::Rm(w)], &[0xf7], ModRm::Ext(ext), opsize_bits(w)));
     }
-    // In Intel syntax the multiplications and divisions may name the
-    // accumulator they work on as a first operand.
-    if ext >= 4 {
+    // The divisions may name the accumulator they divide as a first operand.
+    if ext >= 6 {
         for (w, acc) in [(1u8, "al"), (2, "ax"), (4, "eax"), (8, "rax")] {
             let op = if w == 1 { 0xf6 } else { 0xf7 };
-            defs.push(
-                d(
-                    vec![Op::Fixed(acc), Op::Rm(w)],
-                    &[op],
-                    ModRm::Ext(ext),
-                    opsize_bits(w),
-                )
-                .flags(INTEL_ONLY),
-            );
+            defs.push(d(
+                vec![Op::Fixed(acc), Op::Rm(w)],
+                &[op],
+                ModRm::Ext(ext),
+                opsize_bits(w),
+            ));
         }
     }
     table.insert(mnem, defs);
@@ -347,13 +343,49 @@ fn install_moves(t: &mut Tbl) {
             vec![
                 d(vec![Op::R(8), Op::Imm(8)], &[0xb8], ModRm::None, 64).flags(PLUSREG | IMM64),
                 d(vec![Op::Fixed("al"), Op::Moffs(1)], &[0xa0], ModRm::None, 8).flags(ONLY64),
-                d(vec![Op::Fixed("ax"), Op::Moffs(2)], &[0xa1], ModRm::None, 16).flags(ONLY64),
-                d(vec![Op::Fixed("eax"), Op::Moffs(4)], &[0xa1], ModRm::None, 32).flags(ONLY64),
-                d(vec![Op::Fixed("rax"), Op::Moffs(8)], &[0xa1], ModRm::None, 64).flags(ONLY64),
+                d(
+                    vec![Op::Fixed("ax"), Op::Moffs(2)],
+                    &[0xa1],
+                    ModRm::None,
+                    16,
+                )
+                .flags(ONLY64),
+                d(
+                    vec![Op::Fixed("eax"), Op::Moffs(4)],
+                    &[0xa1],
+                    ModRm::None,
+                    32,
+                )
+                .flags(ONLY64),
+                d(
+                    vec![Op::Fixed("rax"), Op::Moffs(8)],
+                    &[0xa1],
+                    ModRm::None,
+                    64,
+                )
+                .flags(ONLY64),
                 d(vec![Op::Moffs(1), Op::Fixed("al")], &[0xa2], ModRm::None, 8).flags(ONLY64),
-                d(vec![Op::Moffs(2), Op::Fixed("ax")], &[0xa3], ModRm::None, 16).flags(ONLY64),
-                d(vec![Op::Moffs(4), Op::Fixed("eax")], &[0xa3], ModRm::None, 32).flags(ONLY64),
-                d(vec![Op::Moffs(8), Op::Fixed("rax")], &[0xa3], ModRm::None, 64).flags(ONLY64),
+                d(
+                    vec![Op::Moffs(2), Op::Fixed("ax")],
+                    &[0xa3],
+                    ModRm::None,
+                    16,
+                )
+                .flags(ONLY64),
+                d(
+                    vec![Op::Moffs(4), Op::Fixed("eax")],
+                    &[0xa3],
+                    ModRm::None,
+                    32,
+                )
+                .flags(ONLY64),
+                d(
+                    vec![Op::Moffs(8), Op::Fixed("rax")],
+                    &[0xa3],
+                    ModRm::None,
+                    64,
+                )
+                .flags(ONLY64),
             ],
         );
     }
@@ -779,10 +811,12 @@ fn install_branches(t: &mut Tbl) {
     t.insert("jmp", jmp);
 
     // `callw` outside 16-bit mode is a 16-bit call, with a 16-bit
-    // displacement and return address. (`jmpw` is refused.)
+    // displacement and return address, and `calll` in 16-bit mode a 32-bit
+    // one. (`jmpw` and `jmpl` are refused there.)
     let mut call = vec![
         d(vec![Op::Rel(4)], &[0xe8], ModRm::None, 0),
         d(vec![Op::Rel(2)], &[0xe8], ModRm::None, 16).flags(NO64),
+        d(vec![Op::Rel(4)], &[0xe8], ModRm::None, 32).flags(NO64),
     ];
     call.extend(stack_sizes(
         |w| vec![Op::IndirectRm(w)],
@@ -810,7 +844,10 @@ fn install_branches(t: &mut Tbl) {
     t.insert("lret", lret.clone());
     t.insert("retf", lret.clone());
     // Intel syntax names the 64-bit far return too.
-    t.insert("retfq", lret.into_iter().filter(|r| r.opsize == 64).collect());
+    t.insert(
+        "retfq",
+        lret.into_iter().filter(|r| r.opsize == 64).collect(),
+    );
     t.insert("iret", rex_sizes(|_| vec![], &[0xcf], ModRm::None, 0));
     for (name, bits) in [("iretw", 16u8), ("iretd", 32), ("iretq", 64)] {
         let rows = t["iret"]
@@ -997,12 +1034,7 @@ fn install_system(t: &mut Tbl) {
         t.insert(mnem, selector_rows(&[0x0f, 0x00], ext, stores));
     }
     // Group 7: the descriptor tables themselves.
-    for (mnem, ext) in [
-        ("sgdt", 0u8),
-        ("sidt", 1),
-        ("lgdt", 2),
-        ("lidt", 3),
-    ] {
+    for (mnem, ext) in [("sgdt", 0u8), ("sidt", 1), ("lgdt", 2), ("lidt", 3)] {
         // AT&T may give these a suffix, which then asks for its operand size
         // prefix; the CPU only cares in 16-bit mode, where it chooses a
         // 24-bit base.
@@ -1051,9 +1083,12 @@ fn install_system(t: &mut Tbl) {
     );
     t.insert(
         "bound",
+        // The bounds are a pair of the register's size, which is the size an
+        // Intel memory operand is written with: `qword ptr` for `eax`. GNU as
+        // insists on that; llvm-mc also takes the register's own size.
         vec![
-            d(vec![Op::R(2), Op::M(0)], &[0x62], ModRm::Reg, 16).flags(NO64),
-            d(vec![Op::R(4), Op::M(0)], &[0x62], ModRm::Reg, 32).flags(NO64),
+            d(vec![Op::R(2), Op::M(4)], &[0x62], ModRm::Reg, 16).flags(NO64),
+            d(vec![Op::R(4), Op::M(8)], &[0x62], ModRm::Reg, 32).flags(NO64),
         ],
     );
 
@@ -1089,10 +1124,21 @@ fn install_system(t: &mut Tbl) {
         t.insert(
             mnem,
             vec![
-                d(vec![Op::R(4), Op::Rm(4)], &[0x0f, 0x38, 0xf6], ModRm::Reg, 32)
-                    .pfx(pfx)
-                    .flags(NO66),
-                d(vec![Op::R(8), Op::Rm(8)], &[0x0f, 0x38, 0xf6], ModRm::Reg, 64).pfx(pfx),
+                d(
+                    vec![Op::R(4), Op::Rm(4)],
+                    &[0x0f, 0x38, 0xf6],
+                    ModRm::Reg,
+                    32,
+                )
+                .pfx(pfx)
+                .flags(NO66),
+                d(
+                    vec![Op::R(8), Op::Rm(8)],
+                    &[0x0f, 0x38, 0xf6],
+                    ModRm::Reg,
+                    64,
+                )
+                .pfx(pfx),
             ],
         );
     }

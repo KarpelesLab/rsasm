@@ -43,7 +43,10 @@ fn family(
             .filter(|f| f.0 == w)
             .collect::<Vec<_>>();
         // Intel syntax says the width with a size keyword instead.
-        let rows = mem_rows(&rows).into_iter().map(|r| r.flags(ATT_ONLY)).collect();
+        let rows = mem_rows(&rows)
+            .into_iter()
+            .map(|r| r.flags(ATT_ONLY))
+            .collect();
         add(t, name, rows);
     }
 }

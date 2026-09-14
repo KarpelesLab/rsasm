@@ -116,6 +116,12 @@ pub fn install(t: &mut Tbl) {
                 0,
             ),
             d(
+                vec![Op::V(Vk::Mm), Op::R(8), Op::Imm(1)],
+                &[0x0f, 0xc4],
+                ModRm::Reg,
+                0,
+            ),
+            d(
                 vec![Op::V(Vk::Mm), Op::M(2), Op::Imm(1)],
                 &[0x0f, 0xc4],
                 ModRm::Reg,
@@ -127,8 +133,18 @@ pub fn install(t: &mut Tbl) {
         t,
         "pextrw",
         vec![
-            d(vec![Op::R(4), Op::V(Vk::Mm), Op::Imm(1)], &[0x0f, 0xc5], ModRm::Reg, 0),
-            d(vec![Op::R(8), Op::V(Vk::Mm), Op::Imm(1)], &[0x0f, 0xc5], ModRm::Reg, 0),
+            d(
+                vec![Op::R(4), Op::V(Vk::Mm), Op::Imm(1)],
+                &[0x0f, 0xc5],
+                ModRm::Reg,
+                0,
+            ),
+            d(
+                vec![Op::R(8), Op::V(Vk::Mm), Op::Imm(1)],
+                &[0x0f, 0xc5],
+                ModRm::Reg,
+                0,
+            ),
         ],
     );
 

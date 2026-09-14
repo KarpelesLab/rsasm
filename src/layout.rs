@@ -983,6 +983,28 @@ impl Assembler {
                             if let Some(mut r) = self.build_relocation(e, &kind, id, fi, at, span) {
                                 let (arch, _) = self.frag_arch(si, fi);
                                 if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
+                                    // A byte or word field has no room for a
+                                    // larger addend, which GNU as refuses
+                                    // rather than truncate.
+                                    let bits = kind.size as u32 * 8;
+                                    if !rela
+                                        && bits <= 16
+                                        && matches!(
+                                            kind.encoding,
+                                            crate::section::FieldEncoding::Whole
+                                        )
+                                        && !(-(1i64 << (bits - 1))..(1i64 << bits))
+                                            .contains(&r.addend)
+                                    {
+                                        self.diags.error(
+                                            span,
+                                            format!(
+                                                "value {:#x} does not fit in the {}-byte field it is relocated in",
+                                                r.addend, kind.size
+                                            ),
+                                        );
+                                        continue;
+                                    }
                                     let endian = arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =
                                         &mut self.sections[si].frags[fi].kind

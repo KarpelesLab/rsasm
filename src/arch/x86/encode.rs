@@ -299,10 +299,15 @@ pub fn encode(
         return None;
     }
     let is_string = str_src.is_some() || str_dst.is_some();
-    let mem = roles.rm.or(roles.moffs).and_then(mem_of).or(str_src).or(str_dst.map(|mut d| {
-        d.seg = None;
-        d
-    }));
+    let mem = roles
+        .rm
+        .or(roles.moffs)
+        .and_then(mem_of)
+        .or(str_src)
+        .or(str_dst.map(|mut d| {
+            d.seg = None;
+            d
+        }));
 
     check_decorators(cx, def, &roles, rounding, mem.is_some(), span)?;
     check_vsib(cx, def, mem.as_ref(), span)?;
@@ -336,9 +341,7 @@ pub fn encode(
         // An override naming the segment the address uses anyway is left
         // out, as GNU as does: `ss` for a `bp` or `sp` base, `ds` otherwise.
         // llvm-mc keeps it.
-        Some((m, seg)) if seg.num == if is_string { 3 } else { default_segment(m) } => {
-            prefixes.seg
-        }
+        Some((m, seg)) if seg.num == if is_string { 3 } else { default_segment(m) } => prefixes.seg,
         Some((_, seg)) => match segment_prefix(seg) {
             Some(p) => Some(p),
             None => {
@@ -349,14 +352,14 @@ pub fn encode(
                 return None;
             }
         },
-        // GNU as drops a segment prefix written before a direct `jmp` or
-        // `call`, which have no memory operand for it to apply to. It keeps
-        // `cs` and `ds`, which double as branch hints, and keeps everything
-        // before a conditional jump.
-        None if prefixes.seg.is_some_and(|p| p != 0x2e && p != 0x3e)
-            && (matches!(def.ops.as_slice(), [Op::Far])
-                || matches!(def.ops.as_slice(), [Op::Rel(_)])
-                    && matches!(def.opcode.as_slice(), [0xe8 | 0xe9 | 0xeb])) =>
+        // GNU as drops a segment prefix written before a direct far branch,
+        // or a direct `jmp` or `call`, which have no memory operand for it
+        // to apply to. On the near ones it keeps `cs` and `ds`, which double
+        // as branch hints, and it keeps everything before a conditional jump.
+        None if matches!(def.ops.as_slice(), [Op::Far])
+            || prefixes.seg.is_some_and(|p| p != 0x2e && p != 0x3e)
+                && matches!(def.ops.as_slice(), [Op::Rel(_)])
+                && matches!(def.opcode.as_slice(), [0xe8 | 0xe9 | 0xeb]) =>
         {
             None
         }
@@ -393,7 +396,10 @@ pub fn encode(
         }
     }
     if addr_override && prefixes.addr {
-        cx.error(span, "the address size prefix is already implied by the operands");
+        cx.error(
+            span,
+            "the address size prefix is already implied by the operands",
+        );
         return None;
     }
     if addr_override || prefixes.addr {
@@ -449,7 +455,10 @@ pub fn encode(
                     _ => false,
                 };
             if wants_66 && prefixes.data {
-                cx.error(span, "the operand size prefix is already implied by the operands");
+                cx.error(
+                    span,
+                    "the operand size prefix is already implied by the operands",
+                );
                 return None;
             }
             if wants_66 || prefixes.data {
@@ -736,7 +745,11 @@ pub fn encode(
     if let Some((e, width)) = roles.rel {
         // The wide displacement is as wide as the operand size, which in
         // 16-bit mode is a word.
-        let width = if width == 4 && bits == 16 { 2 } else { width };
+        let width = if width == 4 && bits == 16 && def.opsize == 0 {
+            2
+        } else {
+            width
+        };
         let offset = bytes.len() as u32;
         bytes.extend(std::iter::repeat_n(0u8, width as usize));
         // GNU as routes a plain 64-bit-mode call through the PLT but leaves a
