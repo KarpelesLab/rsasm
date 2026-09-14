@@ -71,8 +71,42 @@ fn install_family(t: &mut Tbl, stem: &str, flavours: &[&str], preds: &[(&str, u8
     }
 }
 
+/// The integer compares' predicates. Their immediate holds three bits, and
+/// only six of the eight values have a name: `3` and `7` are always false and
+/// always true, which nobody writes.
+#[rustfmt::skip]
+const INT: &[(&str, u8)] = &[
+    ("eq", 0), ("lt", 1), ("le", 2), ("neq", 4), ("nlt", 5), ("nle", 6),
+];
+
+#[rustfmt::skip]
+const PCLMUL: [(&str, u8); 4] = [
+    ("lqlq", 0x00), ("hqlq", 0x01), ("lqhq", 0x10), ("hqhq", 0x11),
+];
+
+/// The element flavours the integer compares come in. The unsigned forms are
+/// a different opcode, and carry their `u` before the element letter:
+/// `vpcmpnequw`.
+const INT_FLAVOURS: [&str; 8] = ["b", "w", "d", "q", "ub", "uw", "ud", "uq"];
+
 pub fn install(t: &mut Tbl) {
     let sse: Vec<(&str, u8)> = SSE.iter().enumerate().map(|(i, n)| (*n, i as u8)).collect();
     install_family(t, "cmp", &["ps", "pd", "ss", "sd"], &sse);
     install_family(t, "vcmp", &["ps", "pd", "ss", "sd", "ph", "sh"], AVX);
+    install_family(t, "vpcmp", &INT_FLAVOURS, INT);
+    // The carry-less multiply names which quadword of each operand it takes:
+    // `pclmullqhqdq` is the low one of the destination and the high one of
+    // the source, immediate `0x10`.
+    for stem in ["pclmul", "vpclmul"] {
+        let base = format!("{stem}qdq");
+        let rows = predicate_rows(t, &base);
+        for (name, imm) in PCLMUL {
+            let alias = leak(format!("{stem}{name}dq"));
+            add(
+                t,
+                alias,
+                rows.iter().map(|d| d.clone().suffix(imm)).collect(),
+            );
+        }
+    }
 }

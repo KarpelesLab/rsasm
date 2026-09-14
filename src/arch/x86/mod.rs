@@ -641,6 +641,24 @@ fn assemble_inner(
         );
         return None;
     }
+    // AT&T has no size keyword, so a vector instruction whose memory operand
+    // could be any of several lengths — the narrowing conversions, and
+    // `vfpclassps` — is spelled with an `x`, `y` or `z` on the end instead.
+    // Nothing else can be ambiguous there: an AT&T suffix already names the
+    // width, and every other form is pinned by a register operand.
+    if syntax == Syntax::Att
+        && matches.iter().all(|d| d.enc != Enc::Legacy)
+        && ambiguous_memory_size(bits, &matches, &ops)
+    {
+        cx.error(
+            req.span,
+            format!(
+                "`{mnemonic}` needs the size of its memory operand, \
+                 as in `{mnemonic}x` or `{mnemonic}y`"
+            ),
+        );
+        return None;
+    }
     // `.code16gcc` widens what GCC's 32-bit code expects of the stack: the
     // pushes and pops, calls and returns, and the frame instructions. Jumps
     // and `iret` stay 16-bit.
@@ -1347,6 +1365,7 @@ fn ambiguous_memory_size(bits: u8, matches: &[&Def], ops: &[Operand]) -> bool {
         Op::Rm(w) | Op::M(w) | Op::Moffs(w) | Op::IndirectRm(w) | Op::StrSrc(w) | Op::StrDst(w) => {
             w
         }
+        v @ Op::Vm(..) => v.width(),
         _ => 0,
     };
     // A 64-bit operation outside long mode is no rival.

@@ -42,6 +42,8 @@ while IFS= read -r line; do
   r=${r%% }
   if [ "$g" = "$m" ] && [ "$g" = "$r" ]; then
     printf 'ok   %-44s %s\n' "$line" "$r"
+  elif [ "${g#ERR}" != "$g" ] && [ "${m#ERR}" != "$m" ] && [ "${r#error}" != "$r" ]; then
+    printf 'rej  %-44s %s\n' "$line" "${r%%  -->*}"
   else
     printf 'DIFF %-44s\n       gas: %s\n        mc: %s\n     rsasm: %s\n' "$line" "$g" "$m" "$r"
   fi

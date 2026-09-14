@@ -34,29 +34,29 @@ pub fn ev(ops: Vec<Op>, pfx: u8, esc: &[u8], vlen: u16, w: bool, tuple: Tuple) -
         .evex(vlen, tuple)
 }
 
-const ALL: [u16; 3] = [128, 256, 512];
+pub const ALL: [u16; 3] = [128, 256, 512];
 
 /// Half the register class, for the widening and narrowing conversions.
-fn half(vlen: u16) -> Vk {
+pub fn half(vlen: u16) -> Vk {
     match vlen {
         512 => Vk::Ymm,
         _ => Vk::Xmm,
     }
 }
 
-fn nds(k: Vk) -> Vec<Op> {
+pub fn nds(k: Vk) -> Vec<Op> {
     vec![Op::V(k), Op::Nds(k), Op::Vm(k, 0)]
 }
 
-fn rm(k: Vk) -> Vec<Op> {
+pub fn rm(k: Vk) -> Vec<Op> {
     vec![Op::V(k), Op::Vm(k, 0)]
 }
 
-fn mr(k: Vk) -> Vec<Op> {
+pub fn mr(k: Vk) -> Vec<Op> {
     vec![Op::Vm(k, 0), Op::V(k)]
 }
 
-fn with_imm(mut ops: Vec<Op>) -> Vec<Op> {
+pub fn with_imm(mut ops: Vec<Op>) -> Vec<Op> {
     ops.push(Op::Imm(1));
     ops
 }
@@ -64,7 +64,7 @@ fn with_imm(mut ops: Vec<Op>) -> Vec<Op> {
 /// Rounding control only exists where the register holds a full 512-bit
 /// vector or a single scalar; a 128- or 256-bit packed form has no spare
 /// `L'L` to put the mode in.
-fn rounding_flag(def: Def, flag: u32, vlen: u16) -> Def {
+pub fn rounding_flag(def: Def, flag: u32, vlen: u16) -> Def {
     if vlen == 512 { def.flags(flag) } else { def }
 }
 
@@ -834,7 +834,7 @@ fn install_conversions(t: &mut Tbl) {
     ] {
         for l in ALL {
             let def = ev(
-                vec![Op::V(vk(l)), Op::Vm(half(l), 0)],
+                vec![Op::V(vk(l)), Op::Vm(half(l), (l / 16) as u8)],
                 pfx,
                 &[0x0f, op],
                 l,

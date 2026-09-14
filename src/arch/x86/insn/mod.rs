@@ -11,11 +11,14 @@
 
 pub mod avx;
 pub mod avx512;
+pub mod avx512x;
 pub mod base;
 pub mod cmpalias;
 pub mod fma;
+pub mod lenalias;
 pub mod mmx;
 pub mod sse;
+pub mod vexext;
 pub mod x87;
 
 use super::reg::{Reg, RegClass};
@@ -265,14 +268,24 @@ pub enum Tuple {
     Ovm,
     /// Tuple1 Scalar: one element, sized by `EVEX.W` (4 or 8 bytes).
     T1s,
-    /// Tuple1 Scalar with a fixed byte or word element (`vpbroadcastb`/`w`).
+    /// Tuple1 Scalar with a fixed byte, word or dword element: `vpbroadcastb`
+    /// and `w`, and the single-precision scalars whose `EVEX.W` sizes a
+    /// general register instead (`vcvtss2usi %xmm0, %rax`).
     T1s8,
     T1s16,
+    T1s32,
     /// Tuple4: four elements, sized by `EVEX.W` — the `32x4`/`64x4` inserts,
     /// extracts and broadcasts.
     T4,
     /// `vmovddup`: 8 bytes at 128 bits, the whole register above that.
     Dup,
+    /// Mem128: always sixteen bytes, whatever the vector length. The shifts
+    /// that take their count from an `xmm` register read one of these.
+    M128,
+    /// Tuple2 and Tuple8: two or eight elements, sized by `EVEX.W` — the
+    /// `32x2`/`64x2` and `32x8` sub-vector broadcasts, inserts and extracts.
+    T2,
+    T8,
     // The manual defines a few more (Tuple1 Fixed, Tuple2, Tuple8, Mem128)
     // for instruction sets not in the table yet; they belong here when a row
     // needs one.
@@ -308,7 +321,11 @@ impl Tuple {
             Tuple::T1s => elem,
             Tuple::T1s8 => 1,
             Tuple::T1s16 => 2,
+            Tuple::T1s32 => 4,
+            Tuple::T2 => elem * 2,
             Tuple::T4 => elem * 4,
+            Tuple::T8 => elem * 8,
+            Tuple::M128 => 16,
             Tuple::Dup => {
                 if vbytes == 16 {
                     8
@@ -462,9 +479,13 @@ fn build() -> Tbl {
     mmx::install(&mut t);
     sse::install(&mut t);
     avx::install(&mut t);
+    vexext::install(&mut t);
     avx512::install(&mut t);
+    avx512x::install(&mut t);
+    vexext::install_late(&mut t);
     fma::install(&mut t);
     cmpalias::install(&mut t);
+    lenalias::install(&mut t);
     t
 }
 
@@ -559,10 +580,14 @@ mod tests {
             assert!((1..=3).contains(&d.map), "`{m}`: bad map in {d:?}");
             assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
             assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
-            // A VEX or EVEX suffix byte is a folded compare predicate; 3DNow!
-            // is the only legacy family that has one.
+            // A VEX or EVEX suffix byte is an immediate folded into the name
+            // (`vcmpeqps`, `vpcmpltud`, `vpclmullqhqdq`); 3DNow! is the only
+            // legacy family with one that is not.
             assert!(
-                d.suffix.is_none() || m.starts_with("vcmp"),
+                d.suffix.is_none()
+                    || ["vcmp", "vpcmp", "vpclmul"]
+                        .iter()
+                        .any(|p| m.starts_with(p)),
                 "`{m}`: unexpected suffix byte"
             );
             if d.enc == Enc::Vex {
@@ -592,7 +617,10 @@ mod tests {
             if d.flags & (EVEX_ER | EVEX_SAE) != 0 {
                 assert_eq!(d.enc, Enc::Evex, "`{m}`: {d:?}");
                 // Packed forms need the full 512 bits; scalars ignore L'L.
-                let scalar = matches!(d.tuple, Tuple::T1s | Tuple::None);
+                let scalar = matches!(
+                    d.tuple,
+                    Tuple::T1s | Tuple::T1s16 | Tuple::T1s32 | Tuple::None
+                );
                 assert!(d.vlen == 512 || scalar, "`{m}`: {d:?}");
             }
         }
