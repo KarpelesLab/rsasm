@@ -182,6 +182,16 @@ pub struct LexConfig {
     /// `AF'`, the Z80's alternate register pair, is a name: a quote straight
     /// after `AF` is its prime rather than the start of a character literal.
     pub primed_af: bool,
+    /// Whether `.` separates a bit number from the byte it belongs to, as it
+    /// does on the MCS-51; see
+    /// [`crate::arch::Architecture::bit_addressing`]. A `.` is then never
+    /// part of an identifier, and starts one only before a letter, so `P1.3`
+    /// and `20H.3` come out as three tokens while ca65's `.byte` stays one.
+    pub bit_dot: bool,
+    /// Extra words that define a symbol where a label would go, in a dialect
+    /// where a bare word can be a directive; see
+    /// [`crate::arch::Architecture::equates`].
+    pub equates: &'static [&'static str],
     /// Recognises the active backend's mnemonics, in a dialect where a word
     /// in the first column is a label unless it is an instruction or a
     /// directive; see [`crate::arch::Architecture::mnemonics`].
@@ -205,6 +215,8 @@ impl LexConfig {
                 at_in_idents: false,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             // Numbers, names, strings and NASM's own operators are read by
@@ -223,6 +235,8 @@ impl LexConfig {
                 at_in_idents: false,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             // Checked against vasm and GNU as --mri, which agree on every rule.
@@ -240,6 +254,8 @@ impl LexConfig {
                 at_in_idents: false,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             Dialect::Renesas => LexConfig {
@@ -256,6 +272,8 @@ impl LexConfig {
                 at_in_idents: false,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             // CC-RL: `;` comments, and `#` ones at the start of a line
@@ -278,6 +296,8 @@ impl LexConfig {
                 at_in_idents: true,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             // CC-RH: the same comments (§5.1.1 (5), page 383, and the `#` row
@@ -297,6 +317,8 @@ impl LexConfig {
                 at_in_idents: true,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             // CC-RX: `;` comments only, since `#` is the immediate sigil
@@ -317,6 +339,8 @@ impl LexConfig {
                 at_in_idents: false,
                 dollar_in_idents: true,
                 primed_af: false,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
             // The 8-bit references agree on `;` comments, no statement
@@ -338,6 +362,8 @@ impl LexConfig {
                 at_in_idents: false,
                 dollar_in_idents: true,
                 primed_af: true,
+                bit_dot: false,
+                equates: &[],
                 mnemonic: None,
             },
         }
@@ -737,8 +763,24 @@ impl<'a> Lexer<'a> {
 
         let at = self.config.at_in_idents;
         let dollar = self.config.dollar_in_idents;
-        let cont = |b: u8| (is_ident_cont(b) && (dollar || b != b'$')) || (at && b == b'@');
-        if is_ident_start(c) || (at && c == b'@') || (c == b'.' && cont(self.peek_at(1))) {
+        let dots = !self.config.bit_dot;
+        let cont = |b: u8| {
+            (is_ident_cont(b) && (dots || b != b'.') && (dollar || b != b'$')) || (at && b == b'@')
+        };
+        // A leading `.` introduces a directive name. Where `.` is the bit
+        // separator it may only do so before a letter, so `20H.3` splits.
+        let dot_starts = c == b'.'
+            && if dots {
+                cont(self.peek_at(1))
+            } else {
+                is_ident_start(self.peek_at(1))
+            };
+        if is_ident_start(c) || (at && c == b'@') || dot_starts {
+            // The leading `.` is taken here, since where it is the bit
+            // separator it does not continue a name.
+            if c == b'.' {
+                self.pos += 1;
+            }
             // Identifiers may contain non-ASCII characters, so advance by
             // whole characters and never leave `pos` inside one.
             while !self.at_end() && cont(self.peek()) {

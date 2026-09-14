@@ -58,6 +58,34 @@ llvm-mc on are forms only GNU as accepts and nothing is written in: Intel
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
 
+## The 8051
+
+`mcs51.py` generates random whole 8051 programs from a table of forms written
+from Intel's MCS-51 instruction set — labels with forward and backward
+references, generic `JMP` and `CALL`, bit addresses, `DB`/`DW`/`DS`, and
+code placed just short of a 2 KiB block boundary — and assembles each with
+rsasm, with the Macro Assembler AS and with SDCC's sdas8051 and sdld, all
+from `tools/oracles/build.sh`. A program both references can read is written
+in both spellings and compared four ways; the rest, AS only.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/mcs51.py fuzz --count 20000
+$ tools/fuzz/mcs51.py fuzz --count 20000 --as-only --seed 7
+$ tools/fuzz/mcs51.py corpus as     # the one-line corpus for tools/xas-diff
+```
+
+`--mutations` (default 0.25) is the fraction of programs made invalid: an
+operand out of range, reserved space that pushes a branch out of reach.
+Programs are classified as in the module comment: **rsasm** findings, and
+the known places where the references and rsasm part — **lenient** (sdas8051
+truncates an operand AS and rsasm refuse), **strict** (sdld refuses an `LJMP`
+below 0 that AS takes as a 16-bit value), **boundary** (an `AJMP` or `ACALL`
+in the last two bytes of a block; see `tools/xas-diff/README.md`) and
+**first-pass** (AS stops after a first pass in which it guessed a forward
+`JMP` or `CALL` short). Two runs of 40,000 programs each, one mixed and one
+AS-only, find no case where rsasm differs.
+
 ## AVR
 
 `avr.py` generates whole random AVR programs and compares what `avr-elf-as`
