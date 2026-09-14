@@ -69,13 +69,15 @@ assembler, not against rsasm's own idea of the manual. See
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
 | MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
 | Intel 8080, in Intel mnemonics | `i8080` | AS | 278 |
+| Intel 8051 (MCS-51), in Intel mnemonics | `8051` | AS, sdas8051 | 960 |
 
 The 8-bit targets are checked against the assemblers their source is written
 for: cc65's ca65 for the 6502, GNU as and vasm for the Z80, and the Macro
 Assembler AS for the 8080 — GNU as has no Intel mnemonics, and vasm's `RST`
-takes a Zilog address. Tests also walk each complete opcode space and assert
-that exactly the documented encodings exist. They are for flat binaries; ELF
-has no class for a 16-bit target. See [the 8-bit dialect](#the-8-bit-dialect).
+takes a Zilog address — and for the 8051, AS and SDCC's sdas8051. Tests also
+walk each complete opcode space and assert that exactly the documented
+encodings exist. They are for flat binaries, or Intel HEX; ELF has no class
+for a 16-bit target. See [the 8-bit dialect](#the-8-bit-dialect).
 The 78K0 has no freely available assembler: its table was extracted
 from NEC's instruction manual, checked against the byte counts in a second NEC
 manual, and cross-checked against MAME's disassembler, which agrees on all
@@ -94,7 +96,7 @@ but 18 forms where both manuals show MAME to be wrong.
 - several targets in one file, switched with `.arch`; see
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
-  and flat binaries
+  flat binaries, and flat images as Intel HEX (`-f ihex`)
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
@@ -145,6 +147,10 @@ but 18 forms where both manuals show MAME to be wrong.
   the `ZEROPAGE` segment's zero-page addressing for labels defined in it
 - 8080: Intel's word operators (`AND`, `SHR`, `HIGH`, `MOD`), which AS does
   not read either
+- 8051: the 8052's timer 2 names and the extended parts (80C320, 80C390,
+  80251 and the rest); address spaces for `DATA`, `BIT`, `CODE` and the other
+  defining words, which define plain values; and ASM51's controls
+  (`$MOD51`, `$NOMOD51`), segments and relocatable output
 - Z80: the `DD CB d op,r` forms that also write a register, which vasm
   refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
   `.byte`, `.word` and `.space`, or the 8-bit dialect)
@@ -185,15 +191,15 @@ rsasm [options] <input.s>...
 
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64, bin or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
-                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080)
+                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
-      --base <addr>  base address for `bin` output
+      --base <addr>  base address for `bin` and `ihex` output
       --hex          print the output as hex instead of writing a file
   -g                 describe the assembly source in DWARF line information
       --gdwarf-<n>   the same, as DWARF version <n> (2 to 5); the version
@@ -202,8 +208,8 @@ rsasm [options] <input.s>...
 ```
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
-`riscv`, `powerpc`, `mips`, `sparc`, `retro`, `m68k`, `superh`, `rx`, `rl78`,
-`v850` and `k78`:
+`riscv`, `powerpc`, `mips`, `sparc`, `retro` (the Z80, 6502, 8080 and 8051),
+`m68k`, `superh`, `rx`, `rl78`, `v850` and `k78`:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -222,7 +228,7 @@ source is normally written in.
 | `ccrl` | `.DB "A",1`, `$IF`, `0x10` or `10H` (Renesas CC-RL) | — |
 | `ccrh` | `.dw #label`, `$IF`, `0x10` (Renesas CC-RH) | — |
 | `ccrx` | `.SECTION P,CODE`, `.LWORD 10H`, `#1:8` (Renesas CC-RX) | — |
-| `8bit` | `lda #$12`, `ld a,(ix+5)`, `MVI A,12H`, `DB 1`, `; comment` | 6502, Z80, 8080 |
+| `8bit` | `lda #$12`, `ld a,(ix+5)`, `MVI A,12H`, `SETB P1.3`, `DB 1`, `; comment` | 6502, Z80, 8080, 8051 |
 | `nasm` | `db 1`, `; comment`, `mov eax, [rel x]`, `%macro`, `0FFh` | — |
 
 ```console
@@ -249,9 +255,9 @@ vasm and GNU as `--mri`. Three rules in it catch people out:
 
 ### The 8-bit dialect
 
-`8bit` reads the source people have for the 6502, the Z80 and the 8080:
-ca65's for the 6502, Zilog's as GNU as and vasm read it, and Intel's as AS
-reads it. Their spellings are one language — `$12`, `12H`, `%1010` and
+`8bit` reads the source people have for the 6502, the Z80, the 8080 and the
+8051: ca65's for the 6502, Zilog's as GNU as and vasm read it, and Intel's as
+AS reads it. Their spellings are one language — `$12`, `12H`, `%1010` and
 `0x12` numbers, `$` and `*` for the location counter, `<`, `>` and `^` for
 the bytes of an address, `DB`/`DEFB`/`.byte`, `DW`/`DEFW`/`.word`,
 `DS`/`DEFS`/`.res`, `EQU`, `=`, `DEFL`/`SET`, `IF`/`ENDIF`, `MACRO`/`ENDM` or
@@ -289,6 +295,46 @@ $ rsasm -a z80 -f bin --hex hello.asm
   statement's address.
 - A comparison is 1 when true, as in ca65 and AS; GNU as and vasm give -1.
   The operators have C's precedence, where ca65 binds `&` as tightly as `*`.
+
+The 8051 adds what its source needs, with AS as the reference and SDCC's
+sdas8051 as the second:
+
+```console
+$ cat blink.asm
+LED     BIT     P1.0
+        ORG     30H
+MAIN:   MOV     TMOD,#01H
+LOOP:   CPL     LED
+        ACALL   DELAY
+        SJMP    LOOP
+DELAY:  DJNZ    R7,DELAY
+        RET
+$ rsasm -a 8051 -f ihex --hex blink.asm
+:0C003000758901B290113980FADFFE22C0
+:00000001FF
+```
+
+- **A bit is written `byte.bit`,** `P1.3` or `20H.5`, and the `.` splits the
+  whole operand as AS splits it, so `20H+1.3` is bit 3 of 21H. Only 20H to
+  2FH and the registers at a multiple of 8 have bits; AS warns about other
+  bytes, or for 30H to 3FH says nothing, and assembles a bit of some other
+  byte, where rsasm refuses them.
+- **The register and bit names are predefined,** as AS's `stddef51.inc`
+  defines them for the 8051, in upper and lower case, with its `USING` and
+  the `AR0`–`AR7` names; a label or `EQU` may take one over. `BIT`, `DATA`,
+  `IDATA`, `XDATA` and `CODE`, and AS's `SFR` and `SFRB`, define a name.
+- **`CY` is the carry flag wherever `C` could stand,** as in AS: `CPL CY` is
+  the one-byte `CPL C`, and `JB CY,$` tests bit D7H.
+- **`JMP` and `CALL` become the shortest jump that reaches,** `SJMP`, then
+  `AJMP` or `ACALL`, then `LJMP` or `LCALL`, with every size picked again on
+  each pass, as AS picks them.
+- **`AJMP` and `ACALL` reach the 2 KiB block of the address after them,**
+  which is where the CPU takes the block from. AS and sdas8051 test the
+  instruction's own address, and differ from rsasm, and the CPU, only for
+  one in the last two bytes of a block.
+- **`DW` is low byte first,** as in AS; sdas8051's `.dw` is high byte first.
+  A 16-bit instruction operand, `LJMP 1234H` or `MOV DPTR,#1234H`, is high
+  byte first in every assembler, as the CPU reads it.
 
 ### Renesas CC-RL, CC-RH and CC-RX
 
@@ -502,12 +548,13 @@ independent assembler, and compare the bytes:
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
   V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
-  6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
+  6502, cc65's ca65 for the 6502, AS for the 8080 and AS and SDCC's sdas8051
+  for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
   the reference for literal pools and interworking. `tools/oracles/build.sh`
-  builds the references from checksum-pinned sources. 7,294 of 7,294 match
-  across twenty variants.
+  builds the references from checksum-pinned sources. 8,254 of 8,254 match
+  across twenty-three variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
@@ -532,7 +579,10 @@ modes and both syntaxes, some of them deliberately invalid, and compares
 rsasm's bytes, relocations and accept/reject decision with GNU as's and
 llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
 from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. See `tools/fuzz/README.md`.
+case where rsasm differs from both. The 8051 is fuzzed with whole programs:
+`tools/fuzz/mcs51.py` assembles them with AS and sdas8051 too, and 80,000
+programs find no case where rsasm differs from the references outside the
+places this README describes. See `tools/fuzz/README.md`.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
