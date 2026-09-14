@@ -8,7 +8,8 @@ pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Syntax};
 use crate::cursor::Cursor;
-use crate::lexer::TokKind;
+use crate::expr::{BinOp, ExprKind, ExprRef};
+use crate::lexer::{LocalDir, TokKind};
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
@@ -340,6 +341,9 @@ fn assemble_inner(
             return None;
         }
         ops.push(o);
+    }
+    for o in &mut ops {
+        fold_operand(cx, o);
     }
 
     // The table is written in Intel order, so AT&T operands are reversed —
@@ -1013,6 +1017,80 @@ fn default_operand_size(bits: u8, gcc16: bool, stack: bool) -> u8 {
         16 if !gcc16 => 16,
         _ => 32,
     }
+}
+
+/// Folds the label differences in an operand's expressions; see
+/// [`fold_differences`].
+fn fold_operand(cx: &mut AsmCtx<'_>, o: &mut Operand) {
+    let fold = |cx: &mut AsmCtx<'_>, e: &mut ExprRef| {
+        if cx.constant(*e).is_none() {
+            *e = fold_differences(cx, *e);
+        }
+    };
+    match &mut o.kind {
+        OperandKind::Imm(e) | OperandKind::Rel(e) => fold(cx, e),
+        OperandKind::Mem(m) => {
+            if let Some(e) = &mut m.disp {
+                fold(cx, e);
+            }
+        }
+        OperandKind::FarPtr { seg, off } => {
+            fold(cx, seg);
+            fold(cx, off);
+        }
+        _ => {}
+    }
+}
+
+/// Replaces each difference of two labels in `e` with the distance between
+/// them, where nothing emitted in between can change size.
+///
+/// GNU as folds such a difference as it reads the expression, so
+/// `addl $_GLOBAL_OFFSET_TABLE_+(.-1b), %ebx` is a relocation against the
+/// GOT with a constant addend, and `movl $(2f-1f), %eax` a constant that can
+/// choose a short immediate. The expression evaluator has room for only one
+/// symbol on either side of a sum, so without this the first would be an
+/// error.
+fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
+    let node = cx.exprs.get(e).clone();
+    match node.kind {
+        ExprKind::Binary(op, l, r) => {
+            if op == BinOp::Sub
+                && let (Some(to), Some(from)) = (label_position(cx, l), label_position(cx, r))
+                && let Some(d) = cx.fixed_distance(from, to)
+            {
+                return cx.exprs.int(d as u64, node.span);
+            }
+            let (fl, fr) = (fold_differences(cx, l), fold_differences(cx, r));
+            if (fl, fr) == (l, r) {
+                e
+            } else {
+                cx.exprs.alloc(ExprKind::Binary(op, fl, fr), node.span)
+            }
+        }
+        ExprKind::Unary(op, x) => match fold_differences(cx, x) {
+            fx if fx == x => e,
+            fx => cx.exprs.alloc(ExprKind::Unary(op, fx), node.span),
+        },
+        ExprKind::Modifier(name, x) => match fold_differences(cx, x) {
+            fx if fx == x => e,
+            fx => cx.exprs.alloc(ExprKind::Modifier(name, fx), node.span),
+        },
+        _ => e,
+    }
+}
+
+/// Where a label an expression names was defined, or where `.` is.
+fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::SectionId, u32)> {
+    let node = cx.exprs.get(e);
+    let id = match node.kind {
+        ExprKind::Here => return Some(cx.here()),
+        ExprKind::SymId(id) => id,
+        ExprKind::Sym(name) => cx.symbols.lookup(name)?,
+        ExprKind::LocalRef(n, LocalDir::Backward) => cx.symbols.local_backward(n, node.span)?,
+        _ => return None,
+    };
+    cx.label_position(id)
 }
 
 /// True when an unsized memory operand leaves more than one width possible.

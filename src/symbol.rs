@@ -190,7 +190,7 @@ impl SymbolTable {
     }
 
     /// Resolves a backward reference `Nb` to the most recent `N:`.
-    pub fn local_backward(&mut self, n: u32, _span: Span) -> Option<SymbolId> {
+    pub fn local_backward(&self, n: u32, _span: Span) -> Option<SymbolId> {
         let slots = self.locals.get(&n)?;
         if slots.defined == 0 {
             return None;

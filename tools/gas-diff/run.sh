@@ -80,15 +80,18 @@ compare() { # name, source
 }
 
 # What two objects have to agree on: the .text bytes, then each relocation as
-# offset, type and symbol. The symbol's index in the table and its value are
-# left out, since the two assemblers order their symbol tables differently.
+# its section, offset, type and symbol, sorted. The symbol's index in the
+# table and its value are left out, since the two assemblers order their
+# symbol tables differently, and so is the order of the relocations: GNU as
+# writes those of relaxable branches last.
 canon() { # object
+  # An empty .text leaves objcopy nothing to write.
   objcopy -O binary --only-section=.text "$1" "$1.bin" 2>/dev/null
-  xxd -p "$1.bin" | tr -d '\n'
+  [ -f "$1.bin" ] && xxd -p "$1.bin" | tr -d '\n'
   echo
   readelf -rW "$1" | awk '
-    /^Relocation section/ { print $3; next }
-    /^ *[0-9a-f]+ +[0-9a-f]+ +R_/ { print $1, $3, $5, $6, $7 }'
+    /^Relocation section/ { section = $3; next }
+    /^ *[0-9a-f]+ +[0-9a-f]+ +R_/ { print section, $1, $3, $5, $6, $7 }' | sort
 }
 
 compare_object() { # name, source
