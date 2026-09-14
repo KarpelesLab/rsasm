@@ -626,13 +626,24 @@ def join_operands(form, ops, gnu):
     return ",".join(texts)
 
 
+NAMES = set()
+
+
 def spell_mnemonic(name, rng, gnu):
-    """`faddx` as `fadd.x`, or as it is in GNU syntax sometimes."""
-    if name[-1] in "bwlsdxp" and len(name) > 2 and rng.random() < (0.7 if gnu else 1.0):
-        stem = name[:-1]
-        # Only split where the stem is a real prefix of other sized forms,
-        # which GNU as does not care about but reads better.
-        return stem + "." + name[-1]
+    """`faddx` as `fadd.x` (always in Motorola syntax, mostly in GNU's).
+
+    GNU as only removes the dot, so any split would do; this one splits off a
+    size letter where the stem is a mnemonic too or has other sizes, which
+    leaves `lpstop`, `pflushs` and `cinvl` alone."""
+    if not NAMES:
+        rows, aliases = gen.opcodes(BINUTILS)
+        NAMES.update(r[0] for r in rows)
+        NAMES.update(a for a, _ in aliases)
+    sizes = "bwlsdxp" if name.startswith("f") else "bwl"
+    stem, c = name[:-1], name[-1]
+    sized = c in sizes and (stem in NAMES or any(stem + o in NAMES for o in sizes if o != c))
+    if sized and rng.random() < (0.7 if gnu else 1.0):
+        return stem + "." + c
     return name
 
 
@@ -972,23 +983,61 @@ def fuzz(a):
     return 1 if findings else 0
 
 
+# The CPUs the corpora are for, in the order `corpus --first` gives each form
+# to the first one that has it.
+CORPUS_ORDER = ["68020", "68030", "68040", "68060", "cpu32", "fidoa", "5475", "54455", "5208",
+                "5206", "5407"]
+
+
 def corpus(a):
-    """One line per form the CPU has, which that form and no earlier one takes."""
+    """One line per form the CPU has, which that form and no earlier one takes.
+
+    With `--first`, only the forms no CPU before this one in CORPUS_ORDER
+    has, so the corpora for all of them cover each form once."""
     by_name, archs = load(a.all)
     arch = archs[CPUS[a.cpu][3]]
+    earlier = 0
+    if a.first:
+        for cpu in CORPUS_ORDER[:CORPUS_ORDER.index(a.cpu)]:
+            earlier |= archs[CPUS[cpu][3]]
     rng = random.Random(a.seed)
     g = Gen(rng, arch, a.syntax)
+    todo = []
+    lines = {}
     for name, forms in by_name.items():
         if a.only and not re.search(a.only, name):
             continue
         for form in forms:
-            if not form.arch & arch:
+            if not form.arch & arch or form.arch & earlier:
+                continue
+            todo.append((name, form, forms))
+            if mri_skips(g, form, forms):
+                lines[(name, form.index)] = "# %s %s: GNU as --mri reads it differently" % (
+                    name, form.args)
+    # Operands are drawn without regard to what the CPU can address (a
+    # ColdFire index is a long, say), so a line GNU as refuses is drawn again.
+    for _round in range(40):
+        batch = []
+        for item in todo:
+            name, form, forms = item
+            if (name, form.index) in lines:
                 continue
             case = make_case(g, form, forms, rng, exclusive=True)
             if case is None:
-                print("# %s %s: no operands only this form takes" % (name, form.args))
-                continue
-            print("\t" + case.text)
+                lines[(name, form.index)] = "# %s %s: no operands only this form takes" % (
+                    name, form.args)
+            else:
+                batch.append(((name, form.index), case))
+        if not batch:
+            break
+        with tempfile.TemporaryDirectory() as d:
+            results, _ = assemble("ref", a.cpu, a.syntax, [c for _, c in batch], d)
+        for (key, case), res in zip(batch, results):
+            if res[0] == "ok":
+                lines[key] = ("\t" if g.syntax != "gas" else "") + case.text
+    for name, form, _ in todo:
+        print(lines.get((name, form.index),
+                        "# %s %s: no line GNU as takes was found" % (name, form.args)))
     return 0
 
 
@@ -1015,6 +1064,8 @@ def main():
         p.add_argument("--seed", type=int, default=1)
         p.add_argument("--only", default=None)
         p.add_argument("--all", action="store_true")
+        if name == "corpus":
+            p.add_argument("--first", action="store_true")
         if name == "fuzz":
             p.add_argument("--count", type=int, default=10000)
             p.add_argument("--batch", type=int, default=150)
