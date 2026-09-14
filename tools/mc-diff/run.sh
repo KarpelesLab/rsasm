@@ -29,6 +29,9 @@ i386|i386|i386|
 i386-intel|i386|i386||.intel_syntax noprefix
 i8086|i386|i386||.code16
 i8086-intel|i386|i386||.code16\\n.intel_syntax noprefix
+x86-64-simd|x86-64|x86_64|
+x86-64-simd-intel|x86-64|x86_64||.intel_syntax noprefix
+i386-simd|i386|i386|
 aarch64|aarch64|aarch64|
 arm|arm|armv7|
 thumb|thumb|thumbv7|

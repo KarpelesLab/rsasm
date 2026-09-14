@@ -200,7 +200,7 @@ class SimdCase:
                 hi = {"i8": 0xff, "i16": 0xffff, "i32": 0x7fffffff}[kind]
                 v = rng.choice([0, 1, 3, 0x11, 0x7f, hi])
                 if f.mnem.startswith("vpermil2"):
-                    v = rng.randrange(4)
+                    v = rng.choice([0, 1, 2, 3, 15, 16])
                 ops.append(Opnd(kind="imm", value=v))
                 continue
             if kind == "xmm0":

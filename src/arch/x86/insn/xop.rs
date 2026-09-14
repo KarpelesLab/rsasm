@@ -251,7 +251,7 @@ fn install_xop(t: &mut Tbl) {
             vec![row(vec![Op::V(x), Op::Vm(x, 0)], 0x00, 9, op, 128, false)],
         );
     }
-    // `vpermil2ps`: four vector operands and a two-bit control that shares
+    // `vpermil2ps`: four vector operands and a four-bit control that shares
     // the `is4` byte.
     for (mnem, op) in [("vpermil2ps", 0x48u8), ("vpermil2pd", 0x49)] {
         for l in [128u16, 256] {

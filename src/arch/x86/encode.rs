@@ -723,10 +723,10 @@ pub fn encode(
     // `vpermil2ps`): the register in the top nibble, the value in the bottom.
     let mut imm = roles.imm;
     if let (Some(r), Some((e, 1))) = (roles.is4, roles.imm) {
-        let Some(v) = cx.constant(e).filter(|v| (0..=3).contains(v)) else {
+        let Some(v) = cx.constant(e).filter(|v| (0..=15).contains(v)) else {
             cx.error(
                 cx.exprs.span(e),
-                "this immediate shares its byte with a register and must be 0 to 3",
+                "this immediate shares its byte with a register and must be 0 to 15",
             );
             return None;
         };
