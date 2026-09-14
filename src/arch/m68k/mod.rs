@@ -98,6 +98,31 @@ impl Architecture for M68k {
         true
     }
 
+    /// GNU as for m68k treats only a weak symbol as one the linker may
+    /// replace: a branch to a global symbol in the same section is resolved.
+    fn defers_to_linker(&self, r: &crate::arch::SameSectionRef<'_>) -> bool {
+        r.binding == crate::symbol::Binding::Weak
+    }
+
+    /// And a relocation against a global symbol names its section.
+    fn relocates_globals_by_section(&self) -> bool {
+        true
+    }
+
+    /// GNU as aligns the three standard sections to 4 bytes from the start,
+    /// and no other.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        match name {
+            ".text" | ".data" | ".bss" => 4,
+            _ => 1,
+        }
+    }
+
     fn default_dialect(&self) -> crate::lexer::Dialect {
         crate::lexer::Dialect::Motorola
     }

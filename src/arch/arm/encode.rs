@@ -12,7 +12,7 @@ use super::reg::{self, Reg};
 use super::{Insn, reloc};
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, RelocSymbol, Variant};
 use crate::source::Span;
 
 /// `nop` in A32: `mov r0, r0` would do, but the architectural hint is this.
@@ -583,7 +583,9 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             let kind = FixupKind::pcrel(4, 8)
                 .with_field(26, 2)
                 .with_reloc(reloc::CALL)
-                .scatter(scatter_blx);
+                .scatter(scatter_blx)
+                .relocated_in_objects()
+                .with_reloc_symbol(RelocSymbol::Symbol);
             Some(branch_variant(0xfa00_0000, e, kind, ins.span))
         }
         _ => {
@@ -592,13 +594,28 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 return None;
             };
             let link = ins.mnem == Mnem::Bl;
-            let reloc = if link { reloc::CALL } else { reloc::JUMP24 };
+            // A conditional `bl` is `R_ARM_JUMP24`, as the ABI requires:
+            // only an unconditional one may become a `blx`.
+            let reloc = if link && ins.cond == AL {
+                reloc::CALL
+            } else {
+                reloc::JUMP24
+            };
             // The 24-bit field counts words, and the PC an instruction reads
             // is two instructions ahead of itself: hence the +8 adjustment.
-            let kind = FixupKind::pcrel(4, 8)
+            let mut kind = FixupKind::pcrel(4, 8)
                 .with_field(26, 4)
                 .with_reloc(reloc)
                 .scatter(scatter_branch);
+            // llvm-mc, the reference, leaves every `bl` to the linker, even
+            // to a label beside it, against the label itself: the linker
+            // turns it into `blx` if the target is Thumb code. A `b` it
+            // resolves.
+            if link {
+                kind = kind
+                    .relocated_in_objects()
+                    .with_reloc_symbol(RelocSymbol::Symbol);
+            }
             let w = word(ins.cond, if link { 0x0b00_0000 } else { 0x0a00_0000 });
             Some(branch_variant(w, e, kind, ins.span))
         }

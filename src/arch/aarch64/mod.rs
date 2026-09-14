@@ -88,6 +88,18 @@ impl Architecture for AArch64 {
         true
     }
 
+    /// llvm-mc, the reference, aligns every executable section to the 4
+    /// bytes of an instruction, whatever is in it. GNU as instead aligns a
+    /// section of any kind once an instruction is assembled into it.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        _name: &str,
+        flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        if flags.exec { 4 } else { 1 }
+    }
+
     /// AArch64 writes immediates as `#1`, so `#` is a comment only in the
     /// first column and `//` is the comment everywhere else.
     fn comments(&self) -> crate::arch::CommentSyntax {

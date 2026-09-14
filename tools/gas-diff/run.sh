@@ -10,13 +10,19 @@
 #
 # instructions.txt holds one instruction per line.
 # programs.txt holds multi-line snippets separated by `=== <name>` lines.
+# x86-64-relocs.txt and i386-relocs.txt hold snippets in the same format that
+# are compared as whole objects, `as --64` and `as --32` against rsasm's
+# x86-64 and i386: every allocated section's header and bytes, the global and
+# undefined symbols, and the relocations, as tools/mc-diff/canon.sh prints
+# them. That part needs llvm-readobj and llvm-objcopy, and is skipped without.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
 command -v as >/dev/null || { echo "GNU as not found; skipping" >&2; exit 0; }
-cargo build --quiet --manifest-path "$root/Cargo.toml" --example hexdump || exit 1
+cargo build --quiet --manifest-path "$root/Cargo.toml" --example hexdump --bin rsasm || exit 1
 hexdump="$root/target/debug/examples/hexdump"
+rsasm="$root/target/debug/rsasm"
 
 gas() {
   local d
@@ -56,28 +62,73 @@ run_lines() {
   done < "$1"
 }
 
-run_snippets() {
-  local snippet="" name=""
+compare_object() { # as flag, rsasm arch, name, source
+  local d g r
+  d=$(mktemp -d)
+  printf '%s\n' "$4" > "$d/in.s"
+  if as "$1" -o "$d/g.o" "$d/in.s" 2> "$d/err"; then
+    g=$("$root/tools/mc-diff/canon.sh" "$d/g.o")
+  else
+    g="GAS-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
+  fi
+  if "$rsasm" -a "$2" -o "$d/r.o" "$d/in.s" 2> "$d/err"; then
+    r=$("$root/tools/mc-diff/canon.sh" "$d/r.o")
+  else
+    r="RSASM-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+  if [ "$g" = "$r" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "### [$2] $3 (object)"
+    printf '%s\n' "$4" | sed 's/^/    /'
+    echo "  gas:"
+    printf '%s\n' "$g" | sed 's/^/    /'
+    echo "  rsasm:"
+    printf '%s\n' "$r" | sed 's/^/    /'
+  fi
+}
+
+run_snippets() { # file [compare function and its leading arguments]
+  local file=$1 snippet="" name=""
+  shift
+  [ $# -eq 0 ] && set -- compare
   while IFS= read -r line; do
     case "$line" in
       "==="*)
-        [ -n "$snippet" ] && compare "$name" "$snippet"
+        [ -n "$snippet" ] && "$@" "$name" "$snippet"
         snippet=""; name="${line#=== }" ;;
       *) snippet="$snippet$line
 " ;;
     esac
-  done < "$1"
-  [ -n "$snippet" ] && compare "$name" "$snippet"
+  done < "$file"
+  [ -n "$snippet" ] && "$@" "$name" "$snippet"
+  return 0
+}
+
+run_objects() { # file
+  if ! command -v llvm-readobj > /dev/null || ! command -v llvm-objcopy > /dev/null; then
+    echo "llvm-readobj or llvm-objcopy not found; skipping $(basename "$1")" >&2
+    return 0
+  fi
+  case "$(basename "$1")" in
+    i386-*) run_snippets "$1" compare_object --32 i386 ;;
+    *) run_snippets "$1" compare_object --64 x86-64 ;;
+  esac
 }
 
 if [ $# -gt 0 ]; then
   case "$1" in
+    *relocs*) run_objects "$1" ;;
     *programs*) run_snippets "$1" ;;
     *) run_lines "$1" ;;
   esac
 else
   run_lines "$here/instructions.txt"
   run_snippets "$here/programs.txt"
+  run_objects "$here/x86-64-relocs.txt"
+  run_objects "$here/i386-relocs.txt"
 fi
 
 echo "--- $pass matched, $fail differed"

@@ -99,6 +99,21 @@ impl Architecture for Mips {
         true
     }
 
+    /// llvm-mc, the reference, aligns `.text`, `.data` and `.bss` to 16
+    /// bytes, as GNU as does for MIPS outside ELF; for ELF, GNU as aligns
+    /// only `.text`, and to 4.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        match name {
+            ".text" | ".data" | ".bss" => 16,
+            _ => 1,
+        }
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }

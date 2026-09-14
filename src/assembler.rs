@@ -120,7 +120,7 @@ pub struct Assembler {
     /// without comparing configurations on every statement.
     lex_epoch: u64,
     /// The anonymous label standing in for `.` in the current statement.
-    here_sym: Option<SymbolId>,
+    pub(crate) here_sym: Option<SymbolId>,
     cond: Vec<Cond>,
     /// Guards against runaway `.include` recursion.
     include_depth: u32,
@@ -238,7 +238,12 @@ impl Assembler {
         }
         let id = SectionId(self.sections.len() as u32);
         let mut s = Section::new(id, name, kind, flags);
-        s.align = align.max(1);
+        // The backend active where a section is first named decides its
+        // starting alignment, as the reference for that backend would.
+        let default = self
+            .arch
+            .section_align(&self.arch_state, self.interner.get(name), &flags);
+        s.align = align.max(default).max(1);
         s.mark_arch(self.arch_slot);
         self.sections.push(s);
         self.section_ids.insert(name, id);
@@ -286,7 +291,7 @@ impl Assembler {
     // ---- symbols ----------------------------------------------------------
 
     /// Creates an unnamed label pinned to the current position.
-    fn anon_label(&mut self, span: Span) -> SymbolId {
+    pub(crate) fn anon_label(&mut self, span: Span) -> SymbolId {
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
         let section = self.cur;
@@ -1378,7 +1383,7 @@ impl Assembler {
 
     /// Rewrites `.` and `1f`/`1b` nodes created by this statement into direct
     /// symbol references, now that the statement's position is known.
-    fn bind_positional(&mut self, mark: usize) {
+    pub(crate) fn bind_positional(&mut self, mark: usize) {
         if self.exprs.len() == mark {
             return;
         }
@@ -1493,7 +1498,7 @@ impl Assembler {
         ))
     }
 
-    fn eval_ref_symbol(&self, id: SymbolId) -> Result<Value, EvalError> {
+    pub(crate) fn eval_ref_symbol(&self, id: SymbolId) -> Result<Value, EvalError> {
         let mut env = expr::SymbolEnv::new(&self.exprs, &self.symbols);
         env.symbol_value(id, Span::DUMMY)
     }
@@ -1649,8 +1654,14 @@ impl EvalCtx for Env<'_> {
     fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, EvalError> {
         self.symbols.get_mut(id).used = true;
         match self.symbols.get(id).value.clone() {
-            // An `.equ` chain is followed through; anything else stays
-            // symbolic until addresses are known.
+            // An `.equ` chain is followed through, unless it ends at a label:
+            // then the name stands for that address itself, as a label's
+            // does. Both references go by that name to decide whether a
+            // reference can be preempted and which symbol a relocation
+            // names, so after `.set alias, sym` a local `alias` is resolved
+            // and relocated against `sym`'s section even where `sym` is
+            // global, and a global `alias` is relocated against itself.
+            // Anything else stays symbolic until addresses are known.
             SymbolValue::Expr(e) => {
                 if self.depth > 64 {
                     return Err(EvalError::new(span, "symbol definition is circular"));
@@ -1659,7 +1670,21 @@ impl EvalCtx for Env<'_> {
                 let exprs = self.exprs;
                 let v = expr::eval(exprs, e, self);
                 self.depth -= 1;
-                v
+                match v {
+                    // A label, or an alias that already stands for one.
+                    Ok(Value {
+                        plus: Some(p),
+                        minus: None,
+                        ..
+                    }) if matches!(
+                        self.symbols.get(p).value,
+                        SymbolValue::Label { .. } | SymbolValue::Expr(_)
+                    ) =>
+                    {
+                        Ok(Value::sym(id, 0))
+                    }
+                    v => v,
+                }
             }
             _ => Ok(Value::sym(id, 0)),
         }

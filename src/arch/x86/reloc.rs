@@ -101,6 +101,16 @@ impl Abi {
         }
     }
 
+    /// `reloc`, with `PLT32` turned into `PC32`: what GNU as writes for a
+    /// PC-relative reference to a local label, which has no PLT entry.
+    pub fn plt_as_pc32(self, reloc: u32) -> u32 {
+        if reloc == self.plt32() {
+            self.pcrel(4).expect("both ABIs have PC32")
+        } else {
+            reloc
+        }
+    }
+
     pub fn got32(self) -> u32 {
         match self {
             Abi::X86_64 => x86_64::GOT32,

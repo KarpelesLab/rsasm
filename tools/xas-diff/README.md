@@ -38,6 +38,30 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `z80-vasm` | `z80`, 8-bit syntax | `vasmz80_oldstyle`, on `z80.txt` and its own programs |
 | `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
 
+## Comparing objects
+
+`<key>-relocs.txt` holds snippets compared as whole objects — sections,
+global symbols and relocations — with `tools/mc-diff/canon.sh`, as
+`tools/mc-diff` compares its own (see its README). Each walks a symbol of
+every binding through the target's calls, branches and data, and checks the
+alignment of the standard sections. RX's reference is run with
+`-muse-conventional-section-names` for these, since by default it renames
+`.text`, `.data` and `.bss` to Renesas's `P`, `D_1` and `B_1`, which rsasm
+does not.
+
+They leave out what rsasm deliberately writes differently:
+
+- A relocation against a local symbol in RL78 or RX data. GNU as keeps the
+  symbol and writes its value into the field as well; rsasm relocates against
+  the section, like every other target, and leaves the field zero. A linker
+  reads both the same way.
+- `sym - .` where `sym` is outside the section: GNU as for RL78 and RX writes
+  a stack of relocations, which rsasm has no support for and refuses, and GNU
+  as for V850 drops the `- .` (see `src/arch/v850/reloc.rs`).
+- A conditional branch on RX or V850 that is left to the linker: GNU as keeps
+  it short, trusting the linker to reach; rsasm takes the longest form (see
+  `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+
 ## Vendor syntax no reference reads
 
 No Renesas assembler can be run here, so CC-RL, CC-RH and CC-RX source cannot be

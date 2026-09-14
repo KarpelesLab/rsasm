@@ -88,9 +88,14 @@ $1 == "Section" && $NF == "{" {
 }
 $1 == "Offset:" {
     offset = $2
+    # A REL entry has no addend line: its addend is in the section's bytes.
+    addend = 0
 }
 $1 == "Type:" {
     rtype = $2
+    # A type readobj has no name for, as for RX and RL78, by its number.
+    if (rtype == "Unknown")
+        rtype = "R_" paren($0)
 }
 $1 == "Symbol:" {
     sym = paren($0) + 0
