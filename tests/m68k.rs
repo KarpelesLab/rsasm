@@ -3,9 +3,11 @@
 //! Every expected byte string here was produced by a reference assembler, not
 //! written from the manual: `m68k-elf-as --mri` for Motorola syntax,
 //! `m68k-elf-as` for GNU syntax (both GNU binutils 2.47, which assume a 68020
-//! unless told `-m68000`), and `vasmm68k_mot -no-opt -devpac` for the tables
-//! of cases where rsasm deliberately follows vasm instead. The tables at the
-//! bottom are the `tools/xas-diff` corpora with the reference output attached.
+//! with a 68881 and a 68851 unless told `-m68000`, `-m68040`, `-mcpu=5475`
+//! and so on, as the tests for other CPUs were), and `vasmm68k_mot -no-opt
+//! -devpac` (with `-m68020 -m68881 -m68851` for the FPU) for the cases where
+//! rsasm deliberately follows vasm instead. The tables at the bottom are the
+//! `tools/xas-diff` corpora with the reference output attached.
 //!
 //! Expected bytes come from relocatable objects, as the harness compares
 //! them, so a field that carries a relocation reads as zero.
@@ -909,6 +911,272 @@ fn gnu_comments_and_separators() {
     );
 }
 
+// ---- the rest of the family ---------------------------------------------------
+
+#[test]
+fn fpu_instructions() {
+    // m68k-elf-as, which assumes a 68881 beside the 68020.
+    gas("fadd.x %fp0,%fp1\n", "f2 00 00 a2");
+    gas("faddx %a0@(8,%d1:l:4),%fp2\n", "f2 30 49 22 1c 08");
+    gas("fmove.l %fpcr,%d0\n", "f2 00 b0 00");
+    gas("fmovem.x %fp0-%fp3,-(%sp)\n", "f2 27 e0 0f");
+    gas("fmovem.x (%sp)+,%fp0-%fp3\n", "f2 1f d0 f0");
+    gas("fmovem.l %fpcr/%fpsr,(%a0)\n", "f2 10 b8 00");
+    gas("fsincos.x %fp0,%fp1:%fp2\n", "f2 00 01 31");
+    gas("fmove.p %fp0,(%a0){#5}\n", "f2 10 6c 05");
+    gas("fmove.p %fp0,(%a0){%d1}\n", "f2 10 7c 10");
+    gas("fmovecr #0x0e,%fp0\n", "f2 00 5c 0e");
+    gas("ftrapeq.w #1\n", "f2 7a 00 01 00 01");
+    mot(" fmovem.x fp0/fp2/fp4,(a0)\n", "f2 10 f0 a8");
+    mot(" fsincos.x (a0),fp3:fp4\n", "f2 10 4a 33");
+}
+
+#[test]
+fn float_immediates_in_each_format() {
+    // Single and double: m68k-elf-as and vasm agree.
+    gas("fadd.s #0r1.5,%fp1\n", "f2 3c 44 a2 3f c0 00 00");
+    gas(
+        "fadd.d #0r1.5,%fp1\n",
+        "f2 3c 54 a2 3f f8 00 00 00 00 00 00",
+    );
+    gas(
+        "fmove.d #0d-3.5,%fp0\n",
+        "f2 3c 54 00 c0 0c 00 00 00 00 00 00",
+    );
+    mot(" fmove.s #-0.1,fp1\n", "f2 3c 44 80 bd cc cc cd");
+    // An integer where a float is wanted is its own bits, as GNU as writes
+    // it (vasm converts it to a float instead).
+    gas("fadd.s #5,%fp1\n", "f2 3c 44 a2 00 00 00 05");
+    // Extended and packed follow vasm (`-m68881`): the 68881 format with
+    // its 16 zero bits, which GNU as leaves out, and packed decimal, which
+    // GNU as refuses.
+    mot(
+        " fmove.x #1.5,fp0\n",
+        "f2 3c 48 00 3f ff 00 00 c0 00 00 00 00 00 00 00",
+    );
+    mot(
+        " fmove.x #0.1,fp1\n",
+        "f2 3c 48 80 3f fb 00 00 cc cc cc cc cc cc d0 00",
+    );
+    mot(
+        " fmove.p #12345.678,fp3\n",
+        "f2 3c 4d 80 00 04 00 01 23 45 67 80 00 00 00 00",
+    );
+    err(
+        "m68k",
+        Motorola,
+        " fmove.l #1.5,d0\n",
+        "cannot take a floating-point immediate",
+    );
+    err(
+        "m68k",
+        Gas,
+        "ftrapeq.l #0r1.5\n",
+        "needs a floating-point size",
+    );
+}
+
+#[test]
+fn mmu_instructions() {
+    // m68k-elf-as, whose default CPU has a 68851.
+    gas("pmove %tc,(%a0)\n", "f0 10 42 00");
+    gas("pmove %crp,(%a0)\n", "f0 10 4e 00");
+    gas("pmove %bad3,%d0\n", "f0 00 72 0c");
+    gas("pflush #1,#2,(%a0)\n", "f0 10 38 51");
+    gas("ptestr #1,(%a0),#3,%a2\n", "f0 10 8f 51");
+    gas("pvalid %val,(%a0)\n", "f0 10 28 00");
+    gas("pbbs .\n", "f0 80 ff fe");
+    gas("pdbbs %d0,.\n", "f0 48 00 00 ff fc");
+    gas("ptrapbs.w #1\n", "f0 7a 00 00 00 01");
+}
+
+#[test]
+fn integer_instructions_the_68020_added() {
+    // m68k-elf-as.
+    gas("cas.b %d0,%d1,(%a0)\n", "0a d0 00 40");
+    gas("cas2.w %d0:%d1,%d2:%d3,(%a0):(%a1)\n", "0c fc 80 80 90 c1");
+    gas("cas2.l %d0:%d1,%d2:%d3,(%d4):(%a5)\n", "0e fc 40 80 d0 c1");
+    gas("callm #3,(%a0)\n", "06 d0 00 03");
+    gas("rtm %a3\n", "06 cb");
+    gas("pack %d0,%d1,#5\n", "83 40 00 05");
+    gas("unpk -(%a0),-(%a1),#0x1234\n", "83 88 12 34");
+    gas("trapeq\n", "57 fc");
+    gas("traphi.l #0x12345678\n", "52 fb 12 34 56 78");
+    gas("movep.w %d0,4(%a0)\n", "01 88 00 04");
+    gas("moves.l %a2,-(%a3)\n", "0e a3 a8 00");
+}
+
+#[test]
+fn cpu_models_have_their_own_instructions() {
+    table("68040", Gas, GNU_68040);
+    table("68060", Gas, GNU_68060);
+    table("cpu32", Gas, GNU_CPU32);
+    table("fidoa", Gas, GNU_FIDO);
+    table("5475", Gas, GNU_5475);
+    table("54455", Gas, GNU_54455);
+}
+
+#[test]
+fn cpus_refuse_what_they_lack_and_say_what_it_needs() {
+    for (arch, src, needle) in [
+        ("68000", "fadd.x %fp0,%fp1\n", "needs a 68040 or later"),
+        ("68000", "fadd.x %fp0,%fp1\n", "or a 68881/68882 FPU"),
+        ("68000", "fadd.x %fp0,%fp1\n", "this target is a 68000"),
+        ("68040", "pmove %tc,(%a0)\n", "a 68851 MMU"),
+        ("68030", "move16 (%a0)+,(%a1)+\n", "needs a 68040 or later"),
+        ("68030", "callm #0,(%a0)\n", "needs a 68020;"),
+        ("m68k", "bgnd\n", "needs a CPU32 or a Fido"),
+        ("68060", "mvsw %d0,%d1\n", "ColdFire"),
+        ("5475", "bitrev %d0\n", "or a ColdFire ISA_C; this target is a 5475"),
+        ("cpu32", "movel ([4,%a0]),%d0\n", "not available on CPU32"),
+        (
+            "5475",
+            "movew 4(%a0,%d1:w),%d2\n",
+            "ColdFire index register is a long",
+        ),
+        ("68010", "movec %d0,%cacr\n", "on a 68010"),
+        ("68040", "movec %d0,%caar\n", "on a 68040"),
+    ] {
+        err(arch, Gas, src, needle);
+    }
+    // An extension after a comma adds to the CPU, and names it.
+    err(
+        "m68k",
+        Gas,
+        ".arch 68000,68851\n faddx %fp0,%fp1\n",
+        "a 68000 with 68851",
+    );
+    assert_eq!(
+        hex(&text_dialect(
+            "m68k",
+            Gas,
+            ".arch 68000,68881\n faddx %fp0,%fp1\n"
+        )),
+        "f2 00 00 a2"
+    );
+}
+
+#[test]
+fn every_cpu_name_gnu_as_takes() {
+    for name in [
+        "68000",
+        "68ec000",
+        "68hc001",
+        "68302",
+        "68010",
+        "68020",
+        "68k",
+        "68030",
+        "68ec030",
+        "68040",
+        "68060",
+        "cpu32",
+        "68332",
+        "fidoa",
+        "fido",
+        "isaa",
+        "isaaplus",
+        "isab",
+        "isac",
+        "cfv4",
+        "cfv4e",
+        "5200",
+        "5206e",
+        "5208",
+        "5407",
+        "54455",
+        "5475",
+        "547x",
+        "m68030",
+        "mc68060",
+        "68000,68881",
+        "68020,no-68851",
+        "5208,float",
+    ] {
+        assert!(
+            arch::lookup(name).is_some(),
+            "`{name}` should be an m68k CPU"
+        );
+    }
+    for name in ["68070", "5476", "68000,68882x", "cpu33"] {
+        assert!(arch::lookup(name).is_none(), "`{name}` is not a CPU");
+    }
+}
+
+#[test]
+fn elf_flags_record_the_cpu() {
+    // `readelf -h` on m68k-elf-as objects for each `-mcpu`/`-march`.
+    for (name, flags) in [
+        ("m68k", 0),
+        ("68000", 0x0100_0000),
+        ("68010", 0x0100_0000),
+        ("68040", 0),
+        ("cpu32", 0x0081_0000),
+        ("fidoa", 0x0200_0000),
+        ("5475", 0x8065),
+        ("5206", 0x1),
+        ("54455", 0x26),
+        ("5208", 0x23),
+        ("5407", 0x14),
+        ("isaa", 0x2),
+        ("isab", 0x5),
+        ("isac", 0x6),
+        ("cfv4", 0x15),
+        ("cfv4e", 0x8065),
+    ] {
+        let a = arch::lookup(name).expect("an m68k CPU");
+        assert_eq!(a.elf_flags(&a.initial_state()), flags, "{name}");
+    }
+}
+
+#[test]
+fn coprocessor_branches_and_far_dbcc_relax() {
+    // m68k-elf-as: `fjeq` and unsized `pbbs` reach 16 or 32 bits, `fjne` to
+    // an undefined symbol is 32, a DBcc out of reach is dbcc/bra.s/bra.l,
+    // and `jra` to a number jumps there absolutely.
+    let src = "top: fnop\n fjeq top\n pbbs far\n fjne ext\n dbra %d0,far\n jra 0x1000\n \
+               .space 40000\nfar: rts\n";
+    let asm = assemble_dialect("m68k", Gas, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&asm.section_bytes(SectionId(0))[..0x26]),
+        "f2 80 00 00 f2 81 ff fa f0 c0 00 00 9c 5c f2 ce 00 00 00 00 51 c8 00 04 60 06 60 ff \
+         00 00 9c 4a 4e f9 00 00 10 00"
+    );
+    // A 68000 has no 32-bit branch, and jumps absolutely instead.
+    let src = "top: nop\n dbra %d0,far\n jra far\n .space 40000\nfar: rts\n";
+    let asm = assemble_dialect("68000", Gas, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&asm.section_bytes(SectionId(0))[..0x14]),
+        "4e 71 51 c8 00 04 60 06 4e f9 00 00 00 00 4e f9 00 00 00 00"
+    );
+}
+
+#[test]
+fn fpu_and_mmu_corpus_matches_gnu_as() {
+    table("m68k", Gas, GNU_FPU);
+    table("m68k", Gas, GNU_FPU_MORE);
+}
+
+#[test]
+fn fpu_and_mmu_corpus_matches_gnu_as_mri() {
+    table("m68k", Motorola, MOTOROLA_FPU);
+}
+
+#[test]
+fn fpu_corpus_matches_vasm() {
+    table_as("m68k", Motorola, VASM_FPU, true);
+}
+
 // ---- the corpora, with reference output ---------------------------------------
 
 #[test]
@@ -1693,4 +1961,560 @@ const VASM: &[(&str, &str)] = &[
     (r#"andi #$fe,ccr"#, "02 3c 00 fe"),
     (r#"ori #$0700,sr"#, "00 7c 07 00"),
     (r#"eori #1,ccr"#, "0a 3c 00 01"),
+];
+
+const GNU_FPU: &[(&str, &str)] = &[
+    (r#"fmove.x %fp0,%fp1"#, "f2 00 00 80"),
+    (r#"fmove.x %fp7,%fp0"#, "f2 00 1c 00"),
+    (r#"fadd.x %fp1,%fp2"#, "f2 00 05 22"),
+    (r#"fsub.x %fp3,%fp4"#, "f2 00 0e 28"),
+    (r#"fmul.x %fp5,%fp6"#, "f2 00 17 23"),
+    (r#"fdiv.x %fp7,%fp0"#, "f2 00 1c 20"),
+    (r#"fsqrt.x %fp0,%fp1"#, "f2 00 00 84"),
+    (r#"fabs.x %fp2"#, "f2 00 09 18"),
+    (r#"fneg.x %fp3,%fp3"#, "f2 00 0d 9a"),
+    (r#"fmove.l %d0,%fp0"#, "f2 00 40 00"),
+    (r#"fmove.w %d1,%fp2"#, "f2 01 51 00"),
+    (r#"fmove.b %d2,%fp3"#, "f2 02 59 80"),
+    (r#"fmove.l %fp0,%d0"#, "f2 00 60 00"),
+    (r#"fmove.w %fp1,%d1"#, "f2 01 70 80"),
+    (r#"fmove.b %fp2,%d2"#, "f2 02 79 00"),
+    (r#"fmove.x (%a0),%fp0"#, "f2 10 48 00"),
+    (r#"fmove.x %fp0,(%a0)"#, "f2 10 68 00"),
+    (r#"fmove.x (%a0)+,%fp1"#, "f2 18 48 80"),
+    (r#"fmove.x %fp1,-(%a7)"#, "f2 27 68 80"),
+    (r#"fmove.d 0x10(%a0),%fp2"#, "f2 28 55 00 00 10"),
+    (r#"fmove.s %fp3,0x20(%a1)"#, "f2 29 65 80 00 20"),
+    (r#"fmove.x 4(%a0,%d0.w),%fp4"#, "f2 30 4a 00 00 04"),
+    (r#"fmove.x 4(%a0,%d0.l*4),%fp5"#, "f2 30 4a 80 0c 04"),
+    (r#"fmove.l #1,%fp0"#, "f2 3c 40 00 00 00 00 01"),
+    (r#"fmove.w #0x1234,%fp0"#, "f2 3c 50 00 12 34"),
+    (r#"fmove.b #0x12,%fp0"#, "f2 3c 58 00 00 12"),
+    (r#"fmove.l %fpcr,%d0"#, "f2 00 b0 00"),
+    (r#"fmove.l %d0,%fpcr"#, "f2 00 90 00"),
+    (r#"fmove.l %fpsr,(%a0)"#, "f2 10 a8 00"),
+    (r#"fmove.l %fpiar,%d1"#, "f2 01 a4 00"),
+    (r#"fmovem.x %fp0-%fp3,-(%a7)"#, "f2 27 e0 0f"),
+    (r#"fmovem.x (%a7)+,%fp0-%fp3"#, "f2 1f d0 f0"),
+    (r#"fmovem.x %fp0/%fp2/%fp4,(%a0)"#, "f2 10 f0 a8"),
+    (r#"fmovem.x (%a0),%fp1/%fp3"#, "f2 10 d0 50"),
+    (r#"fmovem.l %fpcr/%fpsr,-(%a7)"#, "f2 27 b8 00"),
+    (r#"fmovem.l (%a7)+,%fpcr/%fpsr"#, "f2 1f 98 00"),
+    (r#"fmovem.l %fpcr/%fpsr/%fpiar,(%a0)"#, "f2 10 bc 00"),
+    (r#"fmovecr #0x32,%fp0"#, "f2 00 5c 32"),
+    (r#"fmovecr #0,%fp1"#, "f2 00 5c 80"),
+    (r#"fsincos.x %fp0,%fp1:%fp2"#, "f2 00 01 31"),
+    (r#"fsincos.x (%a0),%fp3:%fp4"#, "f2 10 4a 33"),
+    (r#"ftst.x %fp0"#, "f2 00 00 3a"),
+    (r#"ftst.l %d0"#, "f2 00 40 3a"),
+    (r#"ftst.x (%a0)"#, "f2 10 48 3a"),
+    (r#"fint.x %fp0,%fp1"#, "f2 00 00 81"),
+    (r#"fintrz.x %fp2"#, "f2 00 09 03"),
+    (r#"fetox.x %fp0,%fp1"#, "f2 00 00 90"),
+    (r#"flogn.x %fp2,%fp3"#, "f2 00 09 94"),
+    (r#"fsin.x %fp0"#, "f2 00 00 0e"),
+    (r#"fcos.x %fp1"#, "f2 00 04 9d"),
+    (r#"ftan.x %fp2"#, "f2 00 09 0f"),
+    (r#"fatan.x %fp3"#, "f2 00 0d 8a"),
+    (r#"fgetexp.x %fp0,%fp1"#, "f2 00 00 9e"),
+    (r#"fgetman.x %fp2,%fp3"#, "f2 00 09 9f"),
+    (r#"fscale.l %d0,%fp0"#, "f2 00 40 26"),
+    (r#"fmod.x %fp1,%fp2"#, "f2 00 05 21"),
+    (r#"frem.x %fp3,%fp4"#, "f2 00 0e 25"),
+    (r#"fsgldiv.x %fp0,%fp1"#, "f2 00 00 a4"),
+    (r#"fsglmul.x %fp2,%fp3"#, "f2 00 09 a7"),
+    (r#"fnop"#, "f2 80 00 00"),
+    (r#"fsave -(%a7)"#, "f3 27"),
+    (r#"frestore (%a7)+"#, "f3 5f"),
+    (r#"fseq %d0"#, "f2 40 00 01"),
+    (r#"fsne (%a0)"#, "f2 50 00 0e"),
+    (r#"fsgt -(%a7)"#, "f2 67 00 12"),
+    (r#"fsf %d1"#, "f2 41 00 00"),
+    (r#"fst %d2"#, "f2 42 00 0f"),
+    (r#"ftrapeq"#, "f2 7c 00 01"),
+    (r#"ftrapne.w #1"#, "f2 7a 00 0e 00 01"),
+    (r#"ftrapgt.l #0x12345678"#, "f2 7b 00 12 12 34 56 78"),
+    (r#"fmove.p %fp0,(%a0){#5}"#, "f2 10 6c 05"),
+    (r#"fmove.p %fp1,(%a1){%d2}"#, "f2 11 7c a0"),
+    (r#"pmove %tc,(%a0)"#, "f0 10 42 00"),
+    (r#"pmove (%a0),%tc"#, "f0 10 40 00"),
+    (r#"pmove %crp,(%a1)"#, "f0 11 4e 00"),
+    (r#"pmove %srp,-(%a7)"#, "f0 27 4a 00"),
+    (r#"pmove %psr,%d0"#, "f0 00 62 00"),
+    (r#"pmove %d0,%psr"#, "f0 00 60 00"),
+    (r#"pflush #1,#2"#, "f0 00 30 51"),
+    (r#"pflush #1,#2,(%a0)"#, "f0 10 38 51"),
+    (r#"ptestr #1,(%a0),#7"#, "f0 10 9e 11"),
+    (r#"ptestw #1,(%a0),#7,%a1"#, "f0 10 9d 31"),
+    (r#"pvalid %val,(%a0)"#, "f0 10 28 00"),
+    (r#"psave -(%a7)"#, "f1 27"),
+    (r#"prestore (%a7)+"#, "f1 5f"),
+    (r#"cas.b %d0,%d1,(%a0)"#, "0a d0 00 40"),
+    (r#"cas.w %d2,%d3,(%a1)"#, "0c d1 00 c2"),
+    (r#"cas.l %d4,%d5,(%a2)"#, "0e d2 01 44"),
+    (r#"cas2.w %d0:%d1,%d2:%d3,(%a0):(%a1)"#, "0c fc 80 80 90 c1"),
+    (r#"cas2.l %d0:%d1,%d2:%d3,(%a0):(%a1)"#, "0e fc 80 80 90 c1"),
+    (r#"callm #0,(%a0)"#, "06 d0 00 00"),
+    (r#"rtm %d0"#, "06 c0"),
+    (r#"pack %d0,%d1,#0"#, "83 40 00 00"),
+    (r#"pack -(%a0),-(%a1),#0x30"#, "83 48 00 30"),
+    (r#"unpk %d0,%d1,#0x3030"#, "83 80 30 30"),
+    (r#"unpk -(%a0),-(%a1),#0"#, "83 88 00 00"),
+    (r#"trapeq"#, "57 fc"),
+    (r#"trapne.w #1"#, "56 fa 00 01"),
+    (r#"traphi.l #0x12345678"#, "52 fb 12 34 56 78"),
+    (r#"movep.w %d0,0x10(%a0)"#, "01 88 00 10"),
+    (r#"movep.l 0x20(%a1),%d1"#, "03 49 00 20"),
+    (r#"moves.b (%a0),%d0"#, "0e 10 00 00"),
+    (r#"moves.w %d1,(%a1)"#, "0e 51 18 00"),
+    (r#"moves.l (%a2)+,%a3"#, "0e 9a b0 00"),
+    (r#"fmove.s #0r1.5,%fp0"#, "f2 3c 44 00 3f c0 00 00"),
+    (
+        r#"fmove.d #0r1.5,%fp0"#,
+        "f2 3c 54 00 3f f8 00 00 00 00 00 00",
+    ),
+    (r#"fmove.s #-0r0.1,%fp1"#, "f2 3c 44 80 bd cc cc cd"),
+    (
+        r#"fmove.d #0r2.718281828,%fp1"#,
+        "f2 3c 54 80 40 05 bf 0a 8b 04 91 9b",
+    ),
+    (r#"fadd.s #0r0.5,%fp1"#, "f2 3c 44 a2 3f 00 00 00"),
+    (
+        r#"fsub.d #0r100.25,%fp2"#,
+        "f2 3c 55 28 40 59 10 00 00 00 00 00",
+    ),
+];
+
+const GNU_FPU_MORE: &[(&str, &str)] = &[
+    (r#"faddx %fp0,%fp1"#, "f2 00 00 a2"),
+    (r#"fmovex %a0@,%fp0"#, "f2 10 48 00"),
+    (r#"fmovex %fp0,%a1@-"#, "f2 21 68 00"),
+    (r#"fmovemx %fp0-%fp3,%sp@-"#, "f2 27 e0 0f"),
+    (r#"fmovemx %sp@+,%fp0-%fp3"#, "f2 1f d0 f0"),
+    (r#"faddd %a0@(8,%d1:l:4),%fp2"#, "f2 30 55 22 1c 08"),
+    (r#"fmovel %fpcr,%a0@+"#, "f2 18 b0 00"),
+    (r#"fmoves #0e1.5,%fp0"#, "f2 3c 44 00 3f c0 00 00"),
+    (r#"fmoves #0f2.25,%fp0"#, "f2 3c 44 00 40 10 00 00"),
+    (
+        r#"fmoved #0s1.0,%fp0"#,
+        "f2 3c 54 00 3f f0 00 00 00 00 00 00",
+    ),
+    (
+        r#"fmoved #0d-3.5,%fp0"#,
+        "f2 3c 54 00 c0 0c 00 00 00 00 00 00",
+    ),
+    (
+        r#"fmoved #-0r3.5,%fp0"#,
+        "f2 3c 54 00 c0 0c 00 00 00 00 00 00",
+    ),
+    (r#"fmovecrx #0x0f,%fp7"#, "f2 00 5f 8f"),
+    (r#"fsincosx %a0@(4),%fp6:%fp7"#, "f2 28 4b b6 00 04"),
+    (r#"fmovep %fp0,%a0@(12){#-3}"#, "f2 28 6c 7d 00 0c"),
+    (r#"fmovemx %d7,%a2@"#, "f2 12 f8 70"),
+    (r#"fmovemx %a3@+,%d6"#, "f2 1b d8 60"),
+    (r#"fmovem %fp1,%a0@"#, "f2 10 f0 40"),
+    (r#"fmovem.x #0x80,%a0@"#, "f2 10 f0 80"),
+    (r#"fmovem.x %d1,-(%sp)"#, "f2 27 e8 10"),
+    (r#"fmovem.x (%sp)+,%d1"#, "f2 1f d8 10"),
+    (r#"ptestr %sfc,%a0@,#3,%a4"#, "f0 10 8f 80"),
+    (r#"pmove %bad2,%a0@"#, "f0 10 72 08"),
+    (r#"pmove %a0@,%bac5"#, "f0 10 74 14"),
+    (r#"pmove %cal,%d1"#, "f0 01 52 00"),
+    (r#"pmove %scc,%d2"#, "f0 02 5a 00"),
+    (r#"pmove %ac,%a0@"#, "f0 10 5e 00"),
+    (r#"pmove %a0@,%val"#, "f0 10 54 00"),
+    (r#"pflushr %a0@"#, "f0 10 a0 00"),
+    (r#"pflushs #3,#7"#, "f0 00 34 f3"),
+    (r#"ploadw %dfc,%a0@"#, "f0 10 20 01"),
+    (r#"pdbbc %d7,."#, "f0 4f 00 01 ff fc"),
+    (r#"cas2w %d0:%d1,%d2:%d3,%a0@:%a1@"#, "0c fc 80 80 90 c1"),
+];
+
+const MOTOROLA_FPU: &[(&str, &str)] = &[
+    (r#"fmove.x fp0,fp1"#, "f2 00 00 80"),
+    (r#"fmove.x fp7,fp0"#, "f2 00 1c 00"),
+    (r#"fadd.x fp1,fp2"#, "f2 00 05 22"),
+    (r#"fsub.x fp3,fp4"#, "f2 00 0e 28"),
+    (r#"fmul.x fp5,fp6"#, "f2 00 17 23"),
+    (r#"fdiv.x fp7,fp0"#, "f2 00 1c 20"),
+    (r#"fsqrt.x fp0,fp1"#, "f2 00 00 84"),
+    (r#"fabs.x fp2"#, "f2 00 09 18"),
+    (r#"fneg.x fp3,fp3"#, "f2 00 0d 9a"),
+    (r#"fmove.l d0,fp0"#, "f2 00 40 00"),
+    (r#"fmove.w d1,fp2"#, "f2 01 51 00"),
+    (r#"fmove.b d2,fp3"#, "f2 02 59 80"),
+    (r#"fmove.l fp0,d0"#, "f2 00 60 00"),
+    (r#"fmove.w fp1,d1"#, "f2 01 70 80"),
+    (r#"fmove.b fp2,d2"#, "f2 02 79 00"),
+    (r#"fmove.x (a0),fp0"#, "f2 10 48 00"),
+    (r#"fmove.x fp0,(a0)"#, "f2 10 68 00"),
+    (r#"fmove.x (a0)+,fp1"#, "f2 18 48 80"),
+    (r#"fmove.x fp1,-(a7)"#, "f2 27 68 80"),
+    (r#"fmove.d $10(a0),fp2"#, "f2 28 55 00 00 10"),
+    (r#"fmove.s fp3,$20(a1)"#, "f2 29 65 80 00 20"),
+    (r#"fmove.x 4(a0,d0.w),fp4"#, "f2 30 4a 00 00 04"),
+    (r#"fmove.x 4(a0,d0.l*4),fp5"#, "f2 30 4a 80 0c 04"),
+    (r#"fmove.l #1,fp0"#, "f2 3c 40 00 00 00 00 01"),
+    (r#"fmove.w #$1234,fp0"#, "f2 3c 50 00 12 34"),
+    (r#"fmove.b #$12,fp0"#, "f2 3c 58 00 00 12"),
+    (r#"fmove.l fpcr,d0"#, "f2 00 b0 00"),
+    (r#"fmove.l d0,fpcr"#, "f2 00 90 00"),
+    (r#"fmove.l fpsr,(a0)"#, "f2 10 a8 00"),
+    (r#"fmove.l fpiar,d1"#, "f2 01 a4 00"),
+    (r#"fmovem.x fp0-fp3,-(a7)"#, "f2 27 e0 0f"),
+    (r#"fmovem.x (a7)+,fp0-fp3"#, "f2 1f d0 f0"),
+    (r#"fmovem.x fp0/fp2/fp4,(a0)"#, "f2 10 f0 a8"),
+    (r#"fmovem.x (a0),fp1/fp3"#, "f2 10 d0 50"),
+    (r#"fmovem.l fpcr/fpsr,-(a7)"#, "f2 27 b8 00"),
+    (r#"fmovem.l (a7)+,fpcr/fpsr"#, "f2 1f 98 00"),
+    (r#"fmovem.l fpcr/fpsr/fpiar,(a0)"#, "f2 10 bc 00"),
+    (r#"fmovecr #$32,fp0"#, "f2 00 5c 32"),
+    (r#"fmovecr #0,fp1"#, "f2 00 5c 80"),
+    (r#"fsincos.x fp0,fp1:fp2"#, "f2 00 01 31"),
+    (r#"fsincos.x (a0),fp3:fp4"#, "f2 10 4a 33"),
+    (r#"ftst.x fp0"#, "f2 00 00 3a"),
+    (r#"ftst.l d0"#, "f2 00 40 3a"),
+    (r#"ftst.x (a0)"#, "f2 10 48 3a"),
+    (r#"fint.x fp0,fp1"#, "f2 00 00 81"),
+    (r#"fintrz.x fp2"#, "f2 00 09 03"),
+    (r#"fetox.x fp0,fp1"#, "f2 00 00 90"),
+    (r#"flogn.x fp2,fp3"#, "f2 00 09 94"),
+    (r#"fsin.x fp0"#, "f2 00 00 0e"),
+    (r#"fcos.x fp1"#, "f2 00 04 9d"),
+    (r#"ftan.x fp2"#, "f2 00 09 0f"),
+    (r#"fatan.x fp3"#, "f2 00 0d 8a"),
+    (r#"fgetexp.x fp0,fp1"#, "f2 00 00 9e"),
+    (r#"fgetman.x fp2,fp3"#, "f2 00 09 9f"),
+    (r#"fscale.l d0,fp0"#, "f2 00 40 26"),
+    (r#"fmod.x fp1,fp2"#, "f2 00 05 21"),
+    (r#"frem.x fp3,fp4"#, "f2 00 0e 25"),
+    (r#"fsgldiv.x fp0,fp1"#, "f2 00 00 a4"),
+    (r#"fsglmul.x fp2,fp3"#, "f2 00 09 a7"),
+    (r#"fnop"#, "f2 80 00 00"),
+    (r#"fsave -(a7)"#, "f3 27"),
+    (r#"frestore (a7)+"#, "f3 5f"),
+    (r#"fseq d0"#, "f2 40 00 01"),
+    (r#"fsne (a0)"#, "f2 50 00 0e"),
+    (r#"fsgt -(a7)"#, "f2 67 00 12"),
+    (r#"fsf d1"#, "f2 41 00 00"),
+    (r#"fst d2"#, "f2 42 00 0f"),
+    (r#"ftrapeq"#, "f2 7c 00 01"),
+    (r#"ftrapne.w #1"#, "f2 7a 00 0e 00 01"),
+    (r#"ftrapgt.l #$12345678"#, "f2 7b 00 12 12 34 56 78"),
+    (r#"fmove.p fp0,(a0){#5}"#, "f2 10 6c 05"),
+    (r#"fmove.p fp1,(a1){d2}"#, "f2 11 7c a0"),
+    (r#"pmove tc,(a0)"#, "f0 10 42 00"),
+    (r#"pmove (a0),tc"#, "f0 10 40 00"),
+    (r#"pmove crp,(a1)"#, "f0 11 4e 00"),
+    (r#"pmove srp,-(a7)"#, "f0 27 4a 00"),
+    (r#"pmove psr,d0"#, "f0 00 62 00"),
+    (r#"pmove d0,psr"#, "f0 00 60 00"),
+    (r#"pflush #1,#2"#, "f0 00 30 51"),
+    (r#"pflush #1,#2,(a0)"#, "f0 10 38 51"),
+    (r#"ptestr #1,(a0),#7"#, "f0 10 9e 11"),
+    (r#"ptestw #1,(a0),#7,a1"#, "f0 10 9d 31"),
+    (r#"pvalid val,(a0)"#, "f0 10 28 00"),
+    (r#"psave -(a7)"#, "f1 27"),
+    (r#"prestore (a7)+"#, "f1 5f"),
+    (r#"cas.b d0,d1,(a0)"#, "0a d0 00 40"),
+    (r#"cas.w d2,d3,(a1)"#, "0c d1 00 c2"),
+    (r#"cas.l d4,d5,(a2)"#, "0e d2 01 44"),
+    (r#"cas2.w d0:d1,d2:d3,(a0):(a1)"#, "0c fc 80 80 90 c1"),
+    (r#"cas2.l d0:d1,d2:d3,(a0):(a1)"#, "0e fc 80 80 90 c1"),
+    (r#"callm #0,(a0)"#, "06 d0 00 00"),
+    (r#"rtm d0"#, "06 c0"),
+    (r#"pack d0,d1,#0"#, "83 40 00 00"),
+    (r#"pack -(a0),-(a1),#$30"#, "83 48 00 30"),
+    (r#"unpk d0,d1,#$3030"#, "83 80 30 30"),
+    (r#"unpk -(a0),-(a1),#0"#, "83 88 00 00"),
+    (r#"trapeq"#, "57 fc"),
+    (r#"trapne.w #1"#, "56 fa 00 01"),
+    (r#"traphi.l #$12345678"#, "52 fb 12 34 56 78"),
+    (r#"movep.w d0,$10(a0)"#, "01 88 00 10"),
+    (r#"movep.l $20(a1),d1"#, "03 49 00 20"),
+    (r#"moves.b (a0),d0"#, "0e 10 00 00"),
+    (r#"moves.w d1,(a1)"#, "0e 51 18 00"),
+    (r#"moves.l (a2)+,a3"#, "0e 9a b0 00"),
+    (r#"fmove.s #1.5,fp0"#, "f2 3c 44 00 3f c0 00 00"),
+    (r#"fmove.d #1.5,fp0"#, "f2 3c 54 00 3f f8 00 00 00 00 00 00"),
+    (r#"fmove.s #-0.1,fp1"#, "f2 3c 44 80 bd cc cc cd"),
+    (
+        r#"fmove.d #2.718281828,fp1"#,
+        "f2 3c 54 80 40 05 bf 0a 8b 04 91 9b",
+    ),
+    (r#"fadd.s #0.5,fp1"#, "f2 3c 44 a2 3f 00 00 00"),
+    (
+        r#"fsub.d #100.25,fp2"#,
+        "f2 3c 55 28 40 59 10 00 00 00 00 00",
+    ),
+];
+
+const VASM_FPU: &[(&str, &str)] = &[
+    (r#"fmove.x fp0,fp1"#, "f2 00 00 80"),
+    (r#"fmove.x fp7,fp0"#, "f2 00 1c 00"),
+    (r#"fadd.x fp1,fp2"#, "f2 00 05 22"),
+    (r#"fsub.x fp3,fp4"#, "f2 00 0e 28"),
+    (r#"fmul.x fp5,fp6"#, "f2 00 17 23"),
+    (r#"fdiv.x fp7,fp0"#, "f2 00 1c 20"),
+    (r#"fsqrt.x fp0,fp1"#, "f2 00 00 84"),
+    (r#"fabs.x fp2"#, "f2 00 09 18"),
+    (r#"fneg.x fp3,fp3"#, "f2 00 0d 9a"),
+    (r#"fmove.s #1.5,fp0"#, "f2 3c 44 00 3f c0 00 00"),
+    (r#"fmove.d #1.5,fp0"#, "f2 3c 54 00 3f f8 00 00 00 00 00 00"),
+    (
+        r#"fmove.x #1.5,fp0"#,
+        "f2 3c 48 00 3f ff 00 00 c0 00 00 00 00 00 00 00",
+    ),
+    (
+        r#"fmove.p #1.5,fp0"#,
+        "f2 3c 4c 00 00 00 00 01 50 00 00 00 00 00 00 00",
+    ),
+    (
+        r#"fmove.x #0.1,fp1"#,
+        "f2 3c 48 80 3f fb 00 00 cc cc cc cc cc cc d0 00",
+    ),
+    (
+        r#"fmove.x #-2.5,fp2"#,
+        "f2 3c 49 00 c0 00 00 00 a0 00 00 00 00 00 00 00",
+    ),
+    (
+        r#"fmove.x #3.14159,fp3"#,
+        "f2 3c 49 80 40 00 00 00 c9 0f cf 80 dc 33 70 00",
+    ),
+    (
+        r#"fmove.x #1.0e10,fp4"#,
+        "f2 3c 4a 00 40 20 00 00 95 02 f9 00 00 00 00 00",
+    ),
+    (
+        r#"fmove.x #-1.0e-5,fp5"#,
+        "f2 3c 4a 80 bf ee 00 00 a7 c5 ac 47 1b 47 88 00",
+    ),
+    (
+        r#"fmove.p #0.1,fp1"#,
+        "f2 3c 4c 80 40 01 00 01 00 00 00 00 00 00 00 01",
+    ),
+    (
+        r#"fmove.p #-1.0e-5,fp2"#,
+        "f2 3c 4d 00 c0 05 00 01 00 00 00 00 00 00 00 01",
+    ),
+    (
+        r#"fmove.p #12345.678,fp3"#,
+        "f2 3c 4d 80 00 04 00 01 23 45 67 80 00 00 00 00",
+    ),
+    (
+        r#"fmove.p #3.14159,fp4"#,
+        "f2 3c 4e 00 00 00 00 03 14 15 89 99 99 99 99 99",
+    ),
+    (r#"fmove.s #-0.1,fp1"#, "f2 3c 44 80 bd cc cc cd"),
+    (
+        r#"fmove.d #2.718281828,fp1"#,
+        "f2 3c 54 80 40 05 bf 0a 8b 04 91 9b",
+    ),
+    (r#"fadd.s #0.5,fp1"#, "f2 3c 44 a2 3f 00 00 00"),
+    (
+        r#"fsub.d #100.25,fp2"#,
+        "f2 3c 55 28 40 59 10 00 00 00 00 00",
+    ),
+    (
+        r#"fcmp.x #1.0,fp0"#,
+        "f2 3c 48 38 3f ff 00 00 80 00 00 00 00 00 00 00",
+    ),
+    (r#"fmove.l d0,fp0"#, "f2 00 40 00"),
+    (r#"fmove.w d1,fp2"#, "f2 01 51 00"),
+    (r#"fmove.b d2,fp3"#, "f2 02 59 80"),
+    (r#"fmove.l fp0,d0"#, "f2 00 60 00"),
+    (r#"fmove.w fp1,d1"#, "f2 01 70 80"),
+    (r#"fmove.b fp2,d2"#, "f2 02 79 00"),
+    (r#"fmove.x (a0),fp0"#, "f2 10 48 00"),
+    (r#"fmove.x fp0,(a0)"#, "f2 10 68 00"),
+    (r#"fmove.x (a0)+,fp1"#, "f2 18 48 80"),
+    (r#"fmove.x fp1,-(a7)"#, "f2 27 68 80"),
+    (r#"fmove.d $10(a0),fp2"#, "f2 28 55 00 00 10"),
+    (r#"fmove.s fp3,$20(a1)"#, "f2 29 65 80 00 20"),
+    (r#"fmove.x 4(a0,d0.w),fp4"#, "f2 30 4a 00 00 04"),
+    (r#"fmove.x 4(a0,d0.l*4),fp5"#, "f2 30 4a 80 0c 04"),
+    (r#"fmove.l #1,fp0"#, "f2 3c 40 00 00 00 00 01"),
+    (r#"fmove.w #$1234,fp0"#, "f2 3c 50 00 12 34"),
+    (r#"fmove.b #$12,fp0"#, "f2 3c 58 00 00 12"),
+    (r#"fmove.l fpcr,d0"#, "f2 00 b0 00"),
+    (r#"fmove.l d0,fpcr"#, "f2 00 90 00"),
+    (r#"fmove.l fpsr,(a0)"#, "f2 10 a8 00"),
+    (r#"fmove.l fpiar,d1"#, "f2 01 a4 00"),
+    (r#"fmovem.x fp0-fp3,-(a7)"#, "f2 27 e0 0f"),
+    (r#"fmovem.x (a7)+,fp0-fp3"#, "f2 1f d0 f0"),
+    (r#"fmovem.x fp0/fp2/fp4,(a0)"#, "f2 10 f0 a8"),
+    (r#"fmovem.x (a0),fp1/fp3"#, "f2 10 d0 50"),
+    (r#"fmovem.l fpcr/fpsr,-(a7)"#, "f2 27 b8 00"),
+    (r#"fmovem.l (a7)+,fpcr/fpsr"#, "f2 1f 98 00"),
+    (r#"fmovem.l fpcr/fpsr/fpiar,(a0)"#, "f2 10 bc 00"),
+    (r#"fmovecr #$32,fp0"#, "f2 00 5c 32"),
+    (r#"fmovecr #0,fp1"#, "f2 00 5c 80"),
+    (r#"fsincos.x fp0,fp1:fp2"#, "f2 00 01 31"),
+    (r#"fsincos.x (a0),fp3:fp4"#, "f2 10 4a 33"),
+    (r#"ftst.x fp0"#, "f2 00 00 3a"),
+    (r#"ftst.l d0"#, "f2 00 40 3a"),
+    (r#"ftst.x (a0)"#, "f2 10 48 3a"),
+    (r#"fint.x fp0,fp1"#, "f2 00 00 81"),
+    (r#"fintrz.x fp2"#, "f2 00 09 03"),
+    (r#"fetox.x fp0,fp1"#, "f2 00 00 90"),
+    (r#"flogn.x fp2,fp3"#, "f2 00 09 94"),
+    (r#"fsin.x fp0"#, "f2 00 00 0e"),
+    (r#"fcos.x fp1"#, "f2 00 04 9d"),
+    (r#"ftan.x fp2"#, "f2 00 09 0f"),
+    (r#"fatan.x fp3"#, "f2 00 0d 8a"),
+    (r#"fgetexp.x fp0,fp1"#, "f2 00 00 9e"),
+    (r#"fgetman.x fp2,fp3"#, "f2 00 09 9f"),
+    (r#"fscale.l d0,fp0"#, "f2 00 40 26"),
+    (r#"fmod.x fp1,fp2"#, "f2 00 05 21"),
+    (r#"frem.x fp3,fp4"#, "f2 00 0e 25"),
+    (r#"fsgldiv.x fp0,fp1"#, "f2 00 00 a4"),
+    (r#"fsglmul.x fp2,fp3"#, "f2 00 09 a7"),
+    (r#"fnop"#, "f2 80 00 00"),
+    (r#"fsave -(a7)"#, "f3 27"),
+    (r#"frestore (a7)+"#, "f3 5f"),
+    (r#"fseq d0"#, "f2 40 00 01"),
+    (r#"fsne (a0)"#, "f2 50 00 0e"),
+    (r#"fsgt -(a7)"#, "f2 67 00 12"),
+    (r#"fsf d1"#, "f2 41 00 00"),
+    (r#"fst d2"#, "f2 42 00 0f"),
+    (r#"ftrapeq"#, "f2 7c 00 01"),
+    (r#"ftrapne.w #1"#, "f2 7a 00 0e 00 01"),
+    (r#"ftrapgt.l #$12345678"#, "f2 7b 00 12 12 34 56 78"),
+    (r#"fmove.p fp0,(a0){#5}"#, "f2 10 6c 05"),
+    (r#"fmove.p fp1,(a1){d2}"#, "f2 11 7c a0"),
+    (r#"pmove tc,(a0)"#, "f0 10 42 00"),
+    (r#"pmove (a0),tc"#, "f0 10 40 00"),
+    (r#"pmove crp,(a1)"#, "f0 11 4e 00"),
+    (r#"pmove psr,d0"#, "f0 00 62 00"),
+    (r#"pmove d0,psr"#, "f0 00 60 00"),
+    (r#"pflusha"#, "f0 00 24 00"),
+    (r#"pflush #1,#2"#, "f0 00 30 51"),
+    (r#"pflush #1,#2,(a0)"#, "f0 10 38 51"),
+    (r#"ptestr #1,(a0),#7"#, "f0 10 9e 11"),
+    (r#"ptestw #1,(a0),#7,a1"#, "f0 10 9d 31"),
+    (r#"pvalid val,(a0)"#, "f0 10 28 00"),
+    (r#"psave -(a7)"#, "f1 27"),
+    (r#"prestore (a7)+"#, "f1 5f"),
+    (r#"cas.b d0,d1,(a0)"#, "0a d0 00 40"),
+    (r#"cas.w d2,d3,(a1)"#, "0c d1 00 c2"),
+    (r#"cas.l d4,d5,(a2)"#, "0e d2 01 44"),
+    (r#"cas2.w d0:d1,d2:d3,(a0):(a1)"#, "0c fc 80 80 90 c1"),
+    (r#"cas2.l d0:d1,d2:d3,(a0):(a1)"#, "0e fc 80 80 90 c1"),
+    (r#"callm #0,(a0)"#, "06 d0 00 00"),
+    (r#"rtm d0"#, "06 c0"),
+    (r#"pack d0,d1,#0"#, "83 40 00 00"),
+    (r#"pack -(a0),-(a1),#$30"#, "83 48 00 30"),
+    (r#"unpk d0,d1,#$3030"#, "83 80 30 30"),
+    (r#"unpk -(a0),-(a1),#0"#, "83 88 00 00"),
+    (r#"trapeq"#, "57 fc"),
+    (r#"trapne.w #1"#, "56 fa 00 01"),
+    (r#"traphi.l #$12345678"#, "52 fb 12 34 56 78"),
+    (r#"movep.w d0,$10(a0)"#, "01 88 00 10"),
+    (r#"movep.l $20(a1),d1"#, "03 49 00 20"),
+    (r#"moves.b (a0),d0"#, "0e 10 00 00"),
+    (r#"moves.w d1,(a1)"#, "0e 51 18 00"),
+    (r#"moves.l (a2)+,a3"#, "0e 9a b0 00"),
+];
+
+const GNU_68040: &[(&str, &str)] = &[
+    (r#"move16 (%a0)+,(%a1)+"#, "f6 20 90 00"),
+    (r#"move16 0x12345678,(%a2)"#, "f6 1a 12 34 56 78"),
+    (r#"move16 (%a3),0x1000"#, "f6 13 00 00 10 00"),
+    (r#"move16 %a4@+,0x8000"#, "f6 04 00 00 80 00"),
+    (r#"move16 0x20000,%a5@+"#, "f6 0d 00 02 00 00"),
+    (r#"cinva %ic"#, "f4 98"),
+    (r#"cinva %bc"#, "f4 d8"),
+    (r#"cinvl %dc,(%a0)"#, "f4 48"),
+    (r#"cinvp %nc,%a1@"#, "f4 11"),
+    (r#"cpusha %dc"#, "f4 78"),
+    (r#"cpushl %ic,(%a2)"#, "f4 aa"),
+    (r#"cpushp %bc,(%a3)"#, "f4 f3"),
+    (r#"pflush (%a0)"#, "f5 08"),
+    (r#"pflushn (%a1)"#, "f5 01"),
+    (r#"pflusha"#, "f5 18"),
+    (r#"pflushan"#, "f5 10"),
+    (r#"ptestr (%a2)"#, "f5 6a"),
+    (r#"ptestw (%a3)"#, "f5 4b"),
+    (r#"fsmovex %fp0,%fp1"#, "f2 00 00 c0"),
+    (r#"fdmoved %d0,%fp2"#, "f2 00 55 44"),
+    (r#"fsaddx (%a0),%fp3"#, "f2 10 49 e2"),
+    (r#"fdaddl %d1,%fp4"#, "f2 01 42 66"),
+    (r#"fssubs #0r1.5,%fp5"#, "f2 3c 46 e8 3f c0 00 00"),
+    (r#"fdsubx %fp6,%fp7"#, "f2 00 1b ec"),
+    (r#"fsmulw (%a1)+,%fp0"#, "f2 19 50 63"),
+    (r#"fddivb -(%a2),%fp1"#, "f2 22 58 e4"),
+    (r#"fsabsx %fp2"#, "f2 00 09 58"),
+    (r#"fdnegx %fp3,%fp4"#, "f2 00 0e 5e"),
+    (r#"fssqrtd 8(%a3),%fp5"#, "f2 2b 56 c1 00 08"),
+    (r#"movec %d0,%tc"#, "4e 7b 00 03"),
+    (r#"movec %itt0,%d1"#, "4e 7a 10 04"),
+    (r#"movec %a0,%urp"#, "4e 7b 88 06"),
+    (r#"movec %mmusr,%a1"#, "4e 7a 98 05"),
+];
+
+const GNU_68060: &[(&str, &str)] = &[
+    (r#"plpar (%a0)"#, "f5 c8"),
+    (r#"plpaw (%a7)"#, "f5 8f"),
+    (r#"lpstop #0x2000"#, "f8 00 01 c0 20 00"),
+    (r#"halt"#, "4a c8"),
+    (r#"pulse"#, "4a cc"),
+    (r#"movec %d0,%pcr"#, "4e 7b 08 08"),
+    (r#"movec %buscr,%d1"#, "4e 7a 10 08"),
+    (r#"fsaddx %fp0,%fp1"#, "f2 00 00 e2"),
+    (r#"move16 (%a0)+,(%a1)+"#, "f6 20 90 00"),
+];
+
+const GNU_CPU32: &[(&str, &str)] = &[
+    (r#"bgnd"#, "4a fa"),
+    (r#"lpstop #0x2700"#, "f8 00 01 c0 27 00"),
+    (r#"fmovex %fp0,%fp1"#, "f2 00 00 80"),
+    (r#"movec %d0,%vbr"#, "4e 7b 08 01"),
+    (r#"movew %d0,(8,%a0,%d1.l*4)"#, "31 80 1c 08"),
+    (r#"movel %a0@(0x12345),%d0"#, "20 30 01 70 00 01 23 45"),
+];
+
+const GNU_FIDO: &[(&str, &str)] = &[
+    (r#"sleep"#, "4e 78"),
+    (r#"trapx #3"#, "4e 33"),
+    (r#"bgnd"#, "4a fa"),
+    (r#"movec %d0,%cac"#, "4e 7b 0f fe"),
+    (r#"movec %mbo,%d1"#, "4e 7a 1f ff"),
+];
+
+const GNU_5475: &[(&str, &str)] = &[
+    (r#"mvsb %d0,%d1"#, "73 00"),
+    (r#"mvsw (%a0),%d2"#, "75 50"),
+    (r#"mvzb 8(%a1),%d3"#, "77 a9 00 08"),
+    (r#"mvzw #0x1234,%d4"#, "79 fc 12 34"),
+    (r#"mov3ql #-1,%d5"#, "a1 45"),
+    (r#"mov3ql #7,(%a0)"#, "af 50"),
+    (r#"mov3ql #1,-(%sp)"#, "a3 67"),
+    (r#"satsl %d6"#, "4c 86"),
+    (r#"remsl %d0,%d1:%d2"#, "4c 40 28 01"),
+    (r#"remul (%a0),%d3:%d4"#, "4c 50 40 03"),
+    (r#"tpf"#, "51 fc"),
+    (r#"tpfw #1"#, "51 fa 00 01"),
+    (r#"tpfl #0x12345"#, "51 fb 00 01 23 45"),
+    (r#"wdebug (%a0)"#, "fb d0 00 03"),
+    (r#"wddatab (%a1)"#, "fb 11"),
+    (r#"halt"#, "4a c8"),
+    (r#"pulse"#, "4a cc"),
+    (r#"intouch %a3"#, "f4 2b"),
+    (r#"fmoved %fp0,%fp1"#, "f2 00 00 80"),
+    (r#"fmoved (%a0),%fp2"#, "f2 10 55 00"),
+    (r#"fmoved %fp3,8(%a1)"#, "f2 29 75 80 00 08"),
+    (r#"fmovel %d1,%fp5"#, "f2 01 42 80"),
+    (r#"fmoves (%a2),%fp6"#, "f2 12 47 00"),
+    (r#"fmovemd %fp0-%fp3,(%a7)"#, "f2 17 f0 f0"),
+    (r#"fmovemd (%a7),%fp0-%fp3"#, "f2 17 d0 f0"),
+    (r#"fsqrtd %fp1,%fp2"#, "f2 00 05 04"),
+    (r#"fbeq ."#, "f2 81 ff fe"),
+];
+
+const GNU_54455: &[(&str, &str)] = &[
+    (r#"bitrev %d0"#, "00 c0"),
+    (r#"byterev %d1"#, "02 c1"),
+    (r#"ff1 %d2"#, "04 c2"),
+    (r#"mvsb (%a0)+,%d3"#, "77 18"),
+    (r#"mov3ql #3,%d4"#, "a7 44"),
 ];
