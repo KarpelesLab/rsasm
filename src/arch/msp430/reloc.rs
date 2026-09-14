@@ -63,6 +63,8 @@ pub enum Bfd {
     Pcr16,
     /// `BFD_RELOC_MSP430_10_PCREL`: a conditional jump's displacement.
     Jump10,
+    /// `BFD_RELOC_MSP430_RL_PCREL`: the branch a polymorphic jump grows to.
+    RlPcrel,
     /// `BFD_RELOC_MSP430_SYM_DIFF`: the subtrahend of a difference the
     /// linker has to work out for itself.
     SymDiff,
@@ -112,6 +114,7 @@ pub fn number(isa: Isa, bfd: Bfd) -> Option<u32> {
             Abs16 => 15,
             Hi16 => 16,
             Jump10 => 19,
+            RlPcrel => 13, // R_MSP430X_PCR16
             SymDiff => 21,
             Insn16 | Pcrel16 | Insn16Pcrel => return None,
         });
@@ -124,6 +127,7 @@ pub fn number(isa: Isa, bfd: Bfd) -> Option<u32> {
         Insn16Pcrel => 4, // R_MSP430_16_PCREL
         Data16 => 5,      // R_MSP430_16_BYTE
         Pcrel16 => 6,     // R_MSP430_16_PCREL_BYTE
+        RlPcrel => 8,     // R_MSP430_RL_PCREL
         Data8 => 9,       // R_MSP430_8
         SymDiff => 10,
         Abs16 | Hi16 | Pcr16 | Pcr20Call => return None,
@@ -176,16 +180,11 @@ pub fn pcrel16(reloc: u32) -> FixupKind {
     FixupKind::pcrel(2, 0).with_reloc(reloc).unbiased_reloc()
 }
 
-/// A conditional jump's displacement: ten bits of word offset from the word
-/// after the instruction.
-///
-/// The field holds −512 to 511 words, but GNU as accepts one more going
-/// forward and writes it as the most negative displacement, so the limit
-/// here is its limit rather than the field's.
+/// A conditional jump's displacement: ten bits of word offset, −512 to 511,
+/// from the word after the instruction.
 pub fn jump10(reloc: u32) -> FixupKind {
     FixupKind::pcrel(2, 2)
-        .with_field(12, 2)
-        .with_limits(-1024, 1024)
+        .with_field(11, 2)
         .with_reloc(reloc)
         .unbiased_reloc()
         .scatter(|w, v| (w & 0xfc00) | (((v >> 1) as u64) & 0x3ff))

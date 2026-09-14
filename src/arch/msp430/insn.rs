@@ -39,6 +39,7 @@ use super::reg;
 use super::reloc::{self, Bfd};
 use super::{Isa, repeat_of, with_repeat};
 use crate::arch::{AsmCtx, InsnRequest};
+use crate::expr::ExprKind;
 use crate::lexer::{Punct, Token};
 use crate::section::{FixupKind, LinkValue, Variant};
 use crate::source::Span;
@@ -842,7 +843,7 @@ fn adda(c: &mut Ctx<'_, '_>, opcode: &Opcode, ops: &[&[Token]]) -> Option<Vec<Va
     let mut immediate = None;
     if ops[0].first().is_some_and(|t| t.is_punct(Punct::Hash)) {
         let x = expr_of(c, &ops[0][1..])?;
-        match c.cx.constant(x.e) {
+        match operand::known(c.cx, x.e) {
             Some(v) => {
                 if !(-0x80000..=0xfffff).contains(&v) {
                     c.error(format!("value {v:#x} does not fit in 20 bits"));
@@ -1146,7 +1147,7 @@ fn rpt(c: &mut Ctx<'_, '_>, ops: &[&[Token]]) -> Option<Vec<Variant>> {
     }
     let n = if ops[0].first().is_some_and(|t| t.is_punct(Punct::Hash)) {
         let x = expr_of(c, &ops[0][1..])?;
-        let Some(v) = c.cx.constant(x.e) else {
+        let Some(v) = operand::known(c.cx, x.e) else {
             c.error("`rpt` needs a constant repeat count");
             return None;
         };
@@ -1284,7 +1285,7 @@ fn jump(c: &mut Ctx<'_, '_>, bin: u16, ops: &[&[Token]]) -> Option<Vec<Variant>>
     let dollar = toks.first().is_some_and(|t| t.is_punct(Punct::Dollar));
     let x = expr_of(c, if dollar { &toks[1..] } else { toks })?;
     let mut e = Enc::new();
-    match c.cx.constant(x.e) {
+    match operand::known(c.cx, x.e) {
         Some(mut v) => {
             if v & 1 != 0 {
                 v += 1;
@@ -1326,6 +1327,9 @@ fn polymorph(c: &mut Ctx<'_, '_>, index: u8, ops: &[&[Token]]) -> Option<Vec<Var
         return None;
     }
     let x = target(c, ops[0])?;
+    // The reference gives a polymorph a fragment its relaxation revisits, so
+    // a difference of labels across one is not a number as the file is read.
+    c.cx.relaxable = true;
     let table = if c.isa.is_430x() { &RCODES_X } else { &RCODES };
     let mut e = Enc::new();
     for w in table[index as usize] {
@@ -1334,11 +1338,7 @@ fn polymorph(c: &mut Ctx<'_, '_>, index: u8, ops: &[&[Token]]) -> Option<Vec<Var
         }
     }
     let at = e.word(0);
-    let r = c.reloc(if c.isa.is_430x() {
-        Bfd::Pcr16
-    } else {
-        Bfd::Insn16Pcrel
-    })?;
+    let r = c.reloc(Bfd::RlPcrel)?;
     e.fixup(at, x, reloc::pcrel16(r));
     e.done()
 }
@@ -1350,17 +1350,14 @@ fn polymorph_long(c: &mut Ctx<'_, '_>, index: u8, ops: &[&[Token]]) -> Option<Ve
         return None;
     }
     let x = target(c, ops[0])?;
+    c.cx.relaxable = true;
     let mut e = Enc::new();
     let words = HCODES[index as usize];
     e.word(words[0]);
     e.word(words[1]);
     e.word(branch_word(c.isa));
     let at = e.word(0);
-    let r = c.reloc(if c.isa.is_430x() {
-        Bfd::Pcr16
-    } else {
-        Bfd::Insn16Pcrel
-    })?;
+    let r = c.reloc(Bfd::RlPcrel)?;
     e.fixup(at, x, reloc::pcrel16(r));
     e.done()
 }
@@ -1372,9 +1369,24 @@ fn target(c: &mut Ctx<'_, '_>, toks: &[Token]) -> Option<operand::Expr> {
         _ => toks,
     };
     let x = expr_of(c, rest)?;
-    if c.cx.constant(x.e).is_some() {
-        let name = c.name;
+    let name = c.name;
+    if operand::known(c.cx, x.e).is_some() {
         c.error(format!("`{name}` needs a label, not a number"));
+        return None;
+    }
+    // The reference keeps only the symbol of `beq lab+2` and branches to
+    // `lab`, so anything more than a label is refused rather than copied.
+    if !matches!(
+        c.cx.exprs.get(x.e).kind,
+        ExprKind::Sym(_) | ExprKind::SymId(_) | ExprKind::LocalRef(..)
+    ) {
+        c.cx.error(
+            x.span,
+            format!(
+                "`{name}` needs a label on its own: GNU as branches to the label and \
+                 drops anything added to it"
+            ),
+        );
         return None;
     }
     Some(x)
@@ -1387,7 +1399,7 @@ fn hash_constant(c: &mut Ctx<'_, '_>, toks: &[Token], what: &str, lo: i64, hi: i
         return None;
     }
     let x = expr_of(c, &toks[1..])?;
-    let Some(v) = c.cx.constant(x.e) else {
+    let Some(v) = operand::known(c.cx, x.e) else {
         c.error(format!("{what} must be a constant"));
         return None;
     };

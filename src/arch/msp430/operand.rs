@@ -27,8 +27,8 @@
 use super::reg;
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
-use crate::expr::{ExprKind, ExprRef};
-use crate::lexer::{Punct, TokKind, Token};
+use crate::expr::{BinOp, ExprKind, ExprRef, UnOp};
+use crate::lexer::{LocalDir, Punct, TokKind, Token};
 use crate::source::Span;
 
 /// An expression and where it was written.
@@ -180,7 +180,7 @@ pub fn src(
     if first.is_punct(Punct::Amp) {
         // `&addr`: absolute, through `SR` in mode 1.
         let x = expr(cx, &toks[1..], span)?;
-        let value = cx.constant(x.e);
+        let value = known(cx, x.e);
         if let Some(v) = value
             && !in_range(v, rules.wide)
         {
@@ -224,7 +224,7 @@ pub fn src(
             return None;
         }
         let x = expr(cx, &toks[..open], span)?;
-        let value = cx.constant(x.e);
+        let value = known(cx, x.e);
         if let Some(v) = value {
             if !in_range(v, rules.wide) {
                 out_of_range(cx, x.span, v, rules.wide);
@@ -247,7 +247,7 @@ pub fn src(
     // mode 3 — the immediate the constant generators could not make.
     let am = if first.is_punct(Punct::Minus) { 3 } else { 1 };
     let x = expr(cx, toks, span)?;
-    let value = cx.constant(x.e);
+    let value = known(cx, x.e);
     Some(Operand::exp_mode(reg::PC, am, x, value))
 }
 
@@ -288,7 +288,7 @@ fn immediate(cx: &mut AsmCtx<'_>, toks: &[Token], span: Span, rules: Rules) -> O
         ..Operand::exp_mode(reg::PC, 3, x, None)
     };
 
-    let Some(mut v) = cx.constant(x.e) else {
+    let Some(mut v) = known(cx, x.e) else {
         if vshift > 1 {
             cx.error(x.span, "#hlo() and #hhi() cannot be used on a symbol");
             return None;
@@ -402,6 +402,54 @@ fn imm_in_range(v: i64, wide: bool) -> bool {
 fn out_of_range(cx: &mut AsmCtx<'_>, span: Span, v: i64, wide: bool) {
     let what = if wide { "20-bit" } else { "16-bit" };
     cx.error(span, format!("value {v:#x} is out of the {what} range"));
+}
+
+/// The value of `e`, if GNU as has a number there as it reads it.
+///
+/// That is more than [`AsmCtx::constant`] knows: GNU as also folds a
+/// difference of two labels in one section with nothing between them that
+/// can change size. Not in a code section, though, where the MSP430 linker
+/// may relax the code between them (`msp430_allow_local_subtract`), unless
+/// both are numbered local labels, which have no name to give it.
+pub fn known(cx: &AsmCtx<'_>, e: ExprRef) -> Option<i64> {
+    if let Some(v) = cx.constant(e) {
+        return Some(v);
+    }
+    let node = cx.exprs.get(e);
+    match node.kind {
+        ExprKind::Binary(op, l, r) => {
+            if op == BinOp::Sub
+                && let (Some(to), Some(from)) = (label(cx, l), label(cx, r))
+            {
+                let numbered = |id| cx.symbols.get(id).local_number.is_some();
+                let section = cx.label_position(to)?.0;
+                if cx.sections[section.0 as usize].flags.exec && !(numbered(to) && numbered(from)) {
+                    return None;
+                }
+                return cx.fixed_distance(cx.label_position(from)?, cx.label_position(to)?);
+            }
+            let (a, b) = (known(cx, l)?, known(cx, r)?);
+            match op {
+                BinOp::Add => Some(a.wrapping_add(b)),
+                BinOp::Sub => Some(a.wrapping_sub(b)),
+                _ => None,
+            }
+        }
+        ExprKind::Unary(UnOp::Neg, x) => known(cx, x).map(i64::wrapping_neg),
+        _ => None,
+    }
+}
+
+/// The label an expression names, if it is only a label.
+fn label(cx: &AsmCtx<'_>, e: ExprRef) -> Option<crate::symbol::SymbolId> {
+    let node = cx.exprs.get(e);
+    let id = match node.kind {
+        ExprKind::SymId(id) => id,
+        ExprKind::Sym(name) => cx.symbols.lookup(name)?,
+        ExprKind::LocalRef(n, LocalDir::Backward) => cx.symbols.local_backward(n, node.span)?,
+        _ => return None,
+    };
+    cx.label_position(id).map(|_| id)
 }
 
 /// Parses `toks` as one complete expression.

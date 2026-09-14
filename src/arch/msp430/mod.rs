@@ -241,11 +241,25 @@ impl Architecture for Msp430 {
         true
     }
 
-    /// GNU as for MSP430 never folds a difference of two labels in a code
-    /// section into a data field (`msp430_allow_local_subtract`), since the
-    /// linker may relax the code between them.
-    fn defers_difference(&self, kind: &FixupKind, symbols_in: &SectionFlags) -> bool {
-        symbols_in.exec && Some(kind.reloc) == reloc::data(self.isa, kind.size, false)
+    /// GNU as for MSP430 never folds a difference of two named labels in a
+    /// code section into a data field (`msp430_allow_local_subtract`), since
+    /// the linker may relax the code between them. Numbered local labels it
+    /// folds anyway, having no name to give the linker.
+    fn defers_difference(
+        &self,
+        kind: &FixupKind,
+        symbols_in: &SectionFlags,
+        numbered: bool,
+    ) -> bool {
+        symbols_in.exec && !numbered && Some(kind.reloc) == reloc::data(self.isa, kind.size, false)
+    }
+
+    /// A number as the target of a jump or a symbolic operand is an address,
+    /// relocated against no symbol, as GNU as relocates every PC-relative
+    /// field. Only a number defined after its use gets that far: one already
+    /// known is encoded where it is read.
+    fn pcrel_number_is_address(&self) -> bool {
+        true
     }
 
     /// Every PC-relative fixup is left to the linker
