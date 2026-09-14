@@ -23,3 +23,16 @@ f:
 	.loc 1 4 5 prologue_end
 	mov 0, %o0
 	.cfi_endproc
+=== a sequence address aligned in its fragment but not in the section
+	.file 1 "a.c"
+	.file 2 "b.c"
+	.text
+	.loc 1 1
+	nop
+	.section .text.b,"ax",%progbits
+	.loc 2 2 200
+	nop
+	nop
+	.data
+	.loc 1 3
+	.long 1

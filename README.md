@@ -97,6 +97,9 @@ but 18 forms where both manuals show MAME to be wrong.
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
+- DWARF: line tables from `.file` and `.loc`, versions 2 to 5, call frame
+  information from `.cfi_*` in `.eh_frame` or `.debug_frame`, and `-g` to
+  describe the assembly source itself; see [Debug information](#debug-information)
 - each target's own comment syntax, so ARM's `@`, AArch64's `//` and SPARC's
   `!` work, and `#` stays an immediate prefix where it is one
 - diagnostics with source snippets that name the real limit, and assembly that
@@ -119,7 +122,10 @@ but 18 forms where both manuals show MAME to be wrong.
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
 - Mach-O and PE/COFF
-- DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
+- DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
+  beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
+  `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
+  `.debug_macro`/`.debug_names`
 - ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
 - AArch64: most of NEON, SVE
 - PowerPC: AltiVec/VSX
@@ -180,6 +186,9 @@ rsasm [options] <input.s>...
   -D <sym>[=<val>]   define <sym> before assembling
       --base <addr>  base address for `bin` output
       --hex          print the output as hex instead of writing a file
+  -g                 describe the assembly source in DWARF line information
+      --gdwarf-<n>   the same, as DWARF version <n> (2 to 5); the version
+                     also applies to `.loc` source
       --list-arch    list the architectures this build supports
 ```
 
@@ -430,9 +439,50 @@ Every case in `tools/multiarch-diff/programs.txt` is checked the only way it
 can be: the file is split at its `.arch` lines, each part is assembled by its
 own target's reference, and rsasm has to produce the concatenation.
 
+## Debug information
+
+`.file N "name"` (with a directory and `md5` in DWARF 5) and `.loc` with all of
+its options, `view` included, write `.debug_line` and `.debug_line_str`; the
+`.cfi_*` directives write `.eh_frame` or `.debug_frame`, as `.cfi_sections`
+says. Where the source brings no `.debug_info`, the compilation unit an
+assembler makes up for the table is written too. `-g` (or `--gdwarf-<n>`)
+instead describes the assembly source: a row for each instruction, at its
+line, and a unit naming the file.
+
+The two references agree on the formats and disagree on nearly everything
+inside them, so each target follows the one that checks its encodings: GNU as
+for x86, m68k, SuperH, RX, RL78 and V850, and llvm-mc for the rest. That
+decides, among other things, the default version (3 for GNU as, 4 for
+llvm-mc, 5 for either once a `.file 0` appears), how a path splits into a
+directory, whether a column carries over to the next `.loc`, which directives
+end a pending `.loc`, how CIEs are shared, and how padding and relocations are
+written. Each backend supplies its DWARF register numbers and names, return
+address column, alignment factors, initial instructions and FDE encoding; RX,
+RL78 and V850, whose GNU as has no CFI, refuse `.cfi_*` as it does. For `-g`,
+GNU as places an instruction from a macro on the line that called it, one
+from `.rept` or `.irp` on its line in the block, and one from an included file
+on its line there; llvm-mc puts every instruction in the main file at the
+outermost line that expanded it, and describes each label as well.
+
+Three differences remain, all in what a linker never sees differently:
+
+- GNU as gives a `view -0` row an address of its own wherever its frag
+  obstack happened to start a new chunk, which depends on the host's memory
+  allocation; rsasm does so only where the row is at the address of the one
+  before, which is when the view count needs it.
+- On RL78, GNU as leaves every distance in the line table to the linker as a
+  stack of relocation operations; rsasm writes the distances, which are final
+  since it lays out the section itself.
+- For `-g` on llvm-mc's targets, llvm-mc numbers the last statement of an
+  included file against the file that included it, reading past that file's
+  buffer; rsasm gives its line in the included file.
+
+The producer named in the unit is `rsasm` and its version, or the value of
+`DEBUG_PRODUCER`, which llvm-mc also reads.
+
 ## Verification
 
-Five differential harnesses assemble the same source with rsasm and with an
+Seven differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against the host's GNU as, for x86. 854 of 854 match.
@@ -458,6 +508,12 @@ independent assembler, and compare the bytes:
   a checksum-pinned source.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.
+- `tools/dwarf-diff/run.sh` for [debug information](#debug-information),
+  against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
+  table, frame and compilation unit sections byte for byte with their
+  relocations, from hand-written snippets, `-g` and whole files from GCC and
+  Clang, for all twenty-one ELF target variants with a reference.
+  DWARFDWARF_COUNT
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
@@ -469,7 +525,7 @@ each binding — local, global, weak, hidden and the other visibilities, `.set`
 aliases either way round, `.globl` after use, another section, undefined —
 through branches, calls, PC-relative loads and data.
 
-All six run in CI. The expected bytes in the hermetic tests under `tests/` were
+All seven run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
@@ -567,6 +623,7 @@ $ tools/flat-diff/run.sh    # needs cross binutils with ld, and llvm-mc
 $ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
 $ tools/nasm-diff/run.sh    # needs NASM from tools/oracles/build.sh
 $ tools/multiarch-diff/run.sh  # needs all of the above
+$ tools/dwarf-diff/run.sh   # needs llvm-mc and tools/oracles/build.sh
 ```
 
 ## License

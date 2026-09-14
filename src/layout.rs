@@ -1358,7 +1358,12 @@ impl Assembler {
                     .modifier_reloc(&name, kind.size, kind.pcrel)
             })
             .unwrap_or(kind.reloc);
-        let reloc = self.frag_arch(si, fi).0.reloc_at(reloc, at);
+        let place = if self.relocs_by_fragment.contains(&section) {
+            at - self.sections[si].frags[fi].offset
+        } else {
+            at
+        };
+        let reloc = self.frag_arch(si, fi).0.reloc_at(reloc, place);
         if reloc == 0 {
             self.diags.error(
                 span,

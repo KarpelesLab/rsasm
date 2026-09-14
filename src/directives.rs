@@ -749,6 +749,9 @@ impl Assembler {
             self.push_section_stack();
         }
         self.set_section(id);
+        if self.dwarf.line.source.on {
+            self.dwarf_section_named(id);
+        }
         true
     }
 

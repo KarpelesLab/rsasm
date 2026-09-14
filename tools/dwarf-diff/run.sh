@@ -3,9 +3,11 @@
 # from `.file`/`.loc` and call frame information from `.cfi_*`.
 #
 # Each snippet is assembled into an object by rsasm and by the target's
-# reference, and the two have to agree on `.debug_line`, `.debug_line_str`,
-# `.eh_frame` and `.debug_frame`: each section's type, flags, alignment and
-# bytes, and every relocation against them, read through
+# reference, and the two have to agree on the line table, the call frame
+# information and the compilation unit an assembler makes up for a line table
+# (`.debug_info`, `.debug_abbrev`, `.debug_str`, `.debug_aranges`,
+# `.debug_ranges` or `.debug_rnglists`): each section's type, flags,
+# alignment and bytes, and every relocation against them, read through
 # tools/mc-diff/relocs.awk the way a linker reads it.
 #
 #   tools/dwarf-diff/run.sh               # every target
@@ -20,13 +22,17 @@
 # rest. x86 is checked against the cross x86_64-elf-as rather than the host's
 # as, which compresses debug sections by default and is a different release.
 #
-# Corpora hold snippets separated by `=== <name>` lines: common.txt, whose
+# Corpora hold snippets separated by `=== <name>` lines, or
+# `=== <name> | <flag>` for one assembled with `-g` or `--gdwarf-<n>` (which
+# llvm-mc spells `-g -dwarf-version=<n>`): common.txt and common-g.txt, whose
 # snippets use only `nop` and register numbers and are run for every target,
 # <key>.txt for each target's own, and <key>-compiler.txt with whole files
 # from GCC (x86) and Clang (every target whose code it assembles), see
 # compiler.sh. A snippet using `.cfi_*` is skipped for a target whose
 # reference has no CFI. Both assemblers run in the same scratch directory,
-# which a DWARF 5 table without `.file 0` names.
+# which a DWARF 5 table without `.file 0` names, and both are told to call
+# themselves the reference in the compilation unit, through the
+# DEBUG_PRODUCER variable llvm-mc reads and rsasm reads for this.
 set -u
 verbose=
 [ "${1-}" = -v ] && { verbose=1; shift; }
@@ -65,7 +71,8 @@ rx|rx|xas rx-elf-as|P
 rl78|rl78|xas rl78-elf-as|norelocs
 v850|v850|xas v850-elf-as|
 "
-SECTIONS=".debug_line .debug_line_str .eh_frame .debug_frame"
+SECTIONS=".debug_line .debug_line_str .eh_frame .debug_frame .debug_info .debug_abbrev
+.debug_str .debug_aranges .debug_ranges .debug_rnglists"
 
 command -v llvm-mc > /dev/null || { echo "llvm-mc not found; skipping" >&2; exit 0; }
 command -v llvm-readobj > /dev/null || { echo "llvm-readobj not found; skipping" >&2; exit 0; }
@@ -97,22 +104,32 @@ canon() { # object
   llvm-readobj --symbols "$o" > "$o.syms"
   # Grouped by section, since the order the sections come in says nothing.
   llvm-readobj --relocs --expand-relocs "$o" | ${AWK:-awk} -f "$awkscript" "$o.syms" - |
-    grep -E '^\.rela?(\.debug_line|\.debug_line_str|\.eh_frame|\.debug_frame) ' | sort -s -k1,1
+    grep -E "^\\.rela?($(echo $SECTIONS | sed 's/\./\\./g; s/ /|/g')) " | sort -s -k1,1
 }
 
-compare() { # key, rsasm arch, reference, quirks, name, source
-  local key=$1 rs=$2 ref=$3 quirks=$4 name=$5 src=$6 d kind tool m r
+compare() { # key, rsasm arch, reference, quirks, name, source, flag
+  local key=$1 rs=$2 ref=$3 quirks=$4 name=$5 src=$6 flag=$7 d kind tool m r producer mcflags
+  local -a xasflags=()
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
   # shellcheck disable=SC2086
   set -- $ref
   kind=$1; shift
+  case "$flag" in
+    "") mcflags= ;;
+    -g) mcflags=-g; xasflags=(-g) ;;
+    --gdwarf-*) mcflags="-g -dwarf-version=${flag#--gdwarf-}"; xasflags=("$flag") ;;
+    *) echo "unknown flag in [$key] $name: $flag" >&2; exit 1 ;;
+  esac
   case "$kind" in
-    mc) tool=$1; shift
-      (cd "$d" && llvm-mc -triple="$tool" "$@" -filetype=obj -o ref.o in.s) > "$d/ref.log" 2>&1 ;;
-    xas) tool=$1; shift
+    mc) tool=$1; shift; producer="llvm-mc"
+      # shellcheck disable=SC2086
+      (cd "$d" && DEBUG_PRODUCER=$producer llvm-mc -triple="$tool" "$@" $mcflags -filetype=obj \
+        -o ref.o in.s) > "$d/ref.log" 2>&1 ;;
+    xas) tool=$1; shift; producer="GNU AS 2.47"
       if [ ! -x "$bin/$tool" ]; then echo "REF-MISSING: $tool" > "$d/ref.log"; false
-      else (cd "$d" && "$bin/$tool" --nocompress-debug-sections "$@" -o ref.o in.s) > "$d/ref.log" 2>&1; fi ;;
+      else (cd "$d" && "$bin/$tool" --nocompress-debug-sections "${xasflags[@]}" "$@" -o ref.o in.s) \
+        > "$d/ref.log" 2>&1; fi ;;
   esac
   if [ $? -eq 0 ] && [ -f "$d/ref.o" ]; then
     m=$(canon "$d/ref.o")
@@ -121,7 +138,7 @@ compare() { # key, rsasm arch, reference, quirks, name, source
     m="REF-ERROR: $(grep -m3 -iE 'error|missing' "$d/ref.log" | tr '\n' ' ')"
   fi
   # shellcheck disable=SC2086
-  if (cd "$d" && "$rsasm" -a $rs -o rs.o in.s) > "$d/rs.log" 2>&1; then
+  if (cd "$d" && DEBUG_PRODUCER=$producer "$rsasm" -a $rs $flag -o rs.o in.s) > "$d/rs.log" 2>&1; then
     r=$(canon "$d/rs.o")
   else
     r="RSASM-ERROR: $(grep -m3 -i error "$d/rs.log" | tr '\n' ' ')"
@@ -136,11 +153,12 @@ compare() { # key, rsasm arch, reference, quirks, name, source
   else
     fail=$((fail + 1))
     echo "### [$key] $name"
+    [ -n "$flag" ] && echo "    (assembled with $flag)"
     printf '%s\n' "$src" | sed 's/^/    |/'
     diff <(printf '%s\n' "$m") <(printf '%s\n' "$r") | sed 's/^</  ref:  /; s/^>/  rsasm:/'
     if [ -n "$verbose" ] && [ -f "$d/ref.o" ] && [ -f "$d/rs.o" ]; then
-      diff <(llvm-dwarfdump --debug-line --eh-frame --debug-frame "$d/ref.o" | tail -n +2) \
-        <(llvm-dwarfdump --debug-line --eh-frame --debug-frame "$d/rs.o" | tail -n +2) |
+      diff <(llvm-dwarfdump --all "$d/ref.o" | tail -n +2) \
+        <(llvm-dwarfdump --all "$d/rs.o" | tail -n +2) |
         sed 's/^/    /'
     fi
   fi
@@ -148,18 +166,19 @@ compare() { # key, rsasm arch, reference, quirks, name, source
 }
 
 run_file() { # file, key, rsasm arch, reference, quirks
-  local file=$1 key=$2 rs=$3 ref=$4 quirks=$5 snippet="" name="" line
+  local file=$1 key=$2 rs=$3 ref=$4 quirks=$5 snippet="" name="" flag="" line
   [ -f "$file" ] || return 0
   flush() {
     [ -z "$name" ] && return
     case "$snippet $quirks " in
       *.cfi_*) case " $quirks " in *" cfi "*) ;; *) return ;; esac ;;
     esac
-    compare "$key" "$rs" "$ref" "$quirks" "$name" "$snippet"
+    compare "$key" "$rs" "$ref" "$quirks" "$name" "$snippet" "$flag"
   }
   while IFS= read -r line; do
     case "$line" in
-      "==="*) flush; snippet=""; name="${line#=== }" ;;
+      "==="*" | "*) flush; snippet=""; name="${line#=== }"; flag="${name##* | }"; name="${name% | *}" ;;
+      "==="*) flush; snippet=""; name="${line#=== }"; flag="" ;;
       *) snippet="$snippet$line
 " ;;
     esac
@@ -174,8 +193,7 @@ while IFS='|' read -r key rs ref quirks; do
     case " $wanted " in *" $key "*) ;; *) continue ;; esac
   fi
   before=$((pass + fail))
-  run_file "$here/common.txt" "$key" "$rs" "$ref" "$quirks"
-  for f in "$here/$key.txt" "$here/$key"-*.txt; do
+  for f in "$here"/common*.txt "$here/$key.txt" "$here/$key"-*.txt; do
     run_file "$f" "$key" "$rs" "$ref" "$quirks"
   done
   echo "[$key] $((pass + fail - before)) cases"

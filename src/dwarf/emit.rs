@@ -136,15 +136,39 @@ impl Assembler {
         if self.dwarf.line.has_views {
             self.assign_views();
         }
-        // GNU as writes no table without a row; llvm-mc writes one for a
-        // numbered `.file` alone.
-        let lines = match self.dwarf_target().flavor {
-            Flavor::Gnu => !self.dwarf.line.sequences.is_empty(),
-            Flavor::Llvm => self.dwarf.line.is_used(),
-        };
-        if lines {
-            self.emit_debug_line();
-            added = true;
+        let version = self.dwarf_line_version();
+        self.number_generated_files(version);
+        match self.dwarf_target().flavor {
+            // GNU as's `dwarf2_finish`: no table without a row, unless the
+            // source has a unit of its own for one; and a unit to go with
+            // the table unless the source has one.
+            Flavor::Gnu => {
+                let rows = !self.dwarf.line.sequences.is_empty();
+                let has_info = self.section_has_bytes(".debug_info");
+                let has_line = self.section_has_bytes(".debug_line");
+                if rows && has_line && self.dwarf.line.used {
+                    let span = self.dwarf.line.current.span;
+                    self.diags.error(span, "duplicate .debug_line sections");
+                } else if (rows || has_info) && !(has_info && has_line) {
+                    if !has_line {
+                        self.emit_debug_line();
+                    }
+                    if !has_info {
+                        self.gnu_unit(version);
+                    }
+                    added = true;
+                }
+            }
+            // llvm-mc writes a table for a numbered `.file` alone.
+            Flavor::Llvm => {
+                if self.dwarf.line.is_used() {
+                    self.emit_debug_line();
+                    if self.dwarf.line.source.on {
+                        self.llvm_unit(version);
+                    }
+                    added = true;
+                }
+            }
         }
         if !self.dwarf.cfi.fdes.is_empty() {
             self.emit_frames();
@@ -289,10 +313,7 @@ impl Assembler {
         // Offsets of the strings `strs` holds, for llvm-mc, which writes each
         // one once.
         let mut seen: Vec<(String, u64)> = Vec::new();
-        let str_pos = match str_sec {
-            Some(s) => Some(self.next_pos(s)),
-            None => None,
-        };
+        let str_pos = str_sec.map(|s| self.next_pos(s));
 
         let mut b = Blob::new(endian);
         b.int(0, 4); // unit_length, patched below
@@ -317,11 +338,12 @@ impl Assembler {
         b.bytes
             .extend_from_slice(&lengths[..opcode_base as usize - 1]);
 
-        // A path in `.debug_line_str`, or inline before DWARF 5.
-        let mut path = |asm: &mut Assembler, b: &mut Blob, s: &str| {
+        // A path in `.debug_line_str`, or inline before DWARF 5. Returns
+        // the offset of the string.
+        let mut path = |asm: &mut Assembler, b: &mut Blob, s: &str| -> u64 {
             let (Some(pos), Some(_)) = (str_pos, str_sec) else {
                 b.str(s);
-                return;
+                return 0;
             };
             let off = match seen.iter().find(|(t, _)| t == s) {
                 Some((_, o)) if flavor == Flavor::Llvm => *o,
@@ -335,6 +357,7 @@ impl Assembler {
             let e = asm.pos_expr(pos, off);
             let kind = asm.abs_kind(4);
             b.fixup(4, e, kind);
+            off
         };
 
         match (flavor, version >= 5) {
@@ -365,6 +388,10 @@ impl Assembler {
                 if files.is_empty() {
                     files.push(None);
                 }
+                // File 0 given no `.file 0` is file 1, and the two share
+                // the one string: GNU as shares a string only where the
+                // two slots hold the same pointer, which only this makes.
+                let shared = files[0].is_none() && matches!(files.get(1), Some(Some(_)));
                 if files[0].is_none() {
                     files[0] = Some(match files.get(1).cloned().flatten() {
                         Some(f) => f,
@@ -386,8 +413,15 @@ impl Assembler {
                     b.uleb(DW_FORM_DATA16);
                 }
                 b.uleb(files.len() as u64);
-                for f in files.iter().flatten() {
-                    path(self, &mut b, &f.name);
+                let mut first = 0;
+                for (i, f) in files.iter().flatten().enumerate() {
+                    if shared && i == 1 {
+                        let e = self.pos_expr(str_pos.expect("DWARF 5 has line strings"), first);
+                        let kind = self.abs_kind(4);
+                        b.fixup(4, e, kind);
+                    } else {
+                        first = path(self, &mut b, &f.name);
+                    }
                     b.uleb(f.dir as u64);
                     if md5 {
                         // GNU as writes the number in the target's byte
@@ -481,15 +515,32 @@ impl Assembler {
             opcode_base,
             unaligned: false,
         };
+        // llvm-mc ends a fragment with the address advance that ends each
+        // sequence, which matters where the offset of the next sequence's
+        // address in its fragment picks the relocation (SPARC's unaligned
+        // ones); so the table is cut into fragments at the same places.
+        let mut pieces = Vec::new();
         for (section, rows) in &sequences {
             self.line_program(&mut b, &mut cx, *section, rows);
+            if flavor == Flavor::Llvm {
+                pieces.push(std::mem::replace(&mut b, Blob::new(endian)));
+            }
         }
+        pieces.push(b);
         self.dwarf.line.sequences = sequences;
+        if flavor == Flavor::Llvm {
+            self.relocs_by_fragment.push(line_sec);
+        }
 
-        let total = b.bytes.len() as u64 - 4;
-        b.patch(0, total, 4);
-        let pushed = self.push_blob(line_sec, b, Span::DUMMY);
-        debug_assert_eq!(pushed, line_pos);
+        let total = pieces.iter().map(|p| p.bytes.len() as u64).sum::<u64>() - 4;
+        pieces[0].patch(0, total, 4);
+        for (i, piece) in pieces.into_iter().enumerate() {
+            if i > 0 && piece.bytes.is_empty() {
+                continue;
+            }
+            let pushed = self.push_blob(line_sec, piece, Span::DUMMY);
+            debug_assert!(i > 0 || pushed == line_pos);
+        }
         if let (Some(s), Some(pos)) = (str_sec, str_pos)
             && !strs.bytes.is_empty()
         {

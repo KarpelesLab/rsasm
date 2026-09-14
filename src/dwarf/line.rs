@@ -82,6 +82,9 @@ pub struct Row {
     /// end of the fragment there. See
     /// [`Architecture::dwarf_row_back`](crate::arch::Architecture::dwarf_row_back).
     pub back: Option<u32>,
+    /// For a row generated for the assembly source (`-g`), the source file
+    /// it is in, which is only given a number when the table is written.
+    pub gen_path: Option<String>,
 }
 
 /// A file table entry.
@@ -159,6 +162,9 @@ pub struct LineState {
     pub has_views: bool,
     /// The spans of the `.file` directives, for the table's own diagnostics.
     pub file_spans: Vec<(u32, Span)>,
+    /// Rows are being generated for the assembly source; see
+    /// [`super::source`].
+    pub source: super::source::GenState,
 }
 
 impl LineState {
@@ -170,6 +176,16 @@ impl LineState {
             self.sequences.len() - 1
         });
         self.sequences[idx].1.push(row);
+    }
+
+    /// Indexes the sequences again after some were removed.
+    pub fn rebuild_index(&mut self) {
+        self.by_section = self
+            .sequences
+            .iter()
+            .enumerate()
+            .map(|(i, (s, _))| (*s, i))
+            .collect();
     }
 
     /// Whether anything asks for a `.debug_line` section.
@@ -189,8 +205,32 @@ fn gnu_basename(path: &str) -> usize {
 }
 
 impl GnuFiles {
+    /// `allocate_filenum`: the number of a source file a generated row is in,
+    /// entering it in the table if it is new. Slot 0 is left to `.file 0`.
+    pub(super) fn allocate_generated(&mut self, path: &str, pwd: &str) -> u32 {
+        let base = gnu_basename(path);
+        let dir = self.directory(path, base, None, false, false, pwd);
+        let name = &path[base..];
+        let found = (1..self.files.len()).find(|&i| {
+            self.files[i]
+                .as_ref()
+                .is_some_and(|f| f.dir == dir && f.name == name)
+        });
+        if let Some(i) = found {
+            return i as u32;
+        }
+        let i = self.files.len().max(1);
+        self.files.resize(i + 1, None);
+        self.files[i] = Some(FileEntry {
+            name: name.to_string(),
+            dir,
+            md5: None,
+        });
+        i as u32
+    }
+
     /// `get_directory_table_entry`.
-    fn directory(
+    pub(super) fn directory(
         &mut self,
         dirname: &str,
         dirlen: usize,
@@ -378,6 +418,11 @@ impl LlvmFiles {
         Ok(num)
     }
 
+    /// The file `-g` describes, entered as the first file.
+    pub(super) fn try_get_file_pub(&mut self, name: &str) -> Result<u32, String> {
+        self.try_get_file(None, name, 1, None, false)
+    }
+
     fn track_md5(&mut self, used: bool) {
         self.all_md5 &= used;
         self.any_md5 |= used;
@@ -441,8 +486,12 @@ impl Assembler {
                 }
             }
         }
-        // A numbered `.file` means the source brings its own line table.
+        // A numbered `.file` means the source brings its own line table, and
+        // any made up for it so far goes.
         self.dwarf.line.used = true;
+        if self.dwarf.line.source.on {
+            self.dwarf_stop_generating();
+        }
         let num = num as u32;
         if num == 0 {
             self.dwarf.line.version5 = true;
@@ -501,6 +550,8 @@ impl Assembler {
         }
         match (flavor, requested) {
             (Flavor::Gnu, Some(v)) => v as u16,
+            // GNU as's `-g` alone asks for version 2.
+            (Flavor::Gnu, None) if self.options.debug_source => 2,
             (Flavor::Gnu, None) => 3,
             (Flavor::Llvm, Some(v)) => v as u16,
             (Flavor::Llvm, None) => 4,
@@ -774,16 +825,29 @@ impl Assembler {
                 return;
             }
         }
-        self.dwarf.line.push_row(Row { pos, loc, back });
+        self.dwarf.line.push_row(Row {
+            pos,
+            loc,
+            back,
+            gen_path: None,
+        });
     }
 
     /// Called where an instruction is about to be emitted as fragment `pos`,
     /// with its candidate encodings.
-    pub(crate) fn dwarf_instruction(&mut self, pos: Pos, variants: &[crate::section::Variant]) {
+    pub(crate) fn dwarf_instruction(
+        &mut self,
+        pos: Pos,
+        variants: &[crate::section::Variant],
+        span: Span,
+    ) {
         let back = match variants.first() {
             Some(v) => self.arch.dwarf_row_back(v),
             None => None,
         };
+        if self.dwarf.line.source.on {
+            self.dwarf_source_row(pos, back, span);
+        }
         self.dwarf_consume_loc(pos, back);
     }
 
@@ -820,6 +884,7 @@ impl Assembler {
             pos,
             loc,
             back: None,
+            gen_path: None,
         });
         self.dwarf.line.pending = false;
         let c = &mut self.dwarf.line.current;

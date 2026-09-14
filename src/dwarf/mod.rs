@@ -6,7 +6,7 @@
 //! plus what the directives said, and turned into bytes only once layout has
 //! settled. At that point every distance between two positions in a section
 //! is a number, which is what decides the width of an address advance, so no
-//! fragment has to be revisited; see [`Assembler::emit_dwarf`].
+//! fragment has to be revisited; see `Assembler::emit_dwarf`.
 //!
 //! The two reference assemblers agree on the formats and disagree on almost
 //! every detail inside them: the default version, how a file name is split
@@ -17,7 +17,10 @@
 
 pub mod cfi;
 mod emit;
+mod info;
 pub mod line;
+mod md5;
+pub mod source;
 
 use crate::assembler::Assembler;
 use crate::section::SectionId;
@@ -48,6 +51,10 @@ pub struct DwarfTarget {
     /// opcodes, as GNU as does on targets whose linker relaxes code (RL78),
     /// where no distance is final until link time.
     pub fixed_advance_pc: bool,
+    /// The prefix of the labels llvm-mc keeps out of the compilation unit
+    /// `-g` makes, as it keeps them out of the symbol table: `.L`, but `$`
+    /// for 32-bit MIPS.
+    pub private_prefix: &'static str,
     /// Call frame information, or `None` where the reference has none, which
     /// makes every `.cfi_*` directive an error.
     pub cfi: Option<CfiTarget>,
@@ -61,6 +68,7 @@ impl DwarfTarget {
             flavor,
             min_insn_length,
             fixed_advance_pc: false,
+            private_prefix: ".L",
             cfi: None,
         }
     }

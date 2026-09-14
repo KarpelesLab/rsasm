@@ -45,6 +45,9 @@ pub struct Options {
     /// and `.debug_frame` follow unless the source asks for version 5 with
     /// `.file 0`.
     pub dwarf_version: Option<u8>,
+    /// Describe the assembly source itself in a line table and a
+    /// compilation unit, as `-g` asks GNU as and llvm-mc to.
+    pub debug_source: bool,
 }
 
 impl Default for Options {
@@ -56,6 +59,7 @@ impl Default for Options {
             dialect: Dialect::Gas,
             syntax: None,
             dwarf_version: None,
+            debug_source: false,
         }
     }
 }
@@ -162,6 +166,13 @@ pub struct Assembler {
     /// The sections whose end layout rounded up to their alignment; see
     /// `Assembler::pad_section_tails`.
     pub(crate) tail_pads: Vec<SectionId>,
+    /// The sections whose relocations [`Arch::reloc_at`] picks by the offset
+    /// of the field in its fragment rather than in the section, as llvm-mc
+    /// picks them in the line tables it writes, where each sequence starts a
+    /// fragment of its own.
+    ///
+    /// [`Arch::reloc_at`]: crate::arch::Arch::reloc_at
+    pub(crate) relocs_by_fragment: Vec<SectionId>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
 }
@@ -212,6 +223,7 @@ impl Assembler {
             ccrx_sections: HashMap::new(),
             dwarf: crate::dwarf::DwarfState::default(),
             tail_pads: Vec::new(),
+            relocs_by_fragment: Vec::new(),
             nasm: crate::nasm::State::default(),
         };
         if asm.options.dialect == Dialect::CcRx {
@@ -365,6 +377,12 @@ impl Assembler {
         if self.dwarf.line.mark_labels {
             self.dwarf_label_defined();
         }
+        if self.dwarf.line.source.on
+            && let LabelDef::Named(name, _) = *label
+        {
+            let name = self.interner.get(name).to_string();
+            self.dwarf_source_label(&name, span);
+        }
     }
 
     /// The name to show for a symbol in diagnostics.
@@ -386,11 +404,22 @@ impl Assembler {
 
     pub fn assemble_path(&mut self, path: &std::path::Path) -> std::io::Result<()> {
         let file = self.sm.load(path)?;
+        self.dwarf_start_generating(file);
         self.assemble_file(file);
         Ok(())
     }
 
+    /// Assembles `src` as a source file called `name`; the first file
+    /// assembled is the one `-g` describes.
     pub fn assemble_str(&mut self, name: &str, src: &str) {
+        let file = self.sm.add(name, src);
+        self.dwarf_start_generating(file);
+        self.assemble_file(file);
+    }
+
+    /// Assembles `src` ahead of the source files, as definitions from the
+    /// command line, which `-g` does not describe.
+    pub fn assemble_prelude(&mut self, name: &str, src: &str) {
         let file = self.sm.add(name, src);
         self.assemble_file(file);
     }
@@ -797,7 +826,9 @@ impl Assembler {
             RepeatKind::Irp => "irp",
             RepeatKind::Irpc => "irpc",
         };
-        self.expand(label, text, stmt.span);
+        // Each copy of the block is its lines and the newline that ends it.
+        let copy_lines = body.matches('\n').count() as u32 + 1;
+        self.expand(label, text, stmt.span, Some(copy_lines));
     }
 
     /// A CC-RL/CC-RH `.REPT` count, which is an absolute expression rather
@@ -905,7 +936,7 @@ impl Assembler {
             macros::substitute_with(&def.body, &bindings, counter, positional)
         };
         let name = self.interner.get(def.name).to_string();
-        self.expand(&format!("macro {name}"), text, span);
+        self.expand(&format!("macro {name}"), text, span, None);
         true
     }
 
@@ -1039,7 +1070,10 @@ impl Assembler {
     ///
     /// It becomes a real entry in the source map, so a diagnostic inside a
     /// macro points at the expanded line and names the macro it came from.
-    fn expand(&mut self, what: &str, text: String, span: Span) {
+    ///
+    /// A repeated block gives the lines each copy takes, which lets a line
+    /// table put an instruction on its line in the block.
+    fn expand(&mut self, what: &str, text: String, span: Span, copy_lines: Option<u32>) {
         if self.macro_depth >= 64 {
             self.diags
                 .error(span, "macro expansion nested too deeply; is it recursive?");
@@ -1047,6 +1081,9 @@ impl Assembler {
         }
         let name = format!("<{what}>");
         let file = self.sm.add(name, text);
+        if self.options.debug_source {
+            self.dwarf_expansion(file, span, copy_lines);
+        }
         self.macro_depth += 1;
         self.assemble_file(file);
         self.macro_depth -= 1;
@@ -1650,9 +1687,9 @@ impl Assembler {
         if self.check_nobits(span) {
             return;
         }
-        if self.dwarf.line.pending {
+        if self.dwarf.line.pending || self.dwarf.line.source.on {
             let pos = (self.cur, self.cur_section().next_frag_index());
-            self.dwarf_instruction(pos, &variants);
+            self.dwarf_instruction(pos, &variants, span);
         }
         let idx = self.cur_section().emit_variants(variants, span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;

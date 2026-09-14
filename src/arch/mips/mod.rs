@@ -142,6 +142,7 @@ impl Architecture for Mips {
                 eh_frame_align: if wide { 8 } else { 4 },
                 cie_version: 1,
             }),
+            private_prefix: if wide { ".L" } else { "$" },
             ..DwarfTarget::lines_only(Flavor::Llvm, 1)
         }
     }
