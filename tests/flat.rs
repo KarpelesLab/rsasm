@@ -446,6 +446,18 @@ helper:
             )],
         )),
     },
+    Case {
+        name: "executable sections start on an instruction boundary",
+        base: 0x400000,
+        src: r#"        .text
+        .byte   1
+        .section .text.b,"ax"
+        .byte   2
+        .data
+        .byte   3
+"#,
+        image: Some((6, &[(0, "01 00 00 00 02 03")])),
+    },
 ];
 
 #[cfg(feature = "aarch64")]
@@ -1494,6 +1506,21 @@ far:
             &[(0, "0c 00 00 04 00 00 00 00 00 00 00 00 00 00 00 00")],
         )),
     },
+    Case {
+        name: "sections start at their default alignment",
+        base: 0x400000,
+        src: r#"        .text
+        .byte   1
+        .data
+        .byte   2
+        .section .rodata
+        .byte   3
+"#,
+        image: Some((
+            18,
+            &[(0, "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02 03")],
+        )),
+    },
 ];
 
 #[cfg(feature = "mips")]
@@ -1668,6 +1695,21 @@ far:
         image: Some((
             16,
             &[(0, "04 00 00 0c 00 00 00 00 00 00 00 00 00 00 00 00")],
+        )),
+    },
+    Case {
+        name: "sections start at their default alignment",
+        base: 0x400000,
+        src: r#"        .text
+        .byte   1
+        .data
+        .byte   2
+        .section .rodata
+        .byte   3
+"#,
+        image: Some((
+            18,
+            &[(0, "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02 03")],
         )),
     },
 ];
@@ -2014,6 +2056,18 @@ entry:
  .word entry - .
 "#,
         image: Some((14, &[(0, "4e 75 00 00 00 01 00 00 ff ff ff f8 ff f4")])),
+    },
+    Case {
+        name: "sections start at their default alignment",
+        base: 0x10000,
+        src: r#"        .text
+        .byte   1
+        .data
+        .byte   2
+        .section .rodata
+        .byte   3
+"#,
+        image: Some((6, &[(0, "01 00 00 00 02 03")])),
     },
 ];
 

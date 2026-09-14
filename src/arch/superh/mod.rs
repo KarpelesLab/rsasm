@@ -154,6 +154,12 @@ impl Architecture for SuperH {
         true
     }
 
+    /// `sh-elf-as` resolves a branch or PC-relative load to any symbol in the
+    /// same section, weak ones included.
+    fn defers_to_linker(&self, _r: &crate::arch::SameSectionRef<'_>) -> bool {
+        false
+    }
+
     /// `sh-elf-as` refuses a `.word` or `.long` off its own boundary
     /// ("misaligned data"), though not a `.2byte` or `.4byte`.
     fn aligns_data(&self) -> bool {

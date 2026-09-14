@@ -1,11 +1,12 @@
 Lines before the first snippet are not assembled.
 
-Every section starts and ends with `.p2align 4`. llvm-mc gives MIPS sections
-an alignment of 16 by default, and GNU as 4, while rsasm gives them 1; that
-difference moves the sections of a flat image, and it is not what these
-cases are about. The alignment at the end absorbs the `nop` llvm-mc adds
+Every section starts and ends with `.p2align 4`. llvm-mc gives `.text`,
+`.data` and `.bss` an alignment of 16 by default, as rsasm does, but other
+sections 1; the explicit alignment keeps the cases that are not about that
+independent of it. The alignment at the end absorbs the `nop` llvm-mc adds
 after a jump or branch (see tools/mc-diff/mips-programs.txt), so those are
-written last in their section, where the extra word moves nothing.
+written last in their section, where the extra word moves nothing. The last
+case is about the default alignment, and has none.
 
 === hi and lo of a label in another section
         .text
@@ -99,3 +100,11 @@ far:
         .p2align 4
         jal     0x10000010
         .p2align 4
+
+=== sections start at their default alignment
+        .text
+        .byte   1
+        .data
+        .byte   2
+        .section .rodata
+        .byte   3

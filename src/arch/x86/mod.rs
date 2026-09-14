@@ -11,6 +11,7 @@ use crate::cursor::Cursor;
 use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
+use crate::symbol::Binding;
 use encode::Prefixes;
 use insn::{DEF64, Def, Enc, NOTACC, Op};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
@@ -76,6 +77,26 @@ impl Architecture for X86 {
 
     fn pcrel_number_is_address(&self) -> bool {
         true
+    }
+
+    /// GNU as, the x86 reference, relocates a reference to a weak symbol in
+    /// its own section, and one to a global symbol except from a jump it
+    /// relaxes: `jmp global` and `jz global` are resolved, since without
+    /// `-shared` it takes a global symbol to stay where it is, but `call
+    /// global`, `lea global(%rip)` and `jmp global@PLT` are not. llvm-mc
+    /// relocates all of them, and a `call local@PLT` besides.
+    fn defers_to_linker(&self, r: &crate::arch::SameSectionRef<'_>) -> bool {
+        match r.binding {
+            Binding::Local => false,
+            Binding::Weak => true,
+            Binding::Global => !r.relaxable || r.modifier.is_some(),
+        }
+    }
+
+    /// GNU as writes `call local` and `call local@PLT` as `PC32` against the
+    /// label's section; llvm-mc keeps `PLT32`.
+    fn section_relative_reloc(&self, reloc: u32) -> u32 {
+        reloc::Abi::for_object_bits(self.bits).plt_as_pc32(reloc)
     }
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {

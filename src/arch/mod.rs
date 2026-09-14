@@ -12,7 +12,7 @@ use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
 use crate::section::{FragKind, SectionId, Variant};
 use crate::source::Span;
-use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
+use crate::symbol::{Binding, SymbolId, SymbolTable, SymbolValue};
 
 #[cfg(feature = "x86")]
 pub mod x86;
@@ -139,6 +139,21 @@ pub enum FlatModifier {
     PcRelative,
     /// Something only a linker creates, such as a GOT entry; refused.
     LinkerOnly,
+}
+
+/// A PC-relative reference to a symbol defined in the fixup's own section,
+/// as [`Architecture::defers_to_linker`] is asked about it.
+#[derive(Copy, Clone, Debug)]
+pub struct SameSectionRef<'a> {
+    /// The binding of the symbol as written: `alias` in `call alias` after
+    /// `.set alias, target`, not `target`.
+    pub binding: Binding,
+    /// The relocation the reference would get, after any `@` modifier.
+    pub reloc: u32,
+    /// The `@` modifier, lowercased, if the reference was written with one.
+    pub modifier: Option<&'a str>,
+    /// Whether the instruction has more than one size to relax between.
+    pub relaxable: bool,
 }
 
 /// Mutable, architecture-specific assembler state.
@@ -424,6 +439,85 @@ pub trait Architecture {
     /// x86, measure from the start of the section.
     fn pcrel_number_is_address(&self) -> bool {
         false
+    }
+
+    /// Whether a PC-relative reference to a symbol in the fixup's own section
+    /// is left to the linker in relocatable output, rather than resolved.
+    ///
+    /// A global or weak symbol can be preempted: the linker may bind the name
+    /// to a definition in another object, whether from a shared library or,
+    /// for a weak one, a strong definition elsewhere. So on AArch64, ARM,
+    /// PowerPC, MIPS, SPARC, RX and V850, and for calls on x86 and RISC-V, both
+    /// references relocate a reference to a global or weak symbol, whatever
+    /// its visibility, and resolve one to a local symbol, including a local
+    /// `.set` alias of a global one; that is the default. A difference of two
+    /// labels in one section is never affected: both references fold `.long
+    /// weak - .` to a constant. A field no relocation can describe is
+    /// resolved, unless the instruction has a larger form that one can.
+    ///
+    /// The ports whose reference differs override this, and every binding is
+    /// checked in the `*-relocs.txt` corpora of `tools/gas-diff`,
+    /// `tools/mc-diff` and `tools/xas-diff`.
+    fn defers_to_linker(&self, r: &SameSectionRef<'_>) -> bool {
+        r.binding != Binding::Local
+    }
+
+    /// What goes in the field of a PC-relative fixup at section offset `pc`
+    /// that is relocated against a `binding` symbol in its own section, where
+    /// that is not zero. A linker overwrites the field, so this only matters
+    /// for matching the reference byte for byte: GNU as for V850 measures
+    /// such a reference from the fixup as if the symbol were at 0, and writes
+    /// `-pc`.
+    fn relocated_pcrel_field(&self, _binding: Binding, _pc: u64) -> Option<i64> {
+        None
+    }
+
+    /// The relocation pair, adding one symbol and subtracting another, that
+    /// a `size`-byte data field holding a difference the file cannot fold is
+    /// written as, if the target has one.
+    ///
+    /// Without one, only `sym - label` with the label in the field's own
+    /// section can be relocated, as `sym` relative to the field. RISC-V's
+    /// linker relaxation needs every difference it cannot see through kept as
+    /// its two symbols, so llvm-mc writes `R_RISCV_ADD32`/`R_RISCV_SUB32` for
+    /// that one too, and for a difference across sections.
+    fn difference_relocs(&self, _size: u8) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Whether a relocation against a global symbol defined in this object
+    /// names the symbol's section plus an offset, as one against a local
+    /// label does, rather than the symbol. GNU as for m68k does this for all
+    /// but weak symbols.
+    fn relocates_globals_by_section(&self) -> bool {
+        false
+    }
+
+    /// The relocation to write for a PC-relative `reloc` that names a local
+    /// label's section. GNU as for x86 writes a `call` to a local label as
+    /// `PC32` rather than `PLT32`, there being no PLT entry to go through.
+    fn section_relative_reloc(&self, reloc: u32) -> u32 {
+        reloc
+    }
+
+    /// The alignment a section is given when it is created, before anything
+    /// in it asks for more.
+    ///
+    /// This shows as `sh_addralign` in an object, and as where the section
+    /// starts in a flat image. The references decide it mostly by name, and
+    /// not all of them agree: llvm-mc aligns `.text` on every target, every
+    /// executable section on AArch64, and `.data` and `.bss` too on MIPS,
+    /// while GNU as aligns `.text`, `.data` and `.bss` on m68k, `.text` alone
+    /// on MIPS and RISC-V, and on ARM and AArch64 whatever section an
+    /// instruction is assembled into. Where both references exist, the one
+    /// whose harness checks the target wins; each override says which.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        _name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        1
     }
 
     /// `e_flags` for ELF output, given the state at the end of the source.
