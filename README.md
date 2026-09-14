@@ -60,7 +60,7 @@ assembler, not against rsasm's own idea of the manual. See
 | PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1062 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
-| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 809 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
@@ -106,6 +106,11 @@ but 18 forms where both manuals show MAME to be wrong.
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
+- the whole 680x0 family as GNU as knows it: the 68881/68882 FPU with float
+  immediates in every size (`#1.5` in Motorola source, `#0r1.5` in GNU's), the
+  68851 and on-chip MMUs, `cas2`, `callm`, `move16`, CPU32 and ColdFire,
+  chosen by GNU as's CPU names (`-a 68040`, `.arch 5475`, `.arch 68000,68881`),
+  with what the chosen CPU lacks refused by a message naming what it needs
 - diagnostics with source snippets that name the real limit, and assembly that
   continues past the first error
 
@@ -145,6 +150,14 @@ but 18 forms where both manuals show MAME to be wrong.
   the `ZEROPAGE` segment's zero-page addressing for labels defined in it
 - 8080: Intel's word operators (`AND`, `SHR`, `HIGH`, `MOD`), which AS does
   not read either
+- m68k: the ColdFire MAC and EMAC units; the suppressed registers `zpc`,
+  `za0`-`za7` and `zd0`-`zd7`, and FPU coprocessor numbers other than 1
+  (`.fopt id=`); vasm's `MACHINE`, `FPU` and `CHIP` directives (use `.arch`);
+  vasm's sized `fbcc.w`, which GNU as does not take either (`fbcc` is 16
+  bits, `fbcc.l` 32); and CPU32's `tbl*` table lookups, for which no reference
+  here has an encoding. On ColdFire, an instruction as written that the core
+  dropped is refused where GNU as substitutes one it kept (`addil #5,%a0@`,
+  which GNU as writes as `addql`), since rsasm substitutes nothing
 - Z80: the `DD CB d op,r` forms that also write a register, which vasm
   refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
   `.byte`, `.word` and `.space`, or the 8-bit dialect)
@@ -156,7 +169,7 @@ separately. Nothing is, at the moment.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
-backend. Two such choices are worth knowing about:
+backend. Three such choices are worth knowing about:
 
 - **Which references are left to the linker.** A PC-relative reference to a
   global or weak symbol is relocated even when the symbol is in the same
@@ -177,6 +190,12 @@ backend. Two such choices are worth knowing about:
   compressed instructions, 4 for m68k `.text`, `.data` and `.bss`, and 1
   otherwise, including on x86, where GNU as is followed and llvm-mc's `.text`
   is 4.
+- **m68k floating-point immediates.** Both references write a single or
+  double precision `#1.5` the same way. An extended-precision one GNU as 2.47
+  writes without the 16 zero bits of the 68881 format — its own `.extend`
+  directive and disassembler have them — and a packed-decimal one it refuses;
+  vasm writes both correctly, from a C `double`, and so does rsasm. The m68k
+  backend follows GNU as otherwise.
 
 ## Usage
 
@@ -500,19 +519,21 @@ independent assembler, and compare the bytes:
   supports. 7,230 of 7,230 match across eighteen target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
-- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
+- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
+  model, with corpora generated from GNU's own opcode table so that every
+  form in it is assembled), SuperH, RX, RL78,
   V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
   6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
   the reference for literal pools and interworking. `tools/oracles/build.sh`
-  builds the references from checksum-pinned sources. 7,294 of 7,294 match
-  across twenty variants.
+  builds the references from checksum-pinned sources. 10,228 of 10,228 match
+  across forty variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 120 of 120 match across twenty-four variants.
+  distances between sections. 121 of 121 match across twenty-four variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries and as ELF objects, relocations and global
@@ -532,7 +553,11 @@ modes and both syntaxes, some of them deliberately invalid, and compares
 rsasm's bytes, relocations and accept/reject decision with GNU as's and
 llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
 from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. See `tools/fuzz/README.md`.
+case where rsasm differs from both. The m68k backend is fuzzed the same way:
+`tools/fuzz/m68k.py` draws instructions from GNU's own opcode table, read out
+of the binutils source, for each CPU model in GNU and Motorola syntax against
+GNU as, and in Motorola syntax against vasm; runs of 400,000 and 100,000
+instructions find nothing. See `tools/fuzz/README.md`.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
