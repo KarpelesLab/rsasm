@@ -3,8 +3,8 @@
 //! Everything here predates SIMD; the vector families live in sibling modules.
 
 use super::{
-    CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NOTACC, ONLY64, Op, PLUSREG, WIDTHS, d,
-    opsize_bits,
+    CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, NOTACC, ONLY64, Op, PLUSREG, WIDTHS,
+    d, opsize_bits,
 };
 use std::collections::HashMap;
 
@@ -353,9 +353,13 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
         vec![
             d(vec![Op::Imm8s], &[0x6a], ModRm::None, 0),
             d(vec![Op::R(8)], &[0x50], ModRm::None, 64).flags(PLUSREG | DEF64),
+            // The 32-bit forms exist only outside long mode, where they are
+            // what every 32-bit prologue saves registers with.
+            d(vec![Op::R(4)], &[0x50], ModRm::None, 32).flags(PLUSREG | NO64),
             d(vec![Op::R(2)], &[0x50], ModRm::None, 16).flags(PLUSREG | DEF64),
             d(vec![Op::Imm(4)], &[0x68], ModRm::None, 0),
             d(vec![Op::Rm(8)], &[0xff], ModRm::Ext(6), 64).flags(DEF64),
+            d(vec![Op::Rm(4)], &[0xff], ModRm::Ext(6), 32).flags(NO64),
             d(vec![Op::Rm(2)], &[0xff], ModRm::Ext(6), 16).flags(DEF64),
         ],
     );
@@ -363,8 +367,10 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
         "pop",
         vec![
             d(vec![Op::R(8)], &[0x58], ModRm::None, 64).flags(PLUSREG | DEF64),
+            d(vec![Op::R(4)], &[0x58], ModRm::None, 32).flags(PLUSREG | NO64),
             d(vec![Op::R(2)], &[0x58], ModRm::None, 16).flags(PLUSREG | DEF64),
             d(vec![Op::Rm(8)], &[0x8f], ModRm::Ext(0), 64).flags(DEF64),
+            d(vec![Op::Rm(4)], &[0x8f], ModRm::Ext(0), 32).flags(NO64),
             d(vec![Op::Rm(2)], &[0x8f], ModRm::Ext(0), 16).flags(DEF64),
         ],
     );

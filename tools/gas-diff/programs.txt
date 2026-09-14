@@ -147,3 +147,16 @@ msg:
     .intel_syntax noprefix
     lea rax, [rip+2]
     lea rax, [rip]
+=== 32-bit push and pop
+    .code32
+    pushl %ebx
+    popl %ebx
+    push %ebp
+    pop %esi
+    pushl (%eax)
+    popl 4(%esp)
+    push %bx
+    pop %di
+    .code64
+    push %rbx
+    pop %r12
