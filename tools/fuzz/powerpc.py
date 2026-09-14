@@ -95,9 +95,8 @@ NOT_IMPLEMENTED = re.compile(r"""^(
     x?x?v?[if]\d+gerx?\d*.* | dm.* | pmx.* | pmdm.* | xxm[ft]acc | xxsetaccz
   | xxaes.* | xxgfmul.* | lqarx | stqcx\. | plq | pstq
   | dcffixqq | dctfixqq | dtstsfiq? | b.*tar.* | mf.* | mt.* | wait.* | pause_short
-  | .*sync | stop | urfid | rfscv | rfebb | scv | exser | slb.* | msg.* | tlbie.*
+  | .*sync | stop | urfid | rfscv | rfebb | exser | slb.* | msg.* | tlbie.*
   | hash.* | clrbhrb | cpabort | pbt\. | rmieg | dcb.* | lwat | ldat | stwat | stdat
-  | mcrxrx
 )$""", re.X)
 # The scalar and vector moves between registers are implemented, whatever the
 # `mf`/`mt` rule above says.

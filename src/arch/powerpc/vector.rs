@@ -20,9 +20,10 @@
 //!   suffix that looks like an ordinary instruction. The table keeps both in
 //!   one 64-bit value, prefix first, and so does the encoder.
 //!
-//! The table was derived from the opcode table in GNU binutils' `ppc-opc.c`,
-//! mechanically rather than by hand, and every form in it is in the
-//! `tools/mc-diff` corpora, where llvm-mc and GNU as check the bytes.
+//! This file is written by `tools/tables/powerpc.py table` from the opcode
+//! table in GNU binutils' `ppc-opc.c`, not by hand: change the script, not the
+//! entries. Every form in it is in the `tools/mc-diff` and `tools/xas-diff`
+//! corpora, where llvm-mc and GNU as check the bytes.
 
 use super::insn::{Def, F::*, OPTL, P64, RC, VRC, d, op, x};
 
