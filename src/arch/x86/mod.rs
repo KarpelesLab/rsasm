@@ -141,6 +141,23 @@ impl Architecture for X86 {
         }
     }
 
+    /// Mach-O's one x86-64 modifier is `@GOTPCREL`: a load through the GOT in
+    /// a RIP-relative operand, or in data the address of the GOT slot
+    /// relative to the field. A branch cannot go through one.
+    fn modifier_class(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> Option<crate::reloc::RelocClass> {
+        use crate::reloc::RelocClass;
+        match (name, kind.class) {
+            (_, RelocClass::Branch) => None,
+            ("gotpcrel", RelocClass::GotLoad) if self.bits == 64 => Some(RelocClass::GotLoad),
+            ("gotpcrel", _) if self.bits == 64 => Some(RelocClass::Got),
+            _ => None,
+        }
+    }
+
     /// GNU as creates `_GLOBAL_OFFSET_TABLE_` for every modifier but `@PLT`,
     /// `@PLTOFF` and `@SIZE`, and marks the target of a TLS one thread-local.
     fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {

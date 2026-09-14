@@ -34,6 +34,7 @@ pub mod mapping;
 pub(crate) mod nasm;
 pub mod output;
 pub mod parser;
+pub mod reloc;
 pub mod section;
 pub mod source;
 pub mod symbol;

@@ -58,6 +58,15 @@ impl Assembler {
         let span = stmt.span;
         let mut cur = stmt.arg_cursor();
 
+        // A Mach-O object has directives of its own, and gives some of the
+        // common ones another meaning.
+        if self.options.format == crate::output::Format::MachO
+            && self.macho_directive(&text, &mut cur, span)
+        {
+            self.expect_end(&mut cur);
+            return;
+        }
+
         let handled = match text.as_str() {
             // ---- sections -------------------------------------------------
             ".text" | ".data" | ".bss" | ".rodata" => {
@@ -300,6 +309,7 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            format: options.format,
             sections,
             section: *section,
             relaxable: false,
@@ -352,7 +362,7 @@ impl Assembler {
         Some(self.pool.get(i).to_vec())
     }
 
-    fn expect_name(&mut self, cur: &mut Cursor<'_>) -> Option<(Name, Span)> {
+    pub(crate) fn expect_name(&mut self, cur: &mut Cursor<'_>) -> Option<(Name, Span)> {
         let tok = cur.peek();
         match tok.ident() {
             Some(n) => {
@@ -428,8 +438,15 @@ impl Assembler {
         self.bind_here_to_item(e);
         // Resolve now if it already has a value: a `.set` symbol is a
         // snapshot at each use, so a later redefinition must not reach back
-        // and change bytes that were already emitted.
-        if let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs()) {
+        // and change bytes that were already emitted. In a Mach-O object a
+        // difference of labels already a fixed distance apart is a value too;
+        // see `Assembler::macho_fixed_difference`.
+        if let Some(v) = self
+            .eval_ref(e)
+            .ok()
+            .and_then(|v| v.as_abs())
+            .or_else(|| self.macho_fixed_difference(e))
+        {
             let kind = crate::section::FixupKind::data(size);
             if !kind.fits(v as i128) {
                 let espan = self.exprs.span(e);
@@ -445,8 +462,11 @@ impl Assembler {
         // A modifier the target does not recognise used to fall back to the
         // plain data relocation, so `.long foo@got` quietly became an
         // absolute reference to `foo`. That is a different program, so it is
-        // an error instead.
-        if let Some(m) = self.find_modifier(e) {
+        // an error instead. A Mach-O object checks its modifiers against its
+        // own relocations, once it builds them.
+        if let Some(m) = self.find_modifier(e)
+            && !self.macho_object()
+        {
             let name = self.interner.get(m).to_string();
             match self.arch.modifier_reloc(&name, size, false) {
                 Some(r) => reloc = r,
@@ -635,7 +655,12 @@ impl Assembler {
 
     // ---- layout -----------------------------------------------------------
 
-    fn dir_align(&mut self, cur: &mut Cursor<'_>, span: Span, power_of_two: bool) -> bool {
+    pub(crate) fn dir_align(
+        &mut self,
+        cur: &mut Cursor<'_>,
+        span: Span,
+        power_of_two: bool,
+    ) -> bool {
         let Some(e) = self.parse_expr(cur) else {
             return true;
         };
@@ -839,7 +864,7 @@ impl Assembler {
         rest.len() == 1 && matches!(rest[0].kind, TokKind::Ident(_))
     }
 
-    fn dir_set(&mut self, cur: &mut Cursor<'_>, span: Span, once_only: bool) -> bool {
+    pub(crate) fn dir_set(&mut self, cur: &mut Cursor<'_>, span: Span, once_only: bool) -> bool {
         let Some((name, nspan)) = self.expect_name(cur) else {
             return true;
         };

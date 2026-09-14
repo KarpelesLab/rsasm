@@ -325,6 +325,8 @@ pub struct AsmCtx<'a> {
     /// The source dialect, which decides operand spelling as much as lexing:
     /// the same m68k register is `%d0` to GNU as and `d0` in Motorola source.
     pub dialect: crate::lexer::Dialect,
+    /// The object format being written, for [`AsmCtx::fixed_distance`].
+    pub format: crate::output::Format,
     /// Read-only: what has been emitted so far, for
     /// [`AsmCtx::fixed_distance`].
     pub sections: &'a [crate::section::Section],
@@ -456,41 +458,64 @@ impl AsmCtx<'_> {
     /// is constant. An alignment, a `.org`, a `.space` or LEB128 value that is
     /// not a constant, or an instruction relaxation may resize between the
     /// two breaks it, even where layout later finds nothing to change.
+    ///
+    /// In a Mach-O object the distance also has to stay within one atom,
+    /// since the linker may move atoms apart; a linker-visible label between
+    /// the two ends one. llvm-mc works such a difference out only once it has
+    /// cut the sections into atoms, and leaves one that spans two to the
+    /// linker.
     pub fn fixed_distance(&self, from: (SectionId, u32), to: (SectionId, u32)) -> Option<i64> {
-        if from.0 != to.0 {
+        if self.format == crate::output::Format::MachO
+            && crate::output::macho::atom_starts_between(self.interner, self.symbols, from, to)
+        {
             return None;
         }
-        let (lo, hi, sign) = if from.1 <= to.1 {
-            (from.1, to.1, 1)
-        } else {
-            (to.1, from.1, -1)
-        };
-        let frags = &self.sections[from.0.0 as usize].frags;
-        let mut total = 0i64;
-        for f in frags.get(lo as usize..hi as usize)? {
-            if f.relaxable {
-                return None;
-            }
-            total += match &f.kind {
-                FragKind::Bytes { variants, .. } if variants.len() == 1 => {
-                    variants[0].bytes.len() as i64
-                }
-                FragKind::Space { size, .. } => self.constant(*size).filter(|n| *n >= 0)?,
-                FragKind::Leb128 { value, signed, .. } => {
-                    let v = self.constant(*value)?;
-                    let n = if *signed {
-                        crate::layout::sleb128(v).len()
-                    } else {
-                        crate::layout::uleb128(v as u64).len()
-                    };
-                    n as i64
-                }
-                FragKind::Align { align, .. } if *align <= 1 => 0,
-                _ => return None,
-            };
-        }
-        Some(sign * total)
+        fixed_distance(self.sections, self.exprs, self.symbols, from, to)
     }
+}
+
+/// [`AsmCtx::fixed_distance`], for callers outside a backend.
+pub(crate) fn fixed_distance(
+    sections: &[crate::section::Section],
+    exprs: &ExprArena,
+    symbols: &SymbolTable,
+    from: (SectionId, u32),
+    to: (SectionId, u32),
+) -> Option<i64> {
+    if from.0 != to.0 {
+        return None;
+    }
+    let (lo, hi, sign) = if from.1 <= to.1 {
+        (from.1, to.1, 1)
+    } else {
+        (to.1, from.1, -1)
+    };
+    let constant = |e| crate::expr::SymbolEnv::new(exprs, symbols).constant(e);
+    let frags = &sections[from.0.0 as usize].frags;
+    let mut total = 0i64;
+    for f in frags.get(lo as usize..hi as usize)? {
+        if f.relaxable {
+            return None;
+        }
+        total += match &f.kind {
+            FragKind::Bytes { variants, .. } if variants.len() == 1 => {
+                variants[0].bytes.len() as i64
+            }
+            FragKind::Space { size, .. } => constant(*size).filter(|n| *n >= 0)?,
+            FragKind::Leb128 { value, signed, .. } => {
+                let v = constant(*value)?;
+                let n = if *signed {
+                    crate::layout::sleb128(v).len()
+                } else {
+                    crate::layout::uleb128(v as u64).len()
+                };
+                n as i64
+            }
+            FragKind::Align { align, .. } if *align <= 1 => 0,
+            _ => return None,
+        };
+    }
+    Some(sign * total)
 }
 
 /// See [`Architecture::modifier_symbols`].
@@ -548,6 +573,18 @@ pub trait Architecture {
     /// fixup it built. Defaults to [`Architecture::modifier_reloc`].
     fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
         self.modifier_reloc(name, kind.size, kind.pcrel)
+    }
+
+    /// The format-neutral class a source-level `@` modifier gives the
+    /// relocation of a fixup of `kind`, for a writer that does not number
+    /// relocations as ELF does; see [`crate::reloc`]. `None`, the default,
+    /// refuses the modifier there.
+    fn modifier_class(
+        &self,
+        _name: &str,
+        _kind: &crate::section::FixupKind,
+    ) -> Option<crate::reloc::RelocClass> {
+        None
     }
 
     /// What a source-level `@` modifier means in a flat binary, where there is
