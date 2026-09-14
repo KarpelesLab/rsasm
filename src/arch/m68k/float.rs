@@ -38,8 +38,13 @@ pub fn parse(text: &str, dialect: Dialect) -> Option<f64> {
     let prefixed = body.len() > 2
         && body.as_bytes()[0] == b'0'
         && matches!(body.as_bytes()[1] | 0x20, b'r' | b'd' | b'e' | b'f' | b's');
-    let number = if prefixed {
-        &body[2..]
+    // GNU as takes a sign after the prefix as well as before it: `0r-1.5`.
+    let (neg, number) = if prefixed {
+        match body.as_bytes()[2] {
+            b'-' => (!neg, &body[3..]),
+            b'+' => (neg, &body[3..]),
+            _ => (neg, &body[2..]),
+        }
     } else if dialect == Dialect::Gas {
         return None;
     } else {
@@ -48,7 +53,7 @@ pub fn parse(text: &str, dialect: Dialect) -> Option<f64> {
         if !body.contains('.') {
             return None;
         }
-        body
+        (neg, body)
     };
     if !number
         .bytes()
@@ -171,6 +176,7 @@ mod tests {
         assert_eq!(parse("0r1.5", Dialect::Gas), Some(1.5));
         assert_eq!(parse("-0r1.5", Dialect::Gas), Some(-1.5));
         assert_eq!(parse("0e2.5e1", Dialect::Gas), Some(25.0));
+        assert_eq!(parse("0d-3.5", Dialect::Gas), Some(-3.5));
         assert_eq!(parse("1.5", Dialect::Gas), None);
         assert_eq!(parse("1.5", Dialect::Motorola), Some(1.5));
         assert_eq!(parse("-1.0e-5", Dialect::Motorola), Some(-1.0e-5));

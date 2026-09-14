@@ -65,6 +65,7 @@ TARGETS="
 m68k|m68k|gas|m68k-elf-as|elf:.text
 m68k-mot|m68k|motorola|m68k-elf-as --mri|elf:.text
 m68k-vasm|m68k|motorola|vasmm68k_mot -quiet -no-opt -devpac -Fbin|bin
+m68k-vasm-020|m68k|motorola|vasmm68k_mot -quiet -no-opt -devpac -m68020 -m68881 -m68851 -Fbin|bin
 m68k-000|68000|gas|m68k-elf-as -m68000|elf:.text
 m68k-020|m68k|gas|m68k-elf-as -m68020|elf:.text
 m68k-020-mot|m68k|motorola|m68k-elf-as --mri -m68020|elf:.text
