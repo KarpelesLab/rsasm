@@ -3,7 +3,7 @@
 
 use super::insn::{
     ADDR16, ADDR32, DEF64, DISTINCT_DEST, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK,
-    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, Tuple, Vk, WAIT,
+    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Tuple, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -653,20 +653,28 @@ pub fn encode(
                     }
                 },
             };
-            let Some(rm_operand) = roles.rm else {
-                cx.error(span, "internal: encoding needs an r/m operand");
-                return None;
-            };
-            encode_rm(
-                cx,
-                bits,
-                &mut bytes,
-                &mut disp_fixup,
-                reg_field,
-                rm_operand,
-                mem.as_ref(),
-                disp_scale,
-            )?;
+            match roles.rm {
+                Some(rm_operand) => encode_rm(
+                    cx,
+                    bits,
+                    &mut bytes,
+                    &mut disp_fixup,
+                    reg_field,
+                    rm_operand,
+                    mem.as_ref(),
+                    disp_scale,
+                    def.flags & SIBMEM != 0,
+                )?,
+                // A lone register in ModRM.reg, with r/m unused and zero, as
+                // AMX's `tilezero` is encoded.
+                None if def.enc == Enc::Vex && def.ops.len() == 1 && roles.reg.is_some() => {
+                    bytes.push(0xc0 | (reg_field << 3));
+                }
+                None => {
+                    cx.error(span, "internal: encoding needs an r/m operand");
+                    return None;
+                }
+            }
         }
     }
 
@@ -1047,6 +1055,7 @@ fn encode_rm(
     rm_operand: &Operand,
     mem: Option<&Mem>,
     disp_scale: u32,
+    force_sib: bool,
 ) -> Option<()> {
     // Register direct.
     if let Some(r) = rm_register(rm_operand) {
@@ -1067,6 +1076,13 @@ fn encode_rm(
 
     // RIP-relative: mod=00, rm=101, always a 32-bit displacement.
     if m.rip_relative {
+        if force_sib {
+            cx.error(
+                m.span,
+                "this instruction cannot address memory relative to `rip`",
+            );
+            return None;
+        }
         if bits != 64 {
             cx.error(m.span, "RIP-relative addressing requires 64-bit mode");
             return None;
@@ -1134,7 +1150,7 @@ fn encode_rm(
     let base_low = base.map_or(0, |b| b.num & 7);
     // rsp/r12 as a base always needs SIB; rbp/r13 always needs a displacement.
     // A VSIB index also forces SIB, since that is where it lives.
-    let need_sib = m.index.is_some() || base.is_none() || base_low == 0b100;
+    let need_sib = force_sib || m.index.is_some() || base.is_none() || base_low == 0b100;
     let base_forces_disp = base.is_some() && base_low == 0b101;
 
     // index-only addressing encodes disp32 with mod=00.

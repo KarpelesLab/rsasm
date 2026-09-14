@@ -524,13 +524,19 @@ fn assemble_inner(
 
     // The table is written in Intel order, so AT&T operands are reversed —
     // except for `enter` and `bound`, whose AT&T operands GNU as has always
-    // taken in Intel order, and llvm-mc with it.
+    // taken in Intel order, and llvm-mc with it, and for the instructions
+    // that only name their implicit registers, which GNU as lists in the same
+    // order in both syntaxes.
     let named = |name: &str| {
         mnemonic
             .strip_prefix(name)
             .is_some_and(|s| matches!(s, "" | "b" | "w" | "l" | "q"))
     };
-    if syntax == Syntax::Att && !named("enter") && !named("bound") {
+    let implicit = matches!(
+        mnemonic,
+        "monitor" | "monitorx" | "mwait" | "mwaitx" | "tpause" | "umwait"
+    );
+    if syntax == Syntax::Att && !named("enter") && !named("bound") && !implicit {
         ops.reverse();
     }
     // `imul $imm, %reg` multiplies the register in place: it is the

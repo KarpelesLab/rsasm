@@ -20,6 +20,7 @@ pub mod fp16;
 pub mod lenalias;
 pub mod mmx;
 pub mod sse;
+pub mod sys;
 pub mod vexext;
 pub mod x87;
 pub mod xop;
@@ -39,6 +40,8 @@ pub enum Vk {
     /// The AVX-512 opmask registers `k0`-`k7`, as an ordinary operand rather
     /// than as a `{k1}` writemask decorator.
     K,
+    /// The AMX tile registers `tmm0`-`tmm7`.
+    Tmm,
 }
 
 impl Vk {
@@ -47,6 +50,8 @@ impl Vk {
     pub fn width(self) -> u8 {
         match self {
             Vk::Mm | Vk::K => 8,
+            // A tile has no fixed size, and neither has its memory operand.
+            Vk::Tmm => 0,
             Vk::Xmm => 16,
             Vk::Ymm => 32,
             Vk::Zmm => 64,
@@ -60,6 +65,7 @@ impl Vk {
             Vk::Ymm => RegClass::Ymm,
             Vk::Zmm => RegClass::Zmm,
             Vk::K => RegClass::Mask,
+            Vk::Tmm => RegClass::Tmm,
         }
     }
 
@@ -238,6 +244,10 @@ pub const R_IN_RM: u32 = 1 << 17;
 /// would overwrite one half before reading the other; GNU as refuses the
 /// overlap, where llvm-mc assembles it, and rsasm follows GNU as.
 pub const DISTINCT_DEST: u32 = 1 << 18;
+/// The memory operand is always written with a SIB byte, and so cannot be
+/// RIP-relative: AMX's tile loads and stores take their stride from the
+/// index register, and have no encoding without one.
+pub const SIBMEM: u32 = 1 << 19;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -505,6 +515,7 @@ fn build() -> Tbl {
     avx::install(&mut t);
     vexext::install(&mut t);
     bmi::install(&mut t);
+    sys::install(&mut t);
     xop::install(&mut t);
     avx512::install(&mut t);
     avx512x::install(&mut t);
@@ -614,11 +625,12 @@ mod tests {
             assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
             assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
             // A VEX or EVEX suffix byte is an immediate folded into the name
-            // (`vcmpeqps`, `vpcmpltud`, `vpcomgeb`, `vpclmullqhqdq`); 3DNow!
-            // is the only legacy family with one that is not.
+            // (`vcmpeqps`, `vpcmpltud`, `vpcomgeb`, `vpclmullqhqdq`), or
+            // `tilerelease`'s fixed ModRM; 3DNow! is the only legacy family
+            // with one.
             assert!(
                 d.suffix.is_none()
-                    || ["vcmp", "vpcmp", "vpcom", "vpclmul"]
+                    || ["vcmp", "vpcmp", "vpcom", "vpclmul", "tilerelease"]
                         .iter()
                         .any(|p| m.starts_with(p)),
                 "`{m}`: unexpected suffix byte"
