@@ -61,6 +61,11 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # spelling the two share. A snippet is not compared with the prelude: rsasm
 # sees only the snippet.
 #
+# `p2hex` compares Intel HEX text instead of an image: AS's p2hex against
+# `rsasm -f ihex`. p2hex leaves reserved space and `ORG` gaps out of its
+# records where rsasm writes the zeros `-f bin` has, so those programs are
+# written without gaps.
+#
 # vasm is only a secondary reference, run with `-no-opt -devpac`. By default it
 # is an optimizing assembler that rewrites instructions (`move.l #1,d0` becomes
 # `moveq #1,d0`) and deletes branches, which is not what rsasm or GNU as do;
@@ -88,6 +93,7 @@ z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
 i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
+i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
 "
@@ -107,7 +113,7 @@ fail=0
 # the 8051 note above.
 prelude() { # key
   case "$1" in
-    i8051) printf '\tinclude "stddef51.inc"\n' ;;
+    i8051 | i8051-hex) printf '\tinclude "stddef51.inc"\n' ;;
     i8051-sdas) printf '\t.area CSEG (ABS)\n' ;;
   esac
 }
@@ -136,6 +142,15 @@ reference() { # command, extraction; source on stdin
         "$bin/p2bin" -q -l 0 in.p out.bin >> log 2>&1) || grep -q 'error' "$d/log"; then
         echo "REF-ERROR: $(grep -m2 -iE 'error' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
       fi ;;
+    p2hex)
+      if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -q -o in.p in.s > log 2>&1 &&
+        "$bin/p2hex" -q in.p out.hex >> log 2>&1) || grep -q 'error' "$d/log"; then
+        echo "REF-ERROR: $(grep -m2 -iE 'error' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
+      fi
+      tr -d '\r' < "$d/out.hex" | tr '\n' ' ' | sed 's/ $//'
+      echo
+      rm -rf "$d"
+      return ;;
     sdld)
       # sdas8051 truncates an operand that does not fit without a word, and
       # leaves a branch that does not reach to sdld, which warns and may still
@@ -166,12 +181,29 @@ reference() { # command, extraction; source on stdin
   rm -rf "$d"
 }
 
+rsasm_ihex() { # arch dialect source: rsasm's Intel HEX, one line
+  local d
+  d=$(mktemp -d)
+  printf '%s\n' "$3" > "$d/in.s"
+  if "$rsasm" -a "$1" -d "$2" -f ihex -o "$d/out.hex" "$d/in.s" > "$d/log" 2>&1; then
+    tr '\n' ' ' < "$d/out.hex" | sed 's/ $//'
+    echo
+  else
+    echo "RSASM-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+}
+
 compare() { # key arch dialect cmd extract name source [reference-source]
   local r m gnu="${8-$7}" format=bin
   m=$({ prelude "$1"; printf '%s\n' "$gnu"; } | reference "$4" "$5")
   # Everything but an unlinked ELF object is compared as a flat image.
   [ "${5%%:*}" = elf ] && format=elf
-  r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "$format" 2>&1)
+  if [ "$5" = p2hex ]; then
+    r=$(rsasm_ihex "$2" "$3" "$7")
+  else
+    r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "$format" 2>&1)
+  fi
   # A reference that fails is never a match: a pair whose GNU half does not
   # assemble proves nothing about the vendor half.
   if [ "$m" = "$r" ] && [ "${m#REF-}" = "$m" ]; then

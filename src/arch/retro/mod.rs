@@ -185,8 +185,10 @@ impl Architecture for Retro {
     }
 
     fn relaxation(&self) -> crate::arch::Relaxation {
+        // AS sizes the 8051's generic `JMP` and `CALL` afresh on every pass;
+        // see [`mcs51`]. The others keep the default.
         match self {
-            Retro::Mcs51 => crate::arch::Relaxation::InOrder,
+            Retro::Mcs51 => crate::arch::Relaxation::Shrinking,
             _ => crate::arch::Relaxation::FromLastPass,
         }
     }

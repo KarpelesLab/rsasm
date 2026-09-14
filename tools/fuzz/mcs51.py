@@ -48,8 +48,9 @@ Each case is classified:
                 does and rsasm does; see `Enc::addr11` in the backend.
 
 Some programs are made invalid on purpose (`--mutations`): an operand out of
-range, a relative branch pushed out of reach by reserved space, an `AJMP` to
-the other side of a 2 KiB block boundary.
+range, or a relative branch pushed out of reach by reserved space. Programs
+also start just short of a 2 KiB block boundary, where `AJMP` and `ACALL`
+targets change block.
 
 Environment: RSASM (default target/debug/rsasm under the repository root) and
 RSASM_ORACLES (default target/oracles), which must hold asl, p2bin, sdas8051,
@@ -411,14 +412,15 @@ def asl(source, workdir):
             boundary = boundary_jumps(fh.read())
     except OSError:
         boundary = False
-    if code != 0 or "error" in log:
+    # Without -q, AS ends with a count of errors, so look for a message.
+    if code != 0 or "error:" in log:
         first_pass = "passes not started" in log
         text = " ".join(l for l in log.splitlines() if "error:" in l)[:200]
         return ("ERROR", text, boundary, first_pass)
     code, log = run([os.path.join(BIN, "p2bin"), "-q", "-l", "0", "as.p", "as.bin"], workdir)
     if code != 0:
-        return ("ERROR", log[:200], boundary)
-    return ("OK", image(os.path.join(workdir, "as.bin")) or b"", boundary)
+        return ("ERROR", log[:200], boundary, False)
+    return ("OK", image(os.path.join(workdir, "as.bin")) or b"", boundary, False)
 
 
 def sdas(source, workdir):

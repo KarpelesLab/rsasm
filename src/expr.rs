@@ -94,7 +94,7 @@ pub enum BinOp {
     /// the single 8-bit address the MCS-51 bit instructions take. `20H.3` is
     /// 03H and `P1.3` is 93H; see [`eval_bit_address`]. Only the backends
     /// that ask for it see this operator, and it splits a whole operand
-    /// rather than binding by [`BinOp::precedence`], since it binds looser
+    /// rather than binding by precedence, since it binds looser
     /// than anything else can.
     BitAddr,
 }

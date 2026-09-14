@@ -34,6 +34,28 @@
 //! directives go, and the two 16-bit instruction fields byte-swap on the way
 //! into the encoding. (SDCC's `sdas8051` writes `.dw` the other way round;
 //! AS is the reference the 8-bit dialect follows, here as elsewhere.)
+//!
+//! **Generic jumps are sized as AS sizes them.** AS lays a program out again
+//! on every pass, choosing each `JMP` and `CALL` afresh from the addresses of
+//! the pass before, so a `CALL` that one pass pushed into the next block can
+//! come back to an `ACALL` once a jump before it has grown. rsasm uses
+//! [`Relaxation::Shrinking`](crate::arch::Relaxation::Shrinking) for the same
+//! reason: growing only, it would keep the `LCALL`.
+//!
+//! # Where rsasm and the references part
+//!
+//! AS is followed where the two references disagree: its `CY` for the
+//! carry, its `DW` byte order, its refusal of a branch target below address
+//! 0, which sdas8051 lets wrap, and its refusal of an operand that does not
+//! fit, which sdas8051 truncates. rsasm departs from both, and says so where
+//! the code is, in three places:
+//!
+//! - an `AJMP` or `ACALL` in the last two bytes of a 2 KiB block reaches the
+//!   block after it, as on the CPU; see `Enc::addr11`;
+//! - a bit of a byte that has no bit addresses (`30H.1`, `SBUF.1`) is refused,
+//!   where AS assembles a bit of some other byte; see
+//!   [`crate::expr::eval_bit_address`];
+//! - `SETB A` is refused, where AS assembles `DA A`.
 
 use super::common::{self, Enc};
 use crate::arch::{AsmCtx, InsnRequest};
