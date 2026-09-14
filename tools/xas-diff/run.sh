@@ -12,6 +12,11 @@
 # <key>-programs.txt with multi-line snippets separated by `=== <name>`.
 # Motorola source is column-sensitive, so indent instructions in those corpora.
 #
+# Snippets in <key>-relocs.txt, in the programs format, are compared as whole
+# objects instead: every allocated section's header and bytes, the global,
+# weak and undefined symbols, and the relocations, as tools/mc-diff/canon.sh
+# prints them.
+#
 # A vendor syntax no reference assembler reads (CC-RL, CC-RH, CC-RX) is checked in
 # pairs instead: <key>-pairs.txt holds snippets separated by `=== <name>`, each
 # split by a `--- gnu` line into the vendor source, which rsasm assembles in
@@ -52,8 +57,11 @@ rx-ccrx|rx|ccrx|rx-elf-as|elf:P
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
 command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found" >&2; exit 0; }
-cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump || exit 1
+command -v llvm-readobj > /dev/null || { echo "llvm-readobj not found" >&2; exit 0; }
+cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump --bin rsasm ||
+  exit 1
 hexdump="$root/target/debug/examples/hexdump"
+rsasm="$root/target/debug/rsasm"
 
 pass=0
 fail=0
@@ -103,6 +111,39 @@ compare() { # key arch dialect cmd extract name source [reference-source]
   fi
 }
 
+compare_object() { # key arch dialect cmd name source
+  local d m r tool=${4%% *} flags=""
+  # GNU as for RX renames `.text`, `.data` and `.bss` to Renesas's `P`, `D_1`
+  # and `B_1`, which rsasm does not; asked to keep the usual names, it does.
+  case "$1" in rx*) flags=-muse-conventional-section-names ;; esac
+  d=$(mktemp -d)
+  printf '%s\n' "$6" > "$d/in.s"
+  if [ ! -x "$bin/$tool" ]; then
+    m="REF-MISSING: $tool"
+  elif (cd "$d" && "$bin/$tool" ${4#"$tool"} $flags -o ref.o in.s > log 2>&1); then
+    m=$("$root/tools/mc-diff/canon.sh" "$d/ref.o")
+  else
+    m="REF-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"
+  fi
+  if "$rsasm" -a "$2" -d "$3" -o "$d/rs.o" "$d/in.s" > "$d/log" 2>&1; then
+    r=$("$root/tools/mc-diff/canon.sh" "$d/rs.o")
+  else
+    r="RSASM-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+  if [ "$m" = "$r" ] && [ "${m#REF-}" = "$m" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    echo "### [$1] $5 (object)"
+    printf '%s\n' "$6" | sed 's/^/    |/'
+    echo "  reference:"
+    printf '%s\n' "$m" | sed 's/^/    /'
+    echo "  rsasm:"
+    printf '%s\n' "$r" | sed 's/^/    /'
+  fi
+}
+
 run_target() { # key arch dialect cmd extract
   local lines="$here/$1.txt" progs="$here/$1-programs.txt" before=$((pass + fail))
   if [ -f "$lines" ]; then
@@ -124,6 +165,20 @@ run_target() { # key arch dialect cmd extract
       esac
     done < "$progs"
     [ -n "$snippet" ] && compare "$1" "$2" "$3" "$4" "$5" "$name" "$snippet"
+  fi
+  local objs="$here/$1-relocs.txt"
+  if [ -f "$objs" ]; then
+    local snippet="" name=""
+    while IFS= read -r line; do
+      case "$line" in
+        "==="*)
+          [ -n "$snippet" ] && compare_object "$1" "$2" "$3" "$4" "$name" "$snippet"
+          snippet=""; name="${line#=== }" ;;
+        *) snippet="$snippet$line
+" ;;
+      esac
+    done < "$objs"
+    [ -n "$snippet" ] && compare_object "$1" "$2" "$3" "$4" "$name" "$snippet"
   fi
   local pairs="$here/$1-pairs.txt"
   if [ -f "$pairs" ]; then
@@ -168,7 +223,7 @@ while IFS='|' read -r key arch dialect cmd extract; do
     case " $wanted " in *" $key "*) ;; *) continue ;; esac
   fi
   [ -f "$here/$key.txt" ] || [ -f "$here/$key-programs.txt" ] || [ -f "$here/$key-pairs.txt" ] ||
-    continue
+    [ -f "$here/$key-relocs.txt" ] || continue
   run_target "$key" "$arch" "$dialect" "$cmd" "$extract"
 done <<< "$TARGETS"
 

@@ -53,18 +53,18 @@ assembler, not against rsasm's own idea of the manual. See
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1584 |
-| AArch64 | `aarch64` | llvm-mc | 475 |
-| ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 361 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 518 |
-| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1047 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
-| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
-| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1272 |
-| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 604 |
-| Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 523 |
-| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 548 |
+| x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1594 |
+| AArch64 | `aarch64` | llvm-mc | 480 |
+| ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 371 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
+| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1062 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
+| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 809 |
+| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
+| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
+| Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
+| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
 | Z80, 6502, 8080 | `z80` `6502` `i8080` | opcode tables | — |
 
@@ -118,18 +118,30 @@ but 18 forms where both manuals show MAME to be wrong.
 
 **Known wrong**
 
-These produce incorrect output rather than an error, which is why they are
-listed separately.
+Anything that produces incorrect output rather than an error is listed here,
+separately. Nothing is, at the moment.
 
-- A PC-relative reference to a weak symbol defined in the same section is
-  resolved at assembly time. GNU as and llvm-mc leave it to the linker, which
-  may choose another definition. (llvm-mc on RISC-V leaves references to
-  global symbols to the linker too; rsasm resolves those as well.)
-- Sections have no default alignment beyond what `.align` asks for, where GNU
-  as and llvm-mc give them one: 4 for MIPS `.data` in GNU as, 16 in llvm-mc,
-  and 4 for m68k. So in a flat binary a section that follows an odd-sized one
-  can start at an address a linker would have rounded up. Explicit `.p2align`
-  at the start of the section avoids it.
+Where the references themselves disagree, rsasm follows the one whose harness
+checks the target (see [Verification](#verification)) and says so in the
+backend. Two such choices are worth knowing about:
+
+- **Which references are left to the linker.** A PC-relative reference to a
+  global or weak symbol is relocated even when the symbol is in the same
+  section, since the linker may bind the name elsewhere; a local one, or a
+  local `.set` alias of a global one, is resolved. That is what both
+  references do on nearly every target. The exceptions follow GNU as for
+  x86, m68k, SuperH and RL78 (a jump GNU as relaxes to a global symbol is
+  resolved on x86; only weak symbols are left to the linker on m68k; nothing
+  in the same section is on SuperH and RL78), and llvm-mc for ARM, where
+  every `bl` is relocated so the linker can make it a `blx`.
+- **Default section alignment.** Sections start with the alignment the
+  reference gives them: 16 for MIPS `.text`, `.data` and `.bss` (llvm-mc; GNU
+  as aligns only `.text`, to 4), 4 for `.text` on ARM, PowerPC and SPARC and
+  for every executable section on AArch64 (llvm-mc; GNU as gives 1, or aligns
+  once an instruction is assembled), 2 or 4 for RISC-V `.text` depending on
+  compressed instructions, 4 for m68k `.text`, `.data` and `.bss`, and 1
+  otherwise, including on x86, where GNU as is followed and llvm-mc's `.text`
+  is 4.
 
 ## Usage
 
@@ -308,27 +320,35 @@ own target's reference, and rsasm has to produce the concatenation.
 
 ## Verification
 
-Four differential harnesses assemble the same source with rsasm and with an
+Five differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
-- `tools/gas-diff/run.sh` against the host's GNU as, for x86. 844 of 844 match.
+- `tools/gas-diff/run.sh` against the host's GNU as, for x86. 854 of 854 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
-  supports. 3,980 of 3,980 match across fourteen target variants. For RISC-V
-  it also compares whole objects, relocations included, since `la` and its
-  relatives are only right if the linker is told the right things.
+  supports. 4,042 of 4,042 match across fourteen target variants.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
   and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
   source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds
-  the references from checksum-pinned sources. 3,785 of 3,785 match across
+  the references from checksum-pinned sources. 3,818 of 3,818 match across
   twelve variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 103 of 103 match across twenty-two variants.
+  distances between sections. 107 of 107 match across twenty-two variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.
+
+The first three also compare whole objects for every ELF target, from the
+`*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
+and bytes, the global, weak and undefined symbols, and every relocation, read
+the way a linker reads it (`tools/mc-diff/canon.sh`). Bytes alone cannot show
+a reference that should have been left to the linker, or one relocated
+against the wrong symbol: the field is zero either way. Those corpora walk
+each binding — local, global, weak, hidden and the other visibilities, `.set`
+aliases either way round, `.globl` after use, another section, undefined —
+through branches, calls, PC-relative loads and data.
 
 All five run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
@@ -409,8 +429,10 @@ AArch64 branch offset be range-checked as 26 bits rather than as the 4 bytes
 it lives in.
 
 A few conventions really are per target and have trait methods with defaults:
-`comments` (which characters start one) and `word_bytes` (how wide `.word` is —
-2 on x86 and PowerPC, 4 on the other RISC targets).
+`comments` (which characters start one), `word_bytes` (how wide `.word` is —
+2 on x86 and PowerPC, 4 on the other RISC targets), `section_align` (the
+alignment a section starts with) and `defers_to_linker` (which references to
+a symbol in their own section are still relocated).
 
 Add a corpus under `tools/mc-diff/` for the new target and take the hermetic
 tests' expected bytes from its runs.

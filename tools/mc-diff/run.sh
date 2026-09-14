@@ -12,8 +12,8 @@
 # Corpora live in tools/mc-diff/<arch>.txt, one instruction per line, and
 # optionally tools/mc-diff/<arch>-programs.txt, multi-line snippets separated
 # by `=== <name>` lines. Snippets in tools/mc-diff/<arch>-relocs.txt are
-# compared as whole objects: the .text bytes and every relocation, read
-# through relocs.awk.
+# compared as whole objects: sections, symbols and relocations, as canon.sh
+# prints them.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -82,14 +82,11 @@ compare() { # arch, rsasm_arch, triple, flags, name, source
   fi
 }
 
-# What two objects have to agree on: the .text bytes, then each relocation in
-# the form relocs.awk writes, which reads a symbol the way a linker would.
+# What two objects have to agree on, as canon.sh prints it: every allocated
+# section's header fields and bytes, the global, weak and undefined symbols,
+# and each relocation, with a symbol read the way a linker would read it.
 canon() { # object
-  llvm-objcopy -O binary --only-section=.text "$1" "$1.bin" 2>/dev/null
-  xxd -p "$1.bin" | tr -d '\n'
-  echo
-  llvm-readobj --symbols "$1" > "$1.syms"
-  llvm-readobj --relocs --expand-relocs "$1" | ${AWK:-awk} -f "$here/relocs.awk" "$1.syms" -
+  "$here/canon.sh" "$1"
 }
 
 compare_object() { # arch, rsasm_arch, triple, flags, name, source
