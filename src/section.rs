@@ -562,6 +562,12 @@ pub struct Section {
     pub map_state: Option<&'static str>,
     /// The mapping symbols recorded so far, placed once the layout is known.
     pub map_events: Vec<crate::mapping::MapEvent>,
+    /// The backend state the last instruction was assembled in, while no
+    /// other kind of fragment has followed it: an alignment here pads with
+    /// that state's no-ops, as GNU as's ARM port pads with the instruction
+    /// set of the last instruction in the fragment, whatever `.arm` or
+    /// `.thumb` has said since.
+    pub nop_state: Option<crate::arch::ArchState>,
 }
 
 impl Section {
@@ -582,6 +588,7 @@ impl Section {
             arch_marks: Vec::new(),
             map_state: None,
             map_events: Vec::new(),
+            nop_state: None,
         }
     }
 
@@ -590,6 +597,7 @@ impl Section {
         // Bytes emitted after the switch must not merge into a fragment
         // emitted before it, or one fragment would have two byte orders.
         self.seal();
+        self.nop_state = None;
         let at = self.next_frag_index();
         let current = self.arch_marks.last().map_or(0, |&(_, s)| s);
         match self.arch_marks.last_mut() {
@@ -625,6 +633,7 @@ impl Section {
 
     pub fn push(&mut self, frag: Fragment) -> u32 {
         self.open_data = None;
+        self.nop_state = None;
         let idx = self.frags.len() as u32;
         self.frags.push(frag);
         idx

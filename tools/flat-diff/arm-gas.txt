@@ -106,3 +106,17 @@ g:      bx      lr
         blx     g
         bl      g
         bx      lr
+
+=== a code section ending in Thumb is padded with Thumb no-ops
+        .syntax unified
+        .text
+        .type   fa, %function
+fa:     bx      lr
+        .thumb
+        .thumb_func
+fb:     bx      lr
+        .section .text.b, "ax"
+        .arm
+        .type   fc, %function
+fc:     bl      fb
+        bx      lr

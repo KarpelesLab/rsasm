@@ -6,7 +6,9 @@
 //! point. Instruction sizes normally only grow — `chosen` never decreases — so
 //! the branch half of the loop always terminates. A backend can let sizes
 //! shrink again too (RX does, as GNU as does there), under GNU as's limit on
-//! how often one fragment may flip. The whole loop is bounded as well, since a
+//! how often one fragment may flip, or have them picked afresh each pass
+//! until one grows where nothing before it did (ARM, likewise). The whole
+//! loop is bounded as well, since a
 //! `.org` or `.space` whose size depends on a later symbol can be written to
 //! oscillate.
 
@@ -136,9 +138,12 @@ impl Assembler {
             }
             let exec = s.flags.exec;
             let fill = if exec { Vec::new() } else { vec![0] };
+            // The no-ops are for the last instruction's state, if nothing
+            // but data has followed it; see `Section::nop_state`.
+            let nop_state = s.nop_state.clone().unwrap_or_else(|| state.clone());
             // No-op padding is code, and marked as such where the target
             // marks code; see `crate::mapping`.
-            if let Some(names) = crate::mapping::mapping_names(arch, state)
+            if let Some(names) = crate::mapping::mapping_names(arch, &nop_state)
                 && exec
             {
                 self.map_align_with(SectionId(si as u32), names);
@@ -149,7 +154,7 @@ impl Assembler {
                     fill,
                     max_skip: None,
                     pad: 0,
-                    nop_state: None,
+                    nop_state: exec.then_some(nop_state),
                 },
                 Span::DUMMY,
             ));
@@ -1087,8 +1092,21 @@ impl Assembler {
                 return None;
             }
             let target = self.resolve_value(v)?;
-            let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
-            let here = here & !(kind.pc_align.max(1) as i64 - 1);
+            let base = self.section(section).addr as i64;
+            let mask = !(kind.pc_align.max(1) as i64 - 1);
+            // A reference within its own section is one the assembler
+            // resolves before any linker places the section, so the PC is
+            // rounded from the section's start, as GNU as rounds it; that
+            // differs only for a section a linker puts at an address that is
+            // not itself a multiple of the rounding.
+            let here = if v
+                .plus
+                .is_some_and(|p| self.symbol_section(p) == Some(section))
+            {
+                base + ((at as i64 + kind.adjust as i64) & mask)
+            } else {
+                (base + at as i64 + kind.adjust as i64) & mask
+            };
             return Some(target - here);
         }
         // The distance between two labels in one section is fixed no matter

@@ -619,9 +619,17 @@ impl Assembler {
         };
         // GNU as makes no fragment for an alignment of one byte, and marks
         // the start of any other: as code where no-ops pad it.
+        // No-ops are for the instruction set of the last instruction, if one
+        // has been assembled since the last fragment ended; see
+        // `Section::nop_state`.
+        let nop_state = self
+            .section(self.cur)
+            .nop_state
+            .clone()
+            .unwrap_or_else(|| self.arch_state.clone());
         if align > 1 {
             if fill.is_empty() {
-                self.map_code_align();
+                self.map_code_align(&nop_state);
             } else {
                 self.map_data_frag();
             }
@@ -629,7 +637,7 @@ impl Assembler {
         self.push_frag(
             FragKind::Align {
                 align,
-                nop_state: fill.is_empty().then(|| self.arch_state.clone()),
+                nop_state: fill.is_empty().then_some(nop_state),
                 fill,
                 max_skip,
                 pad: 0,

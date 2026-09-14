@@ -1589,8 +1589,15 @@ impl Assembler {
             return;
         }
         self.map_code();
+        // A relaxable instruction ends GNU as's fragment, and with it the
+        // record of which instruction set later padding is for.
+        let settled = variants.len() == 1;
         let idx = self.cur_section().emit_variants(variants, stmt.span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
+        if settled {
+            let state = self.arch_state.clone();
+            self.cur_section().nop_state = Some(state);
+        }
         self.run_requests(requests, stmt.span);
     }
 }

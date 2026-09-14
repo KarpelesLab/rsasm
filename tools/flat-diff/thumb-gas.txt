@@ -36,3 +36,18 @@ fwd:    nop
         .space  0x800
         .p2align 2, 0
 far:    bx      lr
+
+=== a section a linker places at an odd halfword
+        .syntax unified
+        .text
+        nop
+        .section .text.b, "ax"
+        .thumb_func
+fc:     push    {r4, lr}
+        pop     {r4, pc}
+        adr     r1, fc
+        adr     r2, fwd
+        blx     fwd
+        bx      lr
+        .thumb_func
+fwd:    bx      lr

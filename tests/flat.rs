@@ -591,7 +591,6 @@ entry:  ldr     r0, =0x12345678
         bx      lr
         .data
 msg:    .ascii  "hello"
-
 "#,
         image: Some((
             45,
@@ -614,7 +613,6 @@ over:   ldr     r1, =table + 4
         .section .rodata
         .byte   1
 table:  .word   1, 2, 3
-
 "#,
         image: Some((
             45,
@@ -635,7 +633,6 @@ back:   adr     r0, back
 fwd:    nop
         .space  0x2000
 far:    bx      lr
-
 "#,
         image: Some((
             8224,
@@ -659,7 +656,6 @@ start:  ldr     r0, =other
 other:  ldr     r0, =0x11223344
         ldr     r1, =start
         bx      lr
-
 "#,
         image: Some((
             32,
@@ -699,7 +695,6 @@ tfunc2: bx      lr
         .arm
         .type   afunc, %function
 afunc:  bx      lr
-
 "#,
         image: Some((
             56,
@@ -724,7 +719,6 @@ afunc:  bx      lr
 tfunc:  bx      lr
         .data
         .word   tfunc, afunc, tfunc + 4
-
 "#,
         image: Some((
             40,
@@ -758,6 +752,27 @@ g:      bx      lr
             )],
         )),
     },
+    Case {
+        name: "a code section ending in Thumb is padded with Thumb no-ops",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+        .type   fa, %function
+fa:     bx      lr
+        .thumb
+        .thumb_func
+fb:     bx      lr
+        .section .text.b, "ax"
+        .arm
+        .type   fc, %function
+fc:     bl      fb
+        bx      lr
+"#,
+        image: Some((
+            16,
+            &[(0, "1e ff 2f e1 70 47 00 bf fd ff ff fa 1e ff 2f e1")],
+        )),
+    },
 ];
 
 #[cfg(feature = "arm")]
@@ -782,7 +797,6 @@ entry:  ldr     r0, =0x12345678
         bx      lr
         .data
 msg:    .ascii  "hello"
-
 "#,
         image: Some((
             33,
@@ -804,7 +818,6 @@ entry:  ldr     r0, =data
         .data
         .space  3
 data:   .word   0
-
 "#,
         image: Some((
             1047,
@@ -833,6 +846,31 @@ far:    bx      lr
                 (0, "af f2 04 00 01 a1 0f f6 08 02 00 00 00 bf 00 00"),
                 (0x810, "70 47 00 bf"),
             ],
+        )),
+    },
+    Case {
+        name: "a section a linker places at an odd halfword",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+        nop
+        .section .text.b, "ax"
+        .thumb_func
+fc:     push    {r4, lr}
+        pop     {r4, pc}
+        adr     r1, fc
+        adr     r2, fwd
+        blx     fwd
+        bx      lr
+        .thumb_func
+fwd:    bx      lr
+"#,
+        image: Some((
+            22,
+            &[(
+                0,
+                "00 bf 10 b5 10 bd af f2 07 01 0f f2 07 02 00 f0 01 f8 70 47 70 47",
+            )],
         )),
     },
 ];

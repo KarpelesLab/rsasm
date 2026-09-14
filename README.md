@@ -335,7 +335,7 @@ independent assembler, and compare the bytes:
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 113 of 113 match across twenty-four variants.
+  distances between sections. 115 of 115 match across twenty-four variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.

@@ -120,8 +120,8 @@ impl Assembler {
 
     /// An alignment padded with no-ops is about to be pushed as the next
     /// fragment.
-    pub(crate) fn map_code_align(&mut self) {
-        let Some(names) = self.mapping_names() else {
+    pub(crate) fn map_code_align(&mut self, state: &ArchState) {
+        let Some(names) = mapping_names(self.arch.as_ref(), state) else {
             return;
         };
         if !self.is_debug_section() {
