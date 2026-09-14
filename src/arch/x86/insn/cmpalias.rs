@@ -79,6 +79,14 @@ const INT: &[(&str, u8)] = &[
     ("eq", 0), ("lt", 1), ("le", 2), ("neq", 4), ("nlt", 5), ("nle", 6),
 ];
 
+/// XOP's integer compares, which number the same predicates differently and
+/// name all eight.
+#[rustfmt::skip]
+const XOP: &[(&str, u8)] = &[
+    ("lt", 0), ("le", 1), ("gt", 2), ("ge", 3),
+    ("eq", 4), ("neq", 5), ("false", 6), ("true", 7),
+];
+
 #[rustfmt::skip]
 const PCLMUL: [(&str, u8); 4] = [
     ("lqlq", 0x00), ("hqlq", 0x01), ("lqhq", 0x10), ("hqhq", 0x11),
@@ -94,6 +102,7 @@ pub fn install(t: &mut Tbl) {
     install_family(t, "cmp", &["ps", "pd", "ss", "sd"], &sse);
     install_family(t, "vcmp", &["ps", "pd", "ss", "sd", "ph", "sh"], AVX);
     install_family(t, "vpcmp", &INT_FLAVOURS, INT);
+    install_family(t, "vpcom", &INT_FLAVOURS, XOP);
     // The carry-less multiply names which quadword of each operand it takes:
     // `pclmullqhqdq` is the low one of the destination and the high one of
     // the source, immediate `0x10`.

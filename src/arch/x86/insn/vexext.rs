@@ -271,6 +271,19 @@ fn install_vnni_int(t: &mut Tbl) {
 }
 
 pub fn install(t: &mut Tbl) {
+    // The MXCSR load and store, whose VEX forms only exist so AVX code need
+    // not mix in a legacy prefix.
+    for (mnem, ext) in [("vldmxcsr", 2u8), ("vstmxcsr", 3)] {
+        add(
+            t,
+            mnem,
+            vec![
+                d(vec![Op::M(4)], &[0xae], ModRm::Ext(ext), 0)
+                    .map(1)
+                    .vex(128),
+            ],
+        );
+    }
     install_f16c(t);
     install_gfni(t);
     install_wide_crypto(t);

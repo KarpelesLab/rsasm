@@ -13,6 +13,7 @@ pub mod avx;
 pub mod avx512;
 pub mod avx512x;
 pub mod base;
+pub mod bmi;
 pub mod cmpalias;
 pub mod fma;
 pub mod fp16;
@@ -21,6 +22,7 @@ pub mod mmx;
 pub mod sse;
 pub mod vexext;
 pub mod x87;
+pub mod xop;
 
 use super::reg::{Reg, RegClass};
 use std::collections::HashMap;
@@ -97,8 +99,12 @@ pub enum Op {
     Vm(Vk, u8),
     /// The non-destructive source VEX and EVEX carry in `vvvv`.
     Nds(Vk),
+    /// A general register of this width in `vvvv`, as BMI's `andn` and
+    /// `shlx` take one.
+    NdsR(u8),
     /// A register named by the top four bits of a trailing immediate byte, as
-    /// `vblendvps` does with its selector.
+    /// `vblendvps` does with its selector. Beside an `Imm(1)`, as in XOP's
+    /// `vpermil2ps`, the two share the byte: the immediate is its low nibble.
     Is4(Vk),
     /// A gather/scatter memory operand, whose SIB index is a vector register
     /// of this class rather than a GPR.
@@ -141,7 +147,7 @@ pub enum Op {
 impl Op {
     pub fn width(self) -> u8 {
         match self {
-            Op::Rm(w) | Op::R(w) | Op::M(w) | Op::Imm(w) | Op::IndirectRm(w) => w,
+            Op::Rm(w) | Op::R(w) | Op::M(w) | Op::Imm(w) | Op::IndirectRm(w) | Op::NdsR(w) => w,
             Op::Imm8s => 1,
             Op::Rel(w) => w,
             Op::One | Op::Three => 0,
@@ -373,7 +379,9 @@ pub struct Def {
     pub opsize: u8,
     pub flags: u32,
     pub enc: Enc,
-    /// VEX/EVEX opcode map: 1 = `0F`, 2 = `0F 38`, 3 = `0F 3A`.
+    /// VEX/EVEX opcode map: 1 = `0F`, 2 = `0F 38`, 3 = `0F 3A`, and the
+    /// EVEX-only 5 and 6. Maps 8 to 10 are AMD's XOP space: a VEX row there
+    /// is written with XOP's `8F` escape in place of VEX's `C4`.
     pub map: u8,
     /// Vector length in bits: 128, 256 or 512, for the VEX/EVEX `L` bits.
     pub vlen: u16,
@@ -496,6 +504,8 @@ fn build() -> Tbl {
     sse::install(&mut t);
     avx::install(&mut t);
     vexext::install(&mut t);
+    bmi::install(&mut t);
+    xop::install(&mut t);
     avx512::install(&mut t);
     avx512x::install(&mut t);
     vexext::install_late(&mut t);
@@ -594,20 +604,21 @@ mod tests {
                 );
                 continue;
             }
-            // Maps 5 and 6 are EVEX-only, and hold AVX-512FP16.
+            // Maps 5 and 6 are EVEX-only, and hold AVX-512FP16; 8 to 10 are
+            // XOP's, which only VEX-style rows use.
             let map_ok = match d.enc {
                 Enc::Evex => matches!(d.map, 1..=3 | 5 | 6),
-                _ => (1..=3).contains(&d.map),
+                _ => matches!(d.map, 1..=3 | 8..=10),
             };
             assert!(map_ok, "`{m}`: bad map in {d:?}");
             assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
             assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
             // A VEX or EVEX suffix byte is an immediate folded into the name
-            // (`vcmpeqps`, `vpcmpltud`, `vpclmullqhqdq`); 3DNow! is the only
-            // legacy family with one that is not.
+            // (`vcmpeqps`, `vpcmpltud`, `vpcomgeb`, `vpclmullqhqdq`); 3DNow!
+            // is the only legacy family with one that is not.
             assert!(
                 d.suffix.is_none()
-                    || ["vcmp", "vpcmp", "vpclmul"]
+                    || ["vcmp", "vpcmp", "vpcom", "vpclmul"]
                         .iter()
                         .any(|p| m.starts_with(p)),
                 "`{m}`: unexpected suffix byte"

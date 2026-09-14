@@ -1166,6 +1166,7 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             !nasm_int3 && cx.constant(*e) == Some(if *pat == Op::One { 1 } else { 3 })
         }
         Op::V(k) | Op::Nds(k) | Op::Is4(k) => o.reg().is_some_and(|r| k.accepts(r)),
+        Op::NdsR(w) => o.reg().is_some_and(|r| r.is_gpr() && r.size == w),
         Op::Vm(k, msz) => match &o.kind {
             OperandKind::Reg(r) => k.accepts(*r),
             OperandKind::Mem(_) => {
@@ -1174,6 +1175,7 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
                 let w = if o.decor.broadcast.is_some() {
                     match def.tuple {
                         insn::Tuple::Hv => 4,
+                        insn::Tuple::Fvw | insn::Tuple::Hvw | insn::Tuple::Qvw => 2,
                         _ if def.vex_w() => 8,
                         _ => 4,
                     }

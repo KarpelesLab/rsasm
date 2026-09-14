@@ -187,7 +187,7 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             // goes to r/m instead: that is how the shift-by-immediate forms
             // of `psllw` and friends are built.
             Op::V(_) if roles.rm.is_none() => roles.rm = Some(o),
-            Op::Nds(_) => roles.nds = o.reg(),
+            Op::Nds(_) | Op::NdsR(_) => roles.nds = o.reg(),
             Op::Is4(_) => roles.is4 = o.reg(),
             Op::R(_)
                 if takes_reg_field
@@ -550,7 +550,10 @@ pub fn encode(
                 bytes.push(0xc5);
                 bytes.push(((!ext_r as u8) << 7) | ((!vvvv & 0xf) << 3) | (l << 2) | pp);
             } else {
-                bytes.push(0xc4);
+                // XOP is the three-byte VEX layout behind `8F`, which stays
+                // `POP r/m` because its maps start at 8: a real `POP` has a
+                // zero reg field where XOP's inverted `RXB` and map sit.
+                bytes.push(if def.map >= 8 { 0x8f } else { 0xc4 });
                 bytes.push(
                     ((!ext_r as u8) << 7)
                         | ((!ext_x as u8) << 6)
@@ -699,7 +702,21 @@ pub fn encode(
     }
 
     // ---- immediate --------------------------------------------------------
-    for (e, width) in roles.imm.into_iter().chain(roles.imm2) {
+    // An `is4` register and a small immediate share one byte (XOP's
+    // `vpermil2ps`): the register in the top nibble, the value in the bottom.
+    let mut imm = roles.imm;
+    if let (Some(r), Some((e, 1))) = (roles.is4, roles.imm) {
+        let Some(v) = cx.constant(e).filter(|v| (0..=3).contains(v)) else {
+            cx.error(
+                cx.exprs.span(e),
+                "this immediate shares its byte with a register and must be 0 to 3",
+            );
+            return None;
+        };
+        bytes.push(((r.num & 0xf) << 4) | v as u8);
+        imm = None;
+    }
+    for (e, width) in imm.into_iter().chain(roles.imm2) {
         let offset = bytes.len() as u32;
         let folded = cx.constant(e);
         match folded {
@@ -733,7 +750,7 @@ pub fn encode(
     }
 
     // `is4`: a whole immediate byte whose top nibble names a register.
-    if let Some(r) = roles.is4 {
+    if let (Some(r), None) = (roles.is4, roles.imm) {
         bytes.push((r.num & 0xf) << 4);
     }
 
