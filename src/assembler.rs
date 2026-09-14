@@ -1073,6 +1073,10 @@ impl Assembler {
     /// fragments it emitted: layout resolves their fixups in its byte order
     /// and pads their alignment with its no-ops, whatever is active by then.
     pub(crate) fn switch_arch(&mut self, arch: Box<dyn Architecture>) {
+        // A literal pool belongs to the backend whose instructions load from
+        // it, and its entries are that backend's data, so a pool still open
+        // is written out before another backend takes over.
+        self.flush_all_literals();
         let syntax = self.arch_state.syntax;
         let mut state = arch.initial_state();
         // A syntax choice is the user's, not the architecture's, so it carries
