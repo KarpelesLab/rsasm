@@ -1378,13 +1378,11 @@ impl Assembler {
             // Unless the target's linker may move the labels apart; see
             // `Architecture::defers_difference`.
             let deferred = |asm: &Self| {
-                let numbered = asm.symbols.get(p).local_number.is_some()
-                    && asm.symbols.get(m).local_number.is_some();
                 asm.options.relocatable
                     && ps.is_some_and(|s| {
                         let flags = asm.section(s).flags;
                         let arch = asm.frag_arch(section.0 as usize, fi).0;
-                        arch.defers_difference(kind, &flags, numbered)
+                        arch.defers_difference(kind, &flags)
                     })
             };
             if ps.is_some() && (ps == ms || !self.options.relocatable) && !deferred(self) {

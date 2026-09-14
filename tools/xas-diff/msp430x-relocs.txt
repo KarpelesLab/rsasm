@@ -1446,3 +1446,256 @@ b:      call    #a
         mova    #0x12345, r5
         bra     #0x54321
         reta
+
+=== refused: mov r5
+        .text
+	mov r5
+
+=== refused: mov
+        .text
+	mov
+
+=== refused: mov r5, #1234
+        .text
+	mov r5, #1234
+
+=== refused: mov r5, #-1
+        .text
+	mov r5, #-1
+
+=== refused: mov r5, @r6+
+        .text
+	mov r5, @r6+
+
+=== refused: mov 2(r2), r5
+        .text
+	mov 2(r2), r5
+
+=== refused: mov r5, 2(r2)
+        .text
+	mov r5, 2(r2)
+
+=== refused: mov #0x10000, r5
+        .text
+	mov #0x10000, r5
+
+=== refused: mov #-32769, r5
+        .text
+	mov #-32769, r5
+
+=== refused: mov &0x10000, r5
+        .text
+	mov &0x10000, r5
+
+=== refused: mov &-32769, r5
+        .text
+	mov &-32769, r5
+
+=== refused: mov 0x10000(r4), r5
+        .text
+	mov 0x10000(r4), r5
+
+=== refused: movx #0x100000, r5
+        .text
+	movx #0x100000, r5
+
+=== refused: movx #-0x80001, r5
+        .text
+	movx #-0x80001, r5
+
+=== refused: movx &0x100000, r5
+        .text
+	movx &0x100000, r5
+
+=== refused: jmp $+1030
+        .text
+	jmp $+1030
+
+=== refused: jmp -1030
+        .text
+	jmp -1030
+
+=== refused: jmp $sym
+        .text
+	jmp $sym
+
+=== refused: mova @r2, r5
+        .text
+	mova @r2, r5
+
+=== refused: mova @r3+, r5
+        .text
+	mova @r3+, r5
+
+=== refused: mova &0x1234, r2
+        .text
+	mova &0x1234, r2
+
+=== refused: mova #1, 2(r5)
+        .text
+	mova #1, 2(r5)
+
+=== refused: popm #5, r3
+        .text
+	popm #5, r3
+
+=== refused: rrcm #5, r5
+        .text
+	rrcm #5, r5
+
+=== refused: rrcm #0, r5
+        .text
+	rrcm #0, r5
+
+=== refused: rrcm r5, r6
+        .text
+	rrcm r5, r6
+
+=== refused: rpt #17 { rrax r5
+        .text
+	rpt #17 { rrax r5
+
+=== refused: rpt #0 { rrax r5
+        .text
+	rpt #0 { rrax r5
+
+=== refused: rpt sym { rrax r5
+        .text
+	rpt sym { rrax r5
+
+=== refused: rpt #4 { mov r5, r6
+        .text
+	rpt #4 { mov r5, r6
+
+=== refused: rpt #4 { movx &0x200, r6
+        .text
+	rpt #4 { movx &0x200, r6
+
+=== refused: rpt #4 { rrcm #1, r5
+        .text
+	rpt #4 { rrcm #1, r5
+
+=== refused: rpt #4 { adda r5, r6
+        .text
+	rpt #4 { adda r5, r6
+
+=== refused: swpbx.b r5
+        .text
+	swpbx.b r5
+
+=== refused: mov.q r5, r6
+        .text
+	mov.q r5, r6
+
+=== refused: inc.a r5
+        .text
+	inc.a r5
+
+=== refused: foo r5
+        .text
+	foo r5
+
+=== refused: beq 1234
+        .text
+	beq 1234
+
+=== refused: calla
+        .text
+	calla
+
+=== refused: mova r5
+        .text
+	mova r5
+
+=== refused: adda sym, r5
+        .text
+	adda sym, r5
+
+=== refused: adda #0x100000, r5
+        .text
+	adda #0x100000, r5
+
+=== refused: adda #sym, sym
+        .text
+	adda #sym, sym
+
+=== refused: rla #5
+        .text
+	rla #5
+
+=== refused: .mspabi_attribute 4, 1
+        .text
+	.mspabi_attribute 4, 1
+
+=== refused: .mspabi_attribute 4, 3
+        .text
+	.mspabi_attribute 4, 3
+
+=== refused: .mspabi_attribute 6, 2
+        .text
+	.mspabi_attribute 6, 2
+
+=== refused: .mspabi_attribute 9, 1
+        .text
+	.mspabi_attribute 9, 1
+
+=== refused: .mspabi_attribute 0, 1
+        .text
+	.mspabi_attribute 0, 1
+
+=== refused: mov #hlo(sym), r5
+        .text
+	mov #hlo(sym), r5
+
+=== refused: mov #hhi(sym), r5
+        .text
+	mov #hhi(sym), r5
+
+=== refused: mov (r4), r5
+        .text
+	mov (r4), r5
+
+=== refused: mov @r16, r5
+        .text
+	mov @r16, r5
+
+=== refused: mov 2(r16), r5
+        .text
+	mov 2(r16), r5
+
+=== refused: mov 2(sym), r5
+        .text
+	mov 2(sym), r5
+
+=== refused: jmp #sym
+        .text
+	jmp #sym
+
+=== refused: jmp &sym
+        .text
+	jmp &sym
+
+=== refused: and.a r5, r6
+        .text
+	and.a r5, r6
+
+=== refused: calla #0x100000
+        .text
+	calla #0x100000
+
+=== refused: bra @r2
+        .text
+	bra @r2
+
+=== refused: sxt.a r5
+        .text
+	sxt.a r5
+
+=== refused: mov #'ab', r5
+        .text
+	mov #'ab', r5
+
+=== refused: jmp $-1020 { jmp $-1022
+        .text
+	jmp $-1020 { jmp $-1022
+

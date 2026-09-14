@@ -127,6 +127,9 @@ pub struct Rules {
     /// The instruction is `push`, whose short `#4` and `#8` forms the
     /// original MSP430 does not have (silicon erratum CPU4).
     pub push: bool,
+    /// The target is a CPUXV2 core, which cannot address indirectly through
+    /// the PC.
+    pub xv2: bool,
 }
 
 /// Splits the token tail into operands on commas.
@@ -202,6 +205,13 @@ pub fn src(
             cx.error(span, "expected a register after `@`");
             return None;
         };
+        if rules.xv2 && r == reg::PC {
+            cx.error(
+                span,
+                "a CPUXV2 core cannot address indirectly through the PC",
+            );
+            return None;
+        }
         return Some(Operand::reg_mode(r, if plus { 3 } else { 2 }, span));
     }
 
@@ -409,8 +419,7 @@ fn out_of_range(cx: &mut AsmCtx<'_>, span: Span, v: i64, wide: bool) {
 /// That is more than [`AsmCtx::constant`] knows: GNU as also folds a
 /// difference of two labels in one section with nothing between them that
 /// can change size. Not in a code section, though, where the MSP430 linker
-/// may relax the code between them (`msp430_allow_local_subtract`), unless
-/// both are numbered local labels, which have no name to give it.
+/// may relax the code between them (`msp430_allow_local_subtract`).
 pub fn known(cx: &AsmCtx<'_>, e: ExprRef) -> Option<i64> {
     if let Some(v) = cx.constant(e) {
         return Some(v);
@@ -421,9 +430,8 @@ pub fn known(cx: &AsmCtx<'_>, e: ExprRef) -> Option<i64> {
             if op == BinOp::Sub
                 && let (Some(to), Some(from)) = (label(cx, l), label(cx, r))
             {
-                let numbered = |id| cx.symbols.get(id).local_number.is_some();
                 let section = cx.label_position(to)?.0;
-                if cx.sections[section.0 as usize].flags.exec && !(numbered(to) && numbered(from)) {
+                if cx.sections[section.0 as usize].flags.exec {
                     return None;
                 }
                 return cx.fixed_distance(cx.label_position(from)?, cx.label_position(to)?);

@@ -496,6 +496,7 @@ fn rules(c: &Ctx<'_, '_>, opcode: &Opcode, constants: bool) -> Rules {
         // Silicon erratum CPU4: the original MSP430 decodes neither of
         // `push`'s short constant forms.
         push: opcode.bin == 0x1200 && !c.isa.is_430x(),
+        xv2: c.isa == Isa::Msp430Xv2,
     }
 }
 
@@ -626,6 +627,7 @@ fn shift(c: &mut Ctx<'_, '_>, mut bin: u16, ops: &[&[Token]]) -> Option<Vec<Vari
         wide: c.extended_op,
         constants: true,
         push: false,
+        xv2: c.isa == Isa::Msp430Xv2,
     };
     let mut imm = false;
     let op1 = operand::src(c.cx, ops[0], c.span, r, &mut imm)?;
@@ -671,6 +673,7 @@ fn branch(c: &mut Ctx<'_, '_>, mut bin: u16, ops: &[&[Token]]) -> Option<Vec<Var
         wide: false,
         constants: false,
         push: false,
+        xv2: c.isa == Isa::Msp430Xv2,
     };
     let mut imm = false;
     let op1 = operand::src(c.cx, ops[0], c.span, r, &mut imm)?;
@@ -709,6 +712,7 @@ fn calla(c: &mut Ctx<'_, '_>, mut bin: u16, ops: &[&[Token]]) -> Option<Vec<Vari
         wide: true,
         constants: false,
         push: false,
+        xv2: c.isa == Isa::Msp430Xv2,
     };
     let mut imm = false;
     let op1 = operand::src(c.cx, ops[0], c.span, r, &mut imm)?;
@@ -890,6 +894,7 @@ fn mova(c: &mut Ctx<'_, '_>, opcode: &Opcode, ops: &[&[Token]]) -> Option<Vec<Va
         wide: true,
         constants: false,
         push: false,
+        xv2: c.isa == Isa::Msp430Xv2,
     };
     let (op1, op2) = match opcode.name {
         "reta" => {
@@ -1163,10 +1168,14 @@ fn rpt(c: &mut Ctx<'_, '_>, ops: &[&[Token]]) -> Option<Vec<Variant>> {
             return None;
         };
         if r == reg::PC {
-            c.error("the PC cannot hold a repeat count");
-            return None;
+            // The reference warns and repeats nothing.
+            let span = c.span;
+            c.cx.diags
+                .warning(span, "the PC cannot hold a repeat count; `rpt` ignored");
+            0
+        } else {
+            -(r as i8)
         }
-        -(r as i8)
     };
     c.cx.state.private = with_repeat(c.cx.state, n);
     Some(vec![Variant::new(Vec::new())])

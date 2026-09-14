@@ -696,15 +696,13 @@ pub trait Architecture {
     /// Whether a difference of two labels in one section, in a field of
     /// `kind`, is still left to the linker as a
     /// [`difference_relocs`](Architecture::difference_relocs) pair rather
-    /// than folded. `symbols_in` is the flags of the labels' section, and
-    /// `numbered` says both are numbered local labels (`2f - 1b`). GNU as
-    /// for MSP430 keeps every difference of named labels in code as a pair,
-    /// since its linker may relax the code between them.
+    /// than folded. `symbols_in` is the flags of the labels' section. GNU as
+    /// for MSP430 keeps every difference of labels in code as a pair, since
+    /// its linker may relax the code between them.
     fn defers_difference(
         &self,
         _kind: &crate::section::FixupKind,
         _symbols_in: &crate::section::SectionFlags,
-        _numbered: bool,
     ) -> bool {
         false
     }

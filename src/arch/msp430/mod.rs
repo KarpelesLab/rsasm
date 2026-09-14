@@ -72,6 +72,8 @@ pub mod reloc;
 use crate::arch::{
     ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, SameSectionRef, Syntax,
 };
+use crate::cursor::Cursor;
+use crate::lexer::Punct;
 use crate::section::{FixupKind, SectionFlags, Variant};
 
 pub const NAMES: &[&str] = &["msp430", "msp430x", "msp430xv2"];
@@ -241,17 +243,13 @@ impl Architecture for Msp430 {
         true
     }
 
-    /// GNU as for MSP430 never folds a difference of two named labels in a
-    /// code section into a data field (`msp430_allow_local_subtract`), since
-    /// the linker may relax the code between them. Numbered local labels it
-    /// folds anyway, having no name to give the linker.
-    fn defers_difference(
-        &self,
-        kind: &FixupKind,
-        symbols_in: &SectionFlags,
-        numbered: bool,
-    ) -> bool {
-        symbols_in.exec && !numbered && Some(kind.reloc) == reloc::data(self.isa, kind.size, false)
+    /// GNU as for MSP430 never folds a difference of two labels in a code
+    /// section into a data field (`msp430_allow_local_subtract`), since the
+    /// linker may relax the code between them. Numbered local labels are no
+    /// exception: GNU as's test for its own labels (`S_IS_GAS_LOCAL`) looks
+    /// for a name ending in `\001` or `\002`, and theirs end in a digit.
+    fn defers_difference(&self, kind: &FixupKind, symbols_in: &SectionFlags) -> bool {
+        symbols_in.exec && Some(kind.reloc) == reloc::data(self.isa, kind.size, false)
     }
 
     /// A number as the target of a jump or a symbolic operand is an address,
@@ -325,8 +323,76 @@ impl Architecture for Msp430 {
         insn::is_mnemonic(name)
     }
 
+    /// `.mspabi_attribute` and `.gnu_attribute`, which GCC writes into its
+    /// output. GNU as only checks them against the options it was run with,
+    /// and writes its own attributes whatever they say; so does rsasm.
+    fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        match name {
+            ".mspabi_attribute" => attribute(cx, cur, self.isa, false),
+            ".gnu_attribute" => attribute(cx, cur, self.isa, true),
+            _ => return false,
+        }
+        true
+    }
+
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
         insn::assemble(cx, req, &mnemonic, self.isa)
     }
+}
+
+/// Checks an attribute directive, `msp430_object_attribute` in the reference,
+/// against the ISA and the small memory model rsasm assembles for.
+fn attribute(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>, isa: Isa, gnu: bool) {
+    let span = cur.remaining_span();
+    let number = |cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>| {
+        let e = cx.expr_parser().parse(cur)?;
+        cx.constant(e)
+    };
+    let tag = number(cx, cur);
+    let value = if cur.eat_punct(Punct::Comma).is_some() {
+        number(cx, cur)
+    } else {
+        None
+    };
+    let (Some(tag), Some(value)) = (tag, value) else {
+        cx.error(span, "expected a tag and a value, both numbers");
+        return;
+    };
+    let directive = if gnu {
+        ".gnu_attribute"
+    } else {
+        ".mspabi_attribute"
+    };
+    if tag == 0 || value == 0 {
+        cx.error(
+            span,
+            format!("`{directive}` needs a tag and a value that are not zero"),
+        );
+        return;
+    }
+    if gnu {
+        // `Tag_GNU_MSP430_Data_Region` only means something in the large
+        // model, and any other tag passes unchecked.
+        return;
+    }
+    let msg = match (tag, value) {
+        // `OFBA_MSPABI_Tag_ISA`
+        (4, 1) if isa.is_430x() => {
+            "the file was compiled for the 430 ISA, but this is an MSP430X target"
+        }
+        (4, 2) if !isa.is_430x() => {
+            "the file was compiled for the 430X ISA, but this is an MSP430 target"
+        }
+        (4, 1 | 2) => return,
+        (4, _) => "unknown value for the ISA attribute (tag 4)",
+        // `OFBA_MSPABI_Tag_Code_Model` and `OFBA_MSPABI_Tag_Data_Model`
+        (6 | 8, 1) => return,
+        (6 | 8, 2) => {
+            "the file was compiled for the large memory model, which rsasm does not assemble for"
+        }
+        (6 | 8, _) => "unknown value for a memory model attribute (tag 6 or 8)",
+        _ => "unknown MSPABI attribute tag",
+    };
+    cx.error(span, msg);
 }
