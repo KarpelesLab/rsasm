@@ -10,7 +10,7 @@
 
 use super::{
     ADDR16, ADDR32, CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, NO66, NOTACC, ONLY64, Op,
-    PLUSREG, Tbl, WIDTHS, add, d, opsize_bits,
+    PLUSREG, STRICT_IMM, Tbl, WIDTHS, add, d, opsize_bits,
 };
 
 /// `add`-style group: eight instructions sharing one opcode layout.
@@ -27,8 +27,15 @@ fn alu_group(table: &mut Tbl, mnem: &'static str, base: u8, ext: u8) {
         defs.push(d(vec![Op::R(w), Op::Rm(w)], &[base + 3], ModRm::Reg, bits));
     }
 
-    // Immediate forms. The sign-extended `imm8` encodings come first so the
-    // matcher prefers them whenever the value fits.
+    // Immediate forms. `op al, imm8` is a byte shorter than the ModRM form.
+    // For the wider sizes the sign-extended `imm8` encodings come first, so
+    // the matcher prefers them whenever the value fits.
+    defs.push(d(
+        vec![Op::Fixed("al"), Op::Imm(1)],
+        &[base + 4],
+        ModRm::None,
+        8,
+    ));
     defs.push(d(vec![Op::Rm(1), Op::Imm(1)], &[0x80], ModRm::Ext(ext), 8));
     for w in WIDTHS {
         let bits = opsize_bits(w);
@@ -39,14 +46,8 @@ fn alu_group(table: &mut Tbl, mnem: &'static str, base: u8, ext: u8) {
             bits,
         ));
     }
-    // `op al, imm8` and `op eAX, imm32` are one byte shorter than the ModRM
-    // forms, so they are tried before them but after imm8-sign-extended.
-    defs.push(d(
-        vec![Op::Fixed("al"), Op::Imm(1)],
-        &[base + 4],
-        ModRm::None,
-        8,
-    ));
+    // `op eAX, imm32` is one byte shorter than the ModRM form, so it is tried
+    // before it but after imm8-sign-extended.
     defs.push(d(
         vec![Op::Fixed("ax"), Op::Imm(2)],
         &[base + 5],
@@ -189,16 +190,20 @@ pub fn install(t: &mut Tbl) {
 }
 
 fn install_moves(t: &mut Tbl) {
-    // `test` has no `r, r/m` direction and no sign-extended immediate.
+    // `test` has no sign-extended immediate, and one opcode for either
+    // direction: the operation is symmetric, so both assemblers take the
+    // register and the r/m operand in either order.
     {
         let mut defs = vec![
             d(vec![Op::Rm(1), Op::R(1)], &[0x84], ModRm::Reg, 8),
+            d(vec![Op::R(1), Op::Rm(1)], &[0x84], ModRm::Reg, 8),
             d(vec![Op::Fixed("al"), Op::Imm(1)], &[0xa8], ModRm::None, 8),
             d(vec![Op::Rm(1), Op::Imm(1)], &[0xf6], ModRm::Ext(0), 8),
         ];
         for w in WIDTHS {
             let bits = opsize_bits(w);
             defs.push(d(vec![Op::Rm(w), Op::R(w)], &[0x85], ModRm::Reg, bits));
+            defs.push(d(vec![Op::R(w), Op::Rm(w)], &[0x85], ModRm::Reg, bits));
         }
         defs.push(d(
             vec![Op::Fixed("ax"), Op::Imm(2)],
@@ -322,9 +327,17 @@ fn install_moves(t: &mut Tbl) {
         // `movabs` always takes the full-width immediate form.
         t.insert(
             "movabs",
+            // And the accumulator forms with a 64-bit address.
             vec![
                 d(vec![Op::R(8), Op::Imm(8)], &[0xb8], ModRm::None, 64).flags(PLUSREG | IMM64),
-                d(vec![Op::R(4), Op::Imm(4)], &[0xb8], ModRm::None, 32).flags(PLUSREG),
+                d(vec![Op::Fixed("al"), Op::Moffs(1)], &[0xa0], ModRm::None, 8).flags(ONLY64),
+                d(vec![Op::Fixed("ax"), Op::Moffs(2)], &[0xa1], ModRm::None, 16).flags(ONLY64),
+                d(vec![Op::Fixed("eax"), Op::Moffs(4)], &[0xa1], ModRm::None, 32).flags(ONLY64),
+                d(vec![Op::Fixed("rax"), Op::Moffs(8)], &[0xa1], ModRm::None, 64).flags(ONLY64),
+                d(vec![Op::Moffs(1), Op::Fixed("al")], &[0xa2], ModRm::None, 8).flags(ONLY64),
+                d(vec![Op::Moffs(2), Op::Fixed("ax")], &[0xa3], ModRm::None, 16).flags(ONLY64),
+                d(vec![Op::Moffs(4), Op::Fixed("eax")], &[0xa3], ModRm::None, 32).flags(ONLY64),
+                d(vec![Op::Moffs(8), Op::Fixed("rax")], &[0xa3], ModRm::None, 64).flags(ONLY64),
             ],
         );
     }
@@ -452,8 +465,16 @@ fn install_moves(t: &mut Tbl) {
         t.insert(mnem, defs);
     }
 
-    t.insert("xlat", vec![d(vec![], &[0xd7], ModRm::None, 0)]);
-    t.insert("xlatb", vec![d(vec![], &[0xd7], ModRm::None, 0)]);
+    // A table lookup through `bx`, which may be written with its segment.
+    for name in ["xlat", "xlatb"] {
+        t.insert(
+            name,
+            vec![
+                d(vec![], &[0xd7], ModRm::None, 0),
+                d(vec![Op::StrSrc(1)], &[0xd7], ModRm::None, 0),
+            ],
+        );
+    }
 }
 
 fn install_arith(t: &mut Tbl) {
@@ -693,13 +714,16 @@ fn install_stack(t: &mut Tbl) {
                 d(vec![], &[op], ModRm::None, 32).flags(NO64),
             ],
         );
-        let wide: &'static str = Box::leak(format!("{mnem}d").into_boxed_str());
-        t.insert(wide, vec![d(vec![], &[op], ModRm::None, 32).flags(NO64)]);
+        // Intel syntax names the sizes too, and has no suffix rule to do it.
+        for (suffix, bits) in [("w", 16u8), ("d", 32)] {
+            let name: &'static str = Box::leak(format!("{mnem}{suffix}").into_boxed_str());
+            t.insert(name, vec![d(vec![], &[op], ModRm::None, bits).flags(NO64)]);
+        }
     }
     for (mnem, op) in [("pushf", 0x9cu8), ("popf", 0x9d)] {
         t.insert(mnem, stack_sizes(|_| vec![], &[op], ModRm::None, 0));
         let rows = t[mnem].clone();
-        for (suffix, bits) in [("d", 32u8), ("q", 64)] {
+        for (suffix, bits) in [("w", 16u8), ("d", 32), ("q", 64)] {
             let name: &'static str = Box::leak(format!("{mnem}{suffix}").into_boxed_str());
             t.insert(
                 name,
@@ -710,7 +734,12 @@ fn install_stack(t: &mut Tbl) {
 
     t.insert(
         "enter",
-        stack_sizes(|_| vec![Op::Imm(2), Op::Imm(1)], &[0xc8], ModRm::None, 0),
+        stack_sizes(
+            |_| vec![Op::Imm(2), Op::Imm(1)],
+            &[0xc8],
+            ModRm::None,
+            STRICT_IMM,
+        ),
     );
     t.insert("leave", stack_sizes(|_| vec![], &[0xc9], ModRm::None, 0));
 }
@@ -752,10 +781,20 @@ fn install_branches(t: &mut Tbl) {
     }
 
     let mut ret = stack_sizes(|_| vec![], &[0xc3], ModRm::None, 0);
-    ret.extend(stack_sizes(|_| vec![Op::Imm(2)], &[0xc2], ModRm::None, 0));
+    ret.extend(stack_sizes(
+        |_| vec![Op::Imm(2)],
+        &[0xc2],
+        ModRm::None,
+        STRICT_IMM,
+    ));
     t.insert("ret", ret);
     let mut lret = rex_sizes(|_| vec![], &[0xcb], ModRm::None, 0);
-    lret.extend(rex_sizes(|_| vec![Op::Imm(2)], &[0xca], ModRm::None, 0));
+    lret.extend(rex_sizes(
+        |_| vec![Op::Imm(2)],
+        &[0xca],
+        ModRm::None,
+        STRICT_IMM,
+    ));
     t.insert("lret", lret.clone());
     t.insert("retf", lret);
     t.insert("iret", rex_sizes(|_| vec![], &[0xcf], ModRm::None, 0));
@@ -824,8 +863,9 @@ fn far_direct(op: u8) -> Vec<Def> {
 fn install_strings(t: &mut Tbl) {
     // String instructions: one opcode for bytes and one for the wider sizes.
     // AT&T names the size with a suffix and Intel with `d` for 32 bits, and
-    // `movsd` and `cmpsd` are also SSE instructions, told apart by having
-    // operands.
+    // `movsd` and `cmpsd` are also SSE instructions, told apart by their
+    // operands. The implicit operands may be written out, which is how a
+    // source segment or the other address size is asked for.
     for (stem, op) in [
         ("movs", 0xa4u8),
         ("cmps", 0xa6),
@@ -843,7 +883,27 @@ fn install_strings(t: &mut Tbl) {
             }
             let opcode = if bits == 8 { op } else { op + 1 };
             let flags = if bits == 64 { ONLY64 } else { 0 };
-            vec![d(vec![], &[opcode], ModRm::None, bits).flags(flags)]
+            let w = bits / 8;
+            let acc = match w {
+                1 => "al",
+                2 => "ax",
+                4 => "eax",
+                _ => "rax",
+            };
+            let (src, dst) = (Op::StrSrc(w), Op::StrDst(w));
+            let shapes = match stem {
+                "movs" => vec![vec![], vec![dst, src]],
+                "cmps" => vec![vec![], vec![src, dst]],
+                "stos" => vec![vec![], vec![dst], vec![dst, Op::Fixed(acc)]],
+                "lods" => vec![vec![], vec![src], vec![Op::Fixed(acc), src]],
+                "scas" => vec![vec![], vec![dst], vec![Op::Fixed(acc), dst]],
+                "ins" => vec![vec![], vec![dst, Op::Dx]],
+                _ => vec![vec![], vec![Op::Dx, src]],
+            };
+            shapes
+                .into_iter()
+                .map(|ops| d(ops, &[opcode], ModRm::None, bits).flags(flags))
+                .collect()
         };
         let mut all = Vec::new();
         for bits in [8u8, 16, 32, 64] {

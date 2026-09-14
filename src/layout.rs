@@ -1106,9 +1106,7 @@ impl Assembler {
             .find_modifier(e)
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
-                self.frag_arch(si, fi)
-                    .0
-                    .modifier_reloc(&name, kind.size, kind.pcrel)
+                self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
             })
             .unwrap_or(kind.reloc);
         if reloc == 0 {

@@ -12,7 +12,7 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op};
+use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op, STRICT_IMM};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
 use reg::RegClass;
 
@@ -89,15 +89,38 @@ impl Architecture for X86 {
     }
 
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
+        let abi = reloc::Abi::for_object_bits(self.bits);
+        if abi == reloc::Abi::I386 {
+            // Every i386 modifier names a 32-bit relocation.
+            return if size == 4 {
+                reloc::Abi::i386_modifier(name)
+            } else {
+                None
+            };
+        }
         match name {
-            "plt" => Some(reloc::Abi::for_object_bits(self.bits).plt32()),
-            "gotpcrel" => reloc::Abi::for_object_bits(self.bits).gotpcrel(),
-            "got" => Some(reloc::Abi::for_object_bits(self.bits).got32()),
+            "plt" => Some(abi.plt32()),
+            "gotpcrel" => abi.gotpcrel(),
+            "got" => Some(abi.got32()),
             _ => {
                 let _ = (size, pcrel);
                 None
             }
         }
+    }
+
+    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+        let abi = reloc::Abi::for_object_bits(self.bits);
+        if abi == reloc::Abi::I386 {
+            // The encoder marks the `@GOT` loads the linker may relax.
+            if name == "got" && kind.reloc == reloc::Abi::I386_GOT32X {
+                return Some(kind.reloc);
+            }
+            // A modifier with no relocation at this width is an error, not a
+            // plain reference to the symbol.
+            return Some(self.modifier_reloc(name, kind.size, kind.pcrel).unwrap_or(0));
+        }
+        self.modifier_reloc(name, kind.size, kind.pcrel)
     }
 
     /// `@PLT` is `L + A - P`, and in a static image the PLT entry `L` is the
@@ -287,9 +310,22 @@ fn assemble_inner(
     // The table is written in Intel order, so AT&T operands are reversed —
     // except for `enter` and `bound`, whose AT&T operands GNU as has always
     // taken in Intel order, and llvm-mc with it.
-    let base_name = mnemonic.trim_end_matches(['w', 'l']);
-    if syntax == Syntax::Att && !matches!(base_name, "enter" | "bound") {
+    let named = |name: &str| {
+        mnemonic
+            .strip_prefix(name)
+            .is_some_and(|s| matches!(s, "" | "b" | "w" | "l" | "q"))
+    };
+    if syntax == Syntax::Att && !named("enter") && !named("bound") {
         ops.reverse();
+    }
+    // `imul $imm, %reg` multiplies the register in place: it is the
+    // three-operand form with the register as both source and destination.
+    if named("imul")
+        && ops.len() == 2
+        && ops[0].reg().is_some()
+        && matches!(ops[1].kind, OperandKind::Imm(_))
+    {
+        ops.insert(1, ops[0].clone());
     }
     // AT&T writes a direct far pointer as two immediates, segment first.
     if syntax == Syntax::Att
@@ -691,23 +727,38 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             };
             match cx.constant(*e) {
                 Some(v) => {
-                    // A 32-bit immediate in a 64-bit operation is sign-extended
-                    // to 64 bits, so it must fit as signed.
                     if w == 4 && def.opsize == 64 {
+                        // A 32-bit immediate in a 64-bit operation is
+                        // sign-extended to 64 bits, so it must fit as signed.
                         (-(1i64 << 31)..(1i64 << 31)).contains(&v)
+                    } else if def.opsize != 0 && def.flags & STRICT_IMM == 0 {
+                        // The operand of a sized operation is truncated to
+                        // its field: GNU as warns and llvm-mc agrees on the
+                        // bytes, so `movb $0x100, %al` stores zero.
+                        true
                     } else {
                         fits_unsigned_or_signed(v, w)
                     }
                 }
-                // A symbolic value needs a field wide enough to relocate.
-                None => w >= 2,
+                // A symbolic value is relocated at whatever width the field
+                // has.
+                None => true,
             }
         }
         Op::Imm8s => {
             let OperandKind::Imm(e) = &o.kind else {
                 return false;
             };
-            cx.constant(*e).is_some_and(|v| (-128..=127).contains(&v))
+            // The value is taken at the operation's size first, so a 16-bit
+            // `0xffff` is the -1 that fits a sign-extended byte.
+            cx.constant(*e).is_some_and(|v| {
+                let v = match def.opsize {
+                    16 => v as i16 as i64,
+                    32 => v as i32 as i64,
+                    _ => v,
+                };
+                (-128..=127).contains(&v)
+            })
         }
         Op::One | Op::Three => {
             let OperandKind::Imm(e) = &o.kind else {
@@ -751,15 +802,21 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
         Op::St => o.reg().is_some_and(|r| r.class == RegClass::St),
         Op::Moffs(w) => match &o.kind {
             OperandKind::Mem(m) => {
+                // GNU as keeps a `@GOT` load in ModRM form, which is the
+                // one a linker knows how to relax.
                 m.base.is_none()
                     && m.index.is_none()
                     && !m.rip_relative
-                    && m.disp.is_some()
+                    && m.disp
+                        .is_some_and(|e| encode::modifier(cx, e).as_deref() != Some("got"))
                     && o.size_hint.is_none_or(|h| h == w)
             }
             _ => false,
         },
         Op::Far => matches!(o.kind, OperandKind::FarPtr { .. }),
+        // Neither reference checks that a string operand names `si` or `di`:
+        // the registers only give the address size.
+        Op::StrSrc(w) | Op::StrDst(w) => o.is_mem() && o.size_hint.is_none_or(|h| h == w),
         Op::FarM | Op::Fword => {
             let is_mem = match &o.kind {
                 OperandKind::Mem(_) => true,
@@ -786,8 +843,11 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
         Op::Rel(_) => encode::rel_expr(o).is_some(),
         Op::IndirectRm(w) => {
             // AT&T marks indirect branches with `*`; Intel does not.
+            // Without it GNU as still reads an address in parentheses as
+            // one, with a warning, but a bare address is a direct target.
             let explicit = matches!(o.kind, OperandKind::Indirect(_));
-            if !explicit && cx.state.syntax == Syntax::Att && !o.is_mem() {
+            let bracketed = matches!(&o.kind, OperandKind::Mem(m) if m.bracketed);
+            if !explicit && cx.state.syntax == Syntax::Att && !bracketed {
                 return false;
             }
             match encode::indirect_inner(o) {
@@ -854,7 +914,12 @@ fn ambiguous_memory_size(matches: &[&Def], ops: &[Operand]) -> bool {
         return false;
     };
     let width = |d: &Def| match d.ops[slot] {
-        Op::Rm(w) | Op::M(w) | Op::Moffs(w) | Op::IndirectRm(w) => w,
+        Op::Rm(w)
+        | Op::M(w)
+        | Op::Moffs(w)
+        | Op::IndirectRm(w)
+        | Op::StrSrc(w)
+        | Op::StrDst(w) => w,
         _ => 0,
     };
     let first = width(matches[0]);

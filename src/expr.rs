@@ -615,6 +615,9 @@ impl<'a> ExprParser<'a> {
 
     fn parse_bp(&mut self, cur: &mut Cursor<'_>, min_prec: u8) -> Option<ExprRef> {
         let mut lhs = self.parse_prefix(cur)?;
+        // A modifier binds to the term it follows, so `foo@GOT+4` is the
+        // symbol's GOT entry plus four.
+        lhs = self.parse_postfix(cur, lhs);
         while let Some(op) = peek_binop(cur, self.dialect) {
             let prec = op.precedence(self.dialect);
             if prec < min_prec {

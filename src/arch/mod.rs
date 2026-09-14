@@ -326,6 +326,14 @@ pub trait Architecture {
         None
     }
 
+    /// The relocation a modifier selects for an instruction's fixup, which
+    /// can depend on more than its size: i386 marks a `@GOT` load the linker
+    /// may rewrite with a relocation of its own. The backend says so in the
+    /// fixup it built. Defaults to [`Architecture::modifier_reloc`].
+    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+        self.modifier_reloc(name, kind.size, kind.pcrel)
+    }
+
     /// What a source-level `@` modifier means in a flat binary, where there is
     /// no relocation for it to choose and no linker to build what it names.
     /// Only asked about modifiers on fixups whose [`FixupKind::link`] is

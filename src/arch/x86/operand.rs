@@ -27,6 +27,9 @@ pub struct Mem {
     pub rip_relative: bool,
     /// Address-size of the base/index registers, in bytes.
     pub addr_size: u8,
+    /// Written in parentheses or brackets, rather than as a bare address. A
+    /// bare address can also be a direct branch target.
+    pub bracketed: bool,
     pub span: Span,
 }
 
@@ -40,6 +43,7 @@ impl Mem {
             disp: None,
             rip_relative: false,
             addr_size: 8,
+            bracketed: false,
             span,
         }
     }
@@ -512,6 +516,7 @@ impl OperandParser<'_, '_> {
             m.span = start.to(cur.peek().span.shrink_to_lo());
             return Some(m);
         }
+        m.bracketed = true;
 
         // base
         if cur.check_punct(Punct::Percent) {
@@ -642,16 +647,40 @@ impl OperandParser<'_, '_> {
             });
         }
 
+        // `offset sym` is the address as an immediate.
+        let offset = matches!(cur.peek().kind, TokKind::Ident(n)
+            if self.cx.interner.get(n).eq_ignore_ascii_case("offset"))
+            && !cur.nth(1).is_punct(Punct::Comma)
+            && !cur.nth(1).is_eol();
+        if offset {
+            cur.advance();
+        }
+
         // Otherwise an immediate or branch target; the matcher decides which.
         let e = self.expr(cur)?;
         // `seg:offset`, a direct far branch target.
-        if cur.eat_punct(Punct::Colon).is_some() {
+        if !offset && cur.eat_punct(Punct::Colon).is_some() {
             let off = self.expr(cur)?;
             return Some(Operand {
                 kind: OperandKind::FarPtr { seg: e, off },
                 size_hint,
                 decor: Decor::default(),
                 span: start.to(self.cx.exprs.span(off)),
+            });
+        }
+        // A value that is not a known constant names an address, and without
+        // `offset` an address in Intel syntax means the memory there: `mov
+        // eax, sym` is a load. A branch reads the same operand as its target.
+        if !offset && self.cx.constant(e).is_none() {
+            let span = start.to(self.cx.exprs.span(e));
+            let mut m = Mem::empty(span);
+            m.addr_size = self.addr_size;
+            m.disp = Some(e);
+            return Some(Operand {
+                kind: OperandKind::Mem(m),
+                size_hint,
+                decor: Decor::default(),
+                span,
             });
         }
         Some(Operand {
@@ -672,6 +701,7 @@ impl OperandParser<'_, '_> {
         }
         let mut m = Mem::empty(start);
         m.addr_size = self.addr_size;
+        m.bracketed = true;
 
         // Terms are accumulated into a displacement expression as they are
         // recognised, so `[rax + 4*8 + sym]` folds naturally.

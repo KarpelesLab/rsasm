@@ -121,6 +121,11 @@ pub enum Op {
     /// The port register of `in` and `out`: `%dx`, which AT&T also writes as
     /// `(%dx)`.
     Dx,
+    /// The source or destination a string instruction was written with, as in
+    /// `movsb (%esi), %es:(%edi)`, of this width. Neither is encoded: they only
+    /// name the address size, and a segment for the source.
+    StrSrc(u8),
+    StrDst(u8),
 }
 
 impl Op {
@@ -134,7 +139,7 @@ impl Op {
             Op::V(k) | Op::Nds(k) | Op::Is4(k) | Op::Vsib(k) => k.width(),
             Op::Vm(k, 0) => k.width(),
             Op::Vm(_, w) => w,
-            Op::Moffs(w) => w,
+            Op::Moffs(w) | Op::StrSrc(w) | Op::StrDst(w) => w,
             Op::Seg | Op::Cr | Op::Dr | Op::St | Op::Far | Op::FarM | Op::Fword | Op::Dx => 0,
         }
     }
@@ -200,6 +205,10 @@ pub const ADDR32: u32 = 1 << 14;
 /// as the manual does.
 pub const ATT_ONLY: u32 = 1 << 15;
 pub const INTEL_ONLY: u32 = 1 << 16;
+/// An immediate that does not fit its field is an error rather than being
+/// truncated, as GNU as has it for the frame size of `enter` and the count of
+/// `ret`, whose rows otherwise look like any sized operation's.
+pub const STRICT_IMM: u32 = 1 << 17;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]

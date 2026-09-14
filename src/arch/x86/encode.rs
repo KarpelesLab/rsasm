@@ -9,7 +9,7 @@ use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
 use super::reloc;
 use crate::arch::AsmCtx;
-use crate::expr::ExprRef;
+use crate::expr::{ExprKind, ExprRef};
 use crate::section::{Fixup, FixupKind, Variant};
 use crate::source::Span;
 
@@ -41,6 +41,9 @@ struct Roles<'o> {
     rel: Option<(ExprRef, u8)>,
     /// The absolute address of a `moffs` form.
     moffs: Option<&'o Operand>,
+    /// The operands a string instruction was written with, if any.
+    str_src: Option<&'o Operand>,
+    str_dst: Option<&'o Operand>,
     /// The segment and offset of a direct far pointer.
     far: Option<(ExprRef, ExprRef)>,
     /// The decorators found on the operands, merged.
@@ -60,12 +63,22 @@ pub fn segment_prefix(r: Reg) -> Option<u8> {
 }
 
 /// Extracts the operand expression a `Rel` slot refers to. A bare label parses
-/// as an immediate in Intel syntax and as a displacement-only memory operand in
-/// AT&T, so both spellings are accepted here.
+/// as a displacement-only memory operand, and a bare number as one in AT&T
+/// syntax and as an immediate in Intel syntax, so all of those are accepted
+/// here; an address in parentheses or brackets, or with a size, is not.
 pub fn rel_expr(o: &Operand) -> Option<ExprRef> {
     match &o.kind {
         OperandKind::Imm(e) => Some(*e),
-        OperandKind::Mem(m) if m.base.is_none() && m.index.is_none() && !m.rip_relative => m.disp,
+        OperandKind::Mem(m)
+            if m.base.is_none()
+                && m.index.is_none()
+                && !m.rip_relative
+                && !m.bracketed
+                && m.seg.is_none()
+                && o.size_hint.is_none() =>
+        {
+            m.disp
+        }
         _ => None,
     }
 }
@@ -112,6 +125,8 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
         imm2: None,
         rel: None,
         moffs: None,
+        str_src: None,
+        str_dst: None,
         far: None,
         decor: Decor::default(),
     };
@@ -146,6 +161,8 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
                 roles.reg = o.reg()
             }
             Op::Moffs(_) => roles.moffs = Some(o),
+            Op::StrSrc(_) => roles.str_src = Some(o),
+            Op::StrDst(_) => roles.str_dst = Some(o),
             Op::Far => {
                 if let OperandKind::FarPtr { seg, off } = o.kind {
                     roles.far = Some((seg, off));
@@ -248,14 +265,44 @@ pub fn encode(
         bytes.push(0x9b);
     }
 
-    let mem = roles.rm.or(roles.moffs).and_then(|o| match &o.kind {
+    let mem_of = |o: &Operand| match &o.kind {
         OperandKind::Mem(m) => Some(m.clone()),
         OperandKind::Indirect(inner) => match &**inner {
             OperandKind::Mem(m) => Some(m.clone()),
             _ => None,
         },
         _ => None,
-    });
+    };
+    // A string instruction's operands only say what its implicit ones are:
+    // their address size, and a segment for the source. The destination is
+    // always in `es`.
+    let str_src = roles.str_src.and_then(mem_of);
+    let str_dst = roles.str_dst.and_then(mem_of);
+    if let Some(d) = &str_dst
+        && let Some(seg) = d.seg.filter(|s| s.num != 0)
+    {
+        cx.error(
+            d.span,
+            format!(
+                "a string destination is always in `es`, and cannot be in `{}`",
+                reg::name_of(seg)
+            ),
+        );
+        return None;
+    }
+    if let (Some(s), Some(d)) = (&str_src, &str_dst)
+        && s.base.or(s.index).is_some()
+        && d.base.or(d.index).is_some()
+        && s.addr_size != d.addr_size
+    {
+        cx.error(span, "the two string operands have different address sizes");
+        return None;
+    }
+    let is_string = str_src.is_some() || str_dst.is_some();
+    let mem = roles.rm.or(roles.moffs).and_then(mem_of).or(str_src).or(str_dst.map(|mut d| {
+        d.seg = None;
+        d
+    }));
 
     check_decorators(cx, def, &roles, rounding, mem.is_some(), span)?;
     check_vsib(cx, def, mem.as_ref(), span)?;
@@ -289,7 +336,9 @@ pub fn encode(
         // An override naming the segment the address uses anyway is left
         // out, as GNU as does: `ss` for a `bp` or `sp` base, `ds` otherwise.
         // llvm-mc keeps it.
-        Some((m, seg)) if seg.num == default_segment(m) => prefixes.seg,
+        Some((m, seg)) if seg.num == if is_string { 3 } else { default_segment(m) } => {
+            prefixes.seg
+        }
         Some((_, seg)) => match segment_prefix(seg) {
             Some(p) => Some(p),
             None => {
@@ -611,6 +660,9 @@ pub fn encode(
                 };
                 let mut kind = FixupKind::data(width).with_reloc(r);
                 kind.signed = sign_extended;
+                if abi == reloc::Abi::I386 && width == 4 && names_got(cx, e) {
+                    kind = got_distance(offset);
+                }
                 fixups.push(Fixup {
                     offset,
                     expr: e,
@@ -634,7 +686,7 @@ pub fn encode(
     // A displacement fixup can only be built now that the instruction length,
     // and therefore the RIP-relative bias, is known.
     if let Some((offset, e, dspan, rip_relative, width)) = disp_fixup {
-        let trailing = (bytes.len() - offset - 4) as i8;
+        let trailing = (bytes.len() - offset - width as usize) as i8;
         let kind = if rip_relative {
             FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
         } else if width != 4 {
@@ -643,6 +695,13 @@ pub fn encode(
             // A 64-bit-mode displacement is sign-extended to the address
             // width, so the linker has to range-check it as signed.
             FixupKind::data(4).with_reloc(abi.abs32_signed())
+        } else if abi == reloc::Abi::I386 && names_got(cx, e) {
+            got_distance(offset as u32)
+        } else if abi == reloc::Abi::I386
+            && modifier(cx, e).as_deref() == Some("got")
+            && got_load_is_relaxable(def, mem.as_ref())
+        {
+            FixupKind::data(4).with_reloc(reloc::Abi::I386_GOT32X)
         } else {
             FixupKind::data(4).with_reloc(abi.abs(4).unwrap_or(0))
         };
@@ -679,6 +738,58 @@ pub fn encode(
     }
 
     Some(Variant { bytes, fixups })
+}
+
+/// The name of the `@` modifier in an expression, lowercased, if it has one.
+pub fn modifier(cx: &AsmCtx<'_>, e: ExprRef) -> Option<String> {
+    match &cx.exprs.get(e).kind {
+        ExprKind::Modifier(n, _) => Some(cx.interner.get(*n).to_ascii_lowercase()),
+        ExprKind::Unary(_, a) => modifier(cx, *a),
+        ExprKind::Binary(_, a, b) => modifier(cx, *a).or_else(|| modifier(cx, *b)),
+        _ => None,
+    }
+}
+
+/// True if an expression refers to `_GLOBAL_OFFSET_TABLE_`.
+fn names_got(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    match &cx.exprs.get(e).kind {
+        ExprKind::Sym(n) => cx.interner.get(*n) == "_GLOBAL_OFFSET_TABLE_",
+        ExprKind::Unary(_, a) => names_got(cx, *a),
+        ExprKind::Binary(_, a, b) => names_got(cx, *a) || names_got(cx, *b),
+        _ => false,
+    }
+}
+
+/// A reference to `_GLOBAL_OFFSET_TABLE_` in i386 code, which GNU as and
+/// llvm-mc both turn into the distance to the GOT from the start of the
+/// instruction: `R_386_GOTPC`, whose addend makes up for the field being
+/// `offset` bytes in. That is what makes `addl $_GLOBAL_OFFSET_TABLE_, %ebx`
+/// after a `call`/`pop` pair load the GOT's address.
+fn got_distance(offset: u32) -> FixupKind {
+    FixupKind::pcrel(4, -(offset as i8))
+        .with_reloc(reloc::Abi::I386_GOTPC)
+        .linker_only()
+}
+
+/// True for the `@GOT` loads GNU as marks `R_386_GOT32X`, which a linker may
+/// rewrite to use the symbol's address directly: a 32-bit `mov` load, the
+/// arithmetic operations and `test` reading the pointer, and an indirect
+/// `call`, `jmp` or `push` through it, all with a base register or no
+/// register at all. llvm-mc marks only the `mov`.
+fn got_load_is_relaxable(def: &Def, mem: Option<&Mem>) -> bool {
+    let Some(m) = mem else {
+        return false;
+    };
+    if m.base.is_none() && m.index.is_some() || def.enc != Enc::Legacy {
+        return false;
+    }
+    match (def.opcode.as_slice(), def.modrm) {
+        ([0xff], ModRm::Ext(2 | 4 | 6)) => true,
+        ([op], ModRm::Reg) => {
+            def.opsize == 32 && (*op == 0x8b || *op == 0x85 || (*op & 0xc7 == 0x03 && *op < 0x40))
+        }
+        _ => false,
+    }
 }
 
 /// The number of the segment register an address uses by default: `ss` (2)
