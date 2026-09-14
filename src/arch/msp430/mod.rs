@@ -278,6 +278,12 @@ impl Architecture for Msp430 {
         true
     }
 
+    /// `msp430_insert_uleb128_fixes`: a `.uleb128` of a difference GNU as
+    /// could not fold, which in one section means one of code labels.
+    fn uleb128_difference_relocs(&self, symbols_in: &SectionFlags) -> Option<(u32, u32)> {
+        symbols_in.exec.then(|| reloc::uleb128(self.isa))
+    }
+
     /// Every PC-relative fixup is left to the linker
     /// (`msp430_force_relocation_local`), in a data section too.
     fn defers_to_linker(&self, _r: &SameSectionRef<'_>) -> bool {

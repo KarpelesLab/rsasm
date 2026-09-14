@@ -1423,6 +1423,15 @@ impl Assembler {
                             .iter()
                             .map(|f| (f.offset, f.expr, f.kind, f.span))
                             .collect(),
+                        FragKind::Leb128 {
+                            value,
+                            signed: false,
+                            ..
+                        } if self.options.relocatable => {
+                            let value = *value;
+                            relocs.extend(self.uleb128_relocations(value, id, fi, frag_off));
+                            continue;
+                        }
                         _ => continue,
                     };
                 for (off, e, mut kind, span) in list {
@@ -1560,6 +1569,51 @@ impl Assembler {
             }
         }
         self.relocs = relocs;
+    }
+
+    /// The relocations that leave a `.uleb128` of a difference of labels to
+    /// the linker, on a target that has them; see
+    /// [`Architecture::uleb128_difference_relocs`]. The field keeps the value
+    /// layout computed.
+    ///
+    /// [`Architecture::uleb128_difference_relocs`]: crate::arch::Architecture::uleb128_difference_relocs
+    fn uleb128_relocations(
+        &mut self,
+        value: ExprRef,
+        section: SectionId,
+        fi: usize,
+        at: u64,
+    ) -> Vec<Relocation> {
+        let Ok(v) = self.eval(value) else {
+            return Vec::new();
+        };
+        let (Some(plus), Some(minus)) = (v.plus, v.minus) else {
+            return Vec::new();
+        };
+        let (ps, ms) = (self.symbol_section(plus), self.symbol_section(minus));
+        let Some(sec) = ps.filter(|_| ps == ms) else {
+            return Vec::new();
+        };
+        let flags = self.section(sec).flags;
+        let si = section.0 as usize;
+        let Some((sub, set)) = self.frag_arch(si, fi).0.uleb128_difference_relocs(&flags) else {
+            return Vec::new();
+        };
+        let kind = FixupKind::data(0);
+        let mut out = Vec::new();
+        for (target, mut reloc) in [(minus, sub), (plus, set)] {
+            let mut addend = v.addend;
+            let symbol =
+                self.relocation_symbol(target, &kind, si, fi, false, &mut addend, &mut reloc);
+            out.push(Relocation {
+                section,
+                offset: at,
+                symbol: Some(symbol),
+                addend,
+                kind: reloc,
+            });
+        }
+        out
     }
 
     /// The relocations that leave a fixup to the linker: one, or on a target

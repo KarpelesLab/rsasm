@@ -693,6 +693,19 @@ pub trait Architecture {
         false
     }
 
+    /// The relocations, subtracting and then setting a value, that a
+    /// `.uleb128` of a difference of two labels in one section with
+    /// `symbols_in` flags is left to the linker as, where the target leaves
+    /// it at all. GNU as for MSP430 writes `R_MSP430_GNU_SUB_ULEB128` and
+    /// `R_MSP430_GNU_SET_ULEB128` for one whose labels are in code, which its
+    /// linker may relax; the value the file computes stays in the field.
+    fn uleb128_difference_relocs(
+        &self,
+        _symbols_in: &crate::section::SectionFlags,
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
     /// Whether a difference of two labels in one section, in a field of
     /// `kind`, is still left to the linker as a
     /// [`difference_relocs`](Architecture::difference_relocs) pair rather

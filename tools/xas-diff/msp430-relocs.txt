@@ -689,6 +689,31 @@ b:      nop
         .text
         jmp     a
 
+=== LEB128 of differences of code labels
+        .text
+a:      nop
+        mov     #0x1234, r5
+b:      nop
+        .data
+        .uleb128 b - a
+        .uleb128 a - a
+        .sleb128 b - a
+        .word   1
+        .section .debug_foo, "", @progbits
+        .uleb128 b - a
+        .uleb128 b - a + 300
+        .text
+        jmp     a
+
+=== LEB128 of differences of data labels
+        .data
+c:      .word   1
+d:      .word   2
+        .uleb128 d - c
+        .sleb128 c - d
+        .text
+        nop
+
 === differences of data labels, which GNU as folds
         .data
 c:      .word   1

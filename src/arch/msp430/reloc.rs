@@ -163,6 +163,12 @@ pub fn difference(isa: Isa, size: u8) -> Option<(u32, u32)> {
     Some((data(isa, size, false)?, number(isa, Bfd::SymDiff)?))
 }
 
+/// `R_MSP430_GNU_SUB_ULEB128` and `R_MSP430_GNU_SET_ULEB128`, in that order,
+/// for a `.uleb128` of a difference of code labels.
+pub fn uleb128(isa: Isa) -> (u32, u32) {
+    if isa.is_430x() { (23, 22) } else { (12, 11) }
+}
+
 /// A plain 16-bit operand word holding an absolute value.
 pub fn word16(reloc: u32) -> FixupKind {
     FixupKind::data(2).with_reloc(reloc)
