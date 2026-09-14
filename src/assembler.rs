@@ -180,6 +180,11 @@ pub struct Assembler {
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
+    /// The backends whose [`Architecture::prelude`] has been assembled.
+    pub(crate) arch_preludes: Vec<&'static str>,
+    /// Where each assembled prelude's text lies in the source map, as
+    /// (start, end) positions; a label may take a name defined there.
+    pub(crate) arch_prelude_text: Vec<(u32, u32)>,
 }
 
 impl Assembler {
@@ -232,6 +237,8 @@ impl Assembler {
             literal_pools: HashMap::new(),
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
+            arch_preludes: Vec::new(),
+            arch_prelude_text: Vec::new(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -253,7 +260,36 @@ impl Assembler {
             }
             asm.nasm_prelude();
         }
+        asm.arch_prelude();
         asm
+    }
+
+    /// Assembles what the active backend predefines, the first time that
+    /// backend is active; see [`Architecture::prelude`].
+    pub(crate) fn arch_prelude(&mut self) {
+        let name = self.arch.name();
+        if self.arch_preludes.contains(&name) {
+            return;
+        }
+        self.arch_preludes.push(name);
+        let text = self.arch.prelude(self.options.dialect);
+        if text.is_empty() {
+            return;
+        }
+        let file = self.sm.add(format!("<{name} predefined names>"), text);
+        let f = self.sm.file(file);
+        self.arch_prelude_text.push((f.start, f.end()));
+        self.assemble_file(file);
+    }
+
+    /// Whether symbol `id` was last defined by a backend's prelude, which a
+    /// label is allowed to replace: `P0:` is a label to sdas8051, which
+    /// predefines `P0` too, and to AS, which does not.
+    fn predefined(&self, id: crate::symbol::SymbolId) -> bool {
+        let at = self.symbols.get(id).def_span.lo;
+        self.arch_prelude_text
+            .iter()
+            .any(|&(lo, hi)| at >= lo && at < hi)
     }
 
     // ---- sections ---------------------------------------------------------
@@ -365,7 +401,7 @@ impl Assembler {
                 (id, span)
             }
         };
-        if self.symbols.get(id).is_defined() {
+        if self.symbols.get(id).is_defined() && !self.predefined(id) {
             let prev = self.symbols.get(id).def_span;
             let name = self.display_name(id);
             self.diags.emit(
@@ -476,7 +512,9 @@ impl Assembler {
         }
         if self.options.dialect == Dialect::EightBit {
             config.mnemonic = self.arch.mnemonics();
+            config.equates = self.arch.equates();
         }
+        config.bit_dot = self.arch.bit_addressing();
         config
     }
 
@@ -1203,6 +1241,7 @@ impl Assembler {
         // Comment characters and number spellings are the backend's, so every
         // file being read takes its rules again from its next statement.
         self.lex_epoch += 1;
+        self.arch_prelude();
     }
 
     /// A backend `.arch` made active at some point, with its state: the
@@ -1416,7 +1455,10 @@ impl Assembler {
             let Some(id) = self.symbols.lookup(name) else {
                 continue;
             };
+            // A backend's predefined name stays a reference, so that a label
+            // of the same name later in the file takes it over.
             if let SymbolValue::Expr(e) = self.symbols.get(id).value
+                && !self.predefined(id)
                 && let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs())
             {
                 self.symbols.get_mut(id).used = true;
@@ -1521,6 +1563,7 @@ impl Assembler {
             dollar_is_here: self.options.dialect.dollar_is_here(),
             star_is_here: self.options.dialect.star_is_here(),
             dialect: self.options.dialect,
+            bit_dot: self.arch.bit_addressing(),
             strings: Some(&self.pool),
         };
         p.parse(cur)
@@ -1755,6 +1798,7 @@ impl Assembler {
             ..
         } = self;
         let dialect = options.dialect;
+        let bit_dot = arch.bit_addressing();
         let mut cx = AsmCtx {
             interner,
             exprs,
@@ -1763,6 +1807,7 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            bit_dot,
             sections,
             section: *cur,
             relaxable: false,

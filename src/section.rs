@@ -108,12 +108,22 @@ pub enum LinkValue {
     /// difference, so in relocatable output the fixup resolves as
     /// [`LinkValue::Plain`] would.
     Page(u8),
-    /// A label that has to be in the same `1 << n`-byte region as the address
-    /// just past the field, because the CPU takes the target's top bits from
-    /// there: the delay slot of a MIPS `j` or `jal`. The field holds the value
-    /// as usual; only the check needs the fixup's address, so, as for
-    /// [`LinkValue::Page`], relocatable output does without it.
-    Region(u8),
+    /// A target that has to be in the same `1 << bits`-byte region as the
+    /// address just past the field, because the CPU takes its top bits from
+    /// there: the delay slot of a MIPS `j` or `jal`, and the 2 KiB block an
+    /// MCS-51 `AJMP` reaches. The field holds the value as usual; only the
+    /// check needs the fixup's address, so, as for [`LinkValue::Page`],
+    /// relocatable output does without it. On a PC-relative field the region
+    /// is the target's, not the distance's: `Region { bits: 16, .. }` keeps
+    /// an MCS-51 branch inside the 64 KiB address space.
+    ///
+    /// `numbers` says whether a target written as a plain number is checked
+    /// too. GNU ld lets one through on MIPS, taking the region from the PC
+    /// the same way the CPU does, so a MIPS `j 0x400` assembles wherever it
+    /// stands; the Macro Assembler AS refuses an MCS-51 `AJMP 0` that is not
+    /// on the page, which is also what makes the generic `JMP` fall back to
+    /// `LJMP` for one.
+    Region { bits: u8, numbers: bool },
     /// The value put through a function before its range check: PowerPC's
     /// `@ha` is `(x + 0x8000) >> 16`, whether `x` is a label or a constant.
     Split(fn(i64) -> i64),

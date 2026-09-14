@@ -162,13 +162,21 @@ impl Parser {
         }
         self.offset = lexer.offset();
         let mnemonic = lexer.config.mnemonic;
+        let equates = lexer.config.equates;
         self.config = Some(lexer.config);
         if toks.is_empty() {
             self.spare = toks;
             return None;
         }
         let dialect = self.dialect();
-        Some(Builder { dialect, mnemonic }.build(toks, interner, diags))
+        Some(
+            Builder {
+                dialect,
+                mnemonic,
+                equates,
+            }
+            .build(toks, interner, diags),
+        )
     }
 }
 
@@ -188,6 +196,7 @@ pub fn build_statement(
     Builder {
         dialect,
         mnemonic: None,
+        equates: &[],
     }
     .build(toks, interner, diags)
 }
@@ -196,6 +205,8 @@ struct Builder {
     dialect: Dialect,
     /// See [`LexConfig::mnemonic`].
     mnemonic: Option<fn(&str) -> bool>,
+    /// See [`LexConfig::equates`].
+    equates: &'static [&'static str],
 }
 
 impl Builder {
@@ -417,7 +428,13 @@ impl Builder {
                 match w.as_str() {
                     "equ" | ".equ" | "defl" | ".set" => true,
                     "set" => !self.mnemonic.is_some_and(|m| m("set")),
-                    _ => false,
+                    // The backend's own defining words, such as the MCS-51's
+                    // `BIT` and `DATA`. An instruction of that name wins, as
+                    // `SET` does on the Z80.
+                    _ => {
+                        self.equates.iter().any(|k| w == *k)
+                            && !self.mnemonic.is_some_and(|m| m(&w))
+                    }
                 }
             }
         }
