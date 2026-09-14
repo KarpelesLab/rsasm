@@ -53,7 +53,7 @@ assembler, not against rsasm's own idea of the manual. See
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 8100 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
 | AArch64 | `aarch64` | llvm-mc | 480 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
@@ -103,6 +103,15 @@ but 18 forms where both manuals show MAME to be wrong.
   describe the assembly source itself; see [Debug information](#debug-information)
 - each target's own comment syntax, so ARM's `@`, AArch64's `//` and SPARC's
   `!` work, and `#` stays an immediate prefix where it is one
+- the x86 instruction-set extensions both GNU as and llvm-mc assemble: AVX-512
+  and all its subsets (BW, DQ, CD, IFMA, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ,
+  VP2INTERSECT, BF16, FP16, ER, PF) with writemasks, `{z}`, `{1toN}`, rounding
+  and disp8\*N at every tuple type, AVX10.2, the VEX additions (F16C, FMA,
+  GFNI, VAES, VPCLMULQDQ, SHA, SHA512, SM3, SM4, AVX-VNNI, AVX-IFMA,
+  AVX-NE-CONVERT, AVX-VNNI-INT8/16), FMA4 and XOP, BMI1/2, TBM, LWP, AMX, CET,
+  Key Locker, and the newer system instructions; the named compare predicates
+  (`vcmpneq_oqps`, `vpcmpnltuq`), AT&T length spellings (`vcvtpd2psx`) and the
+  `{vex}`, `{vex3}` and `{evex}` pseudo-prefixes
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
@@ -126,6 +135,10 @@ but 18 forms where both manuals show MAME to be wrong.
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
 - Mach-O and PE/COFF
+- x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
+  `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
+  instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
+  and SGX, VMX, SVM, MPX and VIA PadLock
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
@@ -495,9 +508,9 @@ Seven differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
-  16-bit mode, in AT&T and Intel syntax. 4,175 of 4,175 match.
+  16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 7,230 of 7,230 match across eighteen target variants. For RISC-V
+  supports. 11,706 of 11,706 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
@@ -527,12 +540,16 @@ independent assembler, and compare the bytes:
   Clang. 1,005 of 1,005 match across twenty-one target variants.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
-instructions from a table of forms written from the Intel manual, in all three
-modes and both syntaxes, some of them deliberately invalid, and compares
-rsasm's bytes, relocations and accept/reject decision with GNU as's and
-llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
-from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. See `tools/fuzz/README.md`.
+instructions, in all three modes and both syntaxes, some of them deliberately
+invalid, and compares rsasm's bytes, relocations and accept/reject decision
+with GNU as's and llvm-mc's. The general-purpose forms are written from the
+Intel manual; the SIMD and newer extensions are read from GNU's expanded
+opcode table, every row of them, with writemasks, broadcasts, rounding and
+displacements at every disp8\*N scale. The x86 SIMD tables were derived from
+that same table (`tools/fuzz/gnutbl.py` decodes it). Where the two references
+disagree, rsasm follows GNU as, apart from the few cases the corpora note;
+runs of 600,000 general-purpose and 240,000 mixed instructions find no case
+where rsasm differs from both. See `tools/fuzz/README.md`.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
