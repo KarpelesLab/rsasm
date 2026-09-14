@@ -3,16 +3,17 @@
 //! The same shape as [`super::insn`]'s table, and read by the same code; it
 //! is here because the vector instructions outnumber everything else and
 //! bring their own forms with them. The fields they add are the vector and
-//! VSX register slots and a generic immediate, [`F::Uim`], that stands in for
-//! the two dozen one-off immediates these forms carry.
+//! VSX register slots and a generic immediate,
+//! [`F::Uim`](super::insn::F::Uim), that stands in for the two dozen one-off
+//! immediates these forms carry.
 //!
 //! Three things are worth knowing before reading the table:
 //!
 //! - **A VSX register number is six bits.** Five fit in the same slot a
 //!   vector register would use; the sixth is one of four bits at the bottom
 //!   of the word (TX, AX, BX, CX). So `xxlor 0, 32, 63` and `xxlor 0, 0, 31`
-//!   differ in bits nothing else touches, which is what [`F::Xt`] and its
-//!   relatives place.
+//!   differ in bits nothing else touches, which is what
+//!   [`F::Xt`](super::insn::F::Xt) and its relatives place.
 //! - **The vector record bit is not Rc.** `vcmpequb.` sets bit 21 and writes
 //!   CR6, where `add.` sets bit 31 and writes CR0; the table flags those
 //!   forms [`VRC`].

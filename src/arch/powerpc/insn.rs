@@ -299,7 +299,7 @@ pub(super) const fn d(name: &'static str, word: u64, ops: &'static [F], flags: u
 }
 
 /// Primary opcode in bits 0:5.
-pub const fn op(primary: u32) -> u64 {
+pub(super) const fn op(primary: u32) -> u64 {
     (primary as u64) << 26
 }
 
@@ -310,7 +310,7 @@ const fn xo(primary: u32, x: u32) -> u64 {
 
 /// X- and XL-form extended opcode, bits 21:30. Same shift as [`xo`]; named
 /// apart only because the field is one bit wider and so cannot hold OE.
-pub const fn x(primary: u32, ext: u32) -> u64 {
+pub(super) const fn x(primary: u32, ext: u32) -> u64 {
     op(primary) | ((ext as u64) << 1)
 }
 
