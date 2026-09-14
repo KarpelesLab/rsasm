@@ -444,7 +444,7 @@ own target's reference, and rsasm has to produce the concatenation.
 Five differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
-- `tools/gas-diff/run.sh` against the host's GNU as, for x86 in 64-, 32- and
+- `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 4,172 of 4,172 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
   supports. 7,230 of 7,230 match across eighteen target variants. For RISC-V
