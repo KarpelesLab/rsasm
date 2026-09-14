@@ -16,6 +16,18 @@ pub const RVC_BRANCH: u32 = 44;
 pub const RVC_JUMP: u32 = 45;
 pub const PCREL32: u32 = 57;
 
+/// `R_RISCV_ADD8` to `R_RISCV_ADD64`, and the matching `SUB`s: a field that
+/// holds one symbol minus another, in two relocations at the same offset.
+pub fn difference(size: u8) -> Option<(u32, u32)> {
+    Some(match size {
+        1 => (33, 37),
+        2 => (34, 38),
+        4 => (35, 39),
+        8 => (36, 40),
+        _ => return None,
+    })
+}
+
 /// The relocation for an `n`-byte data reference.
 ///
 /// RISC-V has no absolute one- or two-byte relocation, so `.byte foo` can only

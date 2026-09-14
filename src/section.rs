@@ -178,6 +178,12 @@ pub struct FixupKind {
     /// not of the symbol, however close the symbol is. In a flat binary such
     /// a field is an error.
     pub always_reloc: bool,
+    /// Left to the linker in relocatable output even where the value is
+    /// known, for an instruction a linker may rewrite: an ARM `bl` becomes
+    /// `blx` if its target turns out to be Thumb code, which llvm-mc allows
+    /// for even when the target is a local label. Unlike
+    /// [`FixupKind::always_reloc`], a flat binary still resolves it.
+    pub object_reloc: bool,
     /// What the value is, beyond the target itself; see [`LinkValue`].
     pub link: LinkValue,
     /// For a PC-relative field, the PC it is measured from, `here + adjust`,
@@ -245,6 +251,7 @@ impl FixupKind {
             limits: None,
             reloc_symbol: RelocSymbol::Section,
             always_reloc: false,
+            object_reloc: false,
             link: LinkValue::Plain,
             pc_align: 1,
             relax_difference: false,
@@ -301,6 +308,13 @@ impl FixupKind {
     /// [`FixupKind::always_reloc`].
     pub fn linker_only(mut self) -> FixupKind {
         self.always_reloc = true;
+        self
+    }
+
+    /// Leaves the field to the linker in relocatable output; see
+    /// [`FixupKind::object_reloc`].
+    pub fn relocated_in_objects(mut self) -> FixupKind {
+        self.object_reloc = true;
         self
     }
 
@@ -500,6 +514,10 @@ pub struct Section {
     pub size: u64,
     /// Base address, for absolute output formats.
     pub addr: u64,
+    /// The address the source put the section at, when it said: the 8-bit
+    /// dialect's `ORG` before anything was emitted. Absolute output lays the
+    /// section out there rather than after the one before it.
+    pub origin: Option<u64>,
     /// The section symbol, created lazily when a relocation needs it.
     pub sym: Option<SymbolId>,
     /// Index of the trailing fragment that new data may be appended to, if
@@ -528,6 +546,7 @@ impl Section {
             frags: Vec::new(),
             size: 0,
             addr: 0,
+            origin: None,
             sym: None,
             open_data: None,
             group: None,

@@ -35,7 +35,7 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # key | corpora | rsasm arch | assembler | assembler flags | linkers | linker flags | base
 #
 # The assembler is `mc:<triple>` for llvm-mc, or a GNU as program name looked
-# up in the oracles directory (or PATH, for the host's `as`). The linkers are
+# up in the oracles directory (or PATH). The linkers are
 # a comma-separated list of GNU ld program names found the same way; the
 # first one present is used.
 #
@@ -48,8 +48,8 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # There is no MIPS64 row: the MIPS GNU ld among the oracles emulates only o32,
 # so it cannot link an n64 object.
 TARGETS="
-x86-64|x86-64|x86-64|as|--64|x86_64-elf-ld,ld|-m elf_x86_64|0x401000
-i386|i386|i386|as|--32|x86_64-elf-ld,ld|-m elf_i386|0x8048000
+x86-64|x86-64|x86-64|x86_64-elf-as|--64|x86_64-elf-ld|-m elf_x86_64|0x401000
+i386|i386|i386|x86_64-elf-as|--32|x86_64-elf-ld|-m elf_i386|0x8048000
 aarch64|aarch64|aarch64|mc:aarch64||aarch64-elf-ld||0x400000
 aarch64-gas|aarch64-gas|aarch64|aarch64-elf-as||aarch64-elf-ld||0x400000
 arm|arm|arm|mc:armv7||arm-none-eabi-ld||0x8000

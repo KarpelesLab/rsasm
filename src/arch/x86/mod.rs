@@ -12,6 +12,7 @@ use crate::expr::{BinOp, ExprKind, ExprRef};
 use crate::lexer::{LocalDir, TokKind};
 use crate::section::Variant;
 use crate::source::Span;
+use crate::symbol::Binding;
 use encode::Prefixes;
 use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
@@ -80,6 +81,26 @@ impl Architecture for X86 {
         true
     }
 
+    /// GNU as, the x86 reference, relocates a reference to a weak symbol in
+    /// its own section, and one to a global symbol except from a jump it
+    /// relaxes: `jmp global` and `jz global` are resolved, since without
+    /// `-shared` it takes a global symbol to stay where it is, but `call
+    /// global`, `lea global(%rip)` and `jmp global@PLT` are not. llvm-mc
+    /// relocates all of them, and a `call local@PLT` besides.
+    fn defers_to_linker(&self, r: &crate::arch::SameSectionRef<'_>) -> bool {
+        match r.binding {
+            Binding::Local => false,
+            Binding::Weak => true,
+            Binding::Global => !r.relaxable || r.modifier.is_some(),
+        }
+    }
+
+    /// GNU as writes `call local` and `call local@PLT` as `PC32` against the
+    /// label's section; llvm-mc keeps `PLT32`.
+    fn section_relative_reloc(&self, reloc: u32) -> u32 {
+        reloc::Abi::for_object_bits(self.bits).plt_as_pc32(reloc)
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         let abi = reloc::Abi::for_object_bits(self.bits);
         if pcrel {
@@ -91,22 +112,56 @@ impl Architecture for X86 {
 
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
         let abi = reloc::Abi::for_object_bits(self.bits);
-        if abi == reloc::Abi::I386 {
-            // Every i386 modifier names a 32-bit relocation.
-            return if size == 4 {
-                reloc::Abi::i386_modifier(name)
-            } else {
-                None
-            };
-        }
         match name {
-            "plt" => Some(abi.plt32()),
-            "gotpcrel" => abi.gotpcrel(),
-            "got" => Some(abi.got32()),
-            _ => {
-                let _ = (size, pcrel);
-                None
+            // `wrt ..sym` relocates against the symbol itself, with the plain
+            // absolute or PC-relative type for the field.
+            "sym" => {
+                if pcrel {
+                    abi.pcrel(size)
+                } else {
+                    abi.abs(size)
+                }
             }
+            // Every other i386 modifier names a 32-bit relocation.
+            _ if abi == reloc::Abi::I386 => match name {
+                "gotpc" => abi.gotpc(size),
+                _ if size == 4 => reloc::Abi::i386_modifier(name),
+                _ => None,
+            },
+            "plt" => Some(abi.plt32()),
+            // NASM spells the RIP-relative GOT load `wrt ..got`; `..gotpcrel`
+            // is accepted too, as the GNU `@GOTPCREL` name.
+            "gotpcrel" => abi.gotpcrel(),
+            "got" => abi.got(size, pcrel),
+            "gotoff" => abi.gotoff(size),
+            "gotpc" => abi.gotpc(size),
+            _ => None,
+        }
+    }
+
+    /// GNU as creates `_GLOBAL_OFFSET_TABLE_` for every modifier but `@PLT`,
+    /// `@PLTOFF` and `@SIZE`, and marks the target of a TLS one thread-local.
+    fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
+        let tls = matches!(
+            name,
+            "tlsgd"
+                | "tlsldm"
+                | "tlsld"
+                | "gottpoff"
+                | "tpoff"
+                | "ntpoff"
+                | "dtpoff"
+                | "gotntpoff"
+                | "indntpoff"
+                | "tlsdesc"
+                | "tlscall"
+        );
+        let got = tls
+            || matches!(name, "got" | "gotoff" | "gotpcrel" | "gotplt")
+            || name == "gotpc" && reloc::Abi::for_object_bits(self.bits) == reloc::Abi::I386;
+        crate::arch::ModifierSymbols {
+            needs: got.then_some("_GLOBAL_OFFSET_TABLE_"),
+            tls,
         }
     }
 
@@ -135,6 +190,10 @@ impl Architecture for X86 {
         } else {
             FlatModifier::LinkerOnly
         }
+    }
+
+    fn is_mnemonic(&self, name: &str) -> bool {
+        insn::is_mnemonic(name) || prefix_kind(name).is_some()
     }
 
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8> {
@@ -384,6 +443,32 @@ fn assemble_inner(
         }];
     }
 
+    // NASM moves the accumulator to or from a bare address with the one-byte
+    // `A0`-`A3` opcodes, a byte shorter than the ModRM form, which is why
+    // `mov eax, [var]` is `a1` there and `8b 05` under GNU as.
+    if cx.dialect == crate::lexer::Dialect::Nasm
+        && (mnemonic == "mov" || mnemonic == "movq")
+        && let Some(v) = try_moffs(cx, bits, abi, &ops, req.span)
+    {
+        return Some(vec![v]);
+    }
+
+    // A size keyword on one operand fixes the operation width: `mov [eax],
+    // byte 1` is a byte store, though the memory operand itself is unsized.
+    // NASM lets the keyword ride on whichever operand it likes, so the hint
+    // is carried to an unsized memory operand from a sized sibling.
+    if let Some(hint) = ops
+        .iter()
+        .find(|o| matches!(o.kind, OperandKind::Imm(_)) && o.size_hint.is_some())
+        .and_then(|o| o.size_hint)
+    {
+        for o in &mut ops {
+            if o.is_mem() && o.size_hint.is_none() {
+                o.size_hint = Some(hint);
+            }
+        }
+    }
+
     // `{rn-sae}` occupies an operand slot in the source but encodes as bits in
     // the EVEX prefix, so it is lifted out before the operands are matched.
     let mut rounding: Option<(RoundCtl, Span)> = None;
@@ -398,10 +483,46 @@ fn assemble_inner(
     }
     ops.retain(|o| o.rounding().is_none());
 
-    let matches = select(cx, bits, resolved.defs, &resolved, &ops);
+    // NASM's default optimizer loads a 64-bit register from a non-negative
+    // immediate that fits 32 bits with the `mov r32, imm32` form, which
+    // zero-extends and is two bytes shorter than the sign-extending one. GNU
+    // as leaves it as written; the difference shows only in the NASM dialect.
+    if cx.dialect == crate::lexer::Dialect::Nasm
+        && bits == 64
+        && (mnemonic == "mov" || mnemonic == "movq")
+        && let [dst, src] = ops.as_slice()
+        && let (OperandKind::Reg(r), OperandKind::Imm(e)) = (&dst.kind, &src.kind)
+        && r.is_gpr()
+        && r.size == 8
+        && cx
+            .constant(*e)
+            .is_some_and(|v| (0..=0xffff_ffff).contains(&v))
+    {
+        ops[0].kind = OperandKind::Reg(reg::Reg { size: 4, ..*r });
+        ops[0].size_hint = Some(4);
+    }
+
+    let mut matches = select(cx, bits, resolved.defs, &resolved, &ops);
     if matches.is_empty() {
         report_no_match(cx, req, mnemonic, &resolved, &ops);
         return None;
+    }
+
+    // NASM loads a 64-bit register from a symbol with the full `movabs`
+    // (64-bit immediate) form, since the address is unknown and might not fit
+    // 32 bits; GNU as uses the sign-extending 32-bit form. This shows only in
+    // the NASM dialect and only for a still-symbolic immediate.
+    if cx.dialect == crate::lexer::Dialect::Nasm
+        && bits == 64
+        && (mnemonic == "mov" || mnemonic == "movq")
+        && let [dst, src] = ops.as_slice()
+        && let (OperandKind::Reg(r), OperandKind::Imm(e)) = (&dst.kind, &src.kind)
+        && r.is_gpr()
+        && r.size == 8
+        && cx.constant(*e).is_none()
+        && let Some(pos) = matches.iter().position(|d| d.flags & insn::IMM64 != 0)
+    {
+        matches.swap(0, pos);
     }
 
     // Stack and branch instructions have a default operand size in every
@@ -447,6 +568,7 @@ fn assemble_inner(
         && !ops.is_empty()
         && ops.iter().all(|o| matches!(o.kind, OperandKind::Imm(_)))
         && matches[0].opsize != default_size
+        && matches[0].opsize != 0
         && resolved
             .defs
             .iter()
@@ -885,7 +1007,9 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             let OperandKind::Imm(e) = &o.kind else {
                 return false;
             };
-            cx.constant(*e) == Some(if *pat == Op::One { 1 } else { 3 })
+            // NASM writes `int 3` as the two bytes it asks for.
+            let nasm_int3 = *pat == Op::Three && cx.dialect == crate::lexer::Dialect::Nasm;
+            !nasm_int3 && cx.constant(*e) == Some(if *pat == Op::One { 1 } else { 3 })
         }
         Op::V(k) | Op::Nds(k) | Op::Is4(k) => o.reg().is_some_and(|r| k.accepts(r)),
         Op::Vm(k, msz) => match &o.kind {
@@ -1182,6 +1306,103 @@ fn report_no_match(
         req.span,
         format!("no form of `{mnemonic}` accepts {}", described.join(", ")),
     );
+}
+
+/// Builds the accumulator-to-memory `mov` NASM prefers, `A0`-`A3` with the
+/// address as a `moffs` of the current address size, if the operands fit that
+/// shape: the accumulator and a bare-displacement memory operand with no base,
+/// index or RIP. Returns `None` — building nothing — otherwise, so the caller
+/// falls back to the ordinary encoding.
+fn try_moffs(
+    cx: &mut AsmCtx<'_>,
+    bits: u8,
+    abi: reloc::Abi,
+    ops: &[Operand],
+    span: Span,
+) -> Option<crate::section::Variant> {
+    use crate::section::{Fixup, FixupKind, Variant};
+    let [a, b] = ops else { return None };
+    // One operand is the accumulator, the other bare-displacement memory.
+    let acc = a.reg().or_else(|| b.reg())?;
+    if !(acc.is_gpr() && acc.num == 0) {
+        return None;
+    }
+    let (mem_op, load) = match (&a.kind, &b.kind) {
+        (OperandKind::Reg(_), OperandKind::Mem(m)) => (m, true),
+        (OperandKind::Mem(m), OperandKind::Reg(_)) => (m, false),
+        _ => return None,
+    };
+    if mem_op.base.is_some() || mem_op.index.is_some() || mem_op.rip_relative {
+        return None;
+    }
+    // In long mode NASM uses `moffs` only for a genuine 64-bit address, not
+    // for a symbol or a short constant, so the accumulator shortcut is a
+    // 16-/32-bit affair here.
+    if bits == 64 {
+        return None;
+    }
+    let disp = mem_op.disp?;
+    // moffs holds the whole address, in the mode's address size; a size
+    // override would need a ModRM form, so this only fires at the native size.
+    let addr_size = match bits {
+        64 => 8u8,
+        32 => 4,
+        _ => 2,
+    };
+    let mut bytes = Vec::new();
+    if let Some(seg) = mem_op.seg {
+        bytes.push(encode::segment_prefix(seg)?);
+    }
+    // Operand-size prefix for a 16-bit accumulator outside 16-bit mode, or a
+    // 32-bit one within it; REX.W for the 64-bit accumulator.
+    if (acc.size == 2 && bits != 16) || (acc.size == 4 && bits == 16) {
+        bytes.push(0x66);
+    }
+    if acc.size == 8 {
+        bytes.push(0x48);
+    }
+    let opcode = match (acc.size == 1, load) {
+        (true, true) => 0xa0,
+        (true, false) => 0xa2,
+        (false, true) => 0xa1,
+        (false, false) => 0xa3,
+    };
+    bytes.push(opcode);
+    let offset = bytes.len() as u32;
+    let mut fixups = Vec::new();
+    match cx.constant(disp) {
+        Some(v) => bytes.extend_from_slice(&(v as u64).to_le_bytes()[..addr_size as usize]),
+        None => {
+            bytes.extend(std::iter::repeat_n(0u8, addr_size as usize));
+            let reloc = cx
+                .find_modifier_for(disp)
+                .and_then(|m| {
+                    // A `wrt ..got`/`..sym` on the address picks its own type.
+                    let name = cx.name(m).to_string();
+                    reloc_moffs_modifier(abi, &name, addr_size)
+                })
+                .or_else(|| abi.abs(addr_size))
+                .unwrap_or(0);
+            fixups.push(Fixup {
+                offset,
+                expr: disp,
+                kind: FixupKind::data(addr_size).with_reloc(reloc),
+                span: cx.exprs.span(disp),
+            });
+        }
+    }
+    let _ = span;
+    Some(Variant { bytes, fixups })
+}
+
+/// The relocation a `wrt` modifier on a moffs address selects.
+fn reloc_moffs_modifier(abi: reloc::Abi, name: &str, size: u8) -> Option<u32> {
+    match name {
+        "got" => abi.got(size, false),
+        "gotoff" => abi.gotoff(size),
+        "sym" => abi.abs(size),
+        _ => None,
+    }
 }
 
 /// True if `name` is a register, used by the generic parser to avoid treating

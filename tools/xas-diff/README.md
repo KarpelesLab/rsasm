@@ -1,7 +1,8 @@
 # Differential testing against cross assemblers
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
-`tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX and SuperH.
+`tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
+and the 8-bit Z80, 6502 and 8080.
 
 ```console
 $ tools/oracles/build.sh          # once: builds the pinned references
@@ -9,7 +10,8 @@ $ tools/xas-diff/run.sh           # every target with a corpus
 $ tools/xas-diff/run.sh m68k-mot  # just one
 ```
 
-The references are GNU binutils 2.47 and vasm, built into `target/oracles/`,
+The references are GNU binutils 2.47, vasm, cc65 2.19's ca65 and the Macro
+Assembler AS, built into `target/oracles/`,
 or wherever `RSASM_ORACLES` points — useful for sharing one build between
 worktrees, since binutils takes minutes per target.
 See `tools/oracles/build.sh` for why the versions are pinned.
@@ -29,6 +31,36 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `rl78-ccrl` | `rl78`, CC-RL syntax | `rl78-elf-as`, on the GNU half of each pair |
 | `rh850-ccrh` | `rh850`, CC-RH syntax | `v850-elf-as -mv850e3v5`, likewise |
 | `rx-ccrx` | `rx`, CC-RX syntax | `rx-elf-as`, likewise |
+| `6502` | `6502`, 8-bit syntax | `ca65`, laid out by `ld65` |
+| `6502-vasm` | `6502`, 8-bit syntax | `vasm6502_oldstyle` |
+| `z80` | `z80`, 8-bit syntax | `z80-elf-as`, linked at 0 by `z80-elf-ld` |
+| `z80-gas` | `z80`, GNU syntax | `z80-elf-as`, on `z80.txt` |
+| `z80-vasm` | `z80`, 8-bit syntax | `vasmz80_oldstyle`, on `z80.txt` and its own programs |
+| `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
+
+## Comparing objects
+
+`<key>-relocs.txt` holds snippets compared as whole objects — sections,
+global symbols and relocations — with `tools/mc-diff/canon.sh`, as
+`tools/mc-diff` compares its own (see its README). Each walks a symbol of
+every binding through the target's calls, branches and data, and checks the
+alignment of the standard sections. RX's reference is run with
+`-muse-conventional-section-names` for these, since by default it renames
+`.text`, `.data` and `.bss` to Renesas's `P`, `D_1` and `B_1`, which rsasm
+does not.
+
+They leave out what rsasm deliberately writes differently:
+
+- A relocation against a local symbol in RL78 or RX data. GNU as keeps the
+  symbol and writes its value into the field as well; rsasm relocates against
+  the section, like every other target, and leaves the field zero. A linker
+  reads both the same way.
+- `sym - .` where `sym` is outside the section: GNU as for RL78 and RX writes
+  a stack of relocations, which rsasm has no support for and refuses, and GNU
+  as for V850 drops the `- .` (see `src/arch/v850/reloc.rs`).
+- A conditional branch on RX or V850 that is left to the linker: GNU as keeps
+  it short, trusting the linker to reach; rsasm takes the longest form (see
+  `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
 
 ## Vendor syntax no reference reads
 
@@ -70,9 +102,32 @@ On *syntax* the two agree on every rule we checked, including the one that
 surprises people: in Motorola source a word in the first column is a label,
 so `rts` written in column 0 assembles to nothing.
 
+## The 8-bit references
+
+Each 8-bit target has the assembler its source is usually written for as its
+reference, and a second where one reads the same syntax:
+
+- **6502: ca65.** cc65's assembler is what most 6502 source today is written
+  for. It assembles in one pass, so a forward reference is absolute, and its
+  `.org` sets the location counter without padding; the corpus keeps to a
+  leading `.org`. vasm is the second opinion, on programs only: it picks zero
+  page for any address that turns out to fit, and has no `z:`/`a:` or dotted
+  directives in oldstyle syntax.
+- **Z80: GNU as.** Linked at address 0, since an unlinked object leaves
+  absolute addresses to the linker. GNU as has no `org` directive of its own
+  (`.org` pads), reads `add b` as something other than `add a,b`, and gives
+  -1 for a true comparison; those cases are in the vasm programs or nowhere.
+  vasm reads the whole one-line corpus identically.
+- **8080: AS.** Neither GNU as nor vasm reads Intel's 8080 syntax faithfully,
+  and AS does, with two gaps of its own: it has no `D` radix suffix or `AND`-
+  style word operators, and its `$` in a data list is the statement's
+  address rather than the item's.
+
+A reference that refuses a case never matches, so the corpora hold only
+source every reference for the key accepts.
+
 ## 78K0
 
 No reference exists — CA78K0 is a proprietary Windows tool and neither GNU
 binutils nor LLVM supports the 78K0 — so it has no corpus here. Its tables are
-verified the way the Z80 and 6502 are, by tests that walk the whole opcode
-space.
+verified by tests that walk the whole opcode space.

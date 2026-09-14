@@ -22,9 +22,22 @@
 //!
 //! # Syntax
 //!
-//! Traditional 6502 syntax is unwritable in this assembler's GAS lexer, which
+//! In the 8-bit dialect, the default, operands are written as ca65 writes
+//! them, and zero page is chosen as ca65 chooses it: for a constant that fits
+//! in a byte, a label `ORG` has put in the zero page before its use, or a
+//! `<`, `>` or `^` byte selector; a forward reference is absolute. ca65's
+//! `z:` and `a:` prefixes override the choice.
+//!
+//! ```text
+//!   lda #$12       immediate           lda $12        zero page
+//!   lda $1234,x    absolute,X          lda (ptr),y    indirect indexed
+//!   lda a:$12      absolute, forced    lda z:fwd      zero page, forced
+//!   lda <addr      zero page: the low byte of `addr`
+//! ```
+//!
+//! Traditional 6502 syntax is unwritable in the GAS dialect, whose lexer
 //! takes `#` to start a comment and has no `$`-prefixed hexadecimal (see the
-//! module comment on [`super`]). So:
+//! module comment on [`super`]). There:
 //!
 //! ```text
 //!   lda $12        immediate 0x12      (traditional: lda #$12)
@@ -41,8 +54,8 @@
 use super::common::{self, Enc};
 use crate::arch::{AsmCtx, InsnRequest};
 use crate::cursor::Cursor;
-use crate::expr::ExprRef;
-use crate::lexer::Punct;
+use crate::expr::{ExprKind, ExprRef, UnOp};
+use crate::lexer::{Dialect, Punct};
 use crate::section::Variant;
 use crate::source::Span;
 
@@ -93,6 +106,13 @@ impl Mode {
             Rel => "relative",
         }
     }
+}
+
+/// An address size written into the operand, as ca65's `z:` and `a:`.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Size {
+    ZeroPage,
+    Absolute,
 }
 
 /// The index register an operand was suffixed with.
@@ -255,6 +275,11 @@ pub fn for_each_opcode(mut f: impl FnMut(&'static str, Mode, u8)) {
     }
 }
 
+/// Whether `name`, lowercased, is a 6502 mnemonic.
+pub fn is_mnemonic(name: &str) -> bool {
+    !forms(name).is_empty()
+}
+
 /// Every (mode, opcode) pair `mnemonic` has. Empty when the mnemonic is not a
 /// 6502 instruction at all.
 fn forms(mnemonic: &str) -> Vec<(Mode, u8)> {
@@ -277,8 +302,9 @@ enum Arg {
     Implied,
     Acc,
     Imm(ExprRef, Span),
-    /// `expr`, `expr,x` or `expr,y`: zero page or absolute, decided by value.
-    Direct(ExprRef, Option<Index>, Span),
+    /// `expr`, `expr,x` or `expr,y`: zero page or absolute, decided by value
+    /// unless the source named the size.
+    Direct(ExprRef, Option<Index>, Option<Size>, Span),
     /// `(expr)`, `(expr,x)` or `(expr),y`.
     Indirect(ExprRef, Mode, Span),
 }
@@ -289,6 +315,33 @@ fn parse_index(cx: &AsmCtx<'_>, toks: &[crate::lexer::Token]) -> Option<Index> {
         "y" => Some(Index::Y),
         _ => None,
     }
+}
+
+/// Strips ca65's address size prefix — `z:`, `zp:`, `zeropage:`, `a:`,
+/// `abs:` or `absolute:` — from the front of an operand, in the 8-bit dialect.
+fn size_prefix<'t>(
+    cx: &AsmCtx<'_>,
+    toks: &'t [crate::lexer::Token],
+) -> (Option<Size>, &'t [crate::lexer::Token]) {
+    if cx.dialect != Dialect::EightBit {
+        return (None, toks);
+    }
+    let [word, colon, rest @ ..] = toks else {
+        return (None, toks);
+    };
+    if !colon.is_punct(Punct::Colon) {
+        return (None, toks);
+    }
+    let size = match word
+        .ident()
+        .map(|n| cx.name(n).to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("z" | "zp" | "zeropage") => Size::ZeroPage,
+        Some("a" | "abs" | "absolute") => Size::Absolute,
+        _ => return (None, toks),
+    };
+    (Some(size), rest)
 }
 
 fn parse_operand(cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>, forms: &[(Mode, u8)]) -> Option<Arg> {
@@ -311,7 +364,10 @@ fn parse_operand(cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>, forms: &[(Mode, u8
                 return Some(Arg::Acc);
             }
             // Both spellings of the immediate marker; see the module comment.
-            if first.is_punct(Punct::Hash) || first.is_punct(Punct::Dollar) {
+            // Where `$` is the location counter, only `#` is one.
+            if first.is_punct(Punct::Hash)
+                || (first.is_punct(Punct::Dollar) && !cx.dialect.dollar_is_here())
+            {
                 let e = common::expr_of(cx, after, span)?;
                 return Some(Arg::Imm(e, span));
             }
@@ -350,8 +406,9 @@ fn parse_operand(cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>, forms: &[(Mode, u8
                 );
                 return None;
             }
+            let (size, part) = size_prefix(cx, part);
             let e = common::expr_of(cx, part, span)?;
-            Some(Arg::Direct(e, None, span))
+            Some(Arg::Direct(e, None, size, span))
         }
         [base, idx] => {
             let (base, idx) = (*base, *idx);
@@ -371,8 +428,9 @@ fn parse_operand(cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>, forms: &[(Mode, u8
                 let e = common::expr_of(cx, common::inside_parens(base), span)?;
                 return Some(Arg::Indirect(e, IndY, span));
             }
+            let (size, base) = size_prefix(cx, base);
             let e = common::expr_of(cx, base, span)?;
-            Some(Arg::Direct(e, Some(index), span))
+            Some(Arg::Direct(e, Some(index), size, span))
         }
         _ => {
             cx.error(insn.span, "too many operands");
@@ -444,7 +502,7 @@ pub fn assemble(
                 None
             }
         },
-        Arg::Direct(e, index, span) => direct(cx, mnemonic, &forms, e, index, span),
+        Arg::Direct(e, index, size, span) => direct(cx, mnemonic, &forms, e, index, size, span),
     }
 }
 
@@ -456,6 +514,7 @@ fn direct(
     forms: &[(Mode, u8)],
     e: ExprRef,
     index: Option<Index>,
+    size: Option<Size>,
     span: Span,
 ) -> Option<Vec<Variant>> {
     // A branch has no other form to compete with.
@@ -486,7 +545,39 @@ fn direct(
         enc.into_variant()
     };
 
-    match (cx.constant(e), zp, abs) {
+    // The size the source asked for, where there is a form of that size.
+    match (size, zp, abs) {
+        (Some(Size::ZeroPage), Some(op), _) => return Some(vec![zero_page(op)]),
+        (Some(Size::Absolute), _, Some(op)) => return Some(vec![absolute(op)]),
+        (Some(Size::ZeroPage), None, _) => {
+            cx.error(
+                span,
+                format!("`{mnemonic}` has no {} form", zp_mode.describe()),
+            );
+            return None;
+        }
+        (Some(Size::Absolute), _, None) => {
+            cx.error(
+                span,
+                format!("`{mnemonic}` has no {} form", abs_mode.describe()),
+            );
+            return None;
+        }
+        _ => {}
+    }
+
+    // `<addr`, `>addr` and `^addr` are a byte whatever `addr` is, so ca65
+    // gives them zero-page addressing, as it does a small constant.
+    if let Some(op) = zp
+        && matches!(
+            cx.exprs.get(e).kind,
+            ExprKind::Unary(UnOp::Low | UnOp::High | UnOp::Bank, _)
+        )
+    {
+        return Some(vec![zero_page(op)]);
+    }
+
+    match (cx.address_now(e), zp, abs) {
         (_, None, None) => {
             cx.error(
                 span,
@@ -514,10 +605,12 @@ fn direct(
         // that is wrong under `--base`: the layout pass relaxes with every
         // section at address 0 and only applies the base afterwards, so a
         // label at offset 0x13 of a ROM based at 0x8000 would be judged to be
-        // in the zero page and then fail to fit. Until the core relaxes
-        // against final addresses, a symbolic operand takes the absolute
-        // form, which is always correct and costs one byte. Zero-page
-        // variables defined before use still get the short form above.
+        // in the zero page and then fail to fit. So a symbolic operand takes
+        // the absolute form, which is always correct and costs one byte.
+        // Zero-page variables defined before use still get the short form
+        // above, as do labels at an address `ORG` fixed. This is also ca65's
+        // rule: it assembles in one pass, and a forward reference is
+        // absolute there too.
         (None, _, Some(a)) => Some(vec![absolute(a)]),
         // No absolute form to fall back on (`stx sym,y`, `lda (sym),y`): the
         // final fixup check, which does see real addresses, will diagnose a

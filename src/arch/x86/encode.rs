@@ -765,8 +765,11 @@ pub fn encode(
         // GNU as routes a plain 64-bit-mode call through the PLT but leaves a
         // 32-bit-mode one PC-relative, and that follows the mode rather than
         // the object: `.code32` inside an x86-64 object gets `R_X86_64_PC32`.
+        // NASM emits a plain `R_X86_64_PC32` for every branch, reserving the
+        // PLT for an explicit `wrt ..plt`.
+        let nasm = cx.dialect == crate::lexer::Dialect::Nasm;
         let reloc = match width {
-            4 if bits == 64 => abi.plt32(),
+            4 if bits == 64 && !nasm => abi.plt32(),
             _ => abi.pcrel(width).unwrap_or(0),
         };
         fixups.push(Fixup {

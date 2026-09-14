@@ -10,15 +10,19 @@
 #
 # A corpus's name says how it is assembled:
 #
-#   instructions.txt, programs.txt   64-bit mode (`as --64`)
+#   instructions.txt, programs.txt,  64-bit mode (`as --64`)
+#   x86-64-*.txt
 #   i386*.txt                        32-bit mode (`as --32`)
 #   i8086*.txt                       16-bit mode: `as --32` with `.code16`
 #   *-intel*.txt                     Intel syntax, after `.intel_syntax noprefix`
 #
 # A file whose name contains `programs` holds multi-line snippets separated
-# by `=== <name>` lines, and one containing `relocs` holds snippets compared
-# as whole objects: the .text bytes and every relocation, as `readelf` lists
-# them. Any other corpus holds one instruction per line.
+# by `=== <name>` lines. One containing `relocs` holds snippets in the same
+# format that are compared as whole objects: every allocated section's header
+# and bytes, the global and undefined symbols, and the relocations, as
+# tools/mc-diff/canon.sh prints them. That part needs llvm-readobj and
+# llvm-objcopy, and is skipped without. Any other corpus holds one
+# instruction per line.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -79,32 +83,17 @@ compare() { # name, source
   fi
 }
 
-# What two objects have to agree on: the .text bytes, then each relocation as
-# its section, offset, type and symbol, sorted. The symbol's index in the
-# table and its value are left out, since the two assemblers order their
-# symbol tables differently, and so is the order of the relocations: GNU as
-# writes those of relaxable branches last.
-canon() { # object
-  # An empty .text leaves objcopy nothing to write.
-  objcopy -O binary --only-section=.text "$1" "$1.bin" 2>/dev/null
-  [ -f "$1.bin" ] && xxd -p "$1.bin" | tr -d '\n'
-  echo
-  readelf -rW "$1" | awk '
-    /^Relocation section/ { section = $3; next }
-    /^ *[0-9a-f]+ +[0-9a-f]+ +R_/ { print section, $1, $3, $5, $6, $7 }' | sort
-}
-
 compare_object() { # name, source
   local name=$1 src=$header$2 g r d
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
   if as $gasflags -o "$d/g.o" "$d/in.s" 2> "$d/err"; then
-    g=$(canon "$d/g.o")
+    g=$("$root/tools/mc-diff/canon.sh" "$d/g.o")
   else
     g="GAS-ERROR: $(grep -v 'Assembler messages' "$d/err" | head -3 | tr '\n' ' ')"
   fi
   if "$rsasm" -a "$arch" -o "$d/r.o" "$d/in.s" 2> "$d/err"; then
-    r=$(canon "$d/r.o")
+    r=$("$root/tools/mc-diff/canon.sh" "$d/r.o")
   else
     r="RSASM-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
   fi
@@ -113,7 +102,7 @@ compare_object() { # name, source
     pass=$((pass + 1))
   else
     fail=$((fail + 1))
-    echo "### $name (object)"
+    echo "### [$arch] $name (object)"
     printf '%s\n' "$src" | sed 's/^/    /'
     echo "  gas:"
     printf '%s\n' "$g" | sed 's/^/    /'
@@ -142,12 +131,18 @@ run_snippets() { # file, compare function
     esac
   done < "$1"
   [ -n "$snippet" ] && "$2" "$name" "$snippet"
+  return 0
 }
 
 run_corpus() {
   configure "$1"
   case "$(basename "$1")" in
-    *relocs*) run_snippets "$1" compare_object ;;
+    *relocs*)
+      if ! command -v llvm-readobj > /dev/null || ! command -v llvm-objcopy > /dev/null; then
+        echo "llvm-readobj or llvm-objcopy not found; skipping $(basename "$1")" >&2
+        return 0
+      fi
+      run_snippets "$1" compare_object ;;
     *programs*) run_snippets "$1" compare ;;
     *) run_lines "$1" ;;
   esac

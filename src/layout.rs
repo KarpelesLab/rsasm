@@ -12,7 +12,9 @@
 
 use crate::arch::FlatModifier;
 use crate::assembler::{Assembler, Relocation};
-use crate::expr::{ExprKind, ExprRef, Value};
+use crate::expr::{self, EvalError, ExprKind, ExprRef, Value};
+use crate::intern::Name;
+use crate::lexer::LocalDir;
 use crate::section::{
     FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
 };
@@ -97,6 +99,11 @@ impl Assembler {
         self.assign_addresses();
         self.report_misaligned_data();
         self.apply_fixups();
+        // Data references only enter the symbol table when their fixups are
+        // built, so NASM's "symbol not defined" check runs after that.
+        if self.options.dialect == crate::lexer::Dialect::Nasm {
+            self.nasm_report_undefined();
+        }
         self.materialize();
         !self.diags.has_errors()
     }
@@ -492,7 +499,8 @@ impl Assembler {
                 return false;
             };
             // A label ahead, in the fragments this pass has yet to reach.
-            let ahead = match self.eval(e) {
+            // An alias counts as the label it names.
+            let ahead = match self.eval_ref(e) {
                 Ok(v) if kind.pcrel && stretch != 0 => {
                     v.plus.and_then(|p| match self.symbols.get(p).value {
                         SymbolValue::Label { section, frag }
@@ -621,7 +629,10 @@ impl Assembler {
         }
         let mut addr = self.options.base_addr;
         for s in &mut self.sections {
-            addr = addr.next_multiple_of(s.align.max(1));
+            addr = match s.origin {
+                Some(origin) => origin,
+                None => addr.next_multiple_of(s.align.max(1)),
+            };
             s.addr = addr;
             addr += s.size;
         }
@@ -646,13 +657,23 @@ impl Assembler {
                 };
                 Some((s.addr + off) as i64 + shift)
             }
+            // An alias of a label, which evaluation keeps by its own name.
+            SymbolValue::Expr(_) => {
+                let v = self.eval_ref_symbol(id).ok()?;
+                match (v.plus, v.minus) {
+                    (Some(p), None) if p != id => Some(self.symbol_addr(p)?.wrapping_add(v.addend)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
 
-    fn symbol_section(&self, id: SymbolId) -> Option<SectionId> {
+    /// The section a label, or an alias of one, is in.
+    pub(crate) fn symbol_section(&self, id: SymbolId) -> Option<SectionId> {
         match self.symbols.get(id).value {
             SymbolValue::Label { section, .. } => Some(section),
+            SymbolValue::Expr(_) => self.symbol_target_section(id).map(|(s, _)| s),
             _ => None,
         }
     }
@@ -671,8 +692,84 @@ impl Assembler {
 
     /// Evaluates an expression, ignoring errors (the caller reports its own).
     fn eval_absolute_quiet(&mut self, e: ExprRef) -> Option<i64> {
-        let v = self.eval(e).ok()?;
-        self.resolve_value(v)
+        match self.eval(e) {
+            Ok(v) => self.resolve_value(v),
+            Err(_) => self.placement_free_value(e),
+        }
+    }
+
+    /// The value of an expression the symbolic evaluator cannot keep in
+    /// `plus - minus + addend` form, such as NASM's `(($-$$) % 8)`, worked
+    /// out from the labels' addresses, if it does not depend on where the
+    /// sections end up.
+    ///
+    /// In a flat image the addresses are final, so one evaluation settles
+    /// it. In an object each section may still move, so the expression is
+    /// evaluated a second time with every section moved by a different odd
+    /// amount, and only a value that stays the same counts.
+    pub(crate) fn placement_free_value(&self, e: ExprRef) -> Option<i64> {
+        struct Addresses<'a> {
+            asm: &'a Assembler,
+            moved: bool,
+            depth: u32,
+        }
+        impl expr::EvalCtx for Addresses<'_> {
+            fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError> {
+                match self.asm.symbols.lookup(name) {
+                    Some(id) => self.symbol_value(id, span),
+                    None => Err(EvalError::new(span, "undefined symbol")),
+                }
+            }
+            fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, EvalError> {
+                match self.asm.symbols.get(id).value {
+                    SymbolValue::Expr(e) if self.depth < 64 => {
+                        self.depth += 1;
+                        let v = expr::eval(&self.asm.exprs, e, self);
+                        self.depth -= 1;
+                        v
+                    }
+                    SymbolValue::Label { section, .. } => {
+                        let addr = self
+                            .asm
+                            .symbol_addr(id)
+                            .ok_or_else(|| EvalError::new(span, "no address"))?;
+                        let shift = if self.moved {
+                            (section.0 as i64 + 1).wrapping_mul(0x1_0000_0001)
+                        } else {
+                            0
+                        };
+                        Ok(Value::abs(addr.wrapping_add(shift)))
+                    }
+                    _ => Err(EvalError::new(span, "not a number")),
+                }
+            }
+            fn here(&mut self, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+            fn section_start(&mut self, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+            fn local_ref(&mut self, _: u32, _: LocalDir, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+            fn modifier(&mut self, _: Name, _: Value, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+        }
+        let mut env = Addresses {
+            asm: self,
+            moved: false,
+            depth: 0,
+        };
+        let v = expr::eval(&self.exprs, e, &mut env).ok()?.as_abs()?;
+        if self.options.relocatable {
+            env.moved = true;
+            let w = expr::eval(&self.exprs, e, &mut env).ok()?.as_abs()?;
+            if v != w {
+                return None;
+            }
+        }
+        Some(v)
     }
 
     /// Resolves an expression to an offset within `section`.
@@ -788,7 +885,7 @@ impl Assembler {
     /// GNU ld refuses an addend there as well, and the label has to be on
     /// the instruction itself, not merely near it.
     fn paired_high(&mut self, e: ExprRef) -> Option<(SectionId, usize, u64, ExprRef, FixupKind)> {
-        let v = self.eval(e).ok()?;
+        let v = self.eval_ref(e).ok()?;
         let (Some(label), None, 0) = (v.plus, v.minus, v.addend) else {
             return None;
         };
@@ -858,6 +955,65 @@ impl Assembler {
         })
     }
 
+    /// Whether a PC-relative reference from fragment `fi` to `target`, a
+    /// symbol in the same section, is still left to the linker; see
+    /// [`Architecture::defers_to_linker`](crate::arch::Architecture::defers_to_linker).
+    fn defers_to_linker(
+        &self,
+        e: ExprRef,
+        target: SymbolId,
+        kind: &FixupKind,
+        section: SectionId,
+        fi: usize,
+    ) -> bool {
+        if kind.object_reloc {
+            return true;
+        }
+        let (arch, _) = self.frag_arch(section.0 as usize, fi);
+        let modifier = self.find_modifier(e).map(|m| self.interner.get(m));
+        let reloc = modifier
+            .and_then(|m| arch.modifier_reloc(m, kind.size, kind.pcrel))
+            .unwrap_or(kind.reloc);
+        let f = &self.section(section).frags[fi];
+        let relaxable = f.relaxable
+            || matches!(&f.kind, FragKind::Bytes { variants, .. } if variants.len() > 1);
+        // A field no relocation can describe has to be filled in here, unless
+        // the instruction has a larger form to move to that one can.
+        if reloc == 0 && !relaxable {
+            return false;
+        }
+        arch.defers_to_linker(&crate::arch::SameSectionRef {
+            binding: self.symbols.get(target).binding,
+            reloc,
+            modifier,
+            relaxable,
+        })
+    }
+
+    /// What a target's GNU as leaves in the field of a PC-relative fixup at
+    /// `at` that it relocates against a symbol in the same section; see
+    /// [`Architecture::relocated_pcrel_field`](crate::arch::Architecture::relocated_pcrel_field).
+    fn relocated_field(
+        &mut self,
+        e: ExprRef,
+        kind: &FixupKind,
+        section: SectionId,
+        fi: usize,
+        at: u64,
+    ) -> Option<i64> {
+        if !kind.pcrel || !self.options.relocatable {
+            return None;
+        }
+        let target = self.eval(e).ok()?.plus?;
+        if self.symbol_section(target) != Some(section) {
+            return None;
+        }
+        let binding = self.symbols.get(target).binding;
+        self.frag_arch(section.0 as usize, fi)
+            .0
+            .relocated_pcrel_field(binding, at)
+    }
+
     /// [`Self::fixup_value`] for a fixup whose value is the target itself.
     fn plain_fixup_value(
         &mut self,
@@ -867,7 +1023,30 @@ impl Assembler {
         fi: usize,
         at: u64,
     ) -> Option<i64> {
-        let v = self.eval(e).ok()?;
+        let v = match self.eval(e) {
+            Ok(v) => v,
+            // In a flat image every label has its address by now, so an
+            // expression that only a number can go through — `label >> 8`,
+            // `label & 0xff`, the 8-bit dialect's `<label` — has a value
+            // too. A relocation could not have carried it, which is why
+            // evaluating symbolically refused it.
+            Err(_) if !self.options.relocatable => {
+                let mut env = AddressEnv {
+                    asm: self,
+                    depth: 0,
+                };
+                let v = crate::expr::eval(&self.exprs, e, &mut env).ok()?;
+                return v.as_abs().map(|target| {
+                    if kind.pcrel {
+                        let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
+                        target - (here & !(kind.pc_align.max(1) as i64 - 1))
+                    } else {
+                        target
+                    }
+                });
+            }
+            Err(_) => return None,
+        };
         // Within one section the two section bases cancel, so a PC-relative
         // reference resolves even in relocatable output. Across sections it
         // resolves only once the sections have real addresses.
@@ -877,7 +1056,10 @@ impl Assembler {
             // so `call 0x1000` needs a relocation too.
             if self.options.relocatable
                 && match v.plus {
-                    Some(p) => self.symbol_section(p) != Some(section),
+                    Some(p) => {
+                        self.symbol_section(p) != Some(section)
+                            || self.defers_to_linker(e, p, kind, section, fi)
+                    }
                     None => {
                         v.minus.is_none()
                             && self
@@ -980,7 +1162,18 @@ impl Assembler {
                             });
                         }
                         None => {
-                            if let Some(mut r) = self.build_relocation(e, &kind, id, fi, at, span) {
+                            let leftover = self.relocated_field(e, &kind, id, fi, at);
+                            if let Some(v) = leftover {
+                                let endian = self.frag_arch(si, fi).0.endian();
+                                if let FragKind::Bytes { variants, chosen } =
+                                    &mut self.sections[si].frags[fi].kind
+                                {
+                                    let dst = &mut variants[*chosen].bytes
+                                        [off as usize..off as usize + kind.size as usize];
+                                    kind.write(endian, dst, v);
+                                }
+                            }
+                            for mut r in self.build_relocation(e, &kind, id, fi, at, span) {
                                 let (arch, _) = self.frag_arch(si, fi);
                                 if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
                                     // A byte or word field has no room for a
@@ -1027,6 +1220,9 @@ impl Assembler {
         self.relocs = relocs;
     }
 
+    /// The relocations that leave a fixup to the linker: one, or on a target
+    /// that writes a difference as a pair, two. Empty after reporting why
+    /// there can be none.
     fn build_relocation(
         &mut self,
         e: ExprRef,
@@ -1035,23 +1231,58 @@ impl Assembler {
         fi: usize,
         at: u64,
         span: Span,
-    ) -> Option<Relocation> {
+    ) -> Vec<Relocation> {
         let si = section.0 as usize;
+        // A modifier can imply a symbol of its own, which GNU as creates as it
+        // reads the modifier, before the target's.
+        let effects = self
+            .find_modifier(e)
+            .filter(|_| self.options.dialect != crate::lexer::Dialect::Nasm)
+            .map(|m| {
+                let name = self.interner.get(m).to_string();
+                self.frag_arch(si, fi).0.modifier_symbols(&name)
+            });
+        if let Some(needs) = effects.and_then(|x| x.needs) {
+            let name = self.interner.intern(needs);
+            let id = self.symbols.intern(name, span);
+            self.symbols.get_mut(id).used = true;
+        }
         let v = match self.eval(e) {
             Ok(v) => v,
             Err(err) => {
                 self.diags.emit(err.into_diagnostic());
-                return None;
+                return Vec::new();
             }
         };
         if !self.options.relocatable
             && let Some(msg) = self.flat_refusal(e, kind, section, fi, at)
         {
             self.diags.error(span, msg);
-            return None;
+            return Vec::new();
         }
         let mut kind = *kind;
         let mut v = v;
+        // The subtrahend's half of a relocation pair, for a target that
+        // relocates a difference that way.
+        let mut subtrahend = None;
+        if let (Some(_), Some(minus), false, true) =
+            (v.plus, v.minus, kind.pcrel, self.options.relocatable)
+            && let Some((add, sub)) = self.frag_arch(si, fi).0.difference_relocs(kind.size)
+        {
+            let mut addend = 0;
+            let mut reloc = sub;
+            let symbol =
+                self.relocation_symbol(minus, &kind, si, fi, false, &mut addend, &mut reloc);
+            subtrahend = Some(Relocation {
+                section,
+                offset: at,
+                symbol: Some(symbol),
+                addend,
+                kind: reloc,
+            });
+            v.minus = None;
+            kind.reloc = add;
+        }
         if let Some(minus) = v.minus {
             // `sym - label`, with the label in the fixup's own section, is
             // `sym` relative to the field plus a known distance, which a
@@ -1072,7 +1303,7 @@ impl Assembler {
                     span,
                     "the difference of two symbols in different sections cannot be relocated",
                 );
-                return None;
+                return Vec::new();
             };
             v.addend += here - label;
             v.minus = None;
@@ -1080,6 +1311,12 @@ impl Assembler {
             kind.reloc = r;
         }
         let kind = &kind;
+        if effects.is_some_and(|x| x.tls)
+            && let Some(t) = v.plus
+            && self.symbols.get(t).ty == crate::symbol::SymType::NoType
+        {
+            self.symbols.get_mut(t).ty = crate::symbol::SymType::Tls;
+        }
         let target = match v.plus {
             Some(t) => Some(t),
             // A PC-relative reference to a plain number, relocated against
@@ -1087,7 +1324,7 @@ impl Assembler {
             None if kind.pcrel && v.minus.is_none() && self.options.relocatable => None,
             None => {
                 self.diags.error(span, "cannot resolve this value");
-                return None;
+                return Vec::new();
             }
         };
         if !self.options.relocatable && kind.always_reloc {
@@ -1095,12 +1332,12 @@ impl Assembler {
                 span,
                 "this reference is resolved by the linker, which a flat binary does not have",
             );
-            return None;
+            return Vec::new();
         }
         if !self.options.relocatable {
             let name = target.map_or_else(String::new, |t| self.display_name(t));
             self.diags.error(span, format!("undefined symbol `{name}`"));
-            return None;
+            return Vec::new();
         }
         // Relocation numbers mean something only to one machine, and the
         // linker applies them in the object's byte order and word size, so
@@ -1120,7 +1357,7 @@ impl Assembler {
                 crate::diag::Diagnostic::error(span, msg)
                     .with_help("resolve it within the file, or assemble this code on its own"),
             );
-            return None;
+            return Vec::new();
         }
 
         // A modifier anywhere in the expression selects the relocation.
@@ -1140,7 +1377,7 @@ impl Assembler {
                     if kind.pcrel { "PC-relative " } else { "" }
                 ),
             );
-            return None;
+            return Vec::new();
         }
 
         let bias = if kind.pcrel && kind.bias_reloc_addend {
@@ -1149,31 +1386,76 @@ impl Assembler {
             0
         };
         let mut addend = v.addend - bias;
-
-        // Local symbols are relocated against their section, which is what
-        // linkers expect and what keeps local labels out of the symbol table.
-        let symbol = target.map(|target| {
-            let sym = self.symbols.get(target);
-            if sym.binding == Binding::Local
-                && matches!(sym.value, SymbolValue::Label { .. })
-                && kind.reloc_symbol == RelocSymbol::Section
-            {
-                let sec = self.symbol_section(target).expect("label has a section");
-                addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
-                self.section_symbol(sec)
-            } else {
-                self.symbols.get_mut(target).used = true;
-                target
-            }
+        let mut reloc = reloc;
+        // A GOT, PLT or `..sym` modifier in NASM source always names the
+        // symbol, since that is what the linker looks up.
+        let names_symbol = self.find_modifier(e).is_some_and(|m| {
+            matches!(
+                self.interner.get(m),
+                "got" | "gotpcrel" | "plt" | "sym" | "gotoff" | "gotpc"
+            )
+        });
+        let symbol = target.map(|t| {
+            self.relocation_symbol(t, kind, si, fi, names_symbol, &mut addend, &mut reloc)
         });
 
-        Some(Relocation {
+        let mut relocs = vec![Relocation {
             section,
             offset: at,
             symbol,
             addend,
             kind: reloc,
-        })
+        }];
+        relocs.extend(subtrahend);
+        relocs
+    }
+
+    /// The symbol a relocation of `kind` against `target` names, adjusting
+    /// the addend and relocation type to suit.
+    ///
+    /// Local symbols are relocated against their section, which is what
+    /// linkers expect and what keeps local labels out of the symbol table.
+    /// So is a local alias of a label, even of a global one, and on some
+    /// targets a global symbol too.
+    ///
+    /// NASM goes further: it relocates a reference to any symbol defined in
+    /// the module against its section, keeping only external symbols by name,
+    /// unless a modifier (`wrt ..plt`, `..got`, `..sym`) names the symbol.
+    #[allow(clippy::too_many_arguments)]
+    fn relocation_symbol(
+        &mut self,
+        target: SymbolId,
+        kind: &FixupKind,
+        si: usize,
+        fi: usize,
+        names_symbol: bool,
+        addend: &mut i64,
+        reloc: &mut u32,
+    ) -> SymbolId {
+        let binding = self.symbols.get(target).binding;
+        let arch = self.frag_arch(si, fi).0;
+        let by_section = if self.options.dialect == crate::lexer::Dialect::Nasm {
+            !names_symbol && (binding == Binding::Local || self.symbols.get(target).is_defined())
+        } else {
+            match binding {
+                Binding::Local => true,
+                Binding::Global => arch.relocates_globals_by_section(),
+                Binding::Weak => false,
+            }
+        };
+        match self.symbol_section(target) {
+            Some(sec) if by_section && kind.reloc_symbol == RelocSymbol::Section => {
+                if kind.pcrel && binding == Binding::Local {
+                    *reloc = arch.section_relative_reloc(*reloc);
+                }
+                *addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
+                self.section_symbol(sec)
+            }
+            _ => {
+                self.symbols.get_mut(target).used = true;
+                target
+            }
+        }
     }
 
     /// The first `@`-modifier appearing in an expression, if any.
@@ -1265,6 +1547,79 @@ impl Assembler {
             }
         }
         out
+    }
+}
+
+/// Evaluates with every label at its address, for flat output once layout has
+/// given the sections theirs; see `plain_fixup_value`.
+struct AddressEnv<'a> {
+    asm: &'a Assembler,
+    depth: u32,
+}
+
+impl crate::expr::EvalCtx for AddressEnv<'_> {
+    fn lookup_symbol(
+        &mut self,
+        name: crate::intern::Name,
+        span: Span,
+    ) -> Result<Value, crate::expr::EvalError> {
+        match self.asm.symbols.lookup(name) {
+            Some(id) => self.symbol_value(id, span),
+            None => Err(crate::expr::EvalError::new(span, "undefined symbol")),
+        }
+    }
+
+    fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, crate::expr::EvalError> {
+        match self.asm.symbols.get(id).value {
+            SymbolValue::Expr(e) => {
+                if self.depth > 64 {
+                    return Err(crate::expr::EvalError::new(
+                        span,
+                        "symbol definition is circular",
+                    ));
+                }
+                self.depth += 1;
+                let v = crate::expr::eval(&self.asm.exprs, e, self);
+                self.depth -= 1;
+                v
+            }
+            _ => match self.asm.symbol_addr(id) {
+                Some(addr) => Ok(Value::abs(addr)),
+                None => Ok(Value::sym(id, 0)),
+            },
+        }
+    }
+
+    fn here(&mut self, span: Span) -> Result<Value, crate::expr::EvalError> {
+        Err(crate::expr::EvalError::new(span, "`.` cannot be used here"))
+    }
+
+    fn section_start(&mut self, span: Span) -> Result<Value, crate::expr::EvalError> {
+        Err(crate::expr::EvalError::new(
+            span,
+            "`$$` is not supported yet",
+        ))
+    }
+
+    fn local_ref(
+        &mut self,
+        n: u32,
+        _: crate::lexer::LocalDir,
+        span: Span,
+    ) -> Result<Value, crate::expr::EvalError> {
+        Err(crate::expr::EvalError::new(
+            span,
+            format!("local label `{n}` was not resolved"),
+        ))
+    }
+
+    fn modifier(
+        &mut self,
+        _: crate::intern::Name,
+        inner: Value,
+        _: Span,
+    ) -> Result<Value, crate::expr::EvalError> {
+        Ok(inner)
     }
 }
 

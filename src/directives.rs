@@ -6,7 +6,7 @@
 
 use crate::assembler::{Assembler, Cond};
 use crate::cursor::Cursor;
-use crate::expr::{ExprKind, ExprRef};
+use crate::expr::ExprRef;
 use crate::intern::Name;
 use crate::lexer::{Dialect, Punct, TokKind};
 use crate::parser::Statement;
@@ -26,6 +26,14 @@ impl Assembler {
             && let Some(bare) = text.strip_prefix('.')
             && let Some(alias) = crate::dialect::lookup(self.options.dialect, bare)
             && !matches!(alias, crate::dialect::Alias::Gas(_))
+        {
+            self.run_alias(stmt, alias);
+            return;
+        }
+        // In the 8-bit dialect a dotted word is ca65's, whose meaning can
+        // differ from the GNU as directive of the same name (`.org`).
+        if let Some(bare) = text.strip_prefix('.')
+            && let Some(alias) = crate::dialect::lookup_dotted(self.options.dialect, bare)
         {
             self.run_alias(stmt, alias);
             return;
@@ -238,7 +246,17 @@ impl Assembler {
     /// Offers a directive to the architecture backend. Returns whether the
     /// backend claimed it.
     pub(crate) fn arch_directive(&mut self, stmt: &Statement, text: &str) -> bool {
-        let mut cur = stmt.arg_cursor();
+        let args = &stmt.toks[stmt.args.min(stmt.toks.len())..];
+        self.arch_directive_tokens(text, args)
+    }
+
+    /// [`Assembler::arch_directive`], for arguments that are not a statement's.
+    pub(crate) fn arch_directive_tokens(
+        &mut self,
+        text: &str,
+        args: &[crate::lexer::Token],
+    ) -> bool {
+        let mut cur = Cursor::new(args);
         let Assembler {
             arch,
             interner,
@@ -335,15 +353,17 @@ impl Assembler {
         if aligned && self.arch.aligns_data() {
             self.align_data(size as u64, span);
         }
-        for item in 0.. {
+        loop {
             let mark = self.exprs.len();
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
-            // `.` in a later value is where that value goes, not where the
-            // statement starts: `.long 1, .` stores its own address.
-            if item > 0 && self.here_sym.is_some() {
-                self.bind_here(mark, span);
+            // `.` in each value is the address of that value, not of the
+            // statement: `.long a - ., b - .` is two PC-relative values in
+            // GNU as and llvm-mc alike.
+            if self.here_sym.is_some() {
+                self.here_sym = Some(self.anon_label(span));
+                self.bind_positional(mark);
             }
             self.emit_value(size, e, span);
             if cur.eat_punct(Punct::Comma).is_none() {
@@ -351,20 +371,6 @@ impl Assembler {
             }
         }
         true
-    }
-
-    /// Points each `.` among the expression nodes from `mark` on at a new
-    /// label at the current position.
-    fn bind_here(&mut self, mark: usize, span: Span) {
-        if !(mark..self.exprs.len()).any(|i| matches!(self.exprs.nodes[i].kind, ExprKind::Here)) {
-            return;
-        }
-        let label = self.anon_label(span);
-        for i in mark..self.exprs.len() {
-            if matches!(self.exprs.nodes[i].kind, ExprKind::Here) {
-                self.exprs.nodes[i].kind = ExprKind::SymId(label);
-            }
-        }
     }
 
     /// Pads to a `size`-byte boundary ahead of data that must start on one,
@@ -390,6 +396,7 @@ impl Assembler {
         if self.check_nobits(span) {
             return;
         }
+        self.bind_here_to_item(e);
         // Resolve now if it already has a value: a `.set` symbol is a
         // snapshot at each use, so a later redefinition must not reach back
         // and change bytes that were already emitted.

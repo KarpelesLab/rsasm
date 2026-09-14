@@ -45,3 +45,11 @@ entry:
  .long entry
  .long entry - .
  .word entry - .
+
+=== sections start at their default alignment
+        .text
+        .byte   1
+        .data
+        .byte   2
+        .section .rodata
+        .byte   3
