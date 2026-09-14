@@ -56,6 +56,20 @@ Where the two still differ, on purpose:
   `nop.w`, after one 16-bit `nop` if the count is odd; rsasm, like llvm-mc,
   uses 16-bit ones throughout. Snippets pad Thumb code with zeros, or not at
   all.
+- **A three-operand Thumb immediate on one register.** GNU as assembles
+  `adds r0, r0, #1` (and `suble r0, r0, #1` in an `it` block) with the 8-bit
+  `adds r0, #1` form; rsasm, like llvm-mc, keeps the 3-bit form the spelling
+  asks for, which `tools/mc-diff` checks. Snippets write the two-operand form.
+- **`-mthumb-interwork`.** GNU as sets the low bit of a Thumb function's
+  address in an ARM `adr` only with that option, which rsasm does not have;
+  so the snippets, assembled without it, check that it does not.
+
+Where GNU as and llvm-mc disagree and GNU as is followed, as seen in these
+corpora: mapping symbols (llvm-mc marks neither alignment padding nor the
+zeros that align a literal pool), padding the end of a code section to a
+word (llvm-mc does not), and which branches are left to the linker (llvm-mc
+relocates an ARM `bl` even to a label in the same section, and converts no
+`bl` to `blx` itself).
 
 ## Vendor syntax no reference reads
 
