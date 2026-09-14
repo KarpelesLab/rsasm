@@ -591,6 +591,7 @@ impl Assembler {
         let (mut file, mut line, mut column, mut isa) = (1u32, 1i64, 0u32, 0u32);
         let mut is_stmt = true;
         let mut last: Option<u64> = None;
+        let mut last_at: Option<(Pos, u64)> = None;
         for row in rows {
             let loc = &row.loc;
             if file != loc.file {
@@ -633,19 +634,15 @@ impl Assembler {
             }
             let line_delta = loc.line as i64 - line;
             let addr = self.row_addr(row);
+            let at = (row.pos, addr - self.pos_offset(row.pos));
             match last {
                 // A `view -0` row at the address of the one before it gets an
                 // address of its own, so that consumers restart the count.
                 Some(prev) if !(loc.view == Some(View::Reset) && prev == addr) => {
                     let delta = addr.saturating_sub(prev);
                     if fixed {
-                        self.fixed_advance(
-                            b,
-                            Some(line_delta),
-                            delta,
-                            (row.pos, addr - self.pos_offset(row.pos)),
-                            ptr,
-                        );
+                        let from = last_at.unwrap_or(at);
+                        self.fixed_advance(b, Some(line_delta), delta, from, at, ptr);
                     } else {
                         // GNU as says so once, however many rows are off.
                         if delta % min != 0 && flavor == Flavor::Gnu && !cx.unaligned {
@@ -659,19 +656,21 @@ impl Assembler {
                     }
                 }
                 _ => {
-                    self.set_address(b, (row.pos, addr - self.pos_offset(row.pos)), ptr);
+                    self.set_address(b, at, ptr);
                     special_advance(b, Some(line_delta), 0, cx.opcode_base);
                 }
             }
             line = loc.line as i64;
             last = Some(addr);
+            last_at = Some(at);
         }
         let end = self.sequence_end(section);
         let prev = last.unwrap_or(end);
         let delta = end.saturating_sub(prev);
         if fixed {
-            let end_pos = (section, self.section(section).frags.len() as u32);
-            self.fixed_advance(b, None, delta, (end_pos, 0), ptr);
+            let end_at = ((section, self.section(section).frags.len() as u32), 0);
+            let from = last_at.unwrap_or(end_at);
+            self.fixed_advance(b, None, delta, from, end_at, ptr);
         } else {
             special_advance(b, None, delta / min, cx.opcode_base);
         }
@@ -704,9 +703,12 @@ impl Assembler {
         b: &mut Blob,
         line_delta: Option<i64>,
         delta: u64,
+        from: (Pos, u64),
         at: (Pos, u64),
         ptr: u8,
     ) {
+        // GNU as knows how far the last row is from the end of its frag, so
+        // the advance that ends a sequence is always a number.
         let Some(line_delta) = line_delta else {
             b.u8(DW_LNS_FIXED_ADVANCE_PC);
             b.int(delta, 2);
@@ -723,9 +725,23 @@ impl Assembler {
             self.set_address(b, at, ptr);
         } else {
             b.u8(DW_LNS_FIXED_ADVANCE_PC);
-            b.int(delta, 2);
+            self.advance_field(b, from, at);
         }
         b.u8(DW_LNS_COPY);
+    }
+
+    /// The operand of a `DW_LNS_fixed_advance_pc`: the distance between two
+    /// rows, written as the difference of labels at them. Layout folds that
+    /// to the number, unless the target's linker is to work it out, as GNU as
+    /// for MSP430 has it do (see `Architecture::defers_difference`).
+    fn advance_field(&mut self, b: &mut Blob, from: (Pos, u64), to: (Pos, u64)) {
+        let t = self.pos_expr(to.0, to.1);
+        let f = self.pos_expr(from.0, from.1);
+        let e = self
+            .exprs
+            .alloc(ExprKind::Binary(BinOp::Sub, t, f), Span::DUMMY);
+        let kind = self.abs_kind(2);
+        b.fixup(2, e, kind);
     }
 }
 
