@@ -31,10 +31,16 @@ far:    jmp     start
         .space  1018
         jmp     far
 
-=== refused: a jump that does not reach
+=== the longest jump forward
         .text
 start:  jmp     far
         .space  1022
+far:    ret
+
+=== refused: a jump that does not reach
+        .text
+start:  jmp     far
+        .space  1024
 far:    ret
 
 === refused: a jump back that does not reach
