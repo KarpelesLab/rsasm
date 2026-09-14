@@ -407,7 +407,11 @@ fn assemble_inner(
     // Stack and branch instructions have a default operand size in every
     // mode, which the rest do not; the rows long mode widened say which.
     let stack = resolved.defs.iter().any(|d| d.flags & DEF64 != 0);
-    if syntax == Syntax::Intel && !stack && ambiguous_memory_size(&matches, &ops) {
+    // The extending moves always need the source's size, even where the
+    // destination leaves only one.
+    let extends = matches!(mnemonic, "movzx" | "movsx")
+        && ops.iter().any(|o| o.is_mem() && o.size_hint.is_none());
+    if syntax == Syntax::Intel && !stack && (extends || ambiguous_memory_size(&matches, &ops)) {
         cx.error(
             req.span,
             format!("`{mnemonic}` needs the size of its memory operand, as in `dword ptr [...]`"),
@@ -434,14 +438,19 @@ fn assemble_inner(
                 | "leave"
         );
     let matches = prefer_default_size(bits, gcc16, stack, matches, &resolved);
-    // A stack instruction with only immediates is the mode's size, and an
-    // immediate that does not fit it is not a reason to pick another one:
-    // `push $0xffffffff` in 64-bit code is an error, not a `pushw`.
-    if stack
-        && resolved.opsize.is_none()
+    // An instruction with only immediates is the mode's size when it has a
+    // form of that size, and an immediate that does not fit that is not a
+    // reason to pick another one: `push $0xffffffff` in 64-bit code is an
+    // error, not a `pushw`, and so is `lret $0x10000` in 32-bit code.
+    let default_size = default_operand_size(bits, gcc16, stack);
+    if resolved.opsize.is_none()
         && !ops.is_empty()
         && ops.iter().all(|o| matches!(o.kind, OperandKind::Imm(_)))
-        && matches[0].opsize != default_operand_size(bits, gcc16, stack)
+        && matches[0].opsize != default_size
+        && resolved
+            .defs
+            .iter()
+            .any(|d| d.opsize == default_size && d.ops.len() == ops.len() && available(cx, bits, d))
     {
         cx.error(
             req.span,
@@ -596,7 +605,7 @@ struct Resolved {
     /// Rows to try, unconstrained, when nothing in `defs` matched. See the
     /// note on `movq` in `resolve_mnemonic`.
     fallback: &'static [Def],
-    /// The suffix is on `jmp` or `call`, where it can name the mode's size.
+    /// The suffix is on `call`, where it can name the mode's size.
     branch: bool,
 }
 
@@ -679,6 +688,10 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     let w = suffix_width(last)?;
     let stem = &mnemonic[..mnemonic.len() - 1];
     let defs = insn::lookup(stem)?;
+    // `crc32b` and its siblings are already suffixed, and so is `movq`.
+    if stem.starts_with("crc32") || stem == "movq" {
+        return None;
+    }
     // On the Intel-style names of the extending moves, GNU as reads the
     // suffix as the width of the source: `movsxb %al, %ecx`.
     if matches!(stem, "movzx" | "movsx") {
@@ -692,7 +705,10 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     }
     // Only an instruction that comes in more than one size takes a suffix:
     // `cwtl` and `lodsl` already name theirs, so `cwtll` is no instruction.
-    if defs.iter().all(|d| d.opsize == defs[0].opsize) {
+    // An AVX-512 row's size is its `EVEX.W`, which no suffix selects.
+    if defs.iter().all(|d| d.opsize == defs[0].opsize)
+        || !defs.iter().any(|d| d.enc != Enc::Evex && d.opsize == w * 8)
+    {
         return None;
     }
     Some(Resolved {
@@ -700,7 +716,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
         opsize: Some(w * 8),
         rm_width: None,
         fallback: &[],
-        branch: matches!(stem, "jmp" | "call"),
+        branch: stem == "call",
     })
 }
 
@@ -757,10 +773,10 @@ fn select<'d>(
             out.push(def);
         }
     }
-    // A relative `jmp` or `call` has no operand size of its own to match, but
-    // takes the suffix of the mode's: `calll` in 32-bit code, `callq` in
-    // 64-bit code. Any other suffix on an instruction without sizes is
-    // refused, as GNU as refuses it.
+    // A relative `call` has no operand size of its own to match, but takes
+    // the suffix of the mode's: `callq` in 64-bit code. Any other suffix on
+    // an instruction without sizes is refused, as GNU as refuses it, and so
+    // is any suffix on a direct `jmp`.
     let branch_suffix = matches!((resolved.opsize, bits), (Some(32), 32) | (Some(64), 64));
     if out.is_empty() && resolved.branch && branch_suffix {
         for def in defs {

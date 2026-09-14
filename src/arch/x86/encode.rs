@@ -3,7 +3,7 @@
 
 use super::insn::{
     ADDR16, ADDR32, DEF64, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO64,
-    NO66, NOMASK, ONLY64, Op, PLUSREG, Tuple, Vk, WAIT,
+    NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, Tuple, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -176,7 +176,12 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             Op::V(_) if roles.rm.is_none() => roles.rm = Some(o),
             Op::Nds(_) => roles.nds = o.reg(),
             Op::Is4(_) => roles.is4 = o.reg(),
-            Op::R(_) if takes_reg_field && !special_reg && roles.reg.is_none() => {
+            Op::R(_)
+                if takes_reg_field
+                    && !special_reg
+                    && def.flags & R_IN_RM == 0
+                    && roles.reg.is_none() =>
+            {
                 roles.reg = o.reg()
             }
             // An encoding with no reg field puts its register in r/m instead.
@@ -352,14 +357,15 @@ pub fn encode(
                 return None;
             }
         },
-        // GNU as drops a segment prefix written before a direct far branch,
-        // or a direct `jmp` or `call`, which have no memory operand for it
-        // to apply to. On the near ones it keeps `cs` and `ds`, which double
-        // as branch hints, and it keeps everything before a conditional jump.
+        // GNU as drops a segment prefix written before a direct far branch
+        // or `call`, which have no memory operand for it to apply to. On a
+        // direct `jmp` it keeps `cs` and `ds`, which double as branch hints,
+        // and it keeps everything before a conditional jump.
         None if matches!(def.ops.as_slice(), [Op::Far])
+            || matches!(def.ops.as_slice(), [Op::Rel(_)]) && def.opcode == [0xe8]
             || prefixes.seg.is_some_and(|p| p != 0x2e && p != 0x3e)
                 && matches!(def.ops.as_slice(), [Op::Rel(_)])
-                && matches!(def.opcode.as_slice(), [0xe8 | 0xe9 | 0xeb]) =>
+                && matches!(def.opcode.as_slice(), [0xe9 | 0xeb]) =>
         {
             None
         }
@@ -718,10 +724,14 @@ pub fn encode(
             FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
         } else if width != 4 {
             FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
-        } else if bits == 64 && mem.as_ref().is_none_or(|m| m.addr_size == 8) {
+        } else if bits == 64
+            && mem.as_ref().is_none_or(|m| m.addr_size == 8)
+            && !(def.opcode == [0x8d] && def.opsize != 64)
+        {
             // A 64-bit-mode displacement is sign-extended to the address
             // width, so the linker has to range-check it as signed. With
-            // 32-bit addressing it is an unsigned address instead.
+            // 32-bit addressing it is an unsigned address instead, and so is
+            // the result of a `lea` into a 32-bit register.
             FixupKind::data(4).with_reloc(abi.abs32_signed())
         } else if abi == reloc::Abi::I386 && names_got(cx, e) {
             got_distance(offset as u32)
@@ -1177,7 +1187,16 @@ fn encode_rm16(
     }
     // A displacement that fits 16 bits is read as a signed word, so `0xffff`
     // is the byte -1; a wider one is truncated to a full word, as GNU as
-    // does with a warning. `bp` alone has no form without one.
+    // does with a warning. Like an immediate, anything that fits 32 bits is
+    // first read as a signed 32-bit value, so `0xffffffff` is -1 as well.
+    // `bp` alone has no form without one.
+    let disp_const = disp_const.map(|v| {
+        if (-(1 << 31)..=0xffff_ffff).contains(&v) {
+            v as i32 as i64
+        } else {
+            v
+        }
+    });
     let disp = match disp_const {
         None if m.disp.is_some() => 2,
         Some(v) if !(-0x8000..=0xffff).contains(&v) => 2,

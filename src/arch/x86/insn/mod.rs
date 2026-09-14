@@ -217,6 +217,10 @@ pub const ADDR32: u32 = 1 << 14;
 /// as the manual does.
 pub const ATT_ONLY: u32 = 1 << 15;
 pub const INTEL_ONLY: u32 = 1 << 16;
+/// A general register operand goes in ModRM.rm even beside a vector
+/// register in ModRM.reg, as in `movd %xmm0, %rax`, whose r/m operand is
+/// register-only in that form.
+pub const R_IN_RM: u32 = 1 << 17;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]

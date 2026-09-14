@@ -409,6 +409,10 @@ fn install_moves(t: &mut Tbl) {
                 opsize_bits(dst),
             ));
         }
+        // GNU as also spells `movsxd` this way.
+        if op == 0xbe {
+            defs.push(d(vec![Op::R(8), Op::Rm(4)], &[0x63], ModRm::Reg, 64).flags(ONLY64));
+        }
         t.insert(mnem, defs);
     }
     // 32-to-64 sign extension has its own opcode.
@@ -1074,6 +1078,12 @@ fn install_system(t: &mut Tbl) {
             &[0x0f, op],
             ModRm::Reg,
         ));
+        // The result is at most 32 bits, so GNU as gives a 64-bit register
+        // no REX.W (llvm-mc does).
+        let defs = defs
+            .into_iter()
+            .map(|r| if r.opsize == 64 { r.flags(NO_REX_W) } else { r })
+            .collect();
         t.insert(mnem, defs);
     }
 

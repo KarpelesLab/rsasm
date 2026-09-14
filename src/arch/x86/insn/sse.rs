@@ -16,7 +16,7 @@
 //! is why `avx.rs` can mirror these rows almost mechanically.
 
 use super::mmx::{PACKED_BINARY, SHIFT_IMM};
-use super::{ATT_ONLY, Def, ModRm, NO66, Op, Tbl, Vk, add, d};
+use super::{ATT_ONLY, Def, ModRm, NO66, Op, R_IN_RM, Tbl, Vk, add, d};
 
 /// The four floating-point flavours: name suffix, mandatory prefix, and the
 /// width of a memory operand (a scalar form reads one element, not a vector).
@@ -233,14 +233,16 @@ fn install_moves(t: &mut Tbl) {
                 ModRm::Reg,
                 64,
             )
-            .pfx(0x66),
+            .pfx(0x66)
+            .flags(R_IN_RM),
             d(
                 vec![Op::R(8), Op::V(Vk::Xmm)],
                 &[0x0f, 0x7e],
                 ModRm::Reg,
                 64,
             )
-            .pfx(0x66),
+            .pfx(0x66)
+            .flags(R_IN_RM),
         ],
     );
     // See the note in `mmx.rs` on how AT&T `movq` reaches these rows.

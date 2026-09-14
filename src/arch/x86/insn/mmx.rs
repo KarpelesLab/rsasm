@@ -10,7 +10,7 @@
 //! the operation is chosen by a byte *after* the ModRM and displacement, where
 //! an immediate would sit. See [`Def::suffix`].
 
-use super::{Def, ModRm, Op, Tbl, Vk, add, d};
+use super::{Def, ModRm, Op, R_IN_RM, Tbl, Vk, add, d};
 
 /// `op mm, mm/m64`: the shape almost every MMX instruction has.
 fn bin(op: u8) -> Vec<Def> {
@@ -155,8 +155,8 @@ pub fn install(t: &mut Tbl) {
         vec![
             d(vec![Op::V(Vk::Mm), Op::Rm(4)], &[0x0f, 0x6e], ModRm::Reg, 0),
             d(vec![Op::Rm(4), Op::V(Vk::Mm)], &[0x0f, 0x7e], ModRm::Reg, 0),
-            d(vec![Op::V(Vk::Mm), Op::R(8)], &[0x0f, 0x6e], ModRm::Reg, 64),
-            d(vec![Op::R(8), Op::V(Vk::Mm)], &[0x0f, 0x7e], ModRm::Reg, 64),
+            d(vec![Op::V(Vk::Mm), Op::R(8)], &[0x0f, 0x6e], ModRm::Reg, 64).flags(R_IN_RM),
+            d(vec![Op::R(8), Op::V(Vk::Mm)], &[0x0f, 0x7e], ModRm::Reg, 64).flags(R_IN_RM),
         ],
     );
     // In AT&T syntax `movq` is first `mov` with a `q` suffix; these rows are
