@@ -95,6 +95,10 @@ impl Endian {
     }
 }
 
+/// A bit of [`ArchState::features`] set by NASM's `default rel`: a memory
+/// operand with no register in it is RIP-relative. Only x86 reads it.
+pub const FEATURE_DEFAULT_REL: u64 = 1 << 63;
+
 /// Operand syntax flavour. Distinct from the [`crate::lexer::Dialect`]: GAS can
 /// assemble Intel-syntax operands via `.intel_syntax`, keeping `#` comments.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -213,11 +217,26 @@ impl AsmCtx<'_> {
             dollar_is_here: self.dialect.dollar_is_here(),
             star_is_here: self.dialect.star_is_here(),
             dialect: self.dialect,
+            strings: Some(self.pool),
         }
     }
 
     pub fn name(&self, n: Name) -> &str {
         self.interner.get(n)
+    }
+
+    /// The first relocation modifier (`foo wrt ..got`, `foo@PLT`) in an
+    /// expression, if any.
+    pub fn find_modifier_for(&self, e: crate::expr::ExprRef) -> Option<Name> {
+        use crate::expr::ExprKind::*;
+        match &self.exprs.get(e).kind {
+            Modifier(n, _) => Some(*n),
+            Unary(_, a) => self.find_modifier_for(*a),
+            Binary(_, a, b) => self
+                .find_modifier_for(*a)
+                .or_else(|| self.find_modifier_for(*b)),
+            _ => None,
+        }
     }
 
     /// The constant value of an expression, following `.set` definitions.
@@ -477,6 +496,14 @@ pub trait Architecture {
     /// it. SuperH's `@(8,pc)` means `. + 8`.
     fn operands_use_location(&self, _interner: &Interner, _operands: &[Token]) -> bool {
         false
+    }
+
+    /// Whether `name` (lowercased) could be one of this backend's
+    /// instructions. NASM source may write a label without a colon, and a
+    /// first word that is not an instruction is taken as one; a backend that
+    /// cannot tell says yes, which makes the colon required.
+    fn is_mnemonic(&self, _name: &str) -> bool {
+        true
     }
 
     /// Handles an architecture-specific directive such as `.code64`. Returns

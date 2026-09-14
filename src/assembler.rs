@@ -74,8 +74,8 @@ enum RepeatKind {
 }
 
 /// A file being assembled, read a statement at a time.
-struct Reader {
-    parser: Parser,
+pub(crate) struct Reader {
+    pub(crate) parser: Parser,
     /// The [`Assembler::lex_epoch`] the parser's lexing rules were taken at.
     epoch: u64,
 }
@@ -152,6 +152,8 @@ pub struct Assembler {
     pub(crate) ccrx_defines: Vec<(String, String)>,
     /// What CC-RX `.SECTION` and `.ORG` said about each section.
     pub(crate) ccrx_sections: HashMap<SectionId, crate::dialect_cc::RxSection>,
+    /// The NASM dialect's preprocessor and assembler state.
+    pub(crate) nasm: crate::nasm::State,
 }
 
 impl Assembler {
@@ -198,6 +200,7 @@ impl Assembler {
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),
             ccrx_sections: HashMap::new(),
+            nasm: crate::nasm::State::default(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -208,6 +211,17 @@ impl Assembler {
             }
         }
         asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
+        if asm.options.dialect == Dialect::Nasm {
+            // NASM operands are Intel's, and its ELF writer aligns `.text` to
+            // 16; its standard macros are defined before any source is read.
+            if asm.options.syntax.is_none() {
+                asm.arch_state.syntax = Syntax::Intel;
+            }
+            if asm.options.relocatable {
+                asm.sections[0].align = 16;
+            }
+            asm.nasm_prelude();
+        }
         asm
     }
 
@@ -286,7 +300,7 @@ impl Assembler {
     // ---- symbols ----------------------------------------------------------
 
     /// Creates an unnamed label pinned to the current position.
-    fn anon_label(&mut self, span: Span) -> SymbolId {
+    pub(crate) fn anon_label(&mut self, span: Span) -> SymbolId {
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
         let section = self.cur;
@@ -300,7 +314,7 @@ impl Assembler {
         id
     }
 
-    fn define_label(&mut self, label: &LabelDef) {
+    pub(crate) fn define_label(&mut self, label: &LabelDef) {
         let (id, span) = match *label {
             LabelDef::Named(name, span) => {
                 let id = self.symbols.intern(name, span);
@@ -386,7 +400,7 @@ impl Assembler {
 
     /// The lexing rules for source read from now on: the dialect's, and in
     /// the GNU dialect the active backend's comment characters and tuning.
-    fn lex_config(&self) -> LexConfig {
+    pub(crate) fn lex_config(&self) -> LexConfig {
         let mut config = LexConfig::for_dialect(self.options.dialect);
         if self.options.dialect == Dialect::Gas {
             let c = self.arch.comments();
@@ -401,7 +415,7 @@ impl Assembler {
     /// now. A statement is read only once the one before it has been carried
     /// out, so an `.arch` switch, in the file itself or in anything it
     /// includes or expands, applies from the next statement on.
-    fn next_statement(&mut self, reader: &mut Reader) -> Option<Statement> {
+    pub(crate) fn next_statement(&mut self, reader: &mut Reader) -> Option<Statement> {
         if self.diags.saturated() {
             return None;
         }
@@ -422,6 +436,11 @@ impl Assembler {
     /// `.macro` and the repeat directives consume statements that follow
     /// them, so the handlers read from `reader` too.
     fn run(&mut self, reader: &mut Reader) {
+        // NASM source goes through its preprocessor a line at a time.
+        if self.options.dialect == Dialect::Nasm {
+            self.run_nasm(reader);
+            return;
+        }
         while let Some(stmt) = self.next_statement(reader) {
             let more = self.run_statement(&stmt, reader);
             // Reusing the token buffer keeps an allocation and a free per
@@ -1367,6 +1386,7 @@ impl Assembler {
             dollar_is_here: self.options.dialect.dollar_is_here(),
             star_is_here: self.options.dialect.star_is_here(),
             dialect: self.options.dialect,
+            strings: Some(&self.pool),
         };
         p.parse(cur)
     }
@@ -1520,11 +1540,48 @@ impl Assembler {
 
     fn instruction(&mut self, stmt: &Statement, mnemonic: Name, span: Span) {
         let operands = &stmt.toks[stmt.args.min(stmt.toks.len())..];
+        self.instruction_tokens(operands, mnemonic, span, stmt.span);
+    }
+
+    /// Assembles an instruction and emits it into the current section.
+    pub(crate) fn instruction_tokens(
+        &mut self,
+        operands: &[crate::lexer::Token],
+        mnemonic: Name,
+        mnemonic_span: Span,
+        span: Span,
+    ) {
+        let Some((variants, relaxable)) =
+            self.assemble_instruction(operands, mnemonic, mnemonic_span, span)
+        else {
+            return;
+        };
+        // Motorola syntax aligns code as well as data; see `motorola_align`.
+        if self.options.dialect == Dialect::Motorola {
+            let unit = self.arch.align_unit();
+            self.align_to(unit, span);
+        }
+        if self.check_nobits(span) {
+            return;
+        }
+        let idx = self.cur_section().emit_variants(variants, span);
+        self.cur_section().frags[idx as usize].relaxable = relaxable;
+    }
+
+    /// The candidate encodings of an instruction, and whether its fragment
+    /// is one relaxation revisits, without emitting anything.
+    pub(crate) fn assemble_instruction(
+        &mut self,
+        operands: &[crate::lexer::Token],
+        mnemonic: Name,
+        mnemonic_span: Span,
+        span: Span,
+    ) -> Option<(Vec<crate::section::Variant>, bool)> {
         let req = InsnRequest {
             mnemonic,
-            mnemonic_span: span,
+            mnemonic_span,
             operands,
-            span: stmt.span,
+            span,
         };
         // Disjoint field borrows keep the architecture object accessible while
         // it mutates the interner, expression arena and diagnostics.
@@ -1556,17 +1613,7 @@ impl Assembler {
         };
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;
-        let Some(variants) = variants else { return };
-        // Motorola syntax aligns code as well as data; see `motorola_align`.
-        if self.options.dialect == Dialect::Motorola {
-            let unit = self.arch.align_unit();
-            self.align_to(unit, stmt.span);
-        }
-        if self.check_nobits(stmt.span) {
-            return;
-        }
-        let idx = self.cur_section().emit_variants(variants, stmt.span);
-        self.cur_section().frags[idx as usize].relaxable = relaxable;
+        variants.map(|v| (v, relaxable))
     }
 }
 

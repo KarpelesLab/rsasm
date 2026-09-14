@@ -112,6 +112,13 @@ impl Parser {
         self.offset
     }
 
+    /// Moves the reading position to `offset`, which has to be where a line
+    /// starts or the end of the file. The NASM preprocessor reads lines as
+    /// text and uses this to step past the ones it has dealt with.
+    pub fn set_offset(&mut self, offset: usize) {
+        self.offset = offset;
+    }
+
     /// Hands back a statement that has been dealt with, so the next one is
     /// read into its token buffer rather than a new allocation.
     pub fn recycle(&mut self, stmt: Statement) {

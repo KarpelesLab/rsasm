@@ -25,6 +25,14 @@ BINUTILS_SHA256=154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 VASM_URL="http://sun.hasenbraten.de/vasm/release/vasm.tar.gz"
 VASM_SHA256=c84b2de1cbb87831795fe64a85c5d9a7002a766e3a7c30b0a2d7d5e99d878f49
 
+# NASM, the reference for the `nasm` dialect. 2.16.03 is the last 2.16.x
+# release, the version most NASM source in circulation was written against.
+# The SHA-256 was taken from the tarball on nasm.us, and its SHA-512 checked
+# against the one Gentoo's dev-lang/nasm Manifest records.
+NASM_VERSION=2.16.03
+NASM_URL="https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VERSION/nasm-$NASM_VERSION.tar.xz"
+NASM_SHA256=1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148
+
 # GNU as and ld, one build per target: gas is single-target by construction.
 # The linkers are what the link tests use to check that relocations mean what
 # rsasm intends, which comparing bytes against another assembler cannot show.
@@ -53,7 +61,7 @@ src="$out/src"
 mkdir -p "$src" "$out/bin"
 jobs=$(nproc 2>/dev/null || echo 4)
 
-wanted="${*:-$BINUTILS_TARGETS vasm}"
+wanted="${*:-$BINUTILS_TARGETS vasm nasm}"
 
 fetch() { # url dest sha256
   [ -s "$2" ] || { echo "fetching $1"; curl -fsSL --retry 3 -o "$2.part" "$1" && mv "$2.part" "$2"; }
@@ -103,9 +111,24 @@ build_vasm() {
   echo "built vasmm68k_mot"
 }
 
+build_nasm() {
+  if [ -x "$out/bin/nasm" ]; then echo "nasm already built"; return; fi
+  fetch "$NASM_URL" "$src/nasm-$NASM_VERSION.tar.xz" "$NASM_SHA256"
+  rm -rf "$src/nasm-$NASM_VERSION" && tar -xJf "$src/nasm-$NASM_VERSION.tar.xz" -C "$src"
+  echo "building nasm $NASM_VERSION"
+  (
+    cd "$src/nasm-$NASM_VERSION"
+    ./configure > configure.log 2>&1
+    make -j"$jobs" nasm > make.log 2>&1
+  ) || { echo "nasm build failed; see $src/nasm-$NASM_VERSION/*.log" >&2; return 1; }
+  cp "$src/nasm-$NASM_VERSION/nasm" "$out/bin/"
+  echo "built nasm"
+}
+
 for w in $wanted; do
   case "$w" in
     vasm) build_vasm ;;
+    nasm) build_nasm ;;
     *) build_binutils "$w" ;;
   esac
 done

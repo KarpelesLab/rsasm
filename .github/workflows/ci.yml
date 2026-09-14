@@ -291,6 +291,21 @@ jobs:
             && { echo "::error::a reference assembler is missing"; exit 1; }
           exit $status
 
+      # Whole NASM programs against NASM itself: flat binaries byte for byte,
+      # ELF objects section by section with relocations and global symbols.
+      # NASM is built by the same oracles script the step above cached.
+      - name: tools/nasm-diff/run.sh
+        run: |
+          set -uo pipefail
+          tools/nasm-diff/run.sh > nasm-diff.log 2>&1
+          status=$?
+          cat nasm-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" nasm-diff.log \
+            || { echo "::error::nasm-diff compared nothing"; exit 1; }
+          grep -q "REF-MISSING" nasm-diff.log \
+            && { echo "::error::NASM is missing"; exit 1; }
+          exit $status
+
       # Flat binaries against the reference assembler's object linked by GNU
       # ld at the same base: page, split and paired values are only right if
       # they match what a linker computes.

@@ -238,7 +238,17 @@ impl Assembler {
     /// Offers a directive to the architecture backend. Returns whether the
     /// backend claimed it.
     pub(crate) fn arch_directive(&mut self, stmt: &Statement, text: &str) -> bool {
-        let mut cur = stmt.arg_cursor();
+        let args = &stmt.toks[stmt.args.min(stmt.toks.len())..];
+        self.arch_directive_tokens(text, args)
+    }
+
+    /// [`Assembler::arch_directive`], for arguments that are not a statement's.
+    pub(crate) fn arch_directive_tokens(
+        &mut self,
+        text: &str,
+        args: &[crate::lexer::Token],
+    ) -> bool {
+        let mut cur = Cursor::new(args);
         let Assembler {
             arch,
             interner,

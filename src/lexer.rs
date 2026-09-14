@@ -18,7 +18,9 @@ pub enum Dialect {
     /// GNU as: `#` and `//` comments, `;` separates statements, `.directives`.
     #[default]
     Gas,
-    /// NASM: `;` comments, no statement separator, bare `directives`.
+    /// NASM: `;` comments, no statement separator, bare `directives`, a
+    /// `%` preprocessor, and three kinds of quotes. Its directives and
+    /// preprocessor live in the crate-private `nasm` module.
     Nasm,
     /// Motorola, as spoken by vasm, Devpac and ASM-One and understood by GNU
     /// as in `--mri` mode: `$7fff` hex, `%1010` binary, `@17` octal, `;`
@@ -96,9 +98,13 @@ impl Dialect {
     /// vendor syntaxes treat it as an ordinary character; CC-RL and CC-RH list
     /// `\n`, `\xhh` and the rest (CC-RL Table 5.3, page 424; CC-RH Table 5.2,
     /// R20UT3516EJ0113 page 382). CC-RX's manual describes none, so its
-    /// strings are taken as written.
+    /// strings are taken as written. NASM reads escapes only in backquoted
+    /// strings, which its own string lexer handles.
     pub fn backslash_escapes(self) -> bool {
-        !matches!(self, Dialect::Motorola | Dialect::Renesas | Dialect::CcRx)
+        !matches!(
+            self,
+            Dialect::Motorola | Dialect::Renesas | Dialect::CcRx | Dialect::Nasm
+        )
     }
 
     /// `*` in operand position is the location counter, as in `dc.l *`. It is
@@ -164,6 +170,8 @@ impl LexConfig {
                 number_prefixes: vec![],
                 at_in_idents: false,
             },
+            // Numbers, names, strings and NASM's own operators are read by
+            // `Lexer::lex_nasm`, so only the comment rules here matter.
             Dialect::Nasm => LexConfig {
                 dialect: d,
                 line_comment: vec![";"],
@@ -311,6 +319,16 @@ pub enum Punct {
     Ge,
     AndAnd,
     OrOr,
+    /// NASM's signed division, `//`.
+    SlashSlash,
+    /// NASM's signed remainder, `%%`.
+    PercentPercent,
+    /// NASM's arithmetic right shift, `>>>`.
+    Sar,
+    /// NASM's logical exclusive or, `^^`.
+    CaretCaret,
+    /// NASM's signed three-way comparison, `<=>`.
+    Spaceship,
 }
 
 impl Punct {
@@ -327,6 +345,8 @@ impl Punct {
             Question => "?", Backslash => "\\",
             Shl => "<<", Shr => ">>", EqEq => "==", Ne => "!=",
             Le => "<=", Ge => ">=", AndAnd => "&&", OrOr => "||",
+            SlashSlash => "//", PercentPercent => "%%", Sar => ">>>",
+            CaretCaret => "^^", Spaceship => "<=>",
         }
     }
 }
@@ -624,7 +644,11 @@ impl<'a> Lexer<'a> {
             return mk(TokKind::Eol, self);
         }
 
-        if c.is_ascii_digit() {
+        if self.config.dialect == Dialect::Nasm {
+            if let Some(tok) = self.lex_nasm(start, spaced, interner, pool, diags) {
+                return tok;
+            }
+        } else if c.is_ascii_digit() {
             return self.lex_number(start, spaced, interner, diags);
         }
 
@@ -654,6 +678,185 @@ impl<'a> Lexer<'a> {
         }
 
         self.lex_punct(start, spaced, diags)
+    }
+
+    /// The NASM tokens that differ from the other dialects: numbers, names,
+    /// strings and the operators only NASM has. `None`, with nothing
+    /// consumed, for anything else.
+    ///
+    /// As NASM 2.16.03 reads them: `$` before a digit is a hex prefix and
+    /// before a name marks the name as a symbol rather than a keyword
+    /// (`$eax`); a name starts with a letter, `.`, `_` or `?` and goes on
+    /// with those, digits, `$`, `#`, `@` and `~`; `'` and `"` quote text as
+    /// written, with no escapes and no doubled quotes, while `` ` `` reads C
+    /// escapes. A quoted string is always a [`TokKind::Str`], even where it
+    /// stands for a number, since only the consumer knows which it is.
+    fn lex_nasm(
+        &mut self,
+        start: usize,
+        spaced: bool,
+        interner: &mut Interner,
+        pool: &mut LitPool,
+        diags: &mut DiagBag,
+    ) -> Option<Token> {
+        let c = self.peek();
+        let mk = |kind, this: &Self| Token {
+            kind,
+            span: this.span_from(start),
+            preceded_by_space: spaced,
+        };
+        if c.is_ascii_digit() || (c == b'$' && self.peek_at(1).is_ascii_digit()) {
+            let kind = self.lex_nasm_number(interner);
+            return Some(mk(kind, self));
+        }
+        if c == b'$' && nasm_name_start(self.peek_at(1)) {
+            self.pos += 1;
+            let from = self.pos;
+            while !self.at_end() && nasm_name_cont(self.peek()) {
+                self.pos += self.char_len();
+            }
+            let name = interner.intern(&self.src[from..self.pos]);
+            return Some(mk(TokKind::Ident(name), self));
+        }
+        // A lone `.` is not a name, though `.x` and `..@x` are.
+        if nasm_name_start(c) && (c != b'.' || nasm_name_cont(self.peek_at(1))) {
+            while !self.at_end() && nasm_name_cont(self.peek()) {
+                self.pos += self.char_len();
+            }
+            let name = interner.intern(&self.src[start..self.pos]);
+            return Some(mk(TokKind::Ident(name), self));
+        }
+        if matches!(c, b'\'' | b'"' | b'`') {
+            self.pos += 1;
+            let mut buf = Vec::new();
+            loop {
+                if self.at_end() || self.peek() == b'\n' {
+                    diags.error(self.span_from(start), "unterminated string literal");
+                    break;
+                }
+                let d = self.peek();
+                if d == c {
+                    self.pos += 1;
+                    break;
+                }
+                if c == b'`' && d == b'\\' {
+                    self.pos += 1;
+                    self.read_nasm_escape(&mut buf, diags);
+                } else {
+                    let n = self.char_len();
+                    buf.extend_from_slice(&self.bytes[self.pos..self.pos + n]);
+                    self.pos += n;
+                }
+            }
+            let idx = pool.add(buf);
+            return Some(mk(TokKind::Str(idx), self));
+        }
+        let p = match self.bytes.get(self.pos..self.pos + 3) {
+            Some(b">>>") => Some((Punct::Sar, 3)),
+            Some(b"<<<") => Some((Punct::Shl, 3)),
+            Some(b"<=>") => Some((Punct::Spaceship, 3)),
+            _ => match self.bytes.get(self.pos..self.pos + 2) {
+                Some(b"//") => Some((Punct::SlashSlash, 2)),
+                Some(b"%%") => Some((Punct::PercentPercent, 2)),
+                Some(b"^^") => Some((Punct::CaretCaret, 2)),
+                _ => None,
+            },
+        };
+        let (p, n) = p?;
+        self.pos += n;
+        Some(mk(TokKind::Punct(p), self))
+    }
+
+    /// A NASM number; see [`nasm_number`]. A run with a `.` in it, or an
+    /// exponent after one, is a floating-point constant, which comes back as
+    /// a [`TokKind::BadNumber`] carrying its text: only the data directives
+    /// take one, and they read the text themselves.
+    fn lex_nasm_number(&mut self, interner: &mut Interner) -> TokKind {
+        let start = self.pos;
+        let dollar = self.peek() == b'$';
+        if dollar {
+            self.pos += 1;
+        }
+        let mut float = false;
+        while !self.at_end() {
+            let b = self.peek();
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                self.pos += 1;
+            } else if !dollar && b == b'.' && self.peek_at(1) != b'.' {
+                float = true;
+                self.pos += 1;
+            } else if float
+                && matches!(b, b'+' | b'-')
+                && matches!(self.bytes[self.pos - 1], b'e' | b'E' | b'p' | b'P')
+            {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let text = &self.src[start..self.pos];
+        match nasm_number(text) {
+            Some(v) if !float => TokKind::Int(v),
+            _ => TokKind::BadNumber(interner.intern(text)),
+        }
+    }
+
+    /// One escape in a NASM backquoted string, the backslash consumed. An
+    /// unknown one stands for the character after the backslash, as in NASM.
+    fn read_nasm_escape(&mut self, buf: &mut Vec<u8>, diags: &mut DiagBag) {
+        let esc_start = self.pos - 1;
+        if self.at_end() || self.peek() == b'\n' {
+            return;
+        }
+        let c = self.peek();
+        self.pos += 1;
+        let digits = |this: &mut Self, radix: u32, max: usize| {
+            let mut v = 0u32;
+            for _ in 0..max {
+                match (this.peek() as char).to_digit(radix) {
+                    Some(d) => {
+                        v = v.wrapping_mul(radix).wrapping_add(d);
+                        this.pos += 1;
+                    }
+                    None => break,
+                }
+            }
+            v
+        };
+        let byte = match c {
+            b'a' => 7,
+            b'b' => 8,
+            b't' => 9,
+            b'n' => 10,
+            b'v' => 11,
+            b'f' => 12,
+            b'r' => 13,
+            b'e' => 27,
+            b'0'..=b'7' => {
+                self.pos -= 1;
+                digits(self, 8, 3) as u8
+            }
+            b'x' => digits(self, 16, 2) as u8,
+            b'u' | b'U' => {
+                let v = digits(self, 16, if c == b'u' { 4 } else { 8 });
+                match char::from_u32(v) {
+                    Some(ch) => {
+                        let mut tmp = [0u8; 4];
+                        buf.extend_from_slice(ch.encode_utf8(&mut tmp).as_bytes());
+                    }
+                    None => diags.error(
+                        self.span_from(esc_start),
+                        format!(
+                            "`{}` is not a Unicode character",
+                            &self.src[esc_start..self.pos]
+                        ),
+                    ),
+                }
+                return;
+            }
+            other => other,
+        };
+        buf.push(byte);
     }
 
     fn lex_punct(&mut self, start: usize, spaced: bool, diags: &mut DiagBag) -> Token {
@@ -1103,6 +1306,72 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// The value of a NASM integer literal, or `None` if `text` is not one.
+///
+/// This is NASM 2.16.03's `readnum`: a radix prefix (`0x`, `0h`, `0d`,
+/// `0t`, `0o`, `0q`, `0b`, `0y`, or `$`), a radix suffix (`h`, `x`, `d`,
+/// `t`, `o`, `q`, `b`, `y`) or neither, with underscores anywhere. Where both
+/// a prefix and a suffix could apply, the prefix wins if everything after it
+/// is a digit of its radix: `0b101` is binary, `0b1h` hex.
+pub fn nasm_number(text: &str) -> Option<u64> {
+    let b = text.as_bytes();
+    let radix_letter = |c: u8| -> Option<u32> {
+        Some(match c | 0x20 {
+            b'b' | b'y' => 2,
+            b'o' | b'q' => 8,
+            b'd' | b't' => 10,
+            b'h' | b'x' => 16,
+            _ => return None,
+        })
+    };
+    let digits = |s: &[u8], radix: u32| -> Option<u64> {
+        let mut v: u64 = 0;
+        let mut any = false;
+        for &c in s {
+            if c == b'_' {
+                continue;
+            }
+            let d = (c as char).to_digit(radix)?;
+            v = v.wrapping_mul(radix as u64).wrapping_add(d as u64);
+            any = true;
+        }
+        any.then_some(v)
+    };
+    let len = b.len();
+    let prefix = if len > 2 && b[0] == b'0' {
+        radix_letter(b[1]).map(|r| (r, 2))
+    } else if len > 1 && b[0] == b'$' {
+        Some((16, 1))
+    } else {
+        None
+    };
+    if let Some((radix, skip)) = prefix
+        && let Some(v) = digits(&b[skip..], radix)
+    {
+        return Some(v);
+    }
+    if len > 1
+        && b[0] != b'$'
+        && let Some(radix) = radix_letter(b[len - 1])
+    {
+        return digits(&b[..len - 1], radix);
+    }
+    if prefix.is_some() {
+        return None;
+    }
+    digits(b, 10)
+}
+
+fn nasm_name_start(c: u8) -> bool {
+    c.is_ascii_alphabetic() || matches!(c, b'_' | b'.' | b'?') || c >= 0x80
+}
+
+fn nasm_name_cont(c: u8) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, b'_' | b'$' | b'#' | b'@' | b'~' | b'.' | b'?')
+        || c >= 0x80
+}
+
 fn is_ident_start(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_' || c >= 0x80
 }
@@ -1191,9 +1460,12 @@ mod tests {
 
     #[test]
     fn nasm_radix_suffixes() {
-        let (k, _) = lex_all("0ffh 1010b 17q 99d 0b1010 0xff 010", Dialect::Nasm);
+        let (k, _) = lex_all(
+            "0ffh 1010b 17q 99d 0b1010 0xff 010 $0F 0h1f 1_000y 0b1h",
+            Dialect::Nasm,
+        );
         assert_eq!(
-            &k[..7],
+            &k[..11],
             &[
                 TokKind::Int(255),
                 TokKind::Int(10),
@@ -1203,6 +1475,11 @@ mod tests {
                 TokKind::Int(255),
                 // NASM has no leading-zero octal rule.
                 TokKind::Int(10),
+                TokKind::Int(15),
+                TokKind::Int(31),
+                TokKind::Int(8),
+                // A prefix whose digits do not fit gives way to the suffix.
+                TokKind::Int(0xb1),
             ]
         );
     }
@@ -1320,9 +1597,14 @@ mod tests {
         assert_eq!(k[1], TokKind::Int(b'a' as u64));
         assert_eq!(k[2], TokKind::Punct(Punct::Comma));
         assert_eq!(k[3], TokKind::Int(b'b' as u64));
-        // NASM packs multi-character literals big-endian.
-        let (k, _) = lex_all("'ab'", Dialect::Nasm);
-        assert_eq!(k[0], TokKind::Int(0x6162));
+        // NASM quotes are strings, escapes only between backquotes; as a
+        // number one is read little-endian, which is the consumer's job.
+        let (k, h) = lex_all(r"'a\n' `a\tb`", Dialect::Nasm);
+        let (TokKind::Str(a), TokKind::Str(b)) = (k[0], k[1]) else {
+            panic!("not strings: {k:?}")
+        };
+        assert_eq!(h.pool.get(a), br"a\n");
+        assert_eq!(h.pool.get(b), b"a\tb");
     }
 
     #[test]
