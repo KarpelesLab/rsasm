@@ -1,9 +1,15 @@
 #!/bin/bash
 # Differential test against GNU as.
 #
-# Assembles the same source with rsasm and with the host's GNU as, and
-# compares the resulting .text bytes. Requires binutils; the hermetic
-# expectations in tests/x86_encoding.rs were produced by running this.
+# Assembles the same source with rsasm and with GNU as, and compares the
+# resulting .text bytes. The hermetic expectations in tests/x86_encoding.rs
+# were produced by running this.
+#
+# The reference is the pinned GNU as 2.47 that tools/oracles/build.sh builds
+# (x86_64-elf-as, found through RSASM_ORACLES as for the other harnesses).
+# Without it the host's `as` is used, with a warning: GNU as keeps changing
+# its x86 output — 2.42 has no `salc` and marks fewer GOT loads relaxable
+# than 2.46 — so only the pinned build is a stable reference.
 #
 #   tools/gas-diff/run.sh                 # every corpus
 #   tools/gas-diff/run.sh <file>...       # just these
@@ -27,7 +33,16 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
-command -v as >/dev/null || { echo "GNU as not found; skipping" >&2; exit 0; }
+bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
+if [ -x "$bin/x86_64-elf-as" ]; then
+  gas="$bin/x86_64-elf-as"
+elif command -v as >/dev/null; then
+  gas=as
+  echo "warning: no pinned x86_64-elf-as in $bin; using the host's $(as --version | head -1)" >&2
+else
+  echo "GNU as not found; skipping" >&2
+  exit 0
+fi
 cargo build --quiet --manifest-path "$root/Cargo.toml" --example hexdump --bin rsasm || exit 1
 hexdump="$root/target/debug/examples/hexdump"
 rsasm="$root/target/debug/rsasm"
@@ -57,7 +72,7 @@ gas() {
   local d
   d=$(mktemp -d)
   cat > "$d/in.s"
-  if ! as $gasflags -o "$d/out.o" "$d/in.s" 2> "$d/err"; then
+  if ! "$gas" $gasflags -o "$d/out.o" "$d/in.s" 2> "$d/err"; then
     echo "GAS-ERROR: $(grep -v 'Assembler messages' "$d/err" | head -3 | tr '\n' ' ')"
     rm -rf "$d"; return
   fi
@@ -87,7 +102,7 @@ compare_object() { # name, source
   local name=$1 src=$header$2 g r d
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
-  if as $gasflags -o "$d/g.o" "$d/in.s" 2> "$d/err"; then
+  if "$gas" $gasflags -o "$d/g.o" "$d/in.s" 2> "$d/err"; then
     g=$("$root/tools/mc-diff/canon.sh" "$d/g.o")
   else
     g="GAS-ERROR: $(grep -v 'Assembler messages' "$d/err" | head -3 | tr '\n' ' ')"
