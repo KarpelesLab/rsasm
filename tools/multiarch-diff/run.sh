@@ -56,6 +56,8 @@ rx|xas rx-elf-as|P
 rl78|xas rl78-elf-as|.text
 v850|xas v850-elf-as|.text
 rh850|xas v850-elf-as -mv850e3v5|.text
+msp430|xas msp430-elf-as -mcpu=430|.text
+msp430x|xas msp430-elf-as -mcpu=430x|.text
 "
 
 command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found" >&2; exit 0; }
