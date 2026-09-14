@@ -296,6 +296,9 @@ pub enum Tuple {
     T1s8,
     T1s16,
     T1s32,
+    /// And a fixed quadword, for the double-precision scalar converted to a
+    /// 32-bit register (`vcvtsd2usi %xmm0, %eax`), whose `W` is 0.
+    T1s64,
     /// Tuple4: four elements, sized by `EVEX.W` — the `32x4`/`64x4` inserts,
     /// extracts and broadcasts.
     T4,
@@ -351,6 +354,7 @@ impl Tuple {
             Tuple::T1s8 => 1,
             Tuple::T1s16 => 2,
             Tuple::T1s32 => 4,
+            Tuple::T1s64 => 8,
             Tuple::T2 => elem * 2,
             Tuple::T4 => elem * 4,
             Tuple::T8 => elem * 8,
@@ -458,6 +462,25 @@ impl Def {
     /// 64-bit operand size.
     pub fn vex_w(&self) -> bool {
         self.opsize == 64
+    }
+
+    /// The `N` of the `{1toN}` this row's memory operand broadcasts with, or
+    /// `None` if it cannot broadcast: the element count of the memory the
+    /// full-width form would read.
+    pub fn broadcast_count(&self) -> Option<u32> {
+        if !self.tuple.broadcastable() {
+            return None;
+        }
+        let vbytes = self.vlen as u32 / 8;
+        Some(match self.tuple {
+            // A half-vector source is half the register, in dword elements.
+            Tuple::Hv => vbytes / 2 / 4,
+            // Half-precision elements are words.
+            Tuple::Fvw => vbytes / 2,
+            Tuple::Hvw => vbytes / 2 / 2,
+            Tuple::Qvw => vbytes / 4 / 2,
+            _ => vbytes / if self.vex_w() { 8 } else { 4 },
+        })
     }
 }
 
@@ -664,7 +687,7 @@ mod tests {
                 // Packed forms need the full 512 bits; scalars ignore L'L.
                 let scalar = matches!(
                     d.tuple,
-                    Tuple::T1s | Tuple::T1s16 | Tuple::T1s32 | Tuple::None
+                    Tuple::T1s | Tuple::T1s16 | Tuple::T1s32 | Tuple::T1s64 | Tuple::None
                 );
                 assert!(d.vlen == 512 || scalar, "`{m}`: {d:?}");
             }

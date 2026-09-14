@@ -3,7 +3,7 @@
 
 use super::insn::{
     ADDR16, ADDR32, DEF64, DISTINCT_DEST, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK,
-    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Tuple, Vk, WAIT,
+    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -436,6 +436,15 @@ pub fn encode(
             span,
             "the destination register must differ from both sources",
         );
+        return None;
+    }
+    // AMX's tile arithmetic reads and writes whole tiles in place, so no two
+    // of its three tiles may be the same.
+    if let (Some(a), Some(b), Some(c)) = (roles.reg, roles.nds, rm_reg)
+        && a.class == RegClass::Tmm
+        && (a == b || a == c || b == c)
+    {
+        cx.error(span, "all three tile registers must be different");
         return None;
     }
 
@@ -984,28 +993,37 @@ fn check_decorators(
         cx.error(d.span, "`{z}` requires a writemask register");
         return None;
     }
+    // A result written to an opmask has nothing for `{z}` to zero: the
+    // writemask already clears the bits it leaves out.
+    if d.zeroing && def.ops.first() == Some(&Op::V(Vk::K)) {
+        cx.error(
+            d.span,
+            "`{z}` cannot be used with a mask register destination",
+        );
+        return None;
+    }
+    // Nor does a store to memory, or a gather, whose mask is its own
+    // bookkeeping.
+    let stores = matches!(
+        def.ops.first(),
+        Some(Op::M(_) | Op::Vm(..) | Op::Vsib(_) | Op::Rm(_))
+    ) && roles.rm.is_some_and(|o| o.is_mem());
+    if d.zeroing && (stores || def.flags & NEEDS_MASK != 0) {
+        cx.error(d.span, "`{z}` cannot be used on this instruction");
+        return None;
+    }
     if let Some(b) = d.broadcast {
         let bspan = b.span;
         if !has_mem {
             cx.error(bspan, "a broadcast decorator needs a memory operand");
             return None;
         }
-        if !def.tuple.broadcastable() {
+        let Some(n) = def.broadcast_count() else {
             cx.error(bspan, "this instruction does not support broadcast");
             return None;
-        }
+        };
         // N is redundant — it is the register's element count — so it is
         // recomputed and the source's spelling checked against it.
-        let vbytes = def.vlen as u32 / 8;
-        let n = match def.tuple {
-            // A half-vector source is half the register, in dword elements.
-            Tuple::Hv => vbytes / 2 / 4,
-            // Half-precision elements are words.
-            Tuple::Fvw => vbytes / 2,
-            Tuple::Hvw => vbytes / 2 / 2,
-            Tuple::Qvw => vbytes / 4 / 2,
-            _ => vbytes / if def.vex_w() { 8 } else { 4 },
-        };
         if b.count != n {
             cx.error(bspan, format!("this operand broadcasts as `{{1to{n}}}`"));
             return None;
@@ -1355,6 +1373,7 @@ pub fn nop_bytes(bits: u8, len: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::insn::Tuple;
     use super::*;
 
     #[test]

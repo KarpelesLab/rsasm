@@ -579,7 +579,9 @@ fn install_dq(t: &mut Tbl) {
         ("vbroadcastf32x8", 0x1b, Vk::Ymm, false, Tuple::T8, &[512]),
         ("vbroadcasti32x8", 0x5b, Vk::Ymm, false, Tuple::T8, &[512]),
     ] {
-        let memw = if tuple == Tuple::T2 { 8 } else { 32 };
+        // Two or eight elements of the row's width.
+        let elem = if w { 8 } else { 4 };
+        let memw = elem * if tuple == Tuple::T2 { 2 } else { 8 };
         for &l in lens {
             add(
                 t,
@@ -1156,7 +1158,11 @@ fn install_f_rest(t: &mut Tbl) {
             )
             .flags(ctl | NOMASK);
             // The tuple follows the scalar, not the register `W` selects.
-            def.tuple = if memw == 4 { Tuple::T1s32 } else { Tuple::T1s };
+            def.tuple = if memw == 4 {
+                Tuple::T1s32
+            } else {
+                Tuple::T1s64
+            };
             def.opsize = gpr * 8;
             add(t, mnem, vec![def]);
         }
@@ -1288,7 +1294,7 @@ fn install_f_rest(t: &mut Tbl) {
         let tuple = if pfx == 0xf3 {
             Tuple::T1s32
         } else {
-            Tuple::T1s
+            Tuple::T1s64
         };
         let memw = if pfx == 0xf3 { 4 } else { 8 };
         for gpr in [4u8, 8] {

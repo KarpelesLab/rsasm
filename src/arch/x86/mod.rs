@@ -604,6 +604,13 @@ fn assemble_inner(
             rounding = Some((ctl, o.span));
         }
     }
+    if let Some(pos) = ops.iter().position(|o| o.rounding().is_some())
+        && cx.dialect != crate::lexer::Dialect::Nasm
+        && !rounding_in_place(&ops, pos, syntax)
+    {
+        cx.error(ops[pos].span, "the rounding-control operand is misplaced");
+        return None;
+    }
     ops.retain(|o| o.rounding().is_none());
 
     // NASM's default optimizer loads a 64-bit register from a non-negative
@@ -629,6 +636,14 @@ fn assemble_inner(
     if matches.is_empty() {
         report_no_match(cx, req, mnemonic, &resolved, &ops);
         return None;
+    }
+    // A `{1toN}` says how long the vector is where a memory operand alone
+    // cannot, as in `vcvtpd2ps (%rax){1to4}, %xmm0`. A count no row has is
+    // left for the encoder to report.
+    if let Some(n) = ops.iter().find_map(|o| o.decor.broadcast.map(|b| b.count))
+        && matches.iter().any(|d| d.broadcast_count() == Some(n))
+    {
+        matches.retain(|d| d.broadcast_count() == Some(n));
     }
     // `{vex}` and `{evex}` narrow the choice to one encoding. That is the only
     // way to reach the VEX forms of AVX-VNNI and AVX-IFMA, whose mnemonics
@@ -821,6 +836,36 @@ fn prefer_evex_when_required<'d>(
     matches.into_iter().filter(|d| d.enc == Enc::Evex).collect()
 }
 
+/// True if a `{rn-sae}` or `{sae}` operand at `pos` (in Intel order) is where
+/// GNU as accepts one.
+///
+/// In AT&T syntax it comes first, or after one immediate or one general
+/// register (`vcvtsi2sd %rax, {rz-sae}, %xmm1, %xmm2`), and a general register
+/// cannot be the first register written after it. Intel syntax writes it
+/// after the register and memory operands and before any immediate, with at
+/// most one general register behind it. llvm-mc is stricter in Intel syntax,
+/// where it wants the mirror of the AT&T order.
+fn rounding_in_place(ops: &[Operand], pos: usize, syntax: Syntax) -> bool {
+    let gpr = |o: &Operand| o.reg().is_some_and(|r| r.is_gpr());
+    let imm = |o: &Operand| matches!(o.kind, OperandKind::Imm(_));
+    let (before, after) = (&ops[..pos], &ops[pos + 1..]);
+    if before.iter().any(imm) {
+        return false;
+    }
+    match syntax {
+        Syntax::Att => {
+            // `after` is what the source wrote before the decorator.
+            let last_reg = ops.iter().rposition(|o| o.reg().is_some());
+            after.len() <= 1
+                && after.iter().all(|o| imm(o) || gpr(o))
+                && !last_reg.is_some_and(|i| i < pos && gpr(&ops[i]))
+        }
+        Syntax::Intel => {
+            after.iter().all(|o| imm(o) || gpr(o)) && after.iter().filter(|o| gpr(o)).count() <= 1
+        }
+    }
+}
+
 /// Swaps in a later VEX form when it encodes shorter than the preferred one.
 ///
 /// A register-to-register `vmovaps` can be written with the load opcode or the
@@ -987,9 +1032,17 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     }
     // Only an instruction that comes in more than one size takes a suffix:
     // `cwtl` and `lodsl` already name theirs, so `cwtll` is no instruction.
-    // An AVX-512 row's size is its `EVEX.W`, which no suffix selects.
+    // An AVX-512 row's size is its `EVEX.W`, which no suffix selects, unless
+    // the row's `W` sizes a general register, as `vcvtusi2sd`'s does.
+    let gpr_sized = |d: &Def| {
+        d.ops
+            .iter()
+            .any(|o| matches!(o, Op::Rm(x) | Op::R(x) if *x == w))
+    };
     if defs.iter().all(|d| d.opsize == defs[0].opsize)
-        || !defs.iter().any(|d| d.enc != Enc::Evex && d.opsize == w * 8)
+        || !defs
+            .iter()
+            .any(|d| d.opsize == w * 8 && (d.enc != Enc::Evex || gpr_sized(d)))
     {
         return None;
     }
@@ -1411,9 +1464,13 @@ fn ambiguous_memory_size(bits: u8, matches: &[&Def], ops: &[Operand]) -> bool {
         _ => 0,
     };
     // A 64-bit operation outside long mode is no rival.
-    let mut usable = matches
-        .iter()
-        .filter(|d| bits == 64 || d.opsize != 64 || d.flags & DEF64 != 0);
+    let mut usable = matches.iter().filter(|d| {
+        // A VEX or EVEX `W1` is no 64-bit operation unless it sizes a
+        // general register, as `vcvtsi2sd`'s does.
+        let vector_w =
+            d.enc != Enc::Legacy && !d.ops.iter().any(|o| matches!(o, Op::Rm(_) | Op::R(_)));
+        bits == 64 || d.opsize != 64 || d.flags & DEF64 != 0 || vector_w
+    });
     let Some(first) = usable.next().map(|d| width(d)) else {
         return false;
     };
