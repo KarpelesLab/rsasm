@@ -56,6 +56,9 @@ pub mod superh;
 #[cfg(feature = "k78")]
 pub mod k78;
 
+#[cfg(feature = "avr")]
+pub mod avr;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Endian {
     Little,
@@ -133,7 +136,7 @@ impl CommentSyntax {
 
 /// What a relocation modifier makes of a value in a flat binary; see
 /// [`Architecture::flat_modifier`].
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum FlatModifier {
     /// The value itself. `call foo@PLT` in an image with no PLT calls `foo`.
     Plain,
@@ -143,6 +146,11 @@ pub enum FlatModifier {
     PcRelative,
     /// Something only a linker creates, such as a GOT entry; refused.
     LinkerOnly,
+    /// The value put through a function: AVR's `lo8(x)` is the low byte of
+    /// `x` whatever `x` is. Such a modifier is arithmetic rather than
+    /// something only a linker can do, so it applies wherever the value is
+    /// known — in an object as well as in a flat image.
+    Value(fn(i64) -> i64),
 }
 
 /// Something a backend asks the core to do to the section, which it cannot do
@@ -550,14 +558,27 @@ pub trait Architecture {
         self.modifier_reloc(name, kind.size, kind.pcrel)
     }
 
-    /// What a source-level `@` modifier means in a flat binary, where there is
-    /// no relocation for it to choose and no linker to build what it names.
-    /// Only asked about modifiers on fixups whose [`FixupKind::link`] is
-    /// plain; the default refuses them all.
+    /// What a source-level relocation modifier means where the value is
+    /// known: in a flat binary, which has no relocation for it to choose and
+    /// no linker to build what it names, and for a
+    /// [`FlatModifier::Value`] modifier in an object too. Only asked about
+    /// modifiers on fixups whose [`FixupKind::link`] is plain; the default
+    /// refuses them all.
     ///
     /// [`FixupKind::link`]: crate::section::FixupKind::link
     fn flat_modifier(&self, _name: &str) -> FlatModifier {
         FlatModifier::LinkerOnly
+    }
+
+    /// Relocation modifiers this target's GNU as writes around the whole of
+    /// a data directive's value as a call, `.word pm(main)`, rather than as
+    /// the `main@pm` suffix the GNU syntax otherwise uses. Only AVR has them.
+    /// A name is one only where a `(` follows it, so a symbol of the same
+    /// name still works; [`Architecture::modifier_reloc`] then says which
+    /// relocation it picks and [`Architecture::flat_modifier`] what it
+    /// computes.
+    fn expr_modifiers(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Comment characters in GNU-style source. Ignored for the NASM dialect,
@@ -980,6 +1001,10 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     if let Some(a) = k78::lookup(&lower) {
         return Some(a);
     }
+    #[cfg(feature = "avr")]
+    if let Some(a) = avr::lookup(&lower) {
+        return Some(a);
+    }
     let _ = lower;
     None
 }
@@ -1018,6 +1043,8 @@ pub fn available() -> Vec<&'static str> {
     v.extend_from_slice(superh::NAMES);
     #[cfg(feature = "k78")]
     v.extend_from_slice(k78::NAMES);
+    #[cfg(feature = "avr")]
+    v.extend_from_slice(avr::NAMES);
     v
 }
 

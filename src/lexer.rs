@@ -175,6 +175,10 @@ pub struct LexConfig {
     /// `@` may start or continue an identifier, as the CC-RL and CC-RH symbol
     /// rules allow (CC-RL §5.1.2 (3)(b), page 428; CC-RH §5.1.12, page 423).
     pub at_in_idents: bool,
+    /// `$` may continue an identifier, as GNU as's default character table
+    /// has it. AVR's port takes it out (`LEX_DOLLAR 0`), since there `$`
+    /// separates statements.
+    pub dollar_in_idents: bool,
     /// `AF'`, the Z80's alternate register pair, is a name: a quote straight
     /// after `AF` is its prime rather than the start of a character literal.
     pub primed_af: bool,
@@ -199,6 +203,7 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -216,6 +221,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -232,6 +238,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![('$', 16), ('%', 2), ('@', 8)],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -247,6 +254,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -268,6 +276,7 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -286,6 +295,7 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -305,6 +315,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 mnemonic: None,
             },
@@ -325,6 +336,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![('$', 16), ('%', 2)],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: true,
                 mnemonic: None,
             },
@@ -724,7 +736,8 @@ impl<'a> Lexer<'a> {
         }
 
         let at = self.config.at_in_idents;
-        let cont = |b: u8| is_ident_cont(b) || (at && b == b'@');
+        let dollar = self.config.dollar_in_idents;
+        let cont = |b: u8| (is_ident_cont(b) && (dollar || b != b'$')) || (at && b == b'@');
         if is_ident_start(c) || (at && c == b'@') || (c == b'.' && cont(self.peek_at(1))) {
             // Identifiers may contain non-ASCII characters, so advance by
             // whole characters and never leave `pos` inside one.

@@ -2,8 +2,8 @@
 # Differential test against cross assemblers built by tools/oracles/build.sh.
 #
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
-# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, and the 8-bit Z80,
-# 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
+# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, AVR, and the 8-bit
+# Z80, 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
 # compares the code bytes. ARM and Thumb, which llvm-mc does assemble, are here
 # too, as whole objects, for what GNU as decides and llvm-mc decides
 # differently: literal pools, interworking and mapping symbols.
@@ -19,8 +19,8 @@
 # objects instead: every allocated section's header and bytes, the global,
 # weak and undefined symbols, and the relocations, as tools/mc-diff/canon.sh
 # prints them; for ARM and Thumb also `e_flags` and every local symbol, with
-# `canon.sh --full`. A snippet there named `refused: ...` matches when both
-# assemblers reject it.
+# `canon.sh --full`, and for AVR `e_flags`, with `canon.sh --flags`. A snippet
+# there named `refused: ...` matches when both assemblers reject it.
 #
 # ARM is checked against GNU as for ARMv7-A, whose Thumb-2 no-ops and
 # interworking rules are what `-march=armv7-a` gives; without it GNU as
@@ -78,6 +78,10 @@ z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
+avr|avr|gas|avr-elf-as|elf:.text
+avr51|avr51|gas|avr-elf-as -mmcu=avr51|elf:.text
+avrxmega|atxmega128a1u|gas|avr-elf-as -mmcu=atxmega128a1u|elf:.text
+avrtiny|avrtiny|gas|avr-elf-as -mmcu=avrtiny|elf:.text
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
@@ -165,7 +169,10 @@ compare_object() { # key arch dialect cmd name source
   # and `B_1`, which rsasm does not; asked to keep the usual names, it does.
   case "$1" in rx*) flags=-muse-conventional-section-names ;; esac
   # ARM objects are compared whole, local symbols and `e_flags` included.
-  case "$1" in arm | thumb) full=--full ;; esac
+  # AVR objects with their `e_flags`, which name the core and say the object
+  # is prepared for linker relaxation; their local symbols are the labels
+  # relocations name, which canon.sh already reads by section and offset.
+  case "$1" in arm | thumb) full=--full ;; avr*) full=--flags ;; esac
   d=$(mktemp -d)
   printf '%s\n' "$6" > "$d/in.s"
   if [ ! -x "$bin/$tool" ]; then

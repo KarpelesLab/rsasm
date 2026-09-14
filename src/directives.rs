@@ -380,7 +380,7 @@ impl Assembler {
         }
         loop {
             let mark = self.exprs.len();
-            let Some(e) = self.parse_expr(cur) else {
+            let Some(e) = self.parse_data_expr(cur) else {
                 return true;
             };
             if self.dwarf.line.pending {
@@ -399,6 +399,41 @@ impl Assembler {
             }
         }
         true
+    }
+
+    /// One value of a data directive. On a target whose relocation modifiers
+    /// are written as a call around the whole value (AVR's `.word pm(main)`;
+    /// see [`Architecture::expr_modifiers`]) that call is read here, as GNU
+    /// as reads it in `avr_parse_cons_expression`: only directly after the
+    /// directive or a comma, and only where a `(` follows the name.
+    ///
+    /// [`Architecture::expr_modifiers`]: crate::arch::Architecture::expr_modifiers
+    fn parse_data_expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
+        let tok = cur.peek();
+        let name = tok.ident().and_then(|n| {
+            let text = self.interner.get(n);
+            self.arch
+                .expr_modifiers()
+                .iter()
+                .find(|m| text.eq_ignore_ascii_case(m))
+                .copied()
+        });
+        let Some(name) = name.filter(|_| cur.nth(1).is_punct(Punct::LParen)) else {
+            return self.parse_expr(cur);
+        };
+        cur.advance();
+        let open = cur.advance();
+        let inner = self.parse_expr(cur)?;
+        let Some(close) = cur.eat_punct(Punct::RParen) else {
+            self.diags.emit(
+                crate::diag::Diagnostic::error(cur.peek().span, "expected `)`")
+                    .with_note(open.span, "to match this `(`"),
+            );
+            return None;
+        };
+        let name = self.interner.intern(name);
+        let kind = crate::expr::ExprKind::Modifier(name, inner);
+        Some(self.exprs.alloc(kind, tok.span.to(close.span)))
     }
 
     /// Pads to a `size`-byte boundary ahead of data that must start on one,
@@ -426,10 +461,50 @@ impl Assembler {
             return;
         }
         self.bind_here_to_item(e);
+        let mut reloc = self.arch.data_reloc(size, false).unwrap_or(0);
+        // A modifier the target does not recognise used to fall back to the
+        // plain data relocation, so `.long foo@got` quietly became an
+        // absolute reference to `foo`. That is a different program, so it is
+        // an error instead. The check comes before the constant fold below
+        // because a modifier can be wrong for the field's width whatever the
+        // value is: AVR has `pm()` for a `.word` and none for a `.byte`.
+        if let Some(m) = self.find_modifier(e) {
+            let name = self.interner.get(m).to_string();
+            match self.arch.modifier_reloc(&name, size, false) {
+                Some(r) => reloc = r,
+                None => {
+                    let espan = self.exprs.span(e);
+                    // Spelled the way the target writes it: `lo8(x)` on AVR,
+                    // `x@got` everywhere else.
+                    let written = if self.arch.expr_modifiers().contains(&name.as_str()) {
+                        format!("`{name}()`")
+                    } else {
+                        format!("`@{name}`")
+                    };
+                    self.diags.error(
+                        espan,
+                        format!(
+                            "{written} is not a relocation modifier the `{}` backend supports \
+                             in a {size}-byte data field",
+                            self.arch.name()
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
         // Resolve now if it already has a value: a `.set` symbol is a
         // snapshot at each use, so a later redefinition must not reach back
-        // and change bytes that were already emitted.
+        // and change bytes that were already emitted. A modifier that is
+        // arithmetic, such as AVR's `lo8()`, applies to that value.
         if let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs()) {
+            let v = match self.find_modifier(e) {
+                Some(m) => match self.arch.flat_modifier(self.interner.get(m)) {
+                    crate::arch::FlatModifier::Value(f) => f(v),
+                    _ => v,
+                },
+                None => v,
+            };
             let kind = crate::section::FixupKind::data(size);
             if !kind.fits(v as i128) {
                 let espan = self.exprs.span(e);
@@ -440,29 +515,6 @@ impl Assembler {
             let bytes = self.arch.endian().bytes(v as u64, size as usize);
             self.cur_section().emit_bytes(&bytes, span);
             return;
-        }
-        let mut reloc = self.arch.data_reloc(size, false).unwrap_or(0);
-        // A modifier the target does not recognise used to fall back to the
-        // plain data relocation, so `.long foo@got` quietly became an
-        // absolute reference to `foo`. That is a different program, so it is
-        // an error instead.
-        if let Some(m) = self.find_modifier(e) {
-            let name = self.interner.get(m).to_string();
-            match self.arch.modifier_reloc(&name, size, false) {
-                Some(r) => reloc = r,
-                None => {
-                    let espan = self.exprs.span(e);
-                    self.diags.error(
-                        espan,
-                        format!(
-                            "`@{name}` is not a relocation modifier the `{}` backend supports \
-                             in a {size}-byte data field",
-                            self.arch.name()
-                        ),
-                    );
-                    return;
-                }
-            }
         }
         let kind = crate::section::FixupKind::data(size).with_reloc(reloc);
         let espan = self.exprs.span(e);

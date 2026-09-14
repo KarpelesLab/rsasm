@@ -996,10 +996,15 @@ impl Assembler {
             | LinkValue::LinkerOnly(_) => {}
         }
         // A modifier on a plain reference (`.long foo@PLT`) only picks the
-        // relocation in an object; in a flat image it decides the value.
-        if flat && let Some(m) = self.find_modifier(e) {
+        // relocation in an object; in a flat image it decides the value. One
+        // that is arithmetic (AVR's `lo8()`) decides it either way.
+        if let Some(m) = self.find_modifier(e) {
             let name = self.interner.get(m);
             match self.frag_arch(section.0 as usize, fi).0.flat_modifier(name) {
+                FlatModifier::Value(f) => {
+                    return self.plain_fixup_value(e, kind, section, fi, at).map(f);
+                }
+                _ if !flat => {}
                 FlatModifier::Plain => {}
                 FlatModifier::PcRelative if kind.pcrel => {}
                 FlatModifier::PcRelative => {
@@ -1170,7 +1175,7 @@ impl Assembler {
         let m = self.find_modifier(e)?;
         let name = self.interner.get(m);
         let arch = self.frag_arch(section.0 as usize, fi).0;
-        (arch.flat_modifier(name) == FlatModifier::LinkerOnly).then(|| {
+        matches!(arch.flat_modifier(name), FlatModifier::LinkerOnly).then(|| {
             format!("`@{name}` names something only a linker creates; a flat binary has none")
         })
     }

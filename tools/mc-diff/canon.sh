@@ -26,13 +26,17 @@
 # for its whole objects, `e_flags` is
 # printed first, and the symbol list takes in every named local symbol but
 # section and file symbols, sorted: ARM's mapping symbols and Thumb function
-# bits are local, and are what that comparison is for.
+# bits are local, and are what that comparison is for. `--flags` prints
+# `e_flags` alone, for a target whose header says something (AVR's core and
+# relaxation flag) and whose local symbols do not.
 #
 # Plain POSIX awk: no strtonum, so hex is converted by hand.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 full=0
-[ "$1" = --full ] && { full=1; shift; }
+flags=0
+[ "$1" = --full ] && { full=1; flags=1; shift; }
+[ "$1" = --flags ] && { flags=1; shift; }
 obj=$1
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -68,7 +72,7 @@ sort -k2,2 "$tmp/sections" | while read -r idx name type flags size align; do
   printf '  %s\n' "$(xxd -p "$tmp/bytes" | tr -d '\n')"
 done
 
-[ "$full" = 1 ] && llvm-readobj --file-headers "$obj" |
+[ "$flags" = 1 ] && llvm-readobj --file-headers "$obj" |
   ${AWK:-awk} '$1 == "Flags" { f = $3; gsub(/[()]/, "", f); print "flags " f; exit }'
 
 llvm-readobj --symbols "$obj" > "$tmp/syms"
