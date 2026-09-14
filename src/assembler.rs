@@ -1748,6 +1748,7 @@ impl Assembler {
             options,
             sections,
             cur,
+            sm,
             ..
         } = self;
         let dialect = options.dialect;
@@ -1763,6 +1764,7 @@ impl Assembler {
             section: *cur,
             relaxable: false,
             requests: Vec::new(),
+            sources: sm,
         };
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;

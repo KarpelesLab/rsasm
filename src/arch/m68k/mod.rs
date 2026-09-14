@@ -1,52 +1,226 @@
-//! Motorola 68000 family. `EM_68K`.
+//! Motorola 680x0 family and ColdFire. `EM_68K`.
 //!
-//! One backend covers the 68000, 68010 and 68020 instruction sets, chosen by
-//! name: `m68k` is the 68020, which is what GNU as assumes by default, and
-//! `68000` and `68010` reject what those CPUs lack — scaled indexes, 32-bit
-//! branches, `extb`, `mulu.l`, bit fields — with a message naming the CPU.
+//! One backend covers every CPU GNU as knows, chosen by the names its
+//! `-mcpu`/`-march` and `.cpu`/`.arch` take: `68000` through `68060`, `cpu32`
+//! and the 683xx parts, Fido, and the ColdFire ISA levels and parts (`isac`,
+//! `5475`). `m68k` is the 68020 with a 68881 and a 68851, which is what GNU as
+//! assumes by default. Extensions follow a comma, as in GNU as:
+//! `.arch 68000,68881`. A CPU is a set of [`table::feature`] bits, and an
+//! instruction or addressing mode it lacks is refused with a message naming
+//! what it needs.
 //!
 //! Motorola syntax is the default dialect, since that is what Amiga and Atari
 //! source is written in; GNU syntax (`movew #1,%d0`) is the other. The core
 //! lexes both and aligns code for the Motorola one; the backend parses
-//! operands ([`operand`]), encodes effective addresses ([`encode`]) and
-//! instructions ([`ops`], [`branch`]).
+//! operands ([`operand`]) and encodes effective addresses ([`encode`]). The
+//! integer instructions of the 68000-68020 are encoded by hand ([`ops`],
+//! [`branch`]); everything else — the FPU, the MMUs, CAS, CALLM, MOVE16,
+//! CPU32 and ColdFire additions — by [`generic`], from a table generated out
+//! of GNU's own ([`table`]).
 //!
 //! Everything here was checked against `m68k-elf-as` 2.47, in both its native
 //! and `--mri` modes, with vasm as a second opinion where the two differ. The
 //! differences that remain are deliberate and listed where they are decided:
-//! no instruction substitution ([`ops`]), and Motorola's word-sized default
-//! index ([`operand`]).
+//! no instruction substitution ([`ops`]), Motorola's word-sized default index
+//! ([`operand`]), and extended-precision float immediates ([`float`]).
 
 pub mod branch;
 pub mod encode;
+pub mod float;
+pub mod generic;
 pub mod insn;
 pub mod operand;
 pub mod ops;
 pub mod reg;
 pub mod reloc;
+pub mod table;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, Syntax};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::section::Variant;
+use table::feature as f;
 
 pub const NAMES: &[&str] = &["m68k"];
 
-/// The instruction set in force, in order of what each adds.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Cpu {
-    M68000,
-    M68010,
-    M68020,
+/// Every 68k CPU, as against ColdFire.
+pub const M68000UP: u32 = f::M68000 | M68010UP;
+/// The 68020 and the CPUs after it.
+pub const M68020UP: u32 = f::M68020 | f::M68030 | f::M68040 | f::M68060;
+/// The CPUs with the 68010's additions: `rtd`, `movec`, `move` from `ccr`.
+pub const M68010UP: u32 = f::M68010 | f::CPU32 | f::FIDO_A | M68020UP;
+
+/// The CPU being assembled for.
+#[derive(Copy, Clone, Debug)]
+pub struct Cpu {
+    /// What it has, as [`table::feature`] bits.
+    pub arch: u32,
+    /// The control registers `movec` reaches on it, by [`table::rid`] number.
+    pub ctrl: &'static [u16],
+    /// The name it was chosen by.
+    pub name: &'static str,
 }
 
+impl Cpu {
+    pub fn has(self, arch: u32) -> bool {
+        self.arch & arch != 0
+    }
+
+    pub fn coldfire(self) -> bool {
+        self.has(f::MCFISA_A)
+    }
+
+    /// The 68020's addressing: full extension words, 32-bit displacements and
+    /// no base register. GNU as's `cpu_of_arch (x) >= m68020 &&
+    /// !arch_coldfire_p (x)`, which CPU32 and Fido pass.
+    pub fn wide(self) -> bool {
+        self.has(M68020UP | f::CPU32 | f::FIDO_A) && !self.coldfire()
+    }
+
+    /// Index scales other than 1, which ColdFire has too.
+    pub fn scales(self) -> bool {
+        self.has(M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_A)
+    }
+
+    /// 32-bit `Bcc`, `BRA` and `BSR` displacements.
+    pub fn long_branch(self) -> bool {
+        self.has(M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B)
+    }
+
+    /// What a message calls this CPU.
+    pub fn describe(self) -> String {
+        let mut s = match self.name {
+            "m68k" => "68020".to_string(),
+            n => n.to_string(),
+        };
+        let base = table::M68K_ARCHS
+            .iter()
+            .chain(table::M68K_CPUS)
+            .find(|c| c.name == self.name)
+            .map_or(self.arch, |c| c.arch);
+        for (bit, ext) in [(f::M68881, "68881"), (f::M68851, "68851"), (f::CFLOAT, "FPU")] {
+            if self.arch & bit != 0 && base & bit == 0 {
+                s.push_str(" with ");
+                s.push_str(ext);
+            }
+        }
+        s
+    }
+}
+
+/// Names what an instruction needs, from the CPUs that have it, for "needs a
+/// 68020 or later"-style messages.
+pub fn describe_arch(arch: u32) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let chain = [
+        (f::M68000, "68000"),
+        (f::M68010, "68010"),
+        (f::M68020, "68020"),
+        (f::M68030, "68030"),
+        (f::M68040, "68040"),
+        (f::M68060, "68060"),
+    ];
+    // The longest run of 68k CPUs up to the 68060 reads "68020 or later".
+    let mut i = 0;
+    while i < chain.len() {
+        if arch & chain[i].0 != 0 {
+            if chain[i..].iter().all(|(b, _)| arch & b != 0) && i + 1 < chain.len() {
+                parts.push(format!("a {} or later", chain[i].1));
+                break;
+            }
+            parts.push(format!("a {}", chain[i].1));
+        }
+        i += 1;
+    }
+    for (bit, what) in [
+        (f::CPU32, "a CPU32"),
+        (f::FIDO_A, "a Fido"),
+        (f::M68881, "a 68881/68882 FPU"),
+        (f::M68851, "a 68851 MMU"),
+        (f::MCFISA_A, "a ColdFire"),
+        (f::MCFISA_AA, "a ColdFire ISA_A+"),
+        (f::MCFISA_B, "a ColdFire ISA_B"),
+        (f::MCFISA_C, "a ColdFire ISA_C"),
+        (f::MCFHWDIV, "a ColdFire hardware divide"),
+        (f::MCFUSP, "a ColdFire USP"),
+        (f::CFLOAT, "a ColdFire FPU"),
+    ] {
+        if arch & bit != 0 {
+            parts.push(what.to_string());
+        }
+    }
+    match parts.len() {
+        0 => "a CPU this backend does not know".to_string(),
+        1 => parts.pop().unwrap_or_default(),
+        n => format!("{} or {}", parts[..n - 1].join(", "), parts[n - 1]),
+    }
+}
+
+/// A CPU or architecture name, with GNU as's optional `m` or `mc` in front
+/// of a 68k one (`m68030`, `mc68030`), then any extensions after commas.
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
-    let cpu = match name {
-        "m68k" | "68020" | "68030" | "68040" | "mc68020" | "mc68030" | "mc68040" => Cpu::M68020,
-        "68000" | "mc68000" => Cpu::M68000,
-        "68010" | "mc68010" => Cpu::M68010,
-        _ => return None,
+    let mut parts = name.split(',');
+    let base = parts.next()?;
+    let (def_name, mut arch, ctrl) = if base == "m68k" {
+        let d = table::M68K_ARCHS.iter().find(|c| c.name == "68020")?;
+        ("m68k", d.arch, d.ctrl)
+    } else {
+        let bare = base
+            .strip_prefix("mc")
+            .or_else(|| base.strip_prefix('m'))
+            .filter(|b| b.starts_with('6'))
+            .unwrap_or(base);
+        let d = table::M68K_ARCHS
+            .iter()
+            .chain(table::M68K_CPUS)
+            .find(|c| c.name == bare)?;
+        (d.name, d.arch, d.ctrl)
     };
-    Some(Box::new(M68k { cpu }))
+    let mut off = 0;
+    for ext in parts {
+        let (neg, ext) = match ext.strip_prefix("no-") {
+            Some(e) => (true, e),
+            None => (false, ext),
+        };
+        let ext = ext
+            .strip_prefix("mc")
+            .or_else(|| ext.strip_prefix('m'))
+            .filter(|b| b.starts_with('6'))
+            .unwrap_or(ext);
+        // `tc-m68k.c`'s `m68k_extensions`.
+        let bits = match ext {
+            "68851" => f::M68851,
+            "68881" | "68882" => f::M68881,
+            "float" => f::CFLOAT | f::M68881,
+            "div" => f::MCFHWDIV,
+            "usp" => f::MCFUSP,
+            // `no-mac` turns off both kinds.
+            "mac" if neg => f::MCFMAC | f::MCFEMAC,
+            "mac" => f::MCFMAC,
+            "emac" => f::MCFEMAC,
+            _ => return None,
+        };
+        if neg {
+            off |= bits;
+        } else {
+            arch |= bits;
+        }
+    }
+    arch &= !off;
+    // `float` is whichever of the two FPUs the CPU can have.
+    if arch & (f::CFLOAT | f::M68881) == f::CFLOAT | f::M68881 {
+        arch ^= if arch & (f::M68K_MASK & !f::M68881) != 0 {
+            f::CFLOAT
+        } else {
+            f::M68881
+        };
+    }
+    Some(Box::new(M68k {
+        cpu: Cpu {
+            arch,
+            ctrl,
+            name: def_name,
+        },
+    }))
 }
 
 pub struct M68k {
@@ -55,17 +229,13 @@ pub struct M68k {
 
 impl Architecture for M68k {
     fn name(&self) -> &'static str {
-        match self.cpu {
-            Cpu::M68020 => "m68k",
-            Cpu::M68010 => "68010",
-            Cpu::M68000 => "68000",
-        }
+        self.cpu.name
     }
 
     fn aliases(&self) -> &'static [&'static str] {
         &[
-            "68000", "68010", "68020", "68030", "68040", "mc68000", "mc68010", "mc68020",
-            "mc68030", "mc68040",
+            "68000", "68010", "68020", "68030", "68040", "68060", "cpu32", "fidoa", "isaa",
+            "isaaplus", "isab", "isac", "cfv4", "cfv4e",
         ]
     }
 
@@ -185,21 +355,28 @@ impl Architecture for M68k {
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let name = cx.name(req.mnemonic).to_ascii_lowercase();
-        let (def, size, _) = match insn::resolve(&name) {
-            Ok(r) => r,
-            Err(msg) => {
-                cx.error(req.mnemonic_span, msg);
-                return None;
-            }
-        };
         let before = cx.diags.error_count();
-        let mut asm = ops::Asm {
-            cx,
-            cpu: self.cpu,
-            name,
-            span: req.span,
+        let out = match insn::resolve(&name) {
+            Ok((def, size, stem)) => {
+                let stem = stem.to_string();
+                let mut asm = ops::Asm {
+                    cx,
+                    cpu: self.cpu,
+                    name,
+                    span: req.span,
+                };
+                asm.assemble(def, size, &stem, req)
+            }
+            // GNU as looks a mnemonic up with its dot removed, so `fadd.x` is
+            // the table's `faddx`.
+            Err(msg) => match generic::forms(&name.replacen('.', "", 1)) {
+                Some(forms) => generic::assemble(cx, self.cpu, &name, forms, req),
+                None => {
+                    cx.error(req.mnemonic_span, msg);
+                    return None;
+                }
+            },
         };
-        let out = asm.assemble(def, size, req);
         // Every failure path reports its own error. Should one ever not, the
         // statement must still not vanish without a word.
         if out.is_none() && cx.diags.error_count() == before {

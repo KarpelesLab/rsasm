@@ -27,6 +27,7 @@
 //!   alternatives listed here.
 
 use super::Cpu;
+use super::float::Float;
 use super::operand::{Base, Index, IndexAt, Mode, Operand, Value, Width};
 use super::reloc;
 use crate::arch::AsmCtx;
@@ -213,6 +214,13 @@ pub struct EaCtx {
     pub cpu: Cpu,
     /// Width of an immediate operand.
     pub size: Sz,
+    /// Or, for an FPU operand, its floating-point size, which an immediate
+    /// takes instead.
+    pub float: Option<Float>,
+    /// Whether an address written without a size, and not known yet, may be
+    /// reached PC-relatively when it turns out to be close: GNU as does that
+    /// for every operand the instruction does not write to.
+    pub pc_abs: bool,
 }
 
 fn fixup(offset: u32, e: ExprRef, kind: FixupKind, span: Span) -> Fixup {
@@ -299,11 +307,16 @@ pub fn size_name(size: Sz) -> &'static str {
     }
 }
 
+/// The 68020's addressing modes, which CPU32 and Fido also have and the
+/// 68000, 68010 and ColdFire do not.
 fn need_020(cx: &mut AsmCtx<'_>, cpu: Cpu, span: Span, what: &str) -> Option<()> {
-    if cpu >= Cpu::M68020 {
+    if cpu.wide() {
         return Some(());
     }
-    cx.error(span, format!("{what} needs a 68020 or later"));
+    cx.error(
+        span,
+        format!("{what} needs a 68020 or later; this target is a {}", cpu.describe()),
+    );
     None
 }
 
@@ -333,6 +346,24 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
         Mode::Ind(n) => vec![Alt::field(2, *n)],
         Mode::PostInc(n) => vec![Alt::field(3, *n)],
         Mode::PreDec(n) => vec![Alt::field(4, *n)],
+        Mode::Imm(e, s) if ecx.float.is_some() => {
+            // An integer where a float is wanted is its own bit pattern,
+            // zero-extended, as GNU as writes it.
+            let len = ecx.float.map_or(4, Float::len);
+            let Some(v) = cx.constant(*e) else {
+                cx.error(
+                    *s,
+                    "a floating-point immediate must be a number, known where it is written",
+                );
+                return None;
+            };
+            let wide = (v as u64 as u128).to_be_bytes();
+            vec![Alt {
+                field: 0o74,
+                bytes: wide[16 - len..].to_vec(),
+                fixups: vec![],
+            }]
+        }
         Mode::Imm(e, s) => {
             let (bytes, fixups) = immediate(cx, *e, ecx.size, *s)?;
             vec![Alt {
@@ -340,6 +371,32 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
                 bytes,
                 fixups,
             }]
+        }
+        Mode::FImm(v, s) => {
+            let Some(kind) = ecx.float else {
+                cx.error(
+                    *s,
+                    "a floating-point immediate needs a floating-point size: `.s`, `.d`, `.x` or `.p`",
+                );
+                return None;
+            };
+            vec![Alt {
+                field: 0o74,
+                bytes: kind.bytes(*v),
+                fixups: vec![],
+            }]
+        }
+        Mode::Abs(v) if ecx.pc_abs && v.width.is_none() && cx.constant(v.e).is_none() => {
+            // GNU as's `ABSTOPCREL`: a PC-relative word if the address is in
+            // this section and within reach, else the absolute long.
+            vec![
+                Alt {
+                    field: 0o72,
+                    bytes: vec![0, 0],
+                    fixups: vec![fixup(0, v.e, pc_kind(2, 0), v.span)],
+                },
+                absolute(cx, v)?,
+            ]
         }
         Mode::Abs(v) => vec![absolute(cx, v)?],
         Mode::Indexed { base, disp, index } => indexed(cx, *base, disp, index, ecx, span)?,
@@ -350,6 +407,10 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
             od,
         } => {
             need_020(cx, ecx.cpu, span, "memory-indirect addressing")?;
+            if ecx.cpu.has(super::table::feature::CPU32) {
+                cx.error(span, "memory-indirect addressing is not available on CPU32");
+                return None;
+            }
             vec![mem_indirect(cx, *base, bd, index, od, span)?]
         }
         _ => {
@@ -496,6 +557,7 @@ fn indexed(
     let cpu = ecx.cpu;
     if let Some(ix) = index
         && ix.scale != 1
+        && !cpu.scales()
     {
         need_020(cx, cpu, ix.span, "a scaled index")?;
     }
@@ -544,7 +606,7 @@ fn indexed(
                         return Some(vec![word_disp(reg, n)]);
                     }
                     _ => {
-                        if cpu < Cpu::M68020 {
+                        if !cpu.wide() {
                             let what = if index.is_some() {
                                 "an 8-bit"
                             } else {
@@ -565,7 +627,7 @@ fn indexed(
                 // Not known yet. GNU as settles this without looking at the
                 // eventual value; see the module comment.
                 (None, None) => {
-                    if cpu < Cpu::M68020 {
+                    if !cpu.wide() {
                         return Some(vec![match index {
                             None => {
                                 let mut k = abs_kind(2);
@@ -720,13 +782,13 @@ fn pc_relative(
         }
         (None, None) => {
             alts.push(word());
-            if cpu >= Cpu::M68020 {
+            if cpu.wide() {
                 alts.push(wide(cx, true));
             }
         }
         (Some(ix), None) => {
             alts.push(brief_pc(ix));
-            if cpu >= Cpu::M68020 {
+            if cpu.wide() {
                 alts.push(wide(cx, false));
                 alts.push(wide(cx, true));
             }

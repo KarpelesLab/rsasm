@@ -8,8 +8,16 @@
 //! The parser records what was written — a base, an index, a displacement and
 //! any explicit `.w`/`.l` — and leaves every size decision to
 //! [`super::encode`], which knows the CPU and whether a value is constant.
+//!
+//! Two things GNU as reads as separate operands arrive here attached to one:
+//! a `{...}` after an operand (a bit field's `{offset:width}`, or `fmove.p`'s
+//! k-factor `{#3}`), and the far side of a colon (`d1:d2`, `fp1:fp2`,
+//! `(a0):(a1)`). [`Operand::brace`] and [`Mode::Pair`]/[`Mode::Colon`] keep
+//! them, and [`super::generic`] spreads them back out.
 
+use super::float;
 use super::reg::{self, Reg};
+use super::table::rid;
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
 use crate::expr::ExprRef;
@@ -39,6 +47,8 @@ pub struct Index {
     pub long: bool,
     /// 1, 2, 4 or 8.
     pub scale: u8,
+    /// Whether the size was written rather than taken by default.
+    pub sized: bool,
     pub span: Span,
 }
 
@@ -59,17 +69,12 @@ pub enum IndexAt {
     Post,
 }
 
-/// One end of a bit field, `{offset:width}`: a constant or a data register.
-#[derive(Copy, Clone, Debug)]
-pub enum BfPart {
-    Imm(ExprRef, Span),
-    Reg(u8),
-}
-
 #[derive(Clone, Debug)]
 pub enum Mode {
     DReg(u8),
     AReg(u8),
+    /// `fp0`-`fp7`.
+    FReg(u8),
     Ind(u8),
     PostInc(u8),
     PreDec(u8),
@@ -89,22 +94,32 @@ pub enum Mode {
     },
     Abs(Value),
     Imm(ExprRef, Span),
+    /// A floating-point immediate, `#1.5` or `#0r1.5`; see [`float`].
+    FImm(f64, Span),
     Sr,
     Ccr,
     Usp,
-    /// A `MOVEM` register list, bit 0 = `d0` through bit 15 = `a7`.
-    RegList(u16),
+    /// Any other register that is not a general one: an FPU control register,
+    /// an MMU register, a cache name or a `movec` register, by its number in
+    /// [`rid`].
+    Ctl(u16),
+    /// A register list, GNU as's way: bit 0 = `d0` through bit 15 = `a7`,
+    /// bits 16-23 `fp0`-`fp7`, and 24-26 `fpiar`, `fpsr` and `fpcr`.
+    RegList(u32),
     /// `d2:d1`, the register pair of a 64-bit multiply or divide.
     Pair(u8, u8),
-    /// A `MOVEC` control register, by its 12-bit code.
-    Ctrl(u16, super::Cpu),
+    /// Any other two operands joined by a colon: `fp1:fp2` for `fsincos`,
+    /// `(a0):(a1)` for `cas2`.
+    Colon(Box<Operand>, Box<Operand>),
 }
 
 #[derive(Clone, Debug)]
 pub struct Operand {
     pub mode: Mode,
     pub span: Span,
-    pub bitfield: Option<(BfPart, BfPart)>,
+    /// What a trailing `{...}` held: two operands for `{offset:width}`, one
+    /// for a k-factor, none without braces.
+    pub brace: Vec<Operand>,
 }
 
 impl Operand {
@@ -126,21 +141,21 @@ impl Operand {
             Mode::MemInd { .. } => "a memory-indirect operand",
             Mode::Abs(_) => "an absolute address",
             Mode::Imm(..) => "an immediate",
+            Mode::FImm(..) => "a floating-point immediate",
+            Mode::FReg(_) => "a floating-point register",
             Mode::Sr => "`sr`",
             Mode::Ccr => "`ccr`",
             Mode::Usp => "`usp`",
             Mode::RegList(_) => "a register list",
             Mode::Pair(..) => "a register pair",
-            Mode::Ctrl(..) => "a control register",
+            Mode::Colon(..) => "a pair of operands",
+            Mode::Ctl(_) => "a control register",
         }
     }
 }
 
 /// Parses the comma-separated operands of one instruction.
-///
-/// `movec` asks for control register names (`vbr`, `cacr`) to be recognised,
-/// which they are nowhere else.
-pub fn parse_list(cx: &mut AsmCtx<'_>, cur: &Cursor<'_>, movec: bool) -> Option<Vec<Operand>> {
+pub fn parse_list(cx: &mut AsmCtx<'_>, cur: &Cursor<'_>) -> Option<Vec<Operand>> {
     if cur.at_end() {
         return Some(Vec::new());
     }
@@ -153,7 +168,6 @@ pub fn parse_list(cx: &mut AsmCtx<'_>, cur: &Cursor<'_>, movec: bool) -> Option<
         let mut p = Parser {
             cx: &mut *cx,
             gnu: false,
-            movec,
         };
         p.gnu = p.cx.dialect == crate::lexer::Dialect::Gas;
         out.push(p.operand(piece)?);
@@ -218,7 +232,6 @@ struct RegTok {
 struct Parser<'a, 'b> {
     cx: &'a mut AsmCtx<'b>,
     gnu: bool,
-    movec: bool,
 }
 
 impl Parser<'_, '_> {
@@ -390,79 +403,128 @@ impl Parser<'_, '_> {
     fn operand(&mut self, toks: &[Token]) -> Option<Operand> {
         let span = span_of(toks);
 
-        // A trailing `{offset:width}` belongs to the bit-field instructions.
-        let (toks, bitfield) = match toks.last() {
+        // A trailing `{...}`: a bit field's `{offset:width}`, or a k-factor.
+        let (toks, brace) = match toks.last() {
             Some(t) if t.is_punct(Punct::RBrace) => {
                 let Some(open) = toks.iter().rposition(|t| t.is_punct(Punct::LBrace)) else {
                     self.cx.error(t.span, "`}` without a matching `{`");
                     return None;
                 };
-                let bf = self.bitfield(&toks[open + 1..toks.len() - 1], toks[open].span)?;
-                (&toks[..open], Some(bf))
+                let parts = self.brace(&toks[open + 1..toks.len() - 1], toks[open].span)?;
+                (&toks[..open], parts)
             }
-            _ => (toks, None),
+            _ => (toks, Vec::new()),
         };
         if toks.is_empty() {
             self.cx.error(span, "expected an operand before `{`");
             return None;
         }
-        let mode = self.mode(toks)?;
-        Some(Operand {
-            mode,
-            span,
-            bitfield,
-        })
-    }
-
-    fn bitfield(&mut self, toks: &[Token], open: Span) -> Option<(BfPart, BfPart)> {
-        let Some(colon) = toks.iter().position(|t| t.is_punct(Punct::Colon)) else {
-            self.cx
-                .error(open, "a bit field is written `{offset:width}`");
-            return None;
-        };
-        let off = self.bf_part(&toks[..colon], open)?;
-        let width = self.bf_part(&toks[colon + 1..], open)?;
-        Some((off, width))
-    }
-
-    fn bf_part(&mut self, toks: &[Token], open: Span) -> Option<BfPart> {
-        if toks.is_empty() {
-            self.cx
-                .error(open, "a bit field is written `{offset:width}`");
-            return None;
-        }
-        if let Some((r, n)) = self.reg_at(toks, 0)
-            && n == toks.len()
-        {
-            return match r.reg {
-                Reg::D(d) if r.long.is_none() => Some(BfPart::Reg(d)),
-                _ => {
-                    self.cx.error(
-                        r.span,
-                        "a bit-field offset or width register must be `d0`-`d7`",
-                    );
-                    None
-                }
+        // GNU as ends an operand at a colon followed by what can start one: a
+        // register, `#`, `(`, `@` or a digit. That splits `d1:d2`, `fp1:fp2`
+        // and `(a0):(a1)`, but not `label:w`.
+        if let Some(colon) = self.operand_colon(toks) {
+            let left = self.operand(&toks[..colon])?;
+            let right = self.operand(&toks[colon + 1..])?;
+            let mode = match (&left.mode, &right.mode) {
+                (Mode::DReg(h), Mode::DReg(l)) => Mode::Pair(*h, *l),
+                _ => Mode::Colon(Box::new(left), Box::new(right)),
             };
+            return Some(Operand { mode, span, brace });
         }
-        let toks = match toks.first() {
-            Some(t) if t.is_punct(Punct::Hash) => &toks[1..],
-            _ => toks,
+        let mode = self.mode(toks)?;
+        Some(Operand { mode, span, brace })
+    }
+
+    /// The top-level colon that separates two operands, if there is one.
+    fn operand_colon(&self, toks: &[Token]) -> Option<usize> {
+        // A register with an index size or scale (`d1:w`, `%d1:l:4`) keeps
+        // its colons.
+        if self.looks_like_register_item(toks) {
+            return None;
+        }
+        let mut depth = 0i32;
+        for (i, t) in toks.iter().enumerate() {
+            match t.kind {
+                TokKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
+                TokKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => depth -= 1,
+                TokKind::Punct(Punct::Colon) if depth == 0 && i > 0 => {
+                    let starts = match toks.get(i + 1).map(|t| t.kind) {
+                        Some(TokKind::Punct(
+                            Punct::Hash | Punct::Amp | Punct::LParen | Punct::At | Punct::Percent,
+                        )) => true,
+                        Some(TokKind::Int(_) | TokKind::LocalRef(..) | TokKind::BadNumber(_)) => {
+                            true
+                        }
+                        Some(TokKind::Ident(n)) => {
+                            let c = self.cx.name(n).as_bytes()[0] | 0x20;
+                            matches!(c, b'a' | b'd' | b'f')
+                        }
+                        _ => false,
+                    };
+                    if starts {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// The operands of a `{...}`: `{offset:width}` or `{k}`. Each is a data
+    /// register, `#expr` or a bare expression, all of which GNU as takes.
+    fn brace(&mut self, toks: &[Token], open: Span) -> Option<Vec<Operand>> {
+        let parts: Vec<&[Token]> = match toks.iter().position(|t| t.is_punct(Punct::Colon)) {
+            Some(colon) => vec![&toks[..colon], &toks[colon + 1..]],
+            None => vec![toks],
         };
-        let v = self.value(toks)?;
-        Some(BfPart::Imm(v.e, v.span))
+        let mut out = Vec::new();
+        for part in parts {
+            if part.is_empty() {
+                self.cx
+                    .error(open, "a bit field is written `{offset:width}`");
+                return None;
+            }
+            let span = span_of(part);
+            let mode = if let Some((r, n)) = self.reg_at(part, 0)
+                && n == part.len()
+            {
+                match r.reg {
+                    Reg::D(d) if r.long.is_none() => Mode::DReg(d),
+                    _ => {
+                        self.cx
+                            .error(r.span, "a register inside `{...}` must be `d0`-`d7`");
+                        return None;
+                    }
+                }
+            } else if part[0].is_punct(Punct::Hash) {
+                self.mode(part)?
+            } else {
+                Mode::Abs(self.value(part)?)
+            };
+            out.push(Operand {
+                mode,
+                span,
+                brace: Vec::new(),
+            });
+        }
+        Some(out)
     }
 
     fn mode(&mut self, toks: &[Token]) -> Option<Mode> {
         let span = span_of(toks);
 
-        // `#expr`
+        // `#expr`, or a floating-point `#1.5`.
         if toks[0].is_punct(Punct::Hash) {
             if toks.len() == 1 {
                 self.cx.error(span, "expected an expression after `#`");
                 return None;
             }
             let rest = &toks[1..];
+            let text = self.cx.sources.span_text(span_of(rest));
+            if let Some(f) = float::parse(text, self.cx.dialect) {
+                return Some(Mode::FImm(f, span));
+            }
             let mut cur = Cursor::new(rest);
             let e = self.cx.expr_parser().parse(&mut cur)?;
             if !cur.is_empty() {
@@ -471,16 +533,6 @@ impl Parser<'_, '_> {
                 return None;
             }
             return Some(Mode::Imm(e, span));
-        }
-
-        if self.movec {
-            let lead = usize::from(toks[0].is_punct(Punct::Percent));
-            if toks.len() == lead + 1
-                && let Some(name) = self.text(&toks[lead])
-                && let Some((code, cpu)) = reg::control(&name)
-            {
-                return Some(Mode::Ctrl(code, cpu));
-            }
         }
 
         if let Some((r, n)) = self.reg_at(toks, 0) {
@@ -495,9 +547,11 @@ impl Parser<'_, '_> {
                 return match r.reg {
                     Reg::D(d) => Some(Mode::DReg(d)),
                     Reg::A(a) => Some(Mode::AReg(a)),
-                    Reg::Sr => Some(Mode::Sr),
-                    Reg::Ccr => Some(Mode::Ccr),
-                    Reg::Usp => Some(Mode::Usp),
+                    Reg::Fp(f) => Some(Mode::FReg(f)),
+                    Reg::Ctl(rid::SR) => Some(Mode::Sr),
+                    Reg::Ctl(rid::CCR) => Some(Mode::Ccr),
+                    Reg::Ctl(rid::USP) => Some(Mode::Usp),
+                    Reg::Ctl(id) => Some(Mode::Ctl(id)),
                     Reg::Pc => {
                         self.cx
                             .error(span, "`pc` can only be a base register, as in `label(pc)`");
@@ -508,19 +562,6 @@ impl Parser<'_, '_> {
             let next = toks[n];
             if next.is_punct(Punct::At) && self.gnu {
                 return self.mit(r, &toks[n + 1..], span);
-            }
-            if next.is_punct(Punct::Colon)
-                && toks.len() == n + 1 + self.reg_len(&toks[n + 1..])
-                && let Some((low, _)) = self.reg_at(toks, n + 1)
-            {
-                return match (r.reg, low.reg) {
-                    (Reg::D(h), Reg::D(l)) => Some(Mode::Pair(h, l)),
-                    _ => {
-                        self.cx
-                            .error(span, "a register pair must be two data registers, `dh:dl`");
-                        None
-                    }
-                };
             }
             if next.is_punct(Punct::Slash) || next.is_punct(Punct::Minus) {
                 return self.reglist(toks);
@@ -599,10 +640,6 @@ impl Parser<'_, '_> {
         }
         let v = self.value(toks)?;
         Some(Mode::Abs(v))
-    }
-
-    fn reg_len(&self, toks: &[Token]) -> usize {
-        self.reg_at(toks, 0).map_or(usize::MAX / 2, |(_, n)| n)
     }
 
     /// Whether the inside of a leading `(...)` is an addressing mode rather
@@ -809,6 +846,7 @@ impl Parser<'_, '_> {
             reg,
             long,
             scale: r.scale.unwrap_or(1),
+            sized: r.long.is_some(),
             span: r.span,
         })
     }
@@ -919,9 +957,9 @@ impl Parser<'_, '_> {
         Some((disp, index))
     }
 
-    /// `d0-d3/a0-a2`, `d0/d2/a5`, `a0-a1/d0-d1`.
+    /// `d0-d3/a0-a2`, `d0/d2/a5`, `fp0-fp3`, `fpcr/fpsr`.
     fn reglist(&mut self, toks: &[Token]) -> Option<Mode> {
-        let mut mask = 0u16;
+        let mut mask = 0u32;
         let mut i = 0;
         let mut expect_reg = true;
         let mut pending: Option<u8> = None;
@@ -933,10 +971,18 @@ impl Parser<'_, '_> {
                         .error(toks[i].span, "expected a register in a register list");
                     return None;
                 };
-                let Some(bit) = r.reg.index_bits().filter(|_| r.long.is_none()) else {
+                let bit = match r.reg {
+                    _ if r.long.is_some() => None,
+                    Reg::Fp(n) => Some(16 + n),
+                    Reg::Ctl(rid::FPI) => Some(24),
+                    Reg::Ctl(rid::FPS) => Some(25),
+                    Reg::Ctl(rid::FPC) => Some(26),
+                    reg => reg.index_bits(),
+                };
+                let Some(bit) = bit else {
                     self.cx.error(
                         r.span,
-                        "a register list holds only data and address registers",
+                        "a register list holds general, floating-point and FPU control registers",
                     );
                     return None;
                 };

@@ -136,7 +136,7 @@ pub fn bcc(cond: u8, size: BranchSize, cpu: Cpu, target: ExprRef, span: Span) ->
         BranchSize::Relax => {
             let mut v = short(op, target, span).to_vec();
             v.push(word(op, target, span));
-            v.push(if cpu >= Cpu::M68020 {
+            v.push(if cpu.long_branch() {
                 long(op, target, span)
             } else {
                 far(cond, target, span)

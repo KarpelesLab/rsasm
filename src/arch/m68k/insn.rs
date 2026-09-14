@@ -8,7 +8,7 @@
 //! intact, reads `divsl` as `divs.l` the way GNU as does, and lets `extb`
 //! stand for itself, since `ext` has no byte form.
 
-use super::Cpu;
+use super::{M68000UP, M68010UP, M68020UP};
 
 /// Every family, with the opcode bits that distinguish its members.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -96,15 +96,16 @@ pub struct Def {
     pub kind: Kind,
     /// Suffixes accepted. A family with none still takes no suffix at all.
     pub sizes: u8,
-    /// The CPU that introduced it.
-    pub cpu: Cpu,
+    /// The CPUs that have it, as [`super::table::feature`] bits, for a
+    /// spelling GNU's table does not name; see [`super::table::HAND_ARCH`].
+    pub arch: u32,
 }
 
 const fn d(kind: Kind, sizes: u8) -> Def {
     Def {
         kind,
         sizes,
-        cpu: Cpu::M68000,
+        arch: M68000UP,
     }
 }
 
@@ -112,7 +113,7 @@ const fn d10(kind: Kind, sizes: u8) -> Def {
     Def {
         kind,
         sizes,
-        cpu: Cpu::M68010,
+        arch: M68010UP,
     }
 }
 
@@ -120,7 +121,7 @@ const fn d20(kind: Kind, sizes: u8) -> Def {
     Def {
         kind,
         sizes,
-        cpu: Cpu::M68020,
+        arch: M68020UP,
     }
 }
 

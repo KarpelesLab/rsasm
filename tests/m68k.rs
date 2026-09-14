@@ -526,7 +526,7 @@ fn the_68000_rejects_what_it_lacks() {
         (" move.w (a0,d1.w*2),d0\n", "scaled index needs a 68020"),
         (" move.w 40000(a0),d1\n", "wider displacements need a 68020"),
         (" move.w 1000(a0,d0.w),d1\n", "8-bit"),
-        (" bra.l far\nfar rts\n", "32-bit branch needs a 68020"),
+        (" bra.l far\nfar rts\n", "`bra.l` needs a 68020 or later"),
         (
             " move.l ([a0]),d0\n",
             "memory-indirect addressing needs a 68020",
@@ -545,7 +545,12 @@ fn the_68000_rejects_what_it_lacks() {
         hex(&text_dialect("68010", Motorola, " movec d0,vbr\n rtd #4\n")),
         "4e 7b 08 01 4e 74 00 04"
     );
-    err("68010", Motorola, " movec d0,cacr\n", "needs a 68020");
+    err(
+        "68010",
+        Motorola,
+        " movec d0,cacr\n",
+        "`cacr` is not a control register `movec` reaches on a 68010",
+    );
     // `.arch` switches the instruction set mid-file.
     err("m68k", Gas, " .arch mc68000\n extbl %d0\n", "needs a 68020");
 }

@@ -17,12 +17,12 @@
 //! from a data register. `add #imm,d0` stays `ADD` with an immediate source,
 //! as vasm `-no-opt` assembles it.
 
-use super::Cpu;
 use super::branch::{self, BranchSize};
 use super::encode::{self, *};
 use super::insn::{BfShape, Def, Kind};
-use super::operand::{BfPart, Mode, Operand};
-use super::reloc;
+use super::operand::{Mode, Operand};
+use super::table::{self, feature as f, rid};
+use super::{Cpu, M68010UP, M68020UP, describe_arch, reloc};
 use crate::arch::{AsmCtx, InsnRequest};
 use crate::lexer::Dialect;
 use crate::section::{Fixup, FixupKind, Variant};
@@ -40,31 +40,21 @@ fn place(part: Vec<Alt>, place: Place) -> Part {
     Part { alts: part, place }
 }
 
-fn cpu_name(cpu: Cpu) -> &'static str {
-    match cpu {
-        Cpu::M68000 => "68000",
-        Cpu::M68010 => "68010",
-        Cpu::M68020 => "68020",
-    }
-}
-
 impl Asm<'_, '_> {
     fn err<T>(&mut self, span: Span, msg: impl Into<String>) -> Option<T> {
         self.cx.error(span, msg);
         None
     }
 
-    fn need(&mut self, cpu: Cpu, span: Span, what: &str) -> Option<()> {
-        if self.cpu >= cpu {
+    /// Refuses what no CPU in `arch` has, naming what it needs.
+    fn need(&mut self, arch: u32, span: Span, what: &str) -> Option<()> {
+        if self.cpu.has(arch) {
             return Some(());
         }
+        let cpu = self.cpu.describe();
         self.err(
             span,
-            format!(
-                "{what} needs a {} or later; this target is a {}",
-                cpu_name(cpu),
-                cpu_name(self.cpu)
-            ),
+            format!("{what} needs {}; this target is a {cpu}", describe_arch(arch)),
         )
     }
 
@@ -108,6 +98,8 @@ impl Asm<'_, '_> {
         let ecx = EaCtx {
             cpu: self.cpu,
             size,
+            float: None,
+            pc_abs: false,
         };
         encode::ea(self.cx, op, ecx)
     }
@@ -117,7 +109,7 @@ impl Asm<'_, '_> {
     }
 
     fn no_bitfield(&mut self, ops: &[Operand]) -> Option<()> {
-        match ops.iter().find(|o| o.bitfield.is_some()) {
+        match ops.iter().find(|o| !o.brace.is_empty()) {
             Some(o) => {
                 let span = o.span;
                 self.err(
@@ -184,18 +176,24 @@ impl Asm<'_, '_> {
         vec![Variant::new(op.to_be_bytes().to_vec())]
     }
 
+    /// `stem` is the mnemonic without its size letter.
     pub fn assemble(
         &mut self,
         def: Def,
         size: Option<char>,
+        stem: &str,
         req: &InsnRequest<'_>,
     ) -> Option<Vec<Variant>> {
-        if def.cpu > self.cpu {
-            let name = format!("`{}`", self.name);
-            self.need(def.cpu, req.mnemonic_span, &name)?;
-        }
-        let movec = def.kind == Kind::MoveC;
-        let ops = super::operand::parse_list(self.cx, &req.cursor(), movec)?;
+        // Which CPUs have the instruction is what GNU's table says for the
+        // same spelling, size letter included: `addl` is on ColdFire and
+        // `addb` is not.
+        let gnu = format!("{stem}{}", size.map_or(String::new(), String::from));
+        let arch = table::HAND_ARCH
+            .binary_search_by(|(n, _)| (*n).cmp(gnu.as_str()))
+            .map_or(def.arch, |i| table::HAND_ARCH[i].1);
+        let name = format!("`{}`", self.name);
+        self.need(arch, req.mnemonic_span, &name)?;
+        let ops = super::operand::parse_list(self.cx, &req.cursor())?;
         if !matches!(def.kind, Kind::Bf(..)) {
             self.no_bitfield(&ops)?;
         }
@@ -251,7 +249,7 @@ impl Asm<'_, '_> {
                 let op = self.single(&ops)?;
                 // The 68020 widened `tst` to every mode but a byte-sized
                 // address register.
-                let allowed = if self.cpu >= Cpu::M68020 {
+                let allowed = if self.cpu.has(M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_A) {
                     ALL
                 } else {
                     DATA_ALT
@@ -320,9 +318,6 @@ impl Asm<'_, '_> {
             DivL(signed) => self.divl(&ops, signed),
             Chk => {
                 let size = sz.unwrap_or(Sz::W);
-                if size == Sz::L {
-                    self.need(Cpu::M68020, req.mnemonic_span, "`chk.l`")?;
-                }
                 let (src, dst) = self.two(&ops)?;
                 self.check(src, DATA, "source")?;
                 let n = self.dreg(dst, "destination")? as u16;
@@ -429,7 +424,7 @@ impl Asm<'_, '_> {
                 let op = if src.mode.is_sr() {
                     0x40c0
                 } else {
-                    self.need(Cpu::M68010, src.span, "`move` from `ccr`")?;
+                    self.need(M68010UP | f::MCFISA_A, src.span, "`move` from `ccr`")?;
                     0x42c0
                 };
                 self.check(dst, DATA_ALT, "destination")?;
@@ -516,7 +511,7 @@ impl Asm<'_, '_> {
         // A register list, a single register, or `#mask`: bits, or an
         // immediate to take as written.
         let mask_of = |o: &Operand| match o.mode {
-            Mode::RegList(m) => Some(Ok(m)),
+            Mode::RegList(m) if m <= 0xffff => Some(Ok(m as u16)),
             Mode::DReg(n) => Some(Ok(1u16 << n)),
             Mode::AReg(n) => Some(Ok(1u16 << (8 + n))),
             Mode::Imm(e, span) => Some(Err((e, span))),
@@ -559,13 +554,14 @@ impl Asm<'_, '_> {
             Mode::AReg(n) => Some(8 | n as u16),
             _ => None,
         };
-        let (op, r, code, cpu, span) = match (&a.mode, &b.mode) {
-            (Mode::Ctrl(code, cpu), _) if reg(b).is_some() => {
-                (0x4e7a, reg(b)?, *code, *cpu, a.span)
-            }
-            (_, Mode::Ctrl(code, cpu)) if reg(a).is_some() => {
-                (0x4e7b, reg(a)?, *code, *cpu, b.span)
-            }
+        let ctl = |o: &Operand| match o.mode {
+            Mode::Ctl(id) => Some(id),
+            Mode::Usp => Some(rid::USP),
+            _ => None,
+        };
+        let (op, r, id, span) = match (ctl(a), ctl(b)) {
+            (Some(id), _) if reg(b).is_some() => (0x4e7a, reg(b)?, id, a.span),
+            (_, Some(id)) if reg(a).is_some() => (0x4e7b, reg(a)?, id, b.span),
             _ => {
                 return self.err(
                     a.span.to(b.span),
@@ -573,7 +569,16 @@ impl Asm<'_, '_> {
                 );
             }
         };
-        self.need(cpu, span, "this control register")?;
+        let Some(code) = super::reg::movec(id, self.cpu.ctrl) else {
+            let cpu = self.cpu.describe();
+            return self.err(
+                span,
+                format!(
+                    "`{}` is not a control register `movec` reaches on a {cpu}",
+                    super::reg::name_of(id)
+                ),
+            );
+        };
         let ext = r << 12 | code;
         let mut bytes = (op as u16).to_be_bytes().to_vec();
         bytes.extend_from_slice(&ext.to_be_bytes());
@@ -678,7 +683,7 @@ impl Asm<'_, '_> {
         }
         let size = size.unwrap_or(Sz::W);
         // The 68020 lets `cmpi` compare against PC-relative memory.
-        let allowed = if base == 0x0c00 && self.cpu >= Cpu::M68020 {
+        let allowed = if base == 0x0c00 && self.cpu.has(M68020UP | f::CPU32 | f::FIDO_A) {
             DATA_ALT | PCREL
         } else {
             DATA_ALT
@@ -797,8 +802,6 @@ impl Asm<'_, '_> {
             let p = self.low(src, Sz::W)?;
             return Some(build(word_op | n << 9, vec![p]));
         }
-        let name = format!("`{}`", self.name);
-        self.need(Cpu::M68020, self.span, &name)?;
         let s = (signed as u16) << 11;
         // A 64-bit form names both registers, `dh:dl` (or `dr:dq`).
         let ext = match (dst.mode.clone(), div) {
@@ -955,21 +958,22 @@ impl Asm<'_, '_> {
             }
             BfShape::EaReg => {
                 let (a, r) = self.two(ops)?;
-                if r.bitfield.is_some() {
+                if !r.brace.is_empty() {
                     return self.err(r.span, "the bit field goes on the first operand");
                 }
                 (a, self.dreg(r, "destination")?)
             }
             BfShape::RegEa => {
                 let (r, a) = self.two(ops)?;
-                if r.bitfield.is_some() {
+                if !r.brace.is_empty() {
                     return self.err(r.span, "the bit field goes on the second operand");
                 }
                 (a, self.dreg(r, "source")?)
             }
         };
-        let Some((off, width)) = ea_op.bitfield else {
-            return self.err(ea_op.span, "a bit-field operand needs `{offset:width}`");
+        let (off, width) = match ea_op.brace.as_slice() {
+            [off, width] => (off, width),
+            _ => return self.err(ea_op.span, "a bit-field operand needs `{offset:width}`"),
         };
         // `bftst`, `bfextu`, `bfexts` and `bfffo` only read.
         let reads = matches!(op, 0xe8c0 | 0xe9c0 | 0xebc0 | 0xedc0);
@@ -980,29 +984,26 @@ impl Asm<'_, '_> {
         };
         self.check(ea_op, allowed, "bit-field operand")?;
         let mut ext = (reg as u16) << 12;
-        ext |= match off {
-            BfPart::Reg(d) => 0x800 | (d as u16) << 6,
-            BfPart::Imm(e, span) => {
-                (self.bf_const(e, span, 0, 31, "bit-field offset")? as u16) << 6
-            }
+        ext |= match off.mode {
+            Mode::DReg(d) => 0x800 | (d as u16) << 6,
+            _ => (self.bf_const(off, 0, 31, "bit-field offset")? as u16) << 6,
         };
-        ext |= match width {
-            BfPart::Reg(d) => 0x20 | d as u16,
+        ext |= match width.mode {
+            Mode::DReg(d) => 0x20 | d as u16,
             // A width of 32 is written as 0.
-            BfPart::Imm(e, span) => self.bf_const(e, span, 1, 32, "bit-field width")? as u16 & 31,
+            _ => self.bf_const(width, 1, 32, "bit-field width")? as u16 & 31,
         };
         let p = self.low(ea_op, Sz::L)?;
         Some(build(op, vec![Part::fixed(ext.to_be_bytes().to_vec()), p]))
     }
 
-    fn bf_const(
-        &mut self,
-        e: crate::expr::ExprRef,
-        span: Span,
-        lo: i64,
-        hi: i64,
-        what: &str,
-    ) -> Option<i64> {
+    /// A bit-field offset or width written as a number, with or without `#`.
+    fn bf_const(&mut self, op: &Operand, lo: i64, hi: i64, what: &str) -> Option<i64> {
+        let (e, span) = match op.mode {
+            Mode::Imm(e, span) => (e, span),
+            Mode::Abs(v) if v.width.is_none() => (v.e, v.span),
+            _ => return self.err(op.span, format!("{what} is a number or `d0`-`d7`")),
+        };
         match self.cx.constant(e) {
             Some(v) if (lo..=hi).contains(&v) => Some(v),
             Some(v) => self.err(span, format!("{what} {v} is out of range ({lo} to {hi})")),
@@ -1041,7 +1042,7 @@ impl Asm<'_, '_> {
             Some('s' | 'b') => BranchSize::Short,
             Some('w') => BranchSize::Word,
             Some('l') => {
-                self.need(Cpu::M68020, mspan, "a 32-bit branch")?;
+                self.need(self.long_branches(), mspan, "a 32-bit branch")?;
                 BranchSize::Long
             }
             // GNU as keeps an unsized `bra` at 16 bits and relaxes only its
@@ -1067,7 +1068,7 @@ impl Asm<'_, '_> {
             (None, None) => false,
         };
         if long {
-            self.need(Cpu::M68020, span, "a 32-bit `link` displacement")?;
+            self.need(M68020UP | f::CPU32 | f::FIDO_A, span, "a 32-bit `link` displacement")?;
             let (bytes, fixups) = encode::immediate(self.cx, e, Sz::L, span)?;
             let part = Part::words(bytes, fixups);
             return Some(build(0x4808 | n, vec![part]));
@@ -1083,6 +1084,13 @@ impl Asm<'_, '_> {
         };
         let part = Part::words(bytes, fixups);
         Some(build(0x4e50 | n, vec![part]))
+    }
+}
+
+impl Asm<'_, '_> {
+    /// The CPUs with 32-bit branches, as a mask for [`Asm::need`].
+    fn long_branches(&self) -> u32 {
+        M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B
     }
 }
 

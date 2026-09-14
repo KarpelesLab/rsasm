@@ -337,6 +337,10 @@ pub struct AsmCtx<'a> {
     /// What the statement needs done to the section beyond its own bytes;
     /// see [`Request`].
     pub requests: Vec<Request>,
+    /// Read-only: the source text, for an operand no token can carry, such as
+    /// an m68k floating-point immediate (`#1.5`), which lexes as `1`, `.`,
+    /// `5`.
+    pub sources: &'a crate::source::SourceMap,
 }
 
 impl AsmCtx<'_> {
