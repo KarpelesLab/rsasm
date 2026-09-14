@@ -154,13 +154,14 @@ impl Parser {
             }
         }
         self.offset = lexer.offset();
+        let mnemonic = lexer.config.mnemonic;
         self.config = Some(lexer.config);
         if toks.is_empty() {
             self.spare = toks;
             return None;
         }
         let dialect = self.dialect();
-        Some(build_statement(toks, dialect, interner, diags))
+        Some(Builder { dialect, mnemonic }.build(toks, interner, diags))
     }
 }
 
@@ -168,18 +169,26 @@ impl Parser {
 ///
 /// Exposed separately from [`Parser`] so that anything holding a bare token
 /// vector — a macro expansion, say — can turn it into a statement without a
-/// lexer.
+/// lexer. Without the lexer's configuration no backend's mnemonics are known,
+/// so in the 8-bit dialect every first-column word that is not a directive is
+/// a label.
 pub fn build_statement(
     toks: Vec<Token>,
     dialect: Dialect,
     interner: &mut Interner,
     diags: &mut DiagBag,
 ) -> Statement {
-    Builder { dialect }.build(toks, interner, diags)
+    Builder {
+        dialect,
+        mnemonic: None,
+    }
+    .build(toks, interner, diags)
 }
 
 struct Builder {
     dialect: Dialect,
+    /// See [`LexConfig::mnemonic`].
+    mnemonic: Option<fn(&str) -> bool>,
 }
 
 impl Builder {
@@ -208,6 +217,27 @@ impl Builder {
             if toks.get(i).map(|t| t.kind) == Some(TokKind::Punct(Punct::Colon)) {
                 i += 1;
             }
+        }
+
+        // The 8-bit references split on this. vasm and AS take a first-column
+        // word as a label, colon or not, like Motorola source; ca65 and GNU as
+        // want the colon, and assemble an instruction written in the first
+        // column. A word that names an instruction or a directive is taken as
+        // one, so both kinds of source mean what they meant to their
+        // assembler, unless a label is spelled like a mnemonic and has no
+        // colon. `NAME = value` is an assignment either way.
+        if self.dialect == Dialect::EightBit
+            && let Some(t) = toks.first()
+            && let TokKind::Ident(n) = t.kind
+            && !t.preceded_by_space
+            && !matches!(
+                toks.get(1).map(|t| t.kind),
+                Some(TokKind::Punct(Punct::Colon | Punct::Eq))
+            )
+            && !self.is_keyword(interner.get(n))
+        {
+            labels.push(LabelDef::Named(n, t.span));
+            i = 1;
         }
 
         // Leading labels. A label is an identifier or a plain integer followed
@@ -243,7 +273,22 @@ impl Builder {
         // `NAME equ value`, the vendor spelling of `.set NAME, value`. The name
         // may already have been taken as a label — by a colon, or by starting
         // in the first column — in which case it is the name being defined
-        // rather than a place.
+        // rather than a place. ca65 also writes `NAME := value`, which is the
+        // same thing with `=` for the keyword.
+        if self.dialect == Dialect::EightBit
+            && toks.get(i).is_some_and(|t| t.is_punct(Punct::Eq))
+            && let [LabelDef::Named(name, name_span)] = labels.as_slice()
+        {
+            let (name, span) = (*name, *name_span);
+            return Statement {
+                labels: Vec::new(),
+                body: Some(Body::Assign { name, span }),
+                symbol: None,
+                args: i + 1,
+                toks,
+                span: stmt_span,
+            };
+        }
         if let Some(word) = toks.get(i).and_then(|t| t.ident())
             && self.is_equate_word(interner.get(word))
             && let [LabelDef::Named(name, name_span)] = labels.as_slice()
@@ -357,7 +402,29 @@ impl Builder {
             }
             // CC-RX has `.EQU` alone (R20UT3248EJ0115 page 475).
             Dialect::CcRx => word.eq_ignore_ascii_case(".equ"),
+            // `EQU` everywhere, AS's and Intel's `SET` and Zilog's `DEFL` for
+            // a name that can be defined again, and ca65's `.set`. `SET` is
+            // left alone where it is an instruction, as it is on the Z80.
+            Dialect::EightBit => {
+                let w = word.to_ascii_lowercase();
+                match w.as_str() {
+                    "equ" | ".equ" | "defl" | ".set" => true,
+                    "set" => !self.mnemonic.is_some_and(|m| m("set")),
+                    _ => false,
+                }
+            }
         }
+    }
+
+    /// Whether a first-column word is an instruction or a directive, rather
+    /// than a label, in the 8-bit dialect. A dotted word is a directive, as
+    /// in ca65.
+    fn is_keyword(&self, word: &str) -> bool {
+        let lower = word.to_ascii_lowercase();
+        lower.starts_with('.')
+            || crate::dialect::lookup(self.dialect, &lower).is_some()
+            || crate::dialect::block_keyword(self.dialect, &lower).is_some()
+            || self.mnemonic.is_some_and(|m| m(&lower))
     }
 
     fn classify(
@@ -369,8 +436,12 @@ impl Builder {
     ) -> Option<Body> {
         let first = *toks.get(*i)?;
 
-        // `. = expr` sets the location counter.
-        if first.is_punct(Punct::Dot) && toks.get(*i + 1).is_some_and(|t| t.is_punct(Punct::Eq)) {
+        // `. = expr` sets the location counter, and so does `* = expr` in the
+        // 8-bit dialect, where vasm and ca65 write it.
+        if (first.is_punct(Punct::Dot)
+            || (first.is_punct(Punct::Star) && self.dialect == Dialect::EightBit))
+            && toks.get(*i + 1).is_some_and(|t| t.is_punct(Punct::Eq))
+        {
             *i += 2;
             return Some(Body::SetLocation { span: first.span });
         }
@@ -406,7 +477,9 @@ impl Builder {
                 // directive too: Renesas's newer assemblers write `.DB` and
                 // `.CSEG`, and a Motorola `.local` label never reaches here,
                 // because a first-column word has already been taken as one.
-                Dialect::Motorola | Dialect::Renesas => text.starts_with('.') && text.len() > 1,
+                Dialect::Motorola | Dialect::Renesas | Dialect::EightBit => {
+                    text.starts_with('.') && text.len() > 1
+                }
                 // Every CC-RL and CC-RH directive is dotted and every bare word
                 // is an instruction or a macro call (CC-RL Table 5.13, page
                 // 484).

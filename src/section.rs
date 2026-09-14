@@ -500,6 +500,10 @@ pub struct Section {
     pub size: u64,
     /// Base address, for absolute output formats.
     pub addr: u64,
+    /// The address the source put the section at, when it said: the 8-bit
+    /// dialect's `ORG` before anything was emitted. Absolute output lays the
+    /// section out there rather than after the one before it.
+    pub origin: Option<u64>,
     /// The section symbol, created lazily when a relocation needs it.
     pub sym: Option<SymbolId>,
     /// Index of the trailing fragment that new data may be appended to, if
@@ -528,6 +532,7 @@ impl Section {
             frags: Vec::new(),
             size: 0,
             addr: 0,
+            origin: None,
             sym: None,
             open_data: None,
             group: None,

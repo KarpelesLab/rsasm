@@ -43,6 +43,14 @@ pub enum Dialect {
     /// numbers, `$` as the location counter, `.SECTION P,CODE`-style
     /// directives and `?:` temporary labels.
     CcRx,
+    /// The conventional syntax of the 8-bit microprocessors, as cc65's ca65
+    /// reads 6502 source, GNU as and vasm read Zilog Z80 source, and the
+    /// Macro Assembler AS reads Intel 8080 source: `$12`, `12H` and `%1010`
+    /// numbers, `;` comments, `$` and `*` for the location counter, `<` and
+    /// `>` for an address's low and high byte, `DB`/`DEFB`/`.byte` data, and
+    /// `ORG` to say where the code is loaded. See [`crate::dialect`] for how
+    /// the references differ and which one each rule follows.
+    EightBit,
 }
 
 impl Dialect {
@@ -55,6 +63,7 @@ impl Dialect {
             "ccrl" | "cc-rl" => Dialect::CcRl,
             "ccrh" | "cc-rh" => Dialect::CcRh,
             "ccrx" | "cc-rx" => Dialect::CcRx,
+            "8bit" | "eightbit" | "ca65" | "zilog" | "oldstyle" => Dialect::EightBit,
             _ => return None,
         })
     }
@@ -62,7 +71,10 @@ impl Dialect {
     /// Whether directives are spelled without a leading dot, so a bare word
     /// has to be looked up before it can be called an instruction.
     pub fn dotless_directives(self) -> bool {
-        matches!(self, Dialect::Nasm | Dialect::Motorola | Dialect::Renesas)
+        matches!(
+            self,
+            Dialect::Nasm | Dialect::Motorola | Dialect::Renesas | Dialect::EightBit
+        )
     }
 
     /// The CC-RL/CC-RH family, which shares its directives, control
@@ -82,7 +94,10 @@ impl Dialect {
     /// CC-RX calls it the location symbol (R20UT3248EJ0115 Table 5.1, page
     /// 453).
     pub fn dollar_is_here(self) -> bool {
-        matches!(self, Dialect::Nasm | Dialect::Renesas | Dialect::CcRx)
+        matches!(
+            self,
+            Dialect::Nasm | Dialect::Renesas | Dialect::CcRx | Dialect::EightBit
+        )
     }
 
     /// Quotes inside a string are written twice (`'it''s'`). Devpac, vasm,
@@ -97,14 +112,21 @@ impl Dialect {
     /// `\n`, `\xhh` and the rest (CC-RL Table 5.3, page 424; CC-RH Table 5.2,
     /// R20UT3516EJ0113 page 382). CC-RX's manual describes none, so its
     /// strings are taken as written.
+    ///
+    /// ca65 (without `.feature string_escapes`) and GNU as for the Z80 take a
+    /// backslash as written too.
     pub fn backslash_escapes(self) -> bool {
-        !matches!(self, Dialect::Motorola | Dialect::Renesas | Dialect::CcRx)
+        !matches!(
+            self,
+            Dialect::Motorola | Dialect::Renesas | Dialect::CcRx | Dialect::EightBit
+        )
     }
 
     /// `*` in operand position is the location counter, as in `dc.l *`. It is
-    /// still multiplication between two operands.
+    /// still multiplication between two operands. ca65 and vasm spell the
+    /// location counter this way for the 6502.
     pub fn star_is_here(self) -> bool {
-        matches!(self, Dialect::Motorola)
+        matches!(self, Dialect::Motorola | Dialect::EightBit)
     }
 }
 
@@ -146,6 +168,13 @@ pub struct LexConfig {
     /// `@` may start or continue an identifier, as the CC-RL and CC-RH symbol
     /// rules allow (CC-RL §5.1.2 (3)(b), page 428; CC-RH §5.1.12, page 423).
     pub at_in_idents: bool,
+    /// `AF'`, the Z80's alternate register pair, is a name: a quote straight
+    /// after `AF` is its prime rather than the start of a character literal.
+    pub primed_af: bool,
+    /// Recognises the active backend's mnemonics, in a dialect where a word
+    /// in the first column is a label unless it is an instruction or a
+    /// directive; see [`crate::arch::Architecture::mnemonics`].
+    pub mnemonic: Option<fn(&str) -> bool>,
 }
 
 impl LexConfig {
@@ -163,6 +192,8 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                primed_af: false,
+                mnemonic: None,
             },
             Dialect::Nasm => LexConfig {
                 dialect: d,
@@ -176,6 +207,8 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                primed_af: false,
+                mnemonic: None,
             },
             // Checked against vasm and GNU as --mri, which agree on every rule.
             Dialect::Motorola => LexConfig {
@@ -190,6 +223,8 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![('$', 16), ('%', 2), ('@', 8)],
                 at_in_idents: false,
+                primed_af: false,
+                mnemonic: None,
             },
             Dialect::Renesas => LexConfig {
                 dialect: d,
@@ -203,6 +238,8 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                primed_af: false,
+                mnemonic: None,
             },
             // CC-RL: `;` comments, and `#` ones at the start of a line
             // (§5.1.2 (6), page 429). A number takes a `0x`/`0b` prefix or an
@@ -222,6 +259,8 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+                primed_af: false,
+                mnemonic: None,
             },
             // CC-RH: the same comments (§5.1.1 (5), page 383, and the `#` row
             // of Table 5.1, page 379), and prefix notation only (§5.1.1
@@ -238,6 +277,8 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+                primed_af: false,
+                mnemonic: None,
             },
             // CC-RX: `;` comments only, since `#` is the immediate sigil
             // (R20UT3248EJ0115 §5.1.7, page 463), and numbers with a `B`, `O`
@@ -255,6 +296,28 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                primed_af: false,
+                mnemonic: None,
+            },
+            // The 8-bit references agree on `;` comments, no statement
+            // separator, and `$` and `%` prefixes. ca65 has no radix suffixes,
+            // but GNU as for the Z80, vasm and AS all read `0FFH`; a `0B00H`
+            // is hex, as it is to all three. Only GNU as has `1b` local label
+            // references, which the others would read as binary, as this does.
+            Dialect::EightBit => LexConfig {
+                dialect: d,
+                line_comment: vec![";"],
+                line_start_comment: vec![],
+                block_comment: false,
+                stmt_sep: vec![],
+                radix_suffix: true,
+                local_label_refs: false,
+                char_multi: true,
+                octal_leading_zero: false,
+                number_prefixes: vec![('$', 16), ('%', 2)],
+                at_in_idents: false,
+                primed_af: true,
+                mnemonic: None,
             },
         }
     }
@@ -641,6 +704,14 @@ impl<'a> Lexer<'a> {
             while !self.at_end() && cont(self.peek()) {
                 self.pos += self.char_len();
             }
+            // The Z80's alternate register pair, `AF'`: a quote straight after
+            // a name cannot open a character literal, so it is the prime.
+            if self.config.primed_af
+                && self.peek() == b'\''
+                && self.src[start..self.pos].eq_ignore_ascii_case("af")
+            {
+                self.pos += 1;
+            }
             let text = &self.src[start..self.pos];
             let name = interner.intern(text);
             return mk(TokKind::Ident(name), self);
@@ -775,7 +846,7 @@ impl<'a> Lexer<'a> {
     fn suffixed_literal_ahead(&self) -> bool {
         if !matches!(
             self.config.dialect,
-            Dialect::Renesas | Dialect::CcRl | Dialect::CcRx
+            Dialect::Renesas | Dialect::CcRl | Dialect::CcRx | Dialect::EightBit
         ) {
             return false;
         }

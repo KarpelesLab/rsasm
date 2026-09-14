@@ -30,6 +30,14 @@ impl Assembler {
             self.run_alias(stmt, alias);
             return;
         }
+        // In the 8-bit dialect a dotted word is ca65's, whose meaning can
+        // differ from the GNU as directive of the same name (`.org`).
+        if let Some(bare) = text.strip_prefix('.')
+            && let Some(alias) = crate::dialect::lookup_dotted(self.options.dialect, bare)
+        {
+            self.run_alias(stmt, alias);
+            return;
+        }
         // CC-RL, CC-RH and CC-RX have tables of their own; the `$` control
         // instructions of the first two keep the `$` in their name.
         if self.options.dialect.renesas_cc()
@@ -370,6 +378,7 @@ impl Assembler {
         if self.check_nobits(span) {
             return;
         }
+        self.bind_here_to_item(e);
         // Resolve now if it already has a value: a `.set` symbol is a
         // snapshot at each use, so a later redefinition must not reach back
         // and change bytes that were already emitted.

@@ -386,6 +386,8 @@ impl Assembler {
 
     /// The lexing rules for source read from now on: the dialect's, and in
     /// the GNU dialect the active backend's comment characters and tuning.
+    /// The 8-bit dialect needs the backend's mnemonics to tell a label in the
+    /// first column from an instruction.
     fn lex_config(&self) -> LexConfig {
         let mut config = LexConfig::for_dialect(self.options.dialect);
         if self.options.dialect == Dialect::Gas {
@@ -393,6 +395,9 @@ impl Assembler {
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
             self.arch.tune_lexer(&mut config);
+        }
+        if self.options.dialect == Dialect::EightBit {
+            config.mnemonic = self.arch.mnemonics();
         }
         config
     }
@@ -613,13 +618,19 @@ impl Assembler {
         // CC-RL, CC-RH and CC-RX write `NAME .MACRO params`, with the name in
         // the symbol field, and CC-RH allows the parameters in parentheses
         // (CC-RL page 527, CC-RH page 460, CC-RX R20UT3248EJ0115 page 486).
+        // vasm and AS write it that way in the 8-bit dialect too, and AS puts
+        // the parameters after the keyword: `LOAD MACRO VAL,ADDR`.
+        let eight_bit = self.options.dialect == Dialect::EightBit;
         let label_name = match (cc, stmt.symbol, stmt.labels.as_slice()) {
             (true, Some((n, _)), _) => Some(self.interner.get(n).to_string()),
-            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() => {
+            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() || eight_bit => {
                 Some(self.interner.get(*n).to_string())
             }
             _ => None,
         };
+        if eight_bit && label_name.is_some() {
+            params_text = header.trim();
+        }
         if cc {
             name_text = "";
             params_text = header.trim();
@@ -843,6 +854,10 @@ impl Assembler {
         let text = if self.options.dialect.renesas_cc() {
             let bindings = self.cc_local_bindings(&def.body, &bindings);
             self.cc_substitute(&def.body, &bindings)
+        } else if self.options.dialect == Dialect::EightBit && !def.params.is_empty() {
+            // ca65 names its parameters in the body as plain words. With no
+            // parameters declared, vasm's `\1` is what the body uses.
+            macros::substitute_words(&def.body, &bindings, '\0', false)
         } else {
             macros::substitute_with(&def.body, &bindings, counter, positional)
         };
@@ -1238,9 +1253,23 @@ impl Assembler {
                         && stmt.toks[stmt.args - 1]
                             .ident()
                             .is_some_and(|w| self.interner.get(w).eq_ignore_ascii_case(".set"));
+                    // The 8-bit dialect's redefinable `DEFL`, `SET` and
+                    // `.set` count the same way, where the value is a number
+                    // already; one that refers to a label keeps it.
+                    let counts = self.options.dialect == Dialect::EightBit
+                        && stmt.args >= 1
+                        && stmt.toks[stmt.args - 1].ident().is_some_and(|w| {
+                            let w = self.interner.get(w);
+                            [".set", "set", "defl"]
+                                .iter()
+                                .any(|k| w.eq_ignore_ascii_case(k))
+                        });
                     let value = if is_set {
                         self.eval_absolute(e, "a `.SET` value")
                             .map(|v| self.exprs.int(v as u64, self.exprs.span(e)))
+                    } else if counts && let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs())
+                    {
+                        Some(self.exprs.int(v as u64, self.exprs.span(e)))
                     } else {
                         Some(e)
                     };
@@ -1264,7 +1293,12 @@ impl Assembler {
             Some(Body::SetLocation { span }) => {
                 let mut cur = stmt.arg_cursor();
                 if let Some(e) = self.parse_expr(&mut cur) {
-                    self.emit_org(e, 0, *span);
+                    // `* = $1000` is `ORG $1000` to the 8-bit references.
+                    if self.options.dialect == Dialect::EightBit {
+                        self.origin(e, *span);
+                    } else {
+                        self.emit_org(e, 0, *span);
+                    }
                 }
                 self.expect_end(&mut cur);
             }
@@ -1278,7 +1312,8 @@ impl Assembler {
     /// has a constant value with that value.
     ///
     /// A CC-RL/CC-RH `.SET` symbol may be redefined, and every use means the
-    /// value it had there (CC-RL page 504; CC-RH page 435). Instruction
+    /// value it had there (CC-RL page 504; CC-RH page 435), as does one
+    /// defined with `DEFL` or `SET` in the 8-bit dialect. Instruction
     /// operands are otherwise evaluated once the whole file is read, when only
     /// the last value is left.
     fn bind_set_values(&mut self, mark: usize) {
@@ -1314,13 +1349,40 @@ impl Assembler {
         }
     }
 
+    /// Binds the location counter in one item of a data list to where that
+    /// item is emitted, rather than to the start of the statement.
+    ///
+    /// `.long ., .` is two different addresses to GNU as, and `.word *, *`
+    /// to ca65 and vasm: each `.` is read as its item is. Instructions keep
+    /// the statement's start, which is also where they begin.
+    pub(crate) fn bind_here_to_item(&mut self, e: ExprRef) {
+        let mut here = Vec::new();
+        let mut stack = vec![e];
+        while let Some(r) = stack.pop() {
+            match &self.exprs.get(r).kind {
+                ExprKind::Here => here.push(r),
+                ExprKind::Unary(_, a) | ExprKind::Modifier(_, a) => stack.push(*a),
+                ExprKind::Binary(_, a, b) => stack.extend([*a, *b]),
+                _ => {}
+            }
+        }
+        if here.is_empty() {
+            return;
+        }
+        let span = self.exprs.span(e);
+        let label = self.anon_label(span);
+        for r in here {
+            self.exprs.set_kind(r, ExprKind::SymId(label));
+        }
+    }
+
     /// Rewrites `.` and `1f`/`1b` nodes created by this statement into direct
     /// symbol references, now that the statement's position is known.
     fn bind_positional(&mut self, mark: usize) {
         if self.exprs.len() == mark {
             return;
         }
-        if self.options.dialect.is_cc() {
+        if self.options.dialect.is_cc() || self.options.dialect == Dialect::EightBit {
             self.bind_set_values(mark);
         }
         let Assembler {

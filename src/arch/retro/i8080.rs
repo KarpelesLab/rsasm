@@ -343,6 +343,13 @@ fn addr_operand(
     enc.done()
 }
 
+/// Whether `name`, lowercased, is an 8080 mnemonic.
+pub fn is_mnemonic(name: &str) -> bool {
+    let mut found = false;
+    for_each_opcode(|m, _, _| found |= m == name);
+    found
+}
+
 /// Walks the whole 8080 instruction set, calling `f` with each
 /// (mnemonic, operand-byte count, opcode). The completeness test uses this to
 /// check that the 244 defined opcodes are all reachable and all distinct.

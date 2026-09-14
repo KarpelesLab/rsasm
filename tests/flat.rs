@@ -250,6 +250,17 @@ entry:
 "#,
         image: Some((13, &[(0, "c3 00 80 04 08 fb ff ff ff f7 ff ff ff")])),
     },
+    Case {
+        name: "the location counter in each item of a data list",
+        base: 0x8048000,
+        src: r#"        .text
+entry:
+        ret
+        .long   ., ., . - entry
+        .byte   . - entry, . - entry
+"#,
+        image: Some((15, &[(0, "c3 01 80 04 08 05 80 04 08 09 00 00 00 0d 0e")])),
+    },
 ];
 
 #[cfg(feature = "aarch64")]

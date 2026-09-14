@@ -22,10 +22,12 @@ pub enum UnOp {
     Not,
     LogicalNot,
     Plus,
-    /// CC-RL and CC-RH `HIGH`: bits 8 to 15.
+    /// CC-RL and CC-RH `HIGH`, and `>` in the 8-bit dialect: bits 8 to 15.
     High,
-    /// `LOW`: bits 0 to 7.
+    /// `LOW`, and `<` in the 8-bit dialect: bits 0 to 7.
     Low,
+    /// ca65's `^`: bits 16 to 23, the bank byte of a 24-bit address.
+    Bank,
     /// `HIGHW`: bits 16 to 31.
     HighW,
     /// `LOWW`: bits 0 to 15.
@@ -44,6 +46,7 @@ impl UnOp {
             UnOp::Plus => "+",
             UnOp::High => "HIGH",
             UnOp::Low => "LOW",
+            UnOp::Bank => "^",
             UnOp::HighW => "HIGHW",
             UnOp::LowW => "LOWW",
             UnOp::HighW1 => "HIGHW1",
@@ -177,6 +180,11 @@ impl ExprArena {
         &self.nodes[r.0 as usize]
     }
 
+    /// Replaces what a node is, keeping where it was written.
+    pub(crate) fn set_kind(&mut self, r: ExprRef, kind: ExprKind) {
+        self.nodes[r.0 as usize].kind = kind;
+    }
+
     pub fn span(&self, r: ExprRef) -> Span {
         self.nodes[r.0 as usize].span
     }
@@ -303,6 +311,7 @@ pub fn eval(arena: &ExprArena, r: ExprRef, cx: &mut dyn EvalCtx) -> Result<Value
                 UnOp::Plus => a,
                 UnOp::High => (a >> 8) & 0xff,
                 UnOp::Low => a & 0xff,
+                UnOp::Bank => (a >> 16) & 0xff,
                 UnOp::HighW => (a >> 16) & 0xffff,
                 UnOp::LowW => a & 0xffff,
                 // Wraps to 0 when the high half is 0xffff and bit 15 is set
@@ -716,6 +725,11 @@ impl<'a> ExprParser<'a> {
             TokKind::Punct(Punct::Bang) if self.dialect == Dialect::CcRh => Some(UnOp::Not),
             TokKind::Punct(Punct::Bang) => Some(UnOp::LogicalNot),
             TokKind::Punct(Punct::Plus) => Some(UnOp::Plus),
+            // ca65's byte selectors, which vasm and AS read too. In operand
+            // position they cannot be comparisons.
+            TokKind::Punct(Punct::Lt) if self.dialect == Dialect::EightBit => Some(UnOp::Low),
+            TokKind::Punct(Punct::Gt) if self.dialect == Dialect::EightBit => Some(UnOp::High),
+            TokKind::Punct(Punct::Caret) if self.dialect == Dialect::EightBit => Some(UnOp::Bank),
             TokKind::Ident(n)
                 if (self.dialect.is_cc() || self.dialect == Dialect::CcRx)
                     && starts_term(cur.nth(1).kind) =>
@@ -786,6 +800,25 @@ impl<'a> ExprParser<'a> {
                     return None;
                 }
                 Some(self.arena.alloc(ExprKind::Sym(n), tok.span))
+            }
+            // ca65's function spellings of the byte selectors.
+            TokKind::Ident(n)
+                if self.dialect == Dialect::EightBit && cur.nth(1).is_punct(Punct::LParen) =>
+            {
+                let op = match self.interner.get(n).to_ascii_lowercase().as_str() {
+                    ".lobyte" => Some(UnOp::Low),
+                    ".hibyte" => Some(UnOp::High),
+                    ".bankbyte" => Some(UnOp::Bank),
+                    ".loword" => Some(UnOp::LowW),
+                    _ => None,
+                };
+                cur.advance();
+                let Some(op) = op else {
+                    return Some(self.arena.alloc(ExprKind::Sym(n), tok.span));
+                };
+                let inner = self.parse_prefix(cur)?;
+                let span = tok.span.to(self.arena.span(inner));
+                Some(self.arena.alloc(ExprKind::Unary(op, inner), span))
             }
             TokKind::Ident(n) => {
                 cur.advance();
@@ -881,6 +914,9 @@ fn peek_binop(cur: &Cursor<'_>, dialect: Dialect) -> Option<BinOp> {
         Punct::Pipe => Or,
         Punct::Caret => Xor,
         Punct::EqEq => Eq,
+        // A single `=` compares in ca65, vasm and GNU as for the Z80. An
+        // assignment was already told apart by the statement parser.
+        Punct::Eq if dialect == Dialect::EightBit => Eq,
         Punct::Ne => Ne,
         Punct::Lt => Lt,
         Punct::Gt => Gt,

@@ -2,8 +2,9 @@
 # Differential test against cross assemblers built by tools/oracles/build.sh.
 #
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
-# GNU and Motorola syntax), V850/RH850, RL78, RX and SuperH. Assembles a corpus
-# with rsasm and with the reference, and compares the code bytes.
+# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, and the 8-bit Z80,
+# 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
+# compares the code bytes.
 #
 #   tools/xas-diff/run.sh              # every target with a corpus
 #   tools/xas-diff/run.sh m68k rx      # just these
@@ -25,9 +26,15 @@ root=$(cd "$here/../.." && pwd)
 bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 
 # key | rsasm arch | rsasm dialect | reference command | how to get the code
+#     [| the key whose one-line corpus this one shares]
 #
 # The extraction is `elf:<section>` for an ELF object — RX keeps code in `P`,
-# the Renesas name, not `.text` — or `bin` for a flat binary.
+# the Renesas name, not `.text` — or `bin` for a flat binary. The 8-bit
+# references need a second tool to make one: `linked:<ld>` links the object at
+# address 0 and takes `.text`, which resolves the absolute addresses an
+# unlinked object leaves as relocations; `ld65` lays a ca65 object out with
+# ld65; `p2bin` converts AS's code file. rsasm assembles a flat binary for all
+# three, so a leading `org` is the image's load address on both sides.
 #
 # vasm is only a secondary reference, run with `-no-opt -devpac`. By default it
 # is an optimizing assembler that rewrites instructions (`move.l #1,d0` becomes
@@ -48,6 +55,12 @@ shl|shl|gas|sh-elf-as -little|elf:.text
 rl78-ccrl|rl78|ccrl|rl78-elf-as|elf:.text
 rh850-ccrh|rh850|ccrh|v850-elf-as -mv850e3v5|elf:.text
 rx-ccrx|rx|ccrx|rx-elf-as|elf:P
+6502|6502|8bit|ca65|ld65
+6502-vasm|6502|8bit|vasm6502_oldstyle -quiet -Fbin|bin
+z80|z80|8bit|z80-elf-as|linked:z80-elf-ld
+z80-gas|z80|gas|z80-elf-as|linked:z80-elf-ld|z80
+z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
+i8080|i8080|8bit|asl -cpu 8080|p2bin
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
@@ -67,6 +80,27 @@ reference() { # command, extraction; source on stdin
     echo "REF-MISSING: $tool"; rm -rf "$d"; return
   fi
   case "$extract" in
+    ld65)
+      # One memory area from address 0, holding every segment ca65 names.
+      printf '%s\n' 'MEMORY { M: start = 0, size = $10000, file = %O; }' \
+        'SEGMENTS { CODE: load = M, type = rw; RODATA: load = M, type = rw, optional = yes;' \
+        '  DATA: load = M, type = rw, optional = yes; ZEROPAGE: load = M, type = rw, optional = yes; }' \
+        > "$d/flat.cfg"
+      if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -o in.o in.s > log 2>&1 &&
+        "$bin/ld65" -C flat.cfg -o out.bin in.o >> log 2>&1); then
+        echo "REF-ERROR: $(grep -m2 -iE 'error' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
+      fi ;;
+    p2bin)
+      if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -q -o in.p in.s > log 2>&1 &&
+        "$bin/p2bin" -q -l 0 in.p out.bin >> log 2>&1) || grep -q 'error' "$d/log"; then
+        echo "REF-ERROR: $(grep -m2 -iE 'error' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
+      fi ;;
+    linked:*)
+      if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -o in.o in.s > log 2>&1 &&
+        "$bin/${extract#linked:}" -e 0 -Ttext=0 -o out.elf in.o >> log 2>&1); then
+        echo "REF-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
+      fi
+      llvm-objcopy -O binary --only-section=.text "$d/out.elf" "$d/out.bin" 2>/dev/null ;;
     bin)
       if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -o out.bin in.s > log 2>&1); then
         echo "REF-ERROR: $(grep -m2 -iE 'error|fatal' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
@@ -83,9 +117,11 @@ reference() { # command, extraction; source on stdin
 }
 
 compare() { # key arch dialect cmd extract name source [reference-source]
-  local r m gnu="${8-$7}"
+  local r m gnu="${8-$7}" format=bin
   m=$(printf '%s\n' "$gnu" | reference "$4" "$5")
-  r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "${5%%:*}" 2>&1)
+  # Everything but an unlinked ELF object is compared as a flat image.
+  [ "${5%%:*}" = elf ] && format=elf
+  r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "$format" 2>&1)
   # A reference that fails is never a match: a pair whose GNU half does not
   # assemble proves nothing about the vendor half.
   if [ "$m" = "$r" ] && [ "${m#REF-}" = "$m" ]; then
@@ -103,8 +139,8 @@ compare() { # key arch dialect cmd extract name source [reference-source]
   fi
 }
 
-run_target() { # key arch dialect cmd extract
-  local lines="$here/$1.txt" progs="$here/$1-programs.txt" before=$((pass + fail))
+run_target() { # key arch dialect cmd extract corpus
+  local lines="$here/$6.txt" progs="$here/$1-programs.txt" before=$((pass + fail))
   if [ -f "$lines" ]; then
     while IFS= read -r line; do
       [ -z "${line// /}" ] && continue
@@ -162,14 +198,15 @@ run_target() { # key arch dialect cmd extract
 }
 
 wanted="${*:-}"
-while IFS='|' read -r key arch dialect cmd extract; do
+while IFS='|' read -r key arch dialect cmd extract corpus; do
   [ -z "$key" ] && continue
   if [ -n "$wanted" ]; then
     case " $wanted " in *" $key "*) ;; *) continue ;; esac
   fi
-  [ -f "$here/$key.txt" ] || [ -f "$here/$key-programs.txt" ] || [ -f "$here/$key-pairs.txt" ] ||
-    continue
-  run_target "$key" "$arch" "$dialect" "$cmd" "$extract"
+  corpus=${corpus:-$key}
+  [ -f "$here/$corpus.txt" ] || [ -f "$here/$key-programs.txt" ] ||
+    [ -f "$here/$key-pairs.txt" ] || continue
+  run_target "$key" "$arch" "$dialect" "$cmd" "$extract" "$corpus"
 done <<< "$TARGETS"
 
 echo "--- $pass matched, $fail differed"
