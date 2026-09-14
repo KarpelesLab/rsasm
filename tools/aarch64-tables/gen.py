@@ -616,19 +616,24 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
     ints = kind != "fimm" and isinstance(b0, int)
     options = []  # (explained, preference, encoding, values)
 
-    # A range is fitted over the values the disassembler prints back, where
-    # there are any: llvm-mc takes `mov z0.h, #65520` too, as `#-16`, and a
-    # range of such aliases is a form of its own to nobody else.
-    ranged, ranged_all = accepted, everything
+    # Which values the disassembler prints back tells a range of values from a
+    # range of llvm-mc's aliases for them: `scvtf d0, w0, #0` is taken as
+    # `#32`, and measured from there, bit 0 moves five bits of the word. So a
+    # range has to be mostly values that are printed back. That only means
+    # something in a shape most encodings of which print back at all; an
+    # alias spelling (`mov z0.h, #1, lsl #8`, printed `#256`) has few or none.
     words_all = {w for v, w in everything.items() if isinstance(v, int)}
     words_printed = {everything[v] for v in printed if v in everything}
-    # Only where most encodings are printed back in this shape: an alias
-    # spelling (`mov z0.h, #1, lsl #8`, printed as `#256`) has few or none.
-    if printed and not reg and len(words_printed) * 2 >= len(words_all):
-        keep = set(printed) | {b0}
-        ranged = {v: w for v, w in accepted.items() if v in keep}
-        ranged_all = {v: w for v, w in everything.items() if v in keep}
+    canon = set(printed) if printed and kind == "imm" and \
+        len(words_printed) * 2 >= len(words_all) else None
 
+    def mostly_printed(lo, hi, step):
+        if canon is None:
+            return True
+        n = (hi - lo) // step + 1
+        return sum(1 for v in canon if lo <= v <= hi and (v - lo) % step == 0) * 2 > n
+
+    ranged, ranged_all = accepted, everything
     if ints:
         top = max(abs(v) for v in ranged if isinstance(v, int))
         bits = bits_from_probes(ranged, b0, base_word, lambda v: v,
@@ -641,7 +646,7 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
             if kind in ("cond", "pat", "prf"):
                 # Only a name reaches the field, so its width is the range.
                 lo, hi = 0, (1 << n) - 1
-            if hi > lo:
+            if hi > lo and mostly_printed(lo, hi, 1):
                 places = [w for _, w in bits]
                 if [v for v, _ in bits] == list(range(len(bits))) and \
                         places == list(range(places[0], places[0] + len(places))):
@@ -666,7 +671,8 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
                     lo, hi = grow(ranged_all, model, b0, step, 0 if reg else None,
                                   None, most=1 << width, printed=printed, skip=claimed)
                     count = (hi - lo) // step + 1
-                    if count >= 3 and (step == 1 or count >= 8):
+                    if count >= 3 and (step == 1 or count >= 8) and \
+                            mostly_printed(lo, hi, step):
                         options.append((count, 1 + width / 100.0,
                                         ("affine", lsb, width, sign, step, lo, hi), None, ()))
 
@@ -692,6 +698,9 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
             if score:
                 options.append((score[0], 2, ("fpimm", place), score[1], score[2]))
     choice = _choice(accepted, b0, base_word)
+    if choice and canon is not None and \
+            sum(1 for v in choice[1] if v in canon) * 2 <= len(choice[1]):
+        choice = None
     if choice:
         options.append((len(choice[1]), 3, choice[0], choice[1], ()))
     if not options:
@@ -865,22 +874,33 @@ def measure_wrap(mn, atoms, slots, base, sp, rng):
               if sl.get("kind") == "imm" and enc_range(sl["enc"]) and enc_range(sl["enc"])[0] < 0]
     if e not in (8, 16, 32) or not signed:
         return 0, []
-    cases = []
-    for i in signed:
-        lo, hi, step = enc_range(slots[i]["enc"])
-        negatives = list(range(lo, min(hi, -1) + 1, step))
-        for v in {negatives[0], negatives[-1], rng.choice(negatives)}:
-            vals = pick_values(slots, rng)
-            vals[i] = v
-            alias = list(vals)
-            alias[i] = v + (1 << e)
-            cases.append((vals, alias))
-    lines = [render(mn, apply_values(atoms, slots, alias, sp)) for _, alias in cases]
-    got = assemble(lines)
-    for (vals, _), w in zip(cases, got):
-        if w != encode_form(slots, base, vals):
-            return 0, []
-    return e, list(zip(lines, got))
+    dirs, kept = 0, []
+    # Each way is measured on its own: llvm-mc may take a number above the
+    # range as the element's bits and refuse one below it.
+    for bit, sign in ((1, 1), (2, -1)):
+        cases = []
+        for i in signed:
+            lo, hi, step = enc_range(slots[i]["enc"])
+            if sign > 0:
+                pool = list(range(lo, min(hi, -1) + 1, step))
+            else:
+                pool = list(range(lo + ((-lo + step - 1) // step) * step, hi + 1, step))
+            if not pool:
+                continue
+            for v in {pool[0], pool[-1], rng.choice(pool)}:
+                vals = pick_values(slots, rng)
+                vals[i] = v
+                alias = list(vals)
+                alias[i] = v + sign * (1 << e)
+                cases.append((vals, alias))
+        if not cases:
+            continue
+        lines = [render(mn, apply_values(atoms, slots, alias, sp)) for _, alias in cases]
+        got = assemble(lines)
+        if all(w == encode_form(slots, base, vals) for (vals, _), w in zip(cases, got)):
+            dirs |= bit
+            kept.extend(zip(lines, got))
+    return ((e, dirs) if dirs else 0), kept
 
 
 def enc_bits(enc):
@@ -1412,7 +1432,8 @@ def emit_rust(forms, path):
             text = "Slot { kind: %s, a: %s, b: %s }" % (kind_rust(kind, spelling), a, b)
             sids.append(slot_pool.setdefault(text, len(slot_pool)))
         shape = shape_pool.setdefault(tuple(sids), len(shape_pool))
-        rows.append((mnem_index[f["mn"]], shape, f["base"], f.get("wrap", 0)))
+        wrap = f.get("wrap") or (0, 0)
+        rows.append((mnem_index[f["mn"]], shape, f["base"], wrap[0], wrap[1]))
     rows.sort(key=lambda r: r[0])  # stable: the forms of a mnemonic keep their order
 
     slots = sorted(slot_pool, key=slot_pool.get)
@@ -1443,10 +1464,10 @@ def emit_rust(forms, path):
     for sh in shapes:
         out.append("    &[%s],\n" % ", ".join(str(x) for x in sh))
     out.append("];\n")
-    out.append("\n/// `(mnemonic, shape, opcode, wrap)`, sorted by mnemonic.\n")
+    out.append("\n/// `(mnemonic, shape, opcode, wrap, directions)`, sorted by mnemonic.\n")
     out.append("pub static FORMS: &[Form] = &[\n")
-    for mn, sh, base, wrap in rows:
-        out.append("    Form(%d, %d, 0x%08x, %d),\n" % (mn, sh, base, wrap))
+    for mn, sh, base, wrap, dirs in rows:
+        out.append("    Form(%d, %d, 0x%08x, %d, %d),\n" % (mn, sh, base, wrap, dirs))
     out.append("];\n")
     with open(path, "w") as fh:
         fh.write("".join(out))
@@ -1549,14 +1570,18 @@ def merge(into, part, rng=random.Random(0)):
 def wrapped(enc, v, wrap):
     """`v` as a signed range reads it. Both references take a number of an
     SVE element's width as that element's bits: `mov z0.h, #0xfff0` is
-    `#-16`. A form `wrap` is set for does the same."""
+    `#-16`, and `mov z0.b, #-241` is `#15`. A form `wrap` is set for does the
+    same."""
     if isinstance(v, int) and (1 << 63) <= v < (1 << 64):
         # The backend reads a number as a 64-bit integer.
         v -= 1 << 64
     r = enc_range(enc)
-    if wrap and r and r[0] < 0 and isinstance(v, int) and \
-            (1 << (wrap - 1)) <= v < (1 << wrap) and v > r[1]:
-        return v - (1 << wrap)
+    bits, dirs = wrap if wrap else (0, 0)
+    if bits and r and r[0] < 0 and isinstance(v, int):
+        if dirs & 1 and (1 << (bits - 1)) <= v < (1 << bits) and v > r[1]:
+            return v - (1 << bits)
+        if dirs & 2 and -(1 << bits) <= v < -(1 << (bits - 1)) and v < r[0]:
+            return v + (1 << bits)
     return v
 
 

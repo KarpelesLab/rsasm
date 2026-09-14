@@ -206,14 +206,15 @@ pub struct Slot {
     pub b: Enc,
 }
 
-/// A form: its mnemonic and operand shape, as indices, its opcode, and the
-/// element width its signed immediates wrap at, or 0.
+/// A form: its mnemonic and operand shape, as indices, its opcode, the
+/// element width its signed immediates wrap at, or 0, and which ways: bit 0
+/// for a number above the range, bit 1 for one below it.
 ///
 /// Both references read a number of an SVE element's width as the element's
 /// bits, so `mov z0.h, #0xfff0` is `mov z0.h, #-16`; the generator sets the
 /// width for each form llvm-mc was seen to do that for.
 #[derive(Copy, Clone, Debug)]
-pub struct Form(pub u16, pub u16, pub u32, pub u8);
+pub struct Form(pub u16, pub u16, pub u32, pub u8, pub u8);
 
 // ---- operands -----------------------------------------------------------------
 
@@ -846,24 +847,27 @@ fn transform(xf: Xf, v: Val) -> Result<u64, String> {
 }
 
 /// A number of an element's width as a signed range reads it; see [`Form`].
-fn wrapped(enc: Enc, v: Option<Val>, wrap: u8) -> Option<Val> {
+fn wrapped(enc: Enc, v: Option<Val>, wrap: u8, dirs: u8) -> Option<Val> {
     let (min, max) = match enc {
         Enc::Field { min, max, .. }
         | Enc::Scatter { min, max, .. }
         | Enc::Affine { min, max, .. } => (min, max),
         _ => return v,
     };
-    match v {
-        Some(Val::Int(x))
-            if wrap != 0
-                && min < 0
-                && x > max
-                && (1i64 << (wrap - 1)..1i64 << wrap).contains(&x) =>
-        {
-            Some(Val::Int(x - (1i64 << wrap)))
-        }
-        _ => v,
+    let Some(Val::Int(x)) = v else {
+        return v;
+    };
+    if wrap == 0 || min >= 0 {
+        return v;
     }
+    let size = 1i64 << wrap;
+    if dirs & 1 != 0 && x > max && (size / 2..size).contains(&x) {
+        return Some(Val::Int(x - size));
+    }
+    if dirs & 2 != 0 && x < min && (-size..-size / 2).contains(&x) {
+        return Some(Val::Int(x + size));
+    }
+    v
 }
 
 /// Puts one number into the word, or says why it does not fit.
@@ -981,7 +985,7 @@ fn encode(form: Form, shape: &[u16], atoms: &[(Atom, Span)]) -> Result<u32, (Spa
             if matches!(enc, Enc::None) {
                 continue;
             }
-            let v = wrapped(enc, v, form.3);
+            let v = wrapped(enc, v, form.3, form.4);
             word = apply(enc, v, &values, word)
                 .map_err(|why| (*span, format!("operand {}: {why}", k + 1)))?;
             values.push(v);

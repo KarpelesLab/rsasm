@@ -4514,25 +4514,19 @@ saddw2 v31.8h, v31.8h, v31.16b
 scvtf d0, d0
 scvtf d0, d0, #1
 scvtf d0, w0
-scvtf d0, w0, #0
-scvtf d0, w5, #0
+scvtf d0, w0, #1
+scvtf d0, w5, #9
 scvtf d0, x0
-scvtf d0, x0, #0
+scvtf d0, x0, #1
 scvtf d10, d30, #22
-scvtf d11, w23, #29
 scvtf d11, x6
-scvtf d2, x22, #6
-scvtf d2, x8, #0
-scvtf d2, xzr, #18
-scvtf d26, w12, #9
+scvtf d2, x8, #30
 scvtf d31, d17
 scvtf d31, d31
 scvtf d31, d31, #64
 scvtf d31, wzr
-scvtf d31, wzr, #1
 scvtf d31, wzr, #32
 scvtf d31, xzr
-scvtf d31, xzr, #1
 scvtf d31, xzr, #64
 scvtf d8, w10
 scvtf h0, h0
@@ -4540,22 +4534,19 @@ scvtf h0, h0, #1
 scvtf h0, w0
 scvtf h0, w0, #1
 scvtf h0, x0
-scvtf h0, x0, #0
-scvtf h12, w27, #22
+scvtf h0, x0, #1
 scvtf h16, h7, #9
 scvtf h25, h25
 scvtf h26, w9
-scvtf h26, x0, #0
+scvtf h26, x0, #24
 scvtf h3, x8
-scvtf h30, xzr, #25
 scvtf h31, h31
 scvtf h31, h31, #16
 scvtf h31, wzr
 scvtf h31, wzr, #32
 scvtf h31, xzr
-scvtf h31, xzr, #1
 scvtf h31, xzr, #64
-scvtf h4, x18, #35
+scvtf h8, w0, #27
 scvtf s0, s0
 scvtf s0, s0, #1
 scvtf s0, w0
@@ -4563,9 +4554,9 @@ scvtf s0, w0, #1
 scvtf s0, x0
 scvtf s0, x0, #1
 scvtf s2, w27
+scvtf s24, w8, #28
 scvtf s26, s2, #24
 scvtf s26, x6
-scvtf s29, x24, #33
 scvtf s31, s15
 scvtf s31, s31
 scvtf s31, s31, #32
@@ -4573,7 +4564,7 @@ scvtf s31, wzr
 scvtf s31, wzr, #32
 scvtf s31, xzr
 scvtf s31, xzr, #64
-scvtf s8, w26, #24
+scvtf s6, x24, #64
 scvtf v0.2d, v0.2d
 scvtf v0.2d, v0.2d, #1
 scvtf v0.2s, v0.2s
@@ -7220,47 +7211,38 @@ uaddw2 v7.2d, v21.2d, v31.4s
 ucvtf d0, d0
 ucvtf d0, d0, #1
 ucvtf d0, w0
-ucvtf d0, w0, #0
-ucvtf d0, w28, #1
+ucvtf d0, w0, #1
+ucvtf d0, w28, #28
 ucvtf d0, x0
-ucvtf d0, x0, #0
-ucvtf d17, x11, #0
+ucvtf d0, x0, #1
+ucvtf d17, x11, #31
 ucvtf d18, w3
 ucvtf d2, d16, #11
-ucvtf d20, x22, #49
 ucvtf d29, x10
-ucvtf d30, w30, #6
 ucvtf d31, d31
 ucvtf d31, d31, #64
 ucvtf d31, wzr
-ucvtf d31, wzr, #1
 ucvtf d31, wzr, #32
 ucvtf d31, xzr
-ucvtf d31, xzr, #1
 ucvtf d31, xzr, #64
 ucvtf d4, d22
-ucvtf d8, xzr, #25
-ucvtf d9, w17, #17
 ucvtf h0, h0
 ucvtf h0, h0, #1
 ucvtf h0, w0
-ucvtf h0, w0, #0
+ucvtf h0, w0, #1
 ucvtf h0, x0
 ucvtf h0, x0, #1
-ucvtf h10, w6, #4
-ucvtf h18, w3, #1
-ucvtf h22, x19, #48
+ucvtf h18, w3, #21
+ucvtf h21, xzr, #19
 ucvtf h25, w20
 ucvtf h31, h25
 ucvtf h31, h31
 ucvtf h31, h31, #16
 ucvtf h31, wzr
-ucvtf h31, wzr, #1
 ucvtf h31, wzr, #32
 ucvtf h31, xzr
 ucvtf h31, xzr, #64
 ucvtf h4, h17, #13
-ucvtf h8, w28, #20
 ucvtf h9, x14
 ucvtf s0, s0
 ucvtf s0, s0, #1
@@ -7269,17 +7251,17 @@ ucvtf s0, w0, #1
 ucvtf s0, x0
 ucvtf s0, x0, #1
 ucvtf s17, s31
-ucvtf s2, w3, #14
+ucvtf s24, x5, #46
 ucvtf s25, w18
 ucvtf s25, x22
 ucvtf s26, s12, #23
+ucvtf s26, w5, #29
 ucvtf s31, s31
 ucvtf s31, s31, #32
 ucvtf s31, wzr
 ucvtf s31, wzr, #32
 ucvtf s31, xzr
 ucvtf s31, xzr, #64
-ucvtf s8, x18, #38
 ucvtf v0.2d, v0.2d
 ucvtf v0.2d, v0.2d, #1
 ucvtf v0.2s, v0.2s

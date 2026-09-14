@@ -957,19 +957,17 @@ cpy z12.h, p15/z, #-45
 cpy z12.s, p8/z, #-46
 cpy z13.h, p0/m, w14
 cpy z15.s, p0/m, w13
-cpy z16.h, p1/z, #18176
 cpy z17.b, p9/z, #-104
 cpy z17.d, p3/z, #30, lsl #8
-cpy z17.s, p13/z, #-3840
+cpy z17.h, p10/m, #-21504
 cpy z18.d, p3/m, x2
 cpy z2.h, p0/m, h9
 cpy z2.h, p2/m, #9, lsl #8
+cpy z20.s, p8/z, #23040
 cpy z21.s, p2/m, s23
 cpy z22.d, p0/m, #111, lsl #8
 cpy z23.d, p0/m, #111
 cpy z23.d, p6/m, #-1024
-cpy z24.s, p3/m, #-26880
-cpy z27.h, p6/m, #-24832
 cpy z28.b, p3/m, b14
 cpy z28.d, p7/z, #-18432
 cpy z30.d, p1/m, d10
@@ -1004,6 +1002,8 @@ cpy z31.s, p15/z, #127, lsl #8
 cpy z31.s, p15/z, #32512
 cpy z31.s, p7/m, s31
 cpy z31.s, p7/m, wsp
+cpy z4.h, p10/z, #-20480
+cpy z5.s, p5/m, #26112
 cpy z8.d, p2/z, #110
 cpy z9.b, p6/m, w25
 decd z0.d
@@ -1086,10 +1086,11 @@ dup z14.h, #94
 dup z18.s, #-98
 dup z2.s, #65, lsl #0
 dup z20.h, #55, lsl #8
-dup z22.s, #5120
+dup z28.s, #10496
 dup z29.d, #-35
 dup z3.d, #31744
 dup z30.b, #104
+dup z30.h, #-30720
 dup z31.b, #127
 dup z31.d, #127
 dup z31.d, #127, lsl #8
@@ -1100,7 +1101,6 @@ dup z31.h, #32512
 dup z31.s, #127
 dup z31.s, #127, lsl #8
 dup z31.s, #32512
-dup z7.h, #-13824
 dupm z0.b, #-128
 dupm z0.d, #-9223372036854775808
 dupm z0.h, #-32768
@@ -3837,8 +3837,7 @@ mov z0.s, z0.s[0]
 mov z1.s, p7/m, #111, lsl #8
 mov z11.h, p13/z, #-126
 mov z12.h, p0/m, w12
-mov z13.h, p13/m, #15104
-mov z14.s, #6656
+mov z12.s, p7/m, #9472
 mov z15.d, p10/m, #74
 mov z15.d, p11/z, #23552
 mov z16.b, p13/m, z10.b
@@ -3846,7 +3845,7 @@ mov z16.h, p6/m, #90
 mov z16.s, p11/m, #-71
 mov z17.h, p12/z, #-7, lsl #8
 mov z18.b, p7/m, b11
-mov z18.s, p1/z, #17664
+mov z18.h, #-24673
 mov z18.s, p10/z, #21
 mov z18.s, s6
 mov z19.b, p6/m, w2
@@ -3857,14 +3856,17 @@ mov z2.h, p15/m, #100, lsl #8
 mov z20.d, p7/m, x27
 mov z21.b, #97
 mov z21.d, #-11
+mov z21.h, #30720
 mov z22.d, x23
-mov z22.s, #4227858687
-mov z23.h, p14/z, #24320
+mov z24.h, p2/z, #-11776
+mov z24.s, p5/z, #28928
 mov z24.s, z25.s[0]
 mov z25.d, p8/m, z31.d
+mov z25.s, #4352
 mov z25.s, p5/m, w15
 mov z26.h, #-113, lsl #8
 mov z26.h, p9/m, z0.h
+mov z28.s, #49152
 mov z29.d, #-99, lsl #8
 mov z29.q, q1
 mov z29.s, p7/z, #-3, lsl #8
@@ -3898,7 +3900,6 @@ mov z31.d, p7/m, sp
 mov z31.d, sp
 mov z31.d, z31.d
 mov z31.d, z31.d[7]
-mov z31.h, #-3073
 mov z31.h, #127
 mov z31.h, #127, lsl #8
 mov z31.h, #32512
@@ -3937,9 +3938,8 @@ mov z31.s, wsp
 mov z31.s, z31.s[15]
 mov z4.d, p10/z, #-16
 mov z4.q, z12.q[1]
-mov z4.s, p12/m, #-14848
 mov z5.d, z19.d
-mov z5.h, #11264
+mov z5.h, p11/m, #24320
 mov z5.s, p7/m, z5.s
 mov z6.b, b17
 mov z6.b, p3/m, #-38
