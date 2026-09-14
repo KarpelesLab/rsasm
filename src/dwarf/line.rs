@@ -500,8 +500,7 @@ impl Assembler {
             return 5;
         }
         match (flavor, requested) {
-            // GNU as writes at least version 3, whatever it is asked for.
-            (Flavor::Gnu, Some(v)) => v.max(3) as u16,
+            (Flavor::Gnu, Some(v)) => v as u16,
             (Flavor::Gnu, None) => 3,
             (Flavor::Llvm, Some(v)) => v as u16,
             (Flavor::Llvm, None) => 4,

@@ -3,8 +3,8 @@
 //! Everything here predates SIMD; the vector families live in sibling modules.
 
 use super::{
-    CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, NOTACC, ONLY64, Op, PLUSREG, WIDTHS,
-    d, opsize_bits,
+    CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, NOTACC, ONLY64, Op, PLUSREG, WIDTHS, d,
+    opsize_bits,
 };
 use std::collections::HashMap;
 

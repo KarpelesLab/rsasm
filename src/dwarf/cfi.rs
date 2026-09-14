@@ -1033,7 +1033,11 @@ impl Assembler {
             }
             // To the width of the address fields, and the last FDE to a
             // pointer's.
-            let fde_align = if n + 1 < count { size as u64 } else { ptr as u64 };
+            let fde_align = if n + 1 < count {
+                size as u64
+            } else {
+                ptr as u64
+            };
             b.align(0, fde_align, 0);
             let len = b.len() - after;
             b.patch(len_at, len, 4);

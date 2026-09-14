@@ -37,9 +37,16 @@ const DW_FORM_UDATA: u64 = 0x0f;
 /// Both references use GNU as's original special-opcode parameters.
 const LINE_BASE: i64 = -5;
 const LINE_RANGE: i64 = 14;
-const OPCODE_BASE: i64 = 13;
-/// The largest address advance a special opcode can carry.
-const MAX_SPECIAL_ADDR_DELTA: u64 = ((255 - OPCODE_BASE) / LINE_RANGE) as u64;
+
+/// The first special opcode: 13, after the twelve standard opcodes, except
+/// in GNU as's version 2 tables, which stop at `DW_LNS_fixed_advance_pc`.
+fn opcode_base(flavor: Flavor, version: u16) -> i64 {
+    if flavor == Flavor::Gnu && version == 2 {
+        10
+    } else {
+        13
+    }
+}
 
 /// Bytes being built for a generated section, with the fixups for the fields
 /// only a relocation can fill.
@@ -109,6 +116,7 @@ struct ProgramCx {
     target: super::DwarfTarget,
     version: u16,
     ptr: u8,
+    opcode_base: i64,
     /// An address advance that is not a whole number of instructions has
     /// been reported.
     unaligned: bool,
@@ -303,9 +311,11 @@ impl Assembler {
         b.u8(1); // default_is_stmt
         b.u8(LINE_BASE as i8 as u8);
         b.u8(LINE_RANGE as u8);
-        b.u8(OPCODE_BASE as u8);
+        let opcode_base = opcode_base(flavor, version);
+        b.u8(opcode_base as u8);
+        let lengths = [0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1];
         b.bytes
-            .extend_from_slice(&[0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]);
+            .extend_from_slice(&lengths[..opcode_base as usize - 1]);
 
         // A path in `.debug_line_str`, or inline before DWARF 5.
         let mut path = |asm: &mut Assembler, b: &mut Blob, s: &str| {
@@ -468,6 +478,7 @@ impl Assembler {
             target,
             version,
             ptr,
+            opcode_base,
             unaligned: false,
         };
         for (section, rows) in &sequences {
@@ -577,7 +588,13 @@ impl Assembler {
                 Some(prev) if !(loc.view == Some(View::Reset) && prev == addr) => {
                     let delta = addr.saturating_sub(prev);
                     if fixed {
-                        self.fixed_advance(b, Some(line_delta), delta, (row.pos, addr - self.pos_offset(row.pos)), ptr);
+                        self.fixed_advance(
+                            b,
+                            Some(line_delta),
+                            delta,
+                            (row.pos, addr - self.pos_offset(row.pos)),
+                            ptr,
+                        );
                     } else {
                         // GNU as says so once, however many rows are off.
                         if delta % min != 0 && flavor == Flavor::Gnu && !cx.unaligned {
@@ -587,12 +604,12 @@ impl Assembler {
                                 "unaligned opcodes detected in executable segment",
                             );
                         }
-                        special_advance(b, Some(line_delta), delta / min);
+                        special_advance(b, Some(line_delta), delta / min, cx.opcode_base);
                     }
                 }
                 _ => {
                     self.set_address(b, (row.pos, addr - self.pos_offset(row.pos)), ptr);
-                    special_advance(b, Some(line_delta), 0);
+                    special_advance(b, Some(line_delta), 0, cx.opcode_base);
                 }
             }
             line = loc.line as i64;
@@ -605,7 +622,7 @@ impl Assembler {
             let end_pos = (section, self.section(section).frags.len() as u32);
             self.fixed_advance(b, None, delta, (end_pos, 0), ptr);
         } else {
-            special_advance(b, None, delta / min);
+            special_advance(b, None, delta / min, cx.opcode_base);
         }
     }
 
@@ -665,9 +682,10 @@ impl Assembler {
 /// instructions, and makes a row; or, with no line delta, ends the sequence
 /// there. This is GNU as's `emit_inc_line_addr`, which llvm-mc's
 /// `MCDwarfLineAddr::encode` copies exactly.
-fn special_advance(b: &mut Blob, line_delta: Option<i64>, addr_delta: u64) {
+fn special_advance(b: &mut Blob, line_delta: Option<i64>, addr_delta: u64, opcode_base: i64) {
+    let max_special = ((255 - opcode_base) / LINE_RANGE) as u64;
     let Some(mut line_delta) = line_delta else {
-        if addr_delta == MAX_SPECIAL_ADDR_DELTA {
+        if addr_delta == max_special {
             b.u8(DW_LNS_CONST_ADD_PC);
         } else if addr_delta != 0 {
             b.u8(DW_LNS_ADVANCE_PC);
@@ -691,14 +709,14 @@ fn special_advance(b: &mut Blob, line_delta: Option<i64>, addr_delta: u64) {
         b.u8(DW_LNS_COPY);
         return;
     }
-    tmp += OPCODE_BASE;
-    if addr_delta < 256 + MAX_SPECIAL_ADDR_DELTA {
+    tmp += opcode_base;
+    if addr_delta < 256 + max_special {
         let opcode = tmp + addr_delta as i64 * LINE_RANGE;
         if opcode <= 255 {
             b.u8(opcode as u8);
             return;
         }
-        let opcode = tmp + (addr_delta as i64 - MAX_SPECIAL_ADDR_DELTA as i64) * LINE_RANGE;
+        let opcode = tmp + (addr_delta as i64 - max_special as i64) * LINE_RANGE;
         if opcode <= 255 {
             b.u8(DW_LNS_CONST_ADD_PC);
             b.u8(opcode as u8);
@@ -716,7 +734,7 @@ mod tests {
 
     fn advance(line: Option<i64>, addr: u64) -> Vec<u8> {
         let mut b = Blob::new(Endian::Little);
-        special_advance(&mut b, line, addr);
+        special_advance(&mut b, line, addr, 13);
         b.bytes
     }
 
@@ -734,7 +752,15 @@ mod tests {
         // line +1998 at +1.
         assert_eq!(
             advance(Some(-398), 301),
-            vec![DW_LNS_ADVANCE_LINE, 0xf2, 0x7c, DW_LNS_ADVANCE_PC, 0xad, 0x02, DW_LNS_COPY]
+            vec![
+                DW_LNS_ADVANCE_LINE,
+                0xf2,
+                0x7c,
+                DW_LNS_ADVANCE_PC,
+                0xad,
+                0x02,
+                DW_LNS_COPY
+            ]
         );
         assert_eq!(
             advance(Some(1998), 1),
