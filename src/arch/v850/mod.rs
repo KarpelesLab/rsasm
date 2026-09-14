@@ -156,6 +156,12 @@ impl Architecture for V850 {
     /// zero fill is nop fill. Every instruction is an even number of bytes,
     /// so an odd count can only follow data, where one zero byte is as good
     /// as any.
+    /// GNU as's conventions, as for every V850 encoding: code counted in
+    /// words, and no call frame information.
+    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+        crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 2)
+    }
+
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         vec![0; len as usize]
     }

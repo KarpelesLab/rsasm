@@ -26,6 +26,7 @@ pub mod reg;
 pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, Syntax};
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::section::Variant;
 
 pub const NAMES: &[&str] = &["m68k"];
@@ -143,6 +144,37 @@ impl Architecture for M68k {
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
+    }
+
+    /// GNU as's conventions, as for every m68k encoding: code counted in
+    /// words, and a frame that starts with the return address just above the
+    /// stack pointer.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: -4,
+                ra_column: 24,
+                initial: vec![cfi::Insn::DefCfa(15, 4), cfi::Insn::Offset(24, -4)],
+                fde_encoding: 0x1b,
+                eh_frame_align: 4,
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Gnu, 2)
+        }
+    }
+
+    /// GNU as's numbering, for the names it accepts, with or without `%`:
+    /// `d0`-`d7`, `a0`-`a6` and `sp` from 8, `fp0`-`fp7` from 16, and `pc`
+    /// as 24. It takes neither `a7` nor `fp` here.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        let name = name.strip_prefix('%').unwrap_or(name);
+        match name {
+            "sp" => Some(15),
+            "pc" => Some(24),
+            _ => numbered_register(name, "d", 7)
+                .or_else(|| numbered_register(name, "a", 6).map(|n| 8 + n))
+                .or_else(|| numbered_register(name, "fp", 7).map(|n| 16 + n)),
+        }
     }
 
     /// Zeroes, not `NOP`s: `m68k-elf-as` (in both syntaxes) and vasm pad code

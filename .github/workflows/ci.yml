@@ -322,6 +322,20 @@ jobs:
             || { echo "::error::multiarch-diff compared nothing"; exit 1; }
           exit $status
 
+      # DWARF line tables, call frame information and the compilation units
+      # `-g` makes, against cross GNU as or llvm-mc as each target follows.
+      - name: tools/dwarf-diff/run.sh
+        run: |
+          set +e -uo pipefail
+          tools/dwarf-diff/run.sh > dwarf-diff.log 2>&1
+          status=$?
+          cat dwarf-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" dwarf-diff.log \
+            || { echo "::error::dwarf-diff compared nothing"; exit 1; }
+          grep -q "REF-MISSING" dwarf-diff.log \
+            && { echo "::error::a reference assembler is missing"; exit 1; }
+          exit $status
+
   cli_smoke:
     name: CLI end-to-end (assemble, link, run)
     runs-on: ubuntu-latest

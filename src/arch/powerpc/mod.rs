@@ -24,6 +24,7 @@ pub mod reg;
 pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::Punct;
 use crate::section::Variant;
 
@@ -125,6 +126,41 @@ impl Architecture for PowerPc {
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel, self.bits() == 64)
+    }
+
+    /// llvm-mc's conventions, as for every PowerPC encoding: addresses in
+    /// the line table and CFA advances counted in four-byte instructions.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        let wide = self.bits() == 64;
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: if wide { -8 } else { -4 },
+                ra_column: 65,
+                initial: vec![cfi::Insn::DefCfa(1, 0)],
+                fde_encoding: 0x1b,
+                eh_frame_align: if wide { 8 } else { 4 },
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Llvm, 4)
+        }
+    }
+
+    /// The ELF ABI's DWARF numbering of the names llvm-mc accepts, with or
+    /// without `%`: `r0`-`r31`, `f0`-`f31` from 32, `lr` 65, `ctr` 66,
+    /// `cr0`-`cr7` from 68 and `v0`-`v31` from 77.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        let name = name.strip_prefix('%').unwrap_or(name);
+        match name {
+            "lr" => return Some(65),
+            "ctr" => return Some(66),
+            "xer" if self.bits() == 64 => return Some(76),
+            "vrsave" => return Some(109),
+            _ => {}
+        }
+        numbered_register(name, "r", 31)
+            .or_else(|| numbered_register(name, "f", 31).map(|n| 32 + n))
+            .or_else(|| numbered_register(name, "cr", 7).map(|n| 68 + n))
+            .or_else(|| numbered_register(name, "v", 31).map(|n| 77 + n))
     }
 
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {

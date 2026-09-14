@@ -23,6 +23,7 @@ use crate::arch::{
     Syntax,
 };
 use crate::cursor::Cursor;
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::TokKind;
 use crate::section::{FixupKind, LinkValue, Variant};
 use crate::source::Span;
@@ -194,6 +195,50 @@ impl Architecture for Arm {
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
+    }
+
+    /// llvm-mc names a local label in every relocation but these two (its
+    /// `ARMELFObjectWriter::needsRelocateWithSymbol`).
+    fn relocates_with_label(&self, reloc: u32) -> bool {
+        !matches!(reloc, reloc::ABS32 | reloc::PREL31)
+    }
+
+    /// llvm-mc's conventions, as for every ARM encoding, in either
+    /// instruction set.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: -4,
+                ra_column: 14,
+                initial: vec![cfi::Insn::DefCfa(13, 0)],
+                fde_encoding: 0x1b,
+                eh_frame_align: 4,
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Llvm, 1)
+        }
+    }
+
+    /// The AAPCS DWARF numbering of the names llvm-mc accepts: the core
+    /// registers under their numbers, APCS names and aliases, and the 64-bit
+    /// VFP registers from 256. `fp` is `r11` in both instruction sets.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        const APCS: [&str; 15] = [
+            "a1", "a2", "a3", "a4", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "ip", "sp",
+            "lr",
+        ];
+        match name {
+            "sb" => return Some(9),
+            "sl" => return Some(10),
+            "fp" => return Some(11),
+            "pc" => return Some(15),
+            _ => {}
+        }
+        if let Some(i) = APCS.iter().position(|r| *r == name) {
+            return Some(i as u32);
+        }
+        numbered_register(name, "r", 15)
+            .or_else(|| numbered_register(name, "d", 31).map(|n| 256 + n))
     }
 
     /// Alignment padding has to stay executable, and the two instruction sets

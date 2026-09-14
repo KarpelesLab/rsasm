@@ -69,7 +69,12 @@ impl Assembler {
             ".pushsection" => self.dir_section(&mut cur, span, true),
             ".popsection" => {
                 match self.pop_section() {
-                    Some(id) => self.cur = id,
+                    Some(id) => {
+                        if id != self.cur {
+                            self.dwarf_section_switch();
+                        }
+                        self.cur = id
+                    }
                     None => self
                         .diags
                         .error(span, "`.popsection` without a matching `.pushsection`"),
@@ -85,7 +90,8 @@ impl Assembler {
             // The `.Nbyte` spellings are never aligned, even on a target whose
             // other data directives are; see `Architecture::aligns_data`.
             ".byte" => self.dir_data(&mut cur, 1, span, false),
-            ".short" | ".hword" | ".half" => self.dir_data(&mut cur, 2, span, true),
+            // `.value` is x86's spelling, which GCC writes in debug sections.
+            ".short" | ".hword" | ".half" | ".value" => self.dir_data(&mut cur, 2, span, true),
             ".2byte" => self.dir_data(&mut cur, 2, span, false),
             // `.word` is the one data directive whose width depends on the
             // target, so it asks the backend rather than assuming x86.
@@ -199,13 +205,23 @@ impl Assembler {
             // ---- files and configuration ----------------------------------
             ".include" => self.dir_include(&mut cur, span),
             ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
-            // Recognised and ignored: they carry no information this assembler
-            // acts on yet, and rejecting them would break real-world input.
-            ".file" | ".ident" | ".version" | ".loc" | ".line" => {
-                cur.set_pos(cur.all().len());
+            // ---- debugging information ------------------------------------
+            ".file" => {
+                self.dir_dwarf_file(&mut cur, span);
                 true
             }
-            _ if text.starts_with(".cfi_") => {
+            ".loc" => {
+                self.dir_loc(&mut cur, span);
+                true
+            }
+            ".loc_mark_labels" => {
+                self.dir_loc_mark_labels(&mut cur, span);
+                true
+            }
+            _ if text.starts_with(".cfi_") => self.dir_cfi(&text, &mut cur, span),
+            // Recognised and ignored: they carry no information this assembler
+            // acts on yet, and rejecting them would break real-world input.
+            ".ident" | ".version" | ".line" => {
                 cur.set_pos(cur.all().len());
                 true
             }
@@ -367,6 +383,9 @@ impl Assembler {
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            if self.dwarf.line.pending {
+                self.dwarf_data();
+            }
             // `.` in each value is the address of that value, not of the
             // statement: `.long a - ., b - .` is two PC-relative values in
             // GNU as and llvm-mc alike.
@@ -462,6 +481,9 @@ impl Assembler {
             if terminate {
                 bytes.push(0);
             }
+            if self.dwarf.line.pending {
+                self.dwarf_data();
+            }
             self.emit_bytes(&bytes, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
@@ -476,6 +498,10 @@ impl Assembler {
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            // llvm-mc writes a constant as bytes, which consume a `.loc`.
+            if self.dwarf.line.pending && self.eval_ref(e).is_ok_and(|v| v.is_absolute()) {
+                self.dwarf_data();
+            }
             if !self.check_nobits(span) {
                 self.push_frag(
                     FragKind::Leb128 {
@@ -570,6 +596,10 @@ impl Assembler {
         if total > 0 {
             self.map_data_frag();
         }
+        // llvm-mc writes `.fill` as values, which consume a `.loc`.
+        if self.dwarf.line.pending {
+            self.dwarf_data();
+        }
         let unit = self.arch.endian().bytes(value as u64, size as usize);
         let mut bytes = Vec::with_capacity(total as usize);
         for _ in 0..count {
@@ -591,6 +621,9 @@ impl Assembler {
         match std::fs::read(&path) {
             Ok(data) => {
                 self.map_data();
+                if self.dwarf.line.pending {
+                    self.dwarf_data();
+                }
                 self.emit_bytes(&data, span)
             }
             Err(e) => self
@@ -685,9 +718,23 @@ impl Assembler {
     fn dir_section(&mut self, cur: &mut Cursor<'_>, _span: Span, push: bool) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
+            // A name is everything up to a comma or a space, as GNU as reads
+            // it: `.note.GNU-stack` is one name, not a subtraction.
             TokKind::Ident(n) => {
-                cur.advance();
-                n
+                let first = cur.advance();
+                let mut last = first;
+                while !cur.peek().is_eol()
+                    && !cur.peek().is_punct(Punct::Comma)
+                    && !cur.peek().preceded_by_space
+                {
+                    last = cur.advance();
+                }
+                if last.span == first.span {
+                    n
+                } else {
+                    let text = self.sm.span_text(first.span.to(last.span)).to_string();
+                    self.interner.intern(&text)
+                }
             }
             TokKind::Str(i) => {
                 cur.advance();
@@ -718,7 +765,12 @@ impl Assembler {
                 if cur.eat_punct(Punct::At).is_none() {
                     cur.eat_punct(Punct::Percent);
                 }
-                if let Some((tn, _)) = self.expect_name(cur) {
+                // A type may also be written as its number, as llvm-mc writes
+                // `@0x7000001e` for MIPS's DWARF sections; any such section
+                // holds bits.
+                if let TokKind::Int(_) = cur.peek().kind {
+                    cur.advance();
+                } else if let Some((tn, _)) = self.expect_name(cur) {
                     let t = self.interner.get(tn).to_ascii_lowercase();
                     kind = match t.as_str() {
                         "nobits" => SectionKind::Nobits,
@@ -743,6 +795,9 @@ impl Assembler {
             self.push_section_stack();
         }
         self.set_section(id);
+        if self.dwarf.line.source.on {
+            self.dwarf_section_named(id);
+        }
         true
     }
 

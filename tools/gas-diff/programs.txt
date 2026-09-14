@@ -147,3 +147,36 @@ msg:
     .intel_syntax noprefix
     lea rax, [rip+2]
     lea rax, [rip]
+=== 32-bit push and pop
+    .code32
+    pushl %ebx
+    popl %ebx
+    push %ebp
+    pop %esi
+    pushl (%eax)
+    popl 4(%esp)
+    push %bx
+    pop %di
+    .code64
+    push %rbx
+    pop %r12
+=== one-byte inc and dec outside long mode
+    .code32
+    incl %eax
+    decl %edi
+    inc %bx
+    dec %sp
+    inc %al
+    incl (%eax)
+    .code64
+    inc %eax
+    dec %r8d
+    inc %rax
+=== suffixed direct calls
+    .code32
+    calll 1f
+1:  call 1b
+    calll *%eax
+    .code64
+    callq 1b
+    callq *%rax

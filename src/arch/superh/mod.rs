@@ -33,6 +33,7 @@ use crate::arch::{
     ArchState, Architecture, AsmCtx, CommentSyntax, Endian, FlatModifier, InsnRequest, Syntax,
 };
 use crate::cursor::Cursor;
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::intern::Interner;
 use crate::lexer::{Punct, TokKind, Token};
 use crate::section::Variant;
@@ -177,6 +178,37 @@ impl Architecture for SuperH {
 
     fn flat_modifier(&self, name: &str) -> FlatModifier {
         reloc::flat_modifier(name)
+    }
+
+    /// GNU as's conventions, as for every SuperH encoding: code counted in
+    /// words.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: -4,
+                ra_column: 17,
+                initial: vec![cfi::Insn::DefCfa(15, 0)],
+                fde_encoding: 0x1b,
+                eh_frame_align: 4,
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Gnu, 2)
+        }
+    }
+
+    /// GNU as's `sh_regname_to_dw2regnum`, for the names it accepts: `r0`-`r15`,
+    /// `pr` 17, `gbr` 19, `mach` 20, `macl` 21, `fpul` 23 and `fr0`-`fr15`
+    /// from 25. Not `sp`.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        match name {
+            "pr" => Some(17),
+            "gbr" => Some(19),
+            "mach" => Some(20),
+            "macl" => Some(21),
+            "fpul" => Some(23),
+            _ => numbered_register(name, "r", 15)
+                .or_else(|| numbered_register(name, "fr", 15).map(|n| 25 + n)),
+        }
     }
 
     /// `nop` is `0009`. An odd pad gets a zero byte first, which is what

@@ -66,6 +66,32 @@ impl Assembler {
         self.check_cc_bare_labels();
         self.pad_section_tails();
 
+        if !self.settle_layout() {
+            return false;
+        }
+        // DWARF is written from the settled layout, into sections of its own
+        // that nothing in the code refers to, so the layout of the code
+        // cannot change when it runs again to place them.
+        if self.emit_dwarf() && !self.settle_layout() {
+            return false;
+        }
+
+        self.assign_addresses();
+        self.report_misaligned_data();
+        self.apply_fixups();
+        self.place_mapping_symbols();
+        // Data references only enter the symbol table when their fixups are
+        // built, so NASM's "symbol not defined" check runs after that.
+        if self.options.dialect == crate::lexer::Dialect::Nasm {
+            self.nasm_report_undefined();
+        }
+        self.materialize();
+        !self.diags.has_errors()
+    }
+
+    /// Runs layout to a fixed point. Returns false, after reporting it, if it
+    /// does not settle.
+    fn settle_layout(&mut self) -> bool {
         let mut settled = false;
         let mut history = HashMap::new();
         let limit = if self.relaxation() >= Relaxation::EachPass {
@@ -98,18 +124,7 @@ impl Assembler {
             );
             return false;
         }
-
-        self.assign_addresses();
-        self.report_misaligned_data();
-        self.apply_fixups();
-        self.place_mapping_symbols();
-        // Data references only enter the symbol table when their fixups are
-        // built, so NASM's "symbol not defined" check runs after that.
-        if self.options.dialect == crate::lexer::Dialect::Nasm {
-            self.nasm_report_undefined();
-        }
-        self.materialize();
-        !self.diags.has_errors()
+        true
     }
 
     /// Refuses data that had to be padded to reach its boundary; see
@@ -160,6 +175,7 @@ impl Assembler {
             if align <= 1 {
                 continue;
             }
+            self.tail_pads.push(SectionId(si as u32));
             self.sections[si].push(Fragment::new(
                 FragKind::Align {
                     align,
@@ -1450,6 +1466,20 @@ impl Assembler {
                                     if rela {
                                         r.addend = 0;
                                     }
+                                } else if r.addend != 0
+                                    && arch.local_value_in_field(r.kind)
+                                    && r.symbol.is_some_and(|s| {
+                                        self.symbols.get(s).ty == crate::symbol::SymType::Section
+                                    })
+                                {
+                                    let endian = arch.endian();
+                                    if let FragKind::Bytes { variants, chosen } =
+                                        &mut self.sections[si].frags[fi].kind
+                                    {
+                                        let dst = &mut variants[*chosen].bytes
+                                            [off as usize..off as usize + kind.size as usize];
+                                        kind.write(endian, dst, r.addend);
+                                    }
                                 }
                                 relocs.push(r);
                             }
@@ -1609,6 +1639,12 @@ impl Assembler {
                 self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
             })
             .unwrap_or(kind.reloc);
+        let place = if self.relocs_by_fragment.contains(&section) {
+            at - self.sections[si].frags[fi].offset
+        } else {
+            at
+        };
+        let reloc = self.frag_arch(si, fi).0.reloc_at(reloc, place);
         if reloc == 0 {
             self.diags.error(
                 span,
@@ -1691,7 +1727,13 @@ impl Assembler {
                 }
             };
         match self.symbol_section(target) {
-            Some(sec) if by_section && kind.reloc_symbol == RelocSymbol::Section => {
+            // Unless the target's reference names the label for this
+            // relocation; see `Architecture::relocates_with_label`.
+            Some(sec)
+                if by_section
+                    && kind.reloc_symbol == RelocSymbol::Section
+                    && !(binding == Binding::Local && arch.relocates_with_label(*reloc)) =>
+            {
                 if kind.pcrel && binding == Binding::Local {
                     *reloc = arch.section_relative_reloc(*reloc);
                 }

@@ -733,6 +733,36 @@ pub trait Architecture {
         !rela
     }
 
+    /// Whether a `RELA` relocation of type `reloc` against a label defined in
+    /// the file also leaves the label's value in the field, as well as in the
+    /// entry's addend.
+    ///
+    /// GNU as for RX resolves the field as far as it can, which for a label
+    /// in the object is all the way; against an undefined symbol it leaves
+    /// the field zero. [`Architecture::addend_in_field`] takes precedence.
+    fn local_value_in_field(&self, _reloc: u32) -> bool {
+        false
+    }
+
+    /// The relocation to write for one of type `reloc` at offset `offset` in
+    /// its section, for targets that have a variant for a field off its
+    /// natural boundary: llvm-mc's SPARC writer uses `R_SPARC_UA32` for a
+    /// four-byte field not on a multiple of four.
+    fn reloc_at(&self, reloc: u32, _offset: u64) -> u32 {
+        reloc
+    }
+
+    /// Whether a relocation of type `reloc` against a local label names the
+    /// label itself rather than its section plus an offset.
+    ///
+    /// A linker reads the two the same, but under `REL` the offset lives in
+    /// the relocated field, so the bytes differ: llvm-mc's ARM writer names
+    /// the label for everything but `R_ARM_ABS32` and `R_ARM_PREL31`, and
+    /// leaves the field zero.
+    fn relocates_with_label(&self, _reloc: u32) -> bool {
+        false
+    }
+
     /// Whether `.align n` means 2^n bytes rather than n.
     ///
     /// GNU as decides this per target, for historical reasons only: x86 ELF,
@@ -844,6 +874,36 @@ pub trait Architecture {
     /// it. SuperH's `@(8,pc)` means `. + 8`.
     fn operands_use_location(&self, _interner: &Interner, _operands: &[Token]) -> bool {
         false
+    }
+
+    /// What this target's DWARF sections look like: whose conventions they
+    /// follow, the line table's instruction unit and the CIE's constants.
+    ///
+    /// The default is a line table in GNU as's conventions counted in bytes,
+    /// with no call frame information, which is what GNU as has for the
+    /// targets where it has none (RX, RL78, V850) and what is safe for a
+    /// target no reference writes DWARF for.
+    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+        crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)
+    }
+
+    /// Where the line table row of an instruction goes, as a distance back
+    /// from the instruction's end, given its smallest encoding; `None`, the
+    /// default, puts it at the start.
+    ///
+    /// GNU as's RX port records the row after it has written the
+    /// instruction, measuring back from the end by the offset of the
+    /// instruction's last relocated field rather than by its length, and a
+    /// relaxed branch is longer by then; see `Rx::dwarf_row_back`.
+    fn dwarf_row_back(&self, _smallest: &Variant) -> Option<u32> {
+        None
+    }
+
+    /// The DWARF register number of a register named in a `.cfi_*`
+    /// directive, lowercased and spelled as the source wrote it, with any
+    /// prefix such as `%` or `$` still on.
+    fn dwarf_register(&self, _state: &ArchState, _name: &str) -> Option<u32> {
+        None
     }
 
     /// Whether `name` (lowercased) could be one of this backend's

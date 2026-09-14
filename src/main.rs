@@ -25,6 +25,9 @@ options:
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)
       --base <addr>  base address for `bin` output (default 0)
       --hex          print the output as hex instead of writing a file
+  -g                 describe the assembly source in DWARF line information
+      --gdwarf-<n>   the same, as DWARF version <n> (2 to 5); the version
+                     also applies to `.loc` source
       --list-arch    list the architectures this build supports
       --no-color     do not colorize diagnostics
   -h, --help         show this message
@@ -147,6 +150,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                 a.options.relocatable = false;
             }
             "--hex" => a.hex = true,
+            "-g" | "--gen-debug" => a.options.debug_source = true,
+            "--gdwarf-2" | "--gdwarf-3" | "--gdwarf-4" | "--gdwarf-5" => {
+                a.options.debug_source = true;
+                a.options.dwarf_version = arg[arg.len() - 1..].parse().ok();
+            }
             "--no-color" => a.color = false,
             _ if arg.starts_with("-I") && arg.len() > 2 => {
                 a.options.include_paths.push(PathBuf::from(&arg[2..]))
@@ -215,7 +223,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
                 src.push_str(&format!(".set {k}, {v}\n"));
             }
         }
-        asm.assemble_str("<command line>", &src);
+        asm.assemble_prelude("<command line>", &src);
     }
 
     for input in &args.inputs {

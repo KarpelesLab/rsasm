@@ -169,6 +169,22 @@ impl Architecture for Rl78 {
         1
     }
 
+    /// GNU as's conventions, as for every RL78 encoding. Its linker relaxes
+    /// code, so GNU as gives every row an explicit address advance; it has no
+    /// call frame information.
+    /// GNU as leaves a local label's value in the relocated field, as its RX
+    /// port does.
+    fn local_value_in_field(&self, _reloc: u32) -> bool {
+        true
+    }
+
+    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+        crate::dwarf::DwarfTarget {
+            fixed_advance_pc: true,
+            ..crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)
+        }
+    }
+
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         // `nop` is `00`, so executable padding is zeros — which is also what
         // the reference pads `.balign` with in `.text`.

@@ -21,6 +21,10 @@ pub const ABS13: u32 = 13;
 /// The low 10 bits of a value, as `%lo()` produces them.
 pub const LO10: u32 = 12;
 pub const ABS64: u32 = 32;
+/// `R_SPARC_32` for a field that need not be aligned.
+pub const UA32: u32 = 23;
+/// `R_SPARC_64` for a field that need not be aligned.
+pub const UA64: u32 = 54;
 /// V9 branch on register: a 16-bit split field.
 pub const WDISP16: u32 = 40;
 /// V9 predicted branch: a 19-bit field.
