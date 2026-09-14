@@ -18,6 +18,7 @@
 
 pub mod arch;
 pub mod assembler;
+pub mod coff;
 pub mod cursor;
 pub mod diag;
 pub mod dialect;

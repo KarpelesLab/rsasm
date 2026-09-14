@@ -15,7 +15,8 @@ usage: rsasm [options] <input.s>...
 options:
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64, coff,
+                     win64, win32 or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
@@ -44,8 +45,8 @@ struct Args {
     color: bool,
     /// Whether `-d` was given; otherwise the architecture picks.
     dialect_given: bool,
-    /// The ELF class `-f elf32` or `-f elf64` named, which picks the
-    /// architecture when `-a` does not.
+    /// The word size `-f elf32`, `-f elf64`, `-f win32` or `-f win64` named,
+    /// which picks the architecture when `-a` does not.
     elf_bits: Option<u8>,
 }
 
@@ -109,8 +110,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                 let v = next(&mut i, arg)?;
                 a.format = Format::from_name(&v).ok_or_else(|| format!("unknown format `{v}`"))?;
                 a.elf_bits = match v.as_str() {
-                    "elf32" => Some(32),
-                    "elf64" => Some(64),
+                    "elf32" | "win32" => Some(32),
+                    "elf64" | "win64" => Some(64),
                     _ => None,
                 };
             }
@@ -197,8 +198,10 @@ fn run(args: Args) -> Result<ExitCode, String> {
         // class, however the source is written, names the x86 machine.
         None => match (args.options.dialect, args.format, args.elf_bits) {
             (Dialect::Nasm, Format::Binary, _) => arch::lookup("i8086"),
-            (_, Format::Elf, Some(32)) => arch::lookup("i386"),
-            (_, Format::Elf, Some(64)) => arch::lookup("x86-64"),
+            // `-f elf32`, `-f win32` and their 64-bit spellings name the x86
+            // machine as well as the format, as they do in NASM.
+            (_, Format::Elf | Format::Coff, Some(32)) => arch::lookup("i386"),
+            (_, Format::Elf | Format::Coff, Some(64)) => arch::lookup("x86-64"),
             _ => None,
         }
         .or_else(arch::default_arch)
@@ -206,6 +209,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
     };
 
     let mut options = args.options.clone();
+    options.format = args.format;
     if !args.dialect_given {
         options.dialect = arch.default_dialect();
     }
@@ -245,6 +249,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
 
     let bytes = match args.format {
         Format::Elf => output::elf::build(&asm).map_err(|e| e.to_string())?,
+        Format::Coff => output::coff::build(&asm).map_err(|e| e.to_string())?,
         Format::Binary => output::raw::build(&asm).map_err(|e| e.to_string())?,
     };
 

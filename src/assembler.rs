@@ -48,6 +48,10 @@ pub struct Options {
     /// Describe the assembly source itself in a line table and a
     /// compilation unit, as `-g` asks GNU as and llvm-mc to.
     pub debug_source: bool,
+    /// The object format being written, which the source can see: COFF has
+    /// directives of its own, keeps relocation addends in the bytes they
+    /// relocate, and starts its sections with alignments of its own.
+    pub format: crate::output::Format,
 }
 
 impl Default for Options {
@@ -60,6 +64,7 @@ impl Default for Options {
             syntax: None,
             dwarf_version: None,
             debug_source: false,
+            format: crate::output::Format::Elf,
         }
     }
 }
@@ -180,6 +185,8 @@ pub struct Assembler {
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
+    /// What COFF output needs that ELF has no room for; see [`crate::coff`].
+    pub coff: crate::coff::State,
 }
 
 impl Assembler {
@@ -232,6 +239,7 @@ impl Assembler {
             literal_pools: HashMap::new(),
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
+            coff: crate::coff::State::default(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -284,10 +292,16 @@ impl Assembler {
         let id = SectionId(self.sections.len() as u32);
         let mut s = Section::new(id, name, kind, flags);
         // The backend active where a section is first named decides its
-        // starting alignment, as the reference for that backend would.
-        let default = self
-            .arch
-            .section_align(&self.arch_state, self.interner.get(name), &flags);
+        // starting alignment, as the reference for that backend would. In a
+        // COFF object the format decides instead: llvm-mc aligns the three
+        // sections it creates itself to four bytes on every machine, and
+        // gives a section the source names none of its own.
+        let default = if self.options.format.is_coff() {
+            crate::output::coff::default_align(self.interner.get(name))
+        } else {
+            self.arch
+                .section_align(&self.arch_state, self.interner.get(name), &flags)
+        };
         s.align = align.max(default).max(1);
         s.mark_arch(self.arch_slot);
         self.sections.push(s);
@@ -1771,9 +1785,10 @@ impl Assembler {
         // modifier is read, so it takes its place in the symbol table ahead
         // of the targets that layout interns later.
         // NASM declares every external symbol, and makes nothing of the kind.
+        // Nor does a COFF object, which has no GOT for one to name.
         let nasm = self.options.dialect == crate::lexer::Dialect::Nasm;
         for f in variants.iter().flatten().flat_map(|v| &v.fixups) {
-            if nasm {
+            if nasm || self.options.format.is_coff() {
                 break;
             }
             if let Some(m) = self.find_modifier(f.expr) {
