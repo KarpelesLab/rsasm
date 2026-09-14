@@ -156,6 +156,14 @@ pub enum Request {
     /// Raises the section's alignment to at least this many bytes, without
     /// padding anything: GNU as's `record_alignment`.
     RecordAlign(u64),
+    /// Pads with no-ops to a multiple of `align` bytes, but only where that
+    /// takes at most `max_skip`, as `.p2align` with a maximum does. Unlike
+    /// the other requests, this one is carried out *before* the instruction
+    /// that asked for it is emitted, so the padding goes in front of it and a
+    /// label on the line before stays on the padding: both references do that
+    /// to keep a POWER10 prefixed instruction from straddling a 64-byte
+    /// boundary.
+    AlignCode { align: u64, max_skip: u64 },
     /// A value the instruction loads from the section's literal pool; see
     /// [`AsmCtx::literal`].
     Literal(LiteralRequest),

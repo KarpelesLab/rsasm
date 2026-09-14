@@ -1521,6 +1521,74 @@ entry:
             )],
         )),
     },
+    Case {
+        name: "prefixed PC-relative references to another section",
+        base: 0x10000000,
+        src: r#"	.text
+	.p2align 4
+	paddi 3, 0, msg@pcrel, 1
+	pld 4, msg@pcrel+8(0), 1
+	pstd 5, msg@pcrel(0), 1
+	plxv 33, msg@pcrel+16(0), 1
+	blr
+	.data
+	.p2align 4
+	.space 0x8010
+msg:	.quad 1, 2, 3, 4
+
+"#,
+        image: Some((
+            32864,
+            &[
+                (
+                    0,
+                    "06 10 00 00 38 60 80 40 04 10 00 00 e4 80 80 40 04 10 00 00 f4 a0 80 30 04 10 00 00 cc 20 80 38 4e 80 00 20 00 00 00 00 00 00 00 00 00 00 00 00",
+                ),
+                (
+                    0x8040,
+                    "00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 04",
+                ),
+            ],
+        )),
+    },
+    Case {
+        name: "a prefixed PC-relative reference within its own section",
+        base: 0x10000000,
+        src: r#"	.text
+	.p2align 4
+	paddi 3, 0, there@pcrel, 1
+	plwz 4, back@pcrel(0), 1
+	nop
+there:
+	blr
+back:	.long 7
+
+"#,
+        image: Some((
+            28,
+            &[(
+                0,
+                "06 10 00 00 38 60 00 14 06 10 00 00 80 80 00 10 60 00 00 00 4e 80 00 20 00 00 00 07",
+            )],
+        )),
+    },
+    Case {
+        name: "a prefixed instruction padded off a 64-byte boundary",
+        base: 0x10000000,
+        src: r#"	.text
+	.p2align 6
+	.fill 15, 4, 0x60000000
+here:	paddi 3, 0, here@pcrel, 1
+	b here
+"#,
+        image: Some((
+            76,
+            &[(
+                0,
+                "60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 06 10 00 00 38 60 00 00 4b ff ff f8",
+            )],
+        )),
+    },
 ];
 
 #[cfg(feature = "powerpc")]
@@ -1648,6 +1716,74 @@ entry:
             &[(
                 0,
                 "20 00 80 4e 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 10 00 00 00 00 e8 ff ff ff e4 ff ff ff ff ff ff ff",
+            )],
+        )),
+    },
+    Case {
+        name: "prefixed PC-relative references to another section",
+        base: 0x10000000,
+        src: r#"	.text
+	.p2align 4
+	paddi 3, 0, msg@pcrel, 1
+	pld 4, msg@pcrel+8(0), 1
+	pstd 5, msg@pcrel(0), 1
+	plxv 33, msg@pcrel+16(0), 1
+	blr
+	.data
+	.p2align 4
+	.space 0x8010
+msg:	.quad 1, 2, 3, 4
+
+"#,
+        image: Some((
+            32864,
+            &[
+                (
+                    0,
+                    "00 00 10 06 40 80 60 38 00 00 10 04 40 80 80 e4 00 00 10 04 30 80 a0 f4 00 00 10 04 38 80 20 cc 20 00 80 4e 00 00 00 00 00 00 00 00 00 00 00 00",
+                ),
+                (
+                    0x8040,
+                    "01 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00",
+                ),
+            ],
+        )),
+    },
+    Case {
+        name: "a prefixed PC-relative reference within its own section",
+        base: 0x10000000,
+        src: r#"	.text
+	.p2align 4
+	paddi 3, 0, there@pcrel, 1
+	plwz 4, back@pcrel(0), 1
+	nop
+there:
+	blr
+back:	.long 7
+
+"#,
+        image: Some((
+            28,
+            &[(
+                0,
+                "00 00 10 06 14 00 60 38 00 00 10 06 10 00 80 80 00 00 00 60 20 00 80 4e 07 00 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "a prefixed instruction padded off a 64-byte boundary",
+        base: 0x10000000,
+        src: r#"	.text
+	.p2align 6
+	.fill 15, 4, 0x60000000
+here:	paddi 3, 0, here@pcrel, 1
+	b here
+"#,
+        image: Some((
+            76,
+            &[(
+                0,
+                "00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 00 60 00 00 10 06 00 00 60 38 f8 ff ff 4b",
             )],
         )),
     },

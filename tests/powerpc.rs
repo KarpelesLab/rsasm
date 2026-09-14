@@ -642,3 +642,469 @@ f:      mflr 0\n\
     assert_eq!(hex(&bytes[..4]), "7c 08 02 a6"); // mflr 0
     assert_eq!(hex(&bytes[32..]), "4e 80 00 20"); // blr
 }
+
+// ---- AltiVec, VSX and the POWER8-10 additions --------------------------------
+//
+// The bytes below were taken from llvm-mc runs, as the vector section of the
+// tools/mc-diff corpora checks them, except where a comment names GNU as.
+
+#[test]
+fn altivec_instructions() {
+    each(
+        "powerpc64",
+        &[
+            ("vaddubm 2, 3, 4", "10432000"),
+            ("vaddcuw 31, 0, 15", "13e07980"),
+            ("vsubsbs 2, 3, 4", "10432700"),
+            ("vmulouw 2, 3, 4", "10432088"),
+            ("vavgsh 2, 3, 4", "10432542"),
+            ("vcmpequb 2, 3, 4", "10432006"),
+            ("vcmpequb. 2, 3, 4", "10432406"),
+            ("vcmpgtfp. 30, 31, 0", "13df06c6"),
+            ("vcmpbfp. 2, 3, 4", "104327c6"),
+            ("vand 2, 3, 4", "10432404"),
+            ("vxor 2, 2, 2", "104214c4"),
+            ("vnor 2, 3, 3", "10431d04"),
+            ("vmr 2, 3", "10431c84"),
+            ("vnot 2, 3", "10431d04"),
+            ("vslb 2, 3, 4", "10432104"),
+            ("vrlq 2, 3, 4", "10432005"),
+            ("vsldoi 2, 3, 4, 15", "104323ec"),
+            ("vspltisb 2, -16", "1050030c"),
+            ("vspltisw 31, 15", "13ef038c"),
+            ("vspltb 2, 3, 15", "104f1a0c"),
+            ("vpermxor 2, 3, 4, 5", "1043216d"),
+            ("vmrghb 2, 3, 4", "1043200c"),
+            ("vpkpx 2, 3, 4", "1043230e"),
+            ("vupkhsb 2, 3", "10401a0e"),
+            ("vsel 2, 3, 4, 5", "1043216a"),
+            ("vmhaddshs 2, 3, 4, 5", "10432160"),
+            ("lvx 2, 3, 4", "7c4320ce"),
+            ("stvx 2, 3, 4", "7c4321ce"),
+            ("mfvscr 2", "10400604"),
+            ("mtvscr 3", "10001e44"),
+            ("vpmsumd 2, 3, 4", "104324c8"),
+            ("vcipher 2, 3, 4", "10432508"),
+            ("vncipherlast 2, 3, 4", "10432549"),
+            ("vsbox 2, 3", "104305c8"),
+            ("vshasigmad 2, 3, 1, 6", "1043b6c2"),
+            ("vpopcntd 2, 3", "10401fc3"),
+            ("vclzb 2, 3", "10401f02"),
+            ("vctzd 2, 3", "105f1e02"),
+            ("vclzlsbb 3, 4", "10602602"),
+            ("vextractub 2, 3, 15", "104f1a0d"),
+            ("vinsertd 2, 3, 8", "10481bcd"),
+            ("vcmpneb. 2, 3, 4", "10432407"),
+            ("vcmpnezw 2, 3, 4", "10432187"),
+            ("vmul10uq 2, 3", "10430201"),
+            ("bcdadd. 2, 3, 4, 1", "10432601"),
+            ("bcdsub. 2, 3, 4, 0", "10432441"),
+            ("vextractbm 3, 4", "10682642"),
+            ("vstribl. 2, 3", "10401c0d"),
+            ("vinsblx 2, 3, 4", "1043220f"),
+            ("vextdubvlx 2, 3, 4, 5", "10432158"),
+            ("vgnb 3, 4, 2", "106224cc"),
+            ("vdivesq 2, 3, 4", "1043230b"),
+            ("mtvsrbmi 2, 65535", "105fffd5"),
+        ],
+    );
+}
+
+#[test]
+fn vsx_instructions_carry_the_sixth_register_bit_below_the_opcode() {
+    each(
+        "powerpc64",
+        &[
+            ("xsadddp 1, 2, 3", "f0221900"),
+            ("xsadddp 33, 34, 35", "f0221907"),
+            ("xxlor 0, 32, 63", "f000fc96"),
+            ("xxlor 63, 0, 31", "f3e0fc91"),
+            ("xxlxor 40, 40, 40", "f10844d7"),
+            ("xxland 1, 2, 3", "f0221c10"),
+            ("xxlorc 1, 2, 3", "f0221d50"),
+            ("xxleqv 60, 61, 62", "f39df5d7"),
+            ("xxpermdi 1, 2, 3, 2", "f0221a50"),
+            ("xxsldwi 1, 2, 3, 3", "f0221b10"),
+            ("xxmrghd 1, 2, 3", "f0221850"),
+            ("xxswapd 1, 2", "f0221250"),
+            ("xxspltd 1, 2, 1", "f0221350"),
+            ("xxspltw 60, 61, 3", "f383ea93"),
+            ("xxsel 1, 2, 3, 4", "f0221930"),
+            ("xxsel 63, 62, 61, 60", "f3feef3f"),
+            ("xxspltib 3, 255", "f067fad0"),
+            ("xxspltib 35, 128", "f06402d1"),
+            ("xxbrd 1, 2", "f037176c"),
+            ("xxbrq 33, 34", "f03f176f"),
+            ("xsmaddadp 1, 2, 3", "f0221908"),
+            ("xsmsubmdp 33, 34, 35", "f02219cf"),
+            ("xscmpudp 7, 1, 2", "f3811118"),
+            ("xscmpexpdp 0, 63, 33", "f01f09de"),
+            ("xvcmpeqdp 1, 2, 3", "f0221b18"),
+            ("xvcmpeqdp. 1, 2, 3", "f0221f18"),
+            ("xvcmpgesp. 61, 62, 63", "f3befe9f"),
+            ("xstsqrtdp 3, 45", "f18069aa"),
+            ("xststdcsp 1, 2, 127", "f0ff14a8"),
+            ("xvtstdcdp 63, 63, 127", "f3ffffef"),
+            ("xscvdpsxds 1, 2", "f0201560"),
+            ("xscvdpuxws 33, 34", "f0201123"),
+            ("xvcvspsxws 1, 2", "f0201260"),
+            ("xscvsxddp 40, 2", "f10015e1"),
+            ("xsrdpi 1, 2", "f0201124"),
+            ("xsiexpdp 1, 3, 4", "f023272c"),
+            ("xsxexpdp 3, 33", "f0600d6e"),
+            ("xsaddqp 2, 3, 4", "fc432008"),
+            ("xsmaddqpo 30, 31, 0", "ffdf0309"),
+            ("xscvqpdp 2, 3", "fc541e88"),
+            ("xscvdpqp 2, 3", "fc561e88"),
+            ("xsrqpi 1, 2, 3, 3", "fc411e0a"),
+            ("xsrqpxp 0, 31, 30, 0", "ffe0f04a"),
+            ("xscmpuqp 7, 2, 3", "ff821d08"),
+            ("lxv 1, 16(3)", "f4230011"),
+            ("lxv 63, -32768(31)", "f7ff8009"),
+            ("stxv 35, 32752(4)", "f4647ffd"),
+            ("lxsd 2, 8(4)", "e444000a"),
+            ("stxssp 31, -4(3)", "f7e3ffff"),
+            ("lxvx 1, 3, 4", "7c232218"),
+            ("stxvl 63, 3, 4", "7fe3231b"),
+            ("lxvdsx 33, 3, 4", "7c232299"),
+            ("lxvp 34, 32(4)", "18640020"),
+            ("stxvp 62, -16(4)", "1be4fff1"),
+            ("mfvsrd 3, 34", "7c430067"),
+            ("mtvsrd 63, 4", "7fe40167"),
+            ("mfvsrwz 3, 2", "7c4300e6"),
+            ("mtvsrwa 1, 4", "7c2401a6"),
+            ("mtvsrdd 33, 3, 4", "7c232367"),
+            ("mfvsrld 3, 35", "7c630267"),
+            ("mtfprd 1, 3", "7c230166"),
+            ("xxgenpcvbm 33, 2, 3", "f0231729"),
+            ("xxextractuw 1, 2, 12", "f02c1294"),
+            ("xxinsertw 1, 2, 12", "f02c12d4"),
+            ("lxvkq 63, 31", "f3fffad1"),
+            ("xxeval 1, 2, 3, 4, 5", "0500000588221910"),
+            ("xxpermx 33, 34, 35, 36, 7", "050000078822190f"),
+            ("xxblendvw 1, 2, 3, 4", "0500000084221920"),
+            ("xxspltiw 3, 0x12345678", "0500123480665678"),
+            ("xxspltidp 35, -1", "0500ffff8065ffff"),
+            ("xxsplti32dx 34, 1, 0xdeadbeef", "0500dead8043beef"),
+        ],
+    );
+}
+
+#[test]
+fn power9_and_power10_scalar_instructions() {
+    each(
+        "powerpc64",
+        &[
+            ("maddld 3, 4, 5, 6", "106429b3"),
+            ("maddhd 3, 4, 5, 6", "106429b0"),
+            ("maddhdu 3, 4, 5, 6", "106429b1"),
+            ("darn 3, 1", "7c6105e6"),
+            ("addpcis 3, 100", "4c720044"),
+            ("addpcis 3, -32768", "4c608004"),
+            ("subpcis 3, 100", "4c6eff84"),
+            ("lnia 3", "4c600004"),
+            ("cmprb 0, 1, 3, 4", "7c232180"),
+            ("cmpeqb 7, 3, 4", "7f8321c0"),
+            ("setb 3, 7", "7c7c0100"),
+            ("setbc 3, 5", "7c650300"),
+            ("setnbcr 3, 31", "7c7f03c0"),
+            ("modsd 3, 4, 5", "7c642e12"),
+            ("modud 3, 4, 5", "7c642a12"),
+            ("modsw 3, 4, 5", "7c642e16"),
+            ("moduw 3, 4, 5", "7c642a16"),
+            ("extswsli 3, 4, 63", "7c83fef6"),
+            ("extswsli. 3, 4, 5", "7c832ef5"),
+            ("cnttzw 3, 4", "7c830434"),
+            ("cnttzd. 3, 4", "7c830475"),
+            ("copy 3, 4", "7c23260c"),
+            ("paste. 3, 4", "7c23270d"),
+            ("paste. 3, 4, 0", "7c03270d"),
+            ("brd 3, 4", "7c830176"),
+            ("brw 3, 4", "7c830136"),
+            ("brh 3, 4", "7c8301b6"),
+            ("cfuged 3, 4, 5", "7c8329b8"),
+            ("pdepd 3, 4, 5", "7c832938"),
+            ("pextd 3, 4, 5", "7c832978"),
+            ("cntlzdm 3, 4, 5", "7c832876"),
+            ("cnttzdm 3, 4, 5", "7c832c76"),
+            ("addex 3, 4, 5, 0", "7c642954"),
+            ("mffsl 3", "fc78048e"),
+            ("mffscrni 3, 3", "fc771c8e"),
+            ("mffscdrn 3, 4", "fc74248e"),
+            ("dst 3, 4, 1", "7c2322ac"),
+            ("dss 3", "7c60066c"),
+            ("dssall", "7e00066c"),
+        ],
+    );
+}
+
+#[test]
+fn prefixed_instructions_are_two_words_each_in_the_target_byte_order() {
+    each(
+        "powerpc64",
+        &[
+            ("paddi 3, 4, 100, 0", "0600000038640064"),
+            ("paddi 3, 0, 100, 1", "0610000038600064"),
+            ("paddi 3, 4, -8589934592", "0602000038640000"),
+            ("pli 3, 8589934591", "0601ffff3860ffff"),
+            ("pla 3, 100(4)", "0600000038640064"),
+            ("psubi 3, 4, 100", "0603ffff3864ff9c"),
+            ("pld 3, 100(4), 0", "04000000e4640064"),
+            ("pld 3, -100(0), 1", "0413ffffe460ff9c"),
+            ("pstd 31, 8(3), 0", "04000000f7e30008"),
+            ("plwa 3, 8(4), 0", "04000000a4640008"),
+            ("plwz 3, 8(4), 0", "0600000080640008"),
+            ("pstb 3, 8(4), 0", "0600000098640008"),
+            ("plfd 1, 8(4), 0", "06000000c8240008"),
+            ("pstfs 31, 8(4), 0", "06000000d3e40008"),
+            ("plxsd 2, 8(4), 0", "04000000a8440008"),
+            ("pstxssp 2, 8(4), 0", "04000000bc440008"),
+            ("plxv 35, 8(4), 0", "04000000cc640008"),
+            ("pstxv 63, 8(4), 0", "04000000dfe40008"),
+            ("plxvp 34, 8(4), 0", "04000000e8640008"),
+            ("pstxvp 2, 8(4), 0", "04000000f8440008"),
+        ],
+    );
+    each(
+        "powerpc64le",
+        &[
+            ("paddi 3, 4, 100, 0", "0000000664006438"),
+            ("paddi 3, 0, 100, 1", "0000100664006038"),
+            ("paddi 3, 4, -8589934592", "0000020600006438"),
+            ("pli 3, 8589934591", "ffff0106ffff6038"),
+            ("pla 3, 100(4)", "0000000664006438"),
+            ("psubi 3, 4, 100", "ffff03069cff6438"),
+            ("pld 3, 100(4), 0", "00000004640064e4"),
+            ("pld 3, -100(0), 1", "ffff13049cff60e4"),
+            ("pstd 31, 8(3), 0", "000000040800e3f7"),
+            ("plwa 3, 8(4), 0", "00000004080064a4"),
+            ("plwz 3, 8(4), 0", "0000000608006480"),
+            ("pstb 3, 8(4), 0", "0000000608006498"),
+            ("plfd 1, 8(4), 0", "00000006080024c8"),
+            ("pstfs 31, 8(4), 0", "000000060800e4d3"),
+            ("plxsd 2, 8(4), 0", "00000004080044a8"),
+            ("pstxssp 2, 8(4), 0", "00000004080044bc"),
+            ("plxv 35, 8(4), 0", "00000004080064cc"),
+            ("pstxv 63, 8(4), 0", "000000040800e4df"),
+            ("plxvp 34, 8(4), 0", "00000004080064e8"),
+            ("pstxvp 2, 8(4), 0", "00000004080044f8"),
+        ],
+    );
+}
+
+#[test]
+fn forms_only_gnu_as_accepts_are_accepted() {
+    // Taken from GNU as 2.47 with -mfuture; llvm-mc refuses each of these.
+    each(
+        "powerpc64",
+        &[
+            ("xxmr 1, 63", "f03ffc96"),
+            ("xxlnot 40, 2", "f1021511"),
+            ("vcfpsxws 2, 3, 31", "105f1bca"),
+            ("fmrgew 1, 2, 3", "fc221f8c"),
+            ("pnop", "0700000000000000"),
+            ("pla 3, -100(0), 1", "0613ffff3860ff9c"),
+            ("xxspltib 3, -128", "f06402d0"),
+            ("mtvsrbmi 2, -1", "105fffd5"),
+            ("subpcis 3, 32768", "4c608004"),
+        ],
+    );
+}
+
+#[test]
+fn vector_registers_may_be_named_or_numbered() {
+    let v = text_for("powerpc64", "vaddubm 2, 3, 4\n");
+    assert_eq!(text_for("powerpc64", "vaddubm v2, v3, v4\n"), v);
+    assert_eq!(text_for("powerpc64", "vaddubm %v2, %v3, %v4\n"), v);
+    let vs = text_for("powerpc64", "xxlor 1, 40, 63\n");
+    assert_eq!(text_for("powerpc64", "xxlor vs1, vs40, vs63\n"), vs);
+    assert_eq!(text_for("powerpc64", "xxlor %vs1, %VS40, %vs63\n"), vs);
+    assert_eq!(
+        text_for("powerpc64", "lxv vs33, 16(r3)\n"),
+        text_for("powerpc64", "lxv 33, 16(3)\n")
+    );
+    // A name from another bank is refused, where both references read its
+    // number: `v2` in a VSX slot is VSX register 34, not 2, and `vs40` has no
+    // vector-register spelling at all.
+    for (src, needle) in [
+        ("xxlor v2, 3, 4\n", "expected a VSX register"),
+        ("vaddubm vs2, 3, 4\n", "is not a vector register"),
+        ("mfvsrd vs3, 4\n", "is not a general-purpose register"),
+        ("xsadddp f1, 2, 3\n", "expected a VSX register"),
+    ] {
+        let msg = errors_for("powerpc64", src);
+        assert!(msg.contains(needle), "`{}`: {msg}", src.trim());
+    }
+}
+
+#[test]
+fn vector_operands_are_range_checked() {
+    let cases = [
+        ("xxlor 64, 0, 0\n", "must be 0 to 63"),
+        ("vaddubm 32, 0, 0\n", "must be 0 to 31"),
+        ("vspltisb 2, 16\n", "must be -16 to 15"),
+        ("xxspltib 2, 256\n", "must be -128 to 255"),
+        ("vsldoi 2, 3, 4, 16\n", "must be 0 to 15"),
+        ("xxpermdi 1, 2, 3, 4\n", "must be 0 to 3"),
+        ("xxspltd 1, 2, 2\n", "must be 0 or 1"),
+        ("lxv 3, 8(4)\n", "multiple of 16"),
+        ("lxsd 3, 6(4)\n", "multiple of 4"),
+        ("lxvp 3, 16(4)\n", "must be even-numbered"),
+        ("addpcis 3, 65536\n", "must be -32768 to 65535"),
+        ("pli 3, 8589934592\n", "out of range"),
+        ("xxspltiw 3, 8589934592\n", "out of range"),
+        ("vcmpequbo 2, 3, 4\n", "unknown instruction"),
+        ("vaddubm. 2, 3, 4\n", "unknown instruction"),
+    ];
+    for (src, needle) in cases {
+        let msg = errors_for("powerpc64", src);
+        assert!(
+            msg.contains(needle),
+            "assembling `{}` should mention `{needle}`, got:\n{msg}",
+            src.trim()
+        );
+    }
+}
+
+#[test]
+fn the_r_operand_has_to_agree_with_the_displacement() {
+    // R says the displacement is from the instruction, which leaves no room
+    // for a base register; both references refuse the pair.
+    assert!(errors_for("powerpc64", "paddi 3, 4, 100, 1\n").contains("base register is 0"));
+    assert!(errors_for("powerpc64", "pld 3, 8(4), 1\n").contains("base register is 0"));
+    // A PC-relative value in a field the instruction reads relative to `rA`
+    // would link to nonsense. GNU as writes it; llvm-mc refuses it.
+    assert!(errors_for("powerpc64", "pld 3, x@pcrel(0)\n").contains("R operand"));
+    assert!(errors_for("powerpc64", "paddi 3, 0, x@pcrel, 0\n").contains("R operand"));
+}
+
+#[test]
+fn a_prefixed_instruction_is_never_split_across_a_64_byte_boundary() {
+    // A no-op goes in front of a prefixed instruction whose suffix would start
+    // a new 64-byte block, and the section is aligned to 64. A label on a line
+    // of its own stays on the padding; one on the instruction's line moves past
+    // it, so `b lab` reaches back 12 bytes and `b lab3` 8. Bytes from llvm-mc,
+    // and GNU as agrees.
+    let src = "\
+        .fill 15, 4, 0x60000000\n\
+lab:\n\
+        paddi 3, 4, 100, 0\n\
+        b lab\n\
+        .fill 11, 4, 0x60000000\n\
+lab2:   pli 3, 1\n\
+        b lab2\n\
+        .fill 14, 4, 0x60000000\n\
+lab3:   pli 3, 2\n\
+        b lab3\n";
+    let nops = |n: usize| vec!["60000000"; n].join("");
+    let want = format!(
+        "{}06000000386400644bfffff4{}06000000386000014bfffff8{}06000000386000024bfffff8",
+        nops(16),
+        nops(11),
+        nops(15)
+    );
+    assert_eq!(hex(&text_for("powerpc64", src)).replace(' ', ""), want);
+    let asm = assemble_for("powerpc64", src);
+    assert_eq!(asm.sections[0].align, 64);
+    // Without a prefixed instruction, `.text` keeps llvm-mc's 4.
+    assert_eq!(assemble_for("powerpc64", "nop\n").sections[0].align, 4);
+}
+
+#[test]
+fn prefixed_references_become_34_bit_relocations() {
+    let src = "\
+        pld 3, ext@pcrel(0), 1\n\
+        paddi 3, 0, ext@pcrel+8, 1\n\
+        pld 4, ext@got@pcrel(0), 1\n\
+        paddi 3, 4, ext, 0\n\
+        lxv 35, ext@l(4)\n\
+        stxsd 2, ext(4)\n";
+    for arch in ["powerpc64", "powerpc64le"] {
+        let asm = assemble_for(arch, src);
+        assert!(
+            !asm.diags.has_errors(),
+            "{}",
+            asm.diags.render(&asm.sm, false)
+        );
+        let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+        // R_PPC64_PCREL34 twice, GOT_PCREL34, D34 (from GNU as: llvm-mc cannot
+        // write it), ADDR16_LO_DS and ADDR16_DS, the last two on the halfword.
+        assert_eq!(kinds, vec![132, 132, 133, 128, 57, 56], "{arch}");
+        let offsets: Vec<u64> = asm.relocs.iter().map(|r| r.offset).collect();
+        let half = if arch == "powerpc64" { 2 } else { 0 };
+        assert_eq!(offsets, vec![0, 8, 16, 24, 32 + half, 36 + half], "{arch}");
+    }
+    // llvm-mc leaves a PC-relative prefixed reference to a local label to the
+    // linker too, since the linker may rewrite the instruction.
+    let local = assemble_for("powerpc64", "paddi 3, 0, 1f@pcrel, 1\n1: blr\n");
+    assert_eq!(local.relocs.len(), 1);
+    // In 32-bit code the DS relocations do not exist: GNU as writes the plain
+    // halfword ones, R_PPC_ADDR16 and R_PPC_ADDR16_LO, and a 34-bit field
+    // cannot be relocated at all.
+    let asm = assemble_for("powerpc", "lxsd 3, ext(4)\nlxv 35, ext@l(4)\n");
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, vec![3, 4]);
+    assert!(errors_for("powerpc", "xxspltiw 3, 1\npstw 3, ext(4), 0\n").contains("64-bit object"));
+}
+
+#[test]
+fn doubleword_vector_and_scalar_additions_are_64_bit_only() {
+    for src in [
+        "maddld 3, 4, 5, 6\n",
+        "mfvsrd 3, 34\n",
+        "pld 3, 8(4), 0\n",
+        "extswsli 3, 4, 5\n",
+    ] {
+        let msg = errors_for("powerpc", src);
+        assert!(
+            msg.contains("64-bit instruction"),
+            "`{}`: {msg}",
+            src.trim()
+        );
+    }
+    // The word-sized and vector ones are fine in 32-bit code.
+    text_for(
+        "powerpc",
+        "modsw 3, 4, 5\nmfvsrwz 3, 34\nxxlor 1, 2, 3\nplwz 3, 8(4), 0\n",
+    );
+}
+
+#[test]
+fn malformed_vector_input_never_panics() {
+    let cases = [
+        "xxlor",
+        "xxlor 1, 2",
+        "xxlor 1, 2, 3, 4",
+        "xxlor r1, v2, vs3",
+        "xxlor 1, 2, undefined",
+        "vaddubm 1, 2, (3)",
+        "lxv 3, 8",
+        "lxv 3, (4)",
+        "lxv 3, sym@pcrel(4)",
+        "lxvp 63, 0(4)",
+        "pld 3, 8(4)(5), 0",
+        "pld 3, 8, 1",
+        "pld 3",
+        "paddi 3, 4",
+        "paddi 3, 4, sym@got, 1",
+        "pli 3, sym@pcrel",
+        "psubi 3, 4, sym",
+        "xxspltiw 3",
+        "xxspltiw 3, sym",
+        "xxeval 1, 2, 3, 4",
+        "xxeval 1, 2, 3, 4, 256",
+        "vcmpequb.. 2, 3, 4",
+        "bcdadd 2, 3, 4, 0",
+        "pnop 1",
+        "paste. 3",
+        "paste. 3, 4, 2",
+        "addpcis 3, sym",
+        "xvtstdcsp 1, 2, 128",
+        "vshasigmad 2, 3, 2, 0",
+    ];
+    for src in cases {
+        for arch in ["powerpc", "powerpc64", "powerpc64le"] {
+            let _ = try_text_for(arch, &format!("{src}\n"));
+        }
+    }
+}
