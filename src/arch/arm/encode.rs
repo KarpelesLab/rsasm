@@ -10,9 +10,9 @@ use super::insn::{AL, Mnem};
 use super::operand::{Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
 use super::reg::{self, Reg};
 use super::{Insn, reloc};
-use crate::arch::AsmCtx;
+use crate::arch::{AsmCtx, Literal};
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, RelocSymbol, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 /// `nop` in A32: `mov r0, r0` would do, but the architectural hint is this.
@@ -163,6 +163,7 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Ldr | Str | Ldrb | Strb => load_store(cx, ins),
         Ldrh | Strh | Ldrsb | Ldrsh => load_store_extra(cx, ins),
         Ldm(_) | Stm(_) | Push | Pop => block_transfer(cx, ins),
+        Adr | Adrl => adr(cx, ins),
         B | Bl | Bx | Blx => branch(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
@@ -190,6 +191,20 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Mrs => status_read(cx, ins),
         Msr => status_write(cx, ins),
         Dmb | Dsb | Isb => barrier(cx, ins),
+        // ARM instructions carry their own conditions, so GNU as takes an
+        // `it` in ARM code for source shared with Thumb, and emits nothing.
+        It(_) => {
+            arity(cx, ins, &[1])?;
+            if ops[0]
+                .word
+                .as_deref()
+                .and_then(super::insn::condition)
+                .is_none()
+            {
+                cx.error(ops[0].span, "expected a condition code");
+            }
+            None
+        }
     }
 }
 
@@ -383,10 +398,100 @@ fn memory_operand<'a>(cx: &mut AsmCtx<'_>, op: &'a Operand) -> Option<&'a Mem> {
     }
 }
 
+/// The value of `ldr rt, =expr` when it is a number, which GNU as loads with
+/// a `mov` or `mvn` instead where one can hold it, and otherwise with a load
+/// from the literal pool; `None` for a value the pool holds as an expression.
+///
+/// Either way the number has to fit in the word the pool would hold.
+pub fn literal_constant(cx: &mut AsmCtx<'_>, op: &Operand, e: ExprRef) -> Option<Option<u32>> {
+    let Some(v) = cx.constant(e) else {
+        return Some(None);
+    };
+    if !(i32::MIN as i64..=u32::MAX as i64).contains(&v) {
+        cx.error(
+            op.span,
+            format!("{v} does not fit in the 32-bit word of a literal pool entry"),
+        );
+        return None;
+    }
+    Some(Some(v as u32))
+}
+
+/// The error for an `=expr` operand on anything but `ldr`.
+pub fn literal_only_for_ldr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, op: &Operand) -> Option<()> {
+    if ins.mnem == Mnem::Ldr {
+        return Some(());
+    }
+    cx.error(
+        op.span,
+        format!(
+            "`{}` cannot load from a literal pool; only `ldr` can",
+            ins.text
+        ),
+    );
+    None
+}
+
+/// A PC-relative load's 12-bit offset and its U bit. An offset of zero keeps
+/// the U bit it was assembled with, which for a literal load is clear: GNU as
+/// writes `ldr r0, [pc, #-0]`.
+fn scatter_literal(w: u64, v: i64) -> u64 {
+    if v == 0 {
+        return w & !0xfff;
+    }
+    let up = if v > 0 { 0x0080_0000 } else { 0 };
+    (w & !0x0080_0fff) | up | (v.unsigned_abs() & 0xfff)
+}
+
+/// `ldr rt, =expr` in A32.
+fn literal_load(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    rt: u32,
+    op: &Operand,
+    e: ExprRef,
+) -> Option<Vec<Variant>> {
+    literal_only_for_ldr(cx, ins, op)?;
+    let constant = literal_constant(cx, op, e)?;
+    if let Some(v) = constant {
+        if let Some(field) = imm::modified(v) {
+            return Some(one(word(ins.cond, 0x03a0_0000 | (rt << 12) | field)));
+        }
+        if let Some(field) = imm::modified(!v) {
+            return Some(one(word(ins.cond, 0x03e0_0000 | (rt << 12) | field)));
+        }
+    }
+    let value = match cx.constant(e) {
+        Some(v) if constant.is_some() => Literal::Const(v),
+        _ => Literal::Expr(e),
+    };
+    let entry = cx.literal(value, 4, op.span);
+    // The PC reads two instructions ahead, and the load reaches 4095 bytes
+    // either way from there.
+    let kind = FixupKind::pcrel(4, 8)
+        .with_limits(-4095, 4095)
+        .with_range_hint("the literal pool is too far away; put an `.ltorg` nearer")
+        .scatter(scatter_literal);
+    Some(vec![Variant {
+        bytes: word(ins.cond, 0x051f_0000 | (rt << 12))
+            .to_le_bytes()
+            .to_vec(),
+        fixups: vec![Fixup {
+            offset: 0,
+            expr: entry,
+            kind,
+            span: op.span,
+        }],
+    }])
+}
+
 fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     arity(cx, ins, &[2])?;
     let rt = reg_of(cx, &ins.ops[0])? as u32;
+    if let OperandKind::Literal(e) = ins.ops[1].kind {
+        return literal_load(cx, ins, rt, &ins.ops[1], e);
+    }
     let mem = *memory_operand(cx, &ins.ops[1])?;
     let (p, w) = index_bits(mem.index);
     let l = u32::from(matches!(ins.mnem, Mnem::Ldr | Mnem::Ldrb));
@@ -556,6 +661,140 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     )))
 }
 
+// ---- adr and adrl ------------------------------------------------------------
+
+/// `add rd, pc, #imm` or `sub rd, pc, #imm` for a PC-relative value, as its
+/// data-processing opcode bits and immediate field: GNU as's
+/// `encode_arm_immediate`, then the negated value with the opposite
+/// operation.
+fn adr_one(v: i64) -> Option<(u32, u32)> {
+    const ADD: u32 = 0x0080_0000;
+    const SUB: u32 = 0x0040_0000;
+    let v = v as u32;
+    if (v as i32) >= 0
+        && let Some(field) = imm::modified(v)
+    {
+        return Some((ADD, field));
+    }
+    imm::modified(v.wrapping_neg()).map(|field| (SUB, field))
+}
+
+/// GNU as's `validate_immediate_twopart`: `v` as the sum of two modified
+/// immediates, the low one first.
+fn adr_two(v: u32) -> Option<(u32, u32)> {
+    for i in (0..32).step_by(2) {
+        let a = v.rotate_left(i);
+        if a & 0xff == 0 {
+            continue;
+        }
+        let high = if a & 0xff00 != 0 {
+            if a & !0xffff != 0 {
+                continue;
+            }
+            (a >> 8) | ((i + 24) << 7)
+        } else if a & 0x00ff_0000 != 0 {
+            if a & 0xff00_0000 != 0 {
+                continue;
+            }
+            (a >> 16) | ((i + 16) << 7)
+        } else {
+            (a >> 24) | ((i + 8) << 7)
+        };
+        return Some(((a & 0xff) | (i << 7), high));
+    }
+    None
+}
+
+fn adr_reaches(v: i64) -> bool {
+    adr_one(v).is_some()
+}
+
+fn adrl_reaches(v: i64) -> bool {
+    adr_one(v).is_some()
+        || adr_two(v as u32).is_some()
+        || adr_two((v as u32).wrapping_neg()).is_some()
+}
+
+/// `adr`: one `add` or `sub` from the PC.
+fn scatter_adr(w: u64, v: i64) -> u64 {
+    let (op, field) = adr_one(v).unwrap_or((0, 0));
+    (w & 0xf000_f000) | 0x020f_0000 | op as u64 | field as u64
+}
+
+/// `adrl`: the `add` or `sub` of `adr` followed by a no-op where one
+/// instruction reaches, and otherwise two, the second adding to (or
+/// subtracting from) the register the first set. The field is both words,
+/// the first in the low half.
+fn scatter_adrl(w: u64, v: i64) -> u64 {
+    let first = w & 0xf000_f000;
+    let rd = (first >> 12) & 0xf;
+    let (low, high) = match adr_one(v) {
+        Some((op, field)) => (first | 0x020f_0000 | op as u64 | field as u64, 0xe1a0_0000),
+        None => {
+            let (op, (lo, hi)) = match adr_two(v as u32) {
+                Some(parts) => (0x0080_0000, parts),
+                None => (
+                    0x0040_0000,
+                    adr_two((v as u32).wrapping_neg()).unwrap_or((0, 0)),
+                ),
+            };
+            let insn = first | 0x0200_0000 | op;
+            (
+                insn | 0x000f_0000 | lo as u64,
+                insn | (rd << 16) | hi as u64,
+            )
+        }
+    };
+    low | (high << 32)
+}
+
+/// `adr rd, label` and `adrl rd, label`, which GNU as resolves within the
+/// section and refuses to relocate.
+fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    no_flags(cx, ins)?;
+    arity(cx, ins, &[2])?;
+    let rd = reg_of(cx, &ins.ops[0])? as u32;
+    let Some(e) = ins.ops[1].imm() else {
+        cx.error(ins.ops[1].span, "expected a label");
+        return None;
+    };
+    // GNU as sets the low bit for a Thumb function only when assembling for
+    // interworking (`-mthumb-interwork`), which rsasm has no option for.
+    let long = ins.mnem == Mnem::Adrl;
+    let (size, reaches, what): (u8, fn(i64) -> bool, _) = if long {
+        (
+            8,
+            adrl_reaches,
+            "`adrl` reaches this far only with an address two `add`s can build",
+        )
+    } else {
+        (
+            4,
+            adr_reaches,
+            "`adr` reaches only an 8-bit value rotated by an even amount; try `adrl`",
+        )
+    };
+    let kind = FixupKind::pcrel(size, 8)
+        .accepting(reaches)
+        .with_range_hint(what)
+        .scatter(if long { scatter_adrl } else { scatter_adr });
+    let w = word(ins.cond, rd << 12) as u64;
+    let bytes = if long {
+        (w | (0xe1a0_0000 << 32)).to_le_bytes().to_vec()
+    } else {
+        (w as u32).to_le_bytes().to_vec()
+    };
+    Some(vec![Variant {
+        bytes,
+        fixups: vec![Fixup {
+            offset: 0,
+            expr: e,
+            kind,
+            span: ins.ops[1].span,
+        }],
+    }])
+}
+
 // ---- branches --------------------------------------------------------------
 
 fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
@@ -580,13 +819,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 cx.error(op.span, "expected a label or register");
                 return None;
             };
-            let kind = FixupKind::pcrel(4, 8)
-                .with_field(26, 2)
-                .with_reloc(reloc::CALL)
-                .scatter(scatter_blx)
-                .relocated_in_objects()
-                .with_reloc_symbol(RelocSymbol::Symbol);
-            Some(branch_variant(0xfa00_0000, e, kind, ins.span))
+            Some(branch_variant(0xfa00_0000, e, blx_kind(), ins.span))
         }
         _ => {
             let Some(e) = op.imm() else {
@@ -594,32 +827,78 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 return None;
             };
             let link = ins.mnem == Mnem::Bl;
-            // A conditional `bl` is `R_ARM_JUMP24`, as the ABI requires:
-            // only an unconditional one may become a `blx`.
-            let reloc = if link && ins.cond == AL {
-                reloc::CALL
-            } else {
-                reloc::JUMP24
-            };
-            // The 24-bit field counts words, and the PC an instruction reads
-            // is two instructions ahead of itself: hence the +8 adjustment.
-            let mut kind = FixupKind::pcrel(4, 8)
-                .with_field(26, 4)
-                .with_reloc(reloc)
-                .scatter(scatter_branch);
-            // llvm-mc, the reference, leaves every `bl` to the linker, even
-            // to a label beside it, against the label itself: the linker
-            // turns it into `blx` if the target is Thumb code. A `b` it
-            // resolves.
-            if link {
-                kind = kind
-                    .relocated_in_objects()
-                    .with_reloc_symbol(RelocSymbol::Symbol);
-            }
+            // Only an unconditional `bl` is a call to the linker, which may
+            // make it a `blx`; a conditional one cannot change state, and is
+            // relocated as a jump.
+            let call = link && ins.cond == AL;
+            let kind = if call { bl_kind() } else { jump_kind() };
             let w = word(ins.cond, if link { 0x0b00_0000 } else { 0x0a00_0000 });
             Some(branch_variant(w, e, kind, ins.span))
         }
     }
+}
+
+/// `bl label`. The 24-bit field counts words, and the PC an instruction
+/// reads is two instructions ahead of itself: hence the +8 adjustment.
+pub fn bl_kind() -> FixupKind {
+    FixupKind::pcrel(4, 8)
+        .with_field(26, 4)
+        .with_reloc(reloc::CALL)
+        .link(LinkValue::Interwork(super::IW_ARM_BL))
+        .scatter(scatter_branch)
+}
+
+/// `blx label`, which swaps to Thumb state, so its target is a halfword
+/// boundary.
+pub fn blx_kind() -> FixupKind {
+    FixupKind::pcrel(4, 8)
+        .with_field(26, 2)
+        .with_reloc(reloc::CALL)
+        .link(LinkValue::Interwork(super::IW_ARM_BLX))
+        .scatter(scatter_blx)
+}
+
+/// `b label`, `b<cond> label` and `bl<cond> label`.
+fn jump_kind() -> FixupKind {
+    FixupKind::pcrel(4, 8)
+        .with_field(26, 4)
+        .with_reloc(reloc::JUMP24)
+        .link(LinkValue::Interwork(super::IW_ARM_JUMP))
+        .scatter(scatter_branch)
+}
+
+/// `bl` rewritten as `blx`, for a call into Thumb.
+pub fn to_blx(w: u64) -> u64 {
+    (w & 0x00ff_ffff) | 0xfa00_0000
+}
+
+/// `blx` rewritten as `bl`, for a call that stays in ARM.
+pub fn to_bl(w: u64) -> u64 {
+    (w & 0x00ff_ffff) | 0xeb00_0000
+}
+
+/// Thumb `adr` of a Thumb function sets the address's low bit, as GNU as
+/// does where it already knows the label is one when it reads the `adr`.
+pub fn thumb_function_address(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
+    let v = crate::expr::SymbolEnv::new(cx.exprs, cx.symbols).value(e);
+    let Some(crate::expr::Value {
+        plus: Some(p),
+        minus: None,
+        ..
+    }) = v
+    else {
+        return e;
+    };
+    let sym = cx.symbols.get(p);
+    if !sym.is_defined() || !super::thumb_is_func(sym.target_flags, sym.ty) {
+        return e;
+    }
+    let span = cx.exprs.span(e);
+    let one = cx.exprs.int(1, span);
+    cx.exprs.alloc(
+        crate::expr::ExprKind::Binary(crate::expr::BinOp::Add, e, one),
+        span,
+    )
 }
 
 // ---- multiply --------------------------------------------------------------

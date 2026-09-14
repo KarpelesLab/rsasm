@@ -6,11 +6,13 @@
 //! point. Instruction sizes normally only grow — `chosen` never decreases — so
 //! the branch half of the loop always terminates. A backend can let sizes
 //! shrink again too (RX does, as GNU as does there), under GNU as's limit on
-//! how often one fragment may flip. The whole loop is bounded as well, since a
+//! how often one fragment may flip, or have them picked afresh each pass
+//! until one grows where nothing before it did (ARM, likewise). The whole
+//! loop is bounded as well, since a
 //! `.org` or `.space` whose size depends on a later symbol can be written to
 //! oscillate.
 
-use crate::arch::FlatModifier;
+use crate::arch::{FlatModifier, Interwork, InterworkTarget, Relaxation};
 use crate::assembler::{Assembler, Relocation};
 use crate::expr::{self, EvalError, ExprKind, ExprRef, Value};
 use crate::intern::Name;
@@ -19,7 +21,7 @@ use crate::section::{
     FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
 };
 use crate::source::Span;
-use crate::symbol::{Binding, SymbolId, SymbolValue};
+use crate::symbol::{Binding, SymbolId, SymbolValue, Visibility};
 use std::collections::HashMap;
 
 /// Enough passes for any realistic file; hitting the limit means the input is
@@ -59,13 +61,14 @@ impl Assembler {
     /// Resolves everything and prepares the sections for output. Returns false
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
+        self.flush_all_literals();
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
 
         let mut settled = false;
         let mut history = HashMap::new();
-        let limit = if self.any_arch_shrinks() {
+        let limit = if self.relaxation() >= Relaxation::EachPass {
             MAX_PASSES_SHRINKING
         } else {
             MAX_PASSES
@@ -99,6 +102,7 @@ impl Assembler {
         self.assign_addresses();
         self.report_misaligned_data();
         self.apply_fixups();
+        self.place_mapping_symbols();
         // Data references only enter the symbol table when their fixups are
         // built, so NASM's "symbol not defined" check runs after that.
         if self.options.dialect == crate::lexer::Dialect::Nasm {
@@ -134,18 +138,35 @@ impl Assembler {
             let s = &self.sections[si];
             // A section that ends in another backend's code is padded as
             // that backend's GNU as would.
-            let (arch, _) = self.frag_arch(si, s.frags.len());
-            if s.align <= 1 || !arch.pads_section_tail(&s.flags) {
+            let (arch, state) = self.frag_arch(si, s.frags.len());
+            let align = s.align.min(arch.section_tail_align_limit());
+            if !arch.pads_section_tail(&s.flags) {
                 continue;
             }
-            let fill = if s.flags.exec { Vec::new() } else { vec![0] };
-            let align = s.align;
+            let exec = s.flags.exec;
+            let fill = if exec { Vec::new() } else { vec![0] };
+            // The no-ops are for the last instruction's state, if nothing
+            // but data has followed it; see `Section::nop_state`.
+            let nop_state = s.nop_state.clone().unwrap_or_else(|| state.clone());
+            // No-op padding is code, and marked as such where the target
+            // marks code; see `crate::mapping`. GNU as makes that padding
+            // even for an alignment of one byte, so the mark is made too,
+            // which is what marks data in a code section that has no code.
+            if let Some(names) = crate::mapping::mapping_names(arch, &nop_state)
+                && exec
+            {
+                self.map_align_with(SectionId(si as u32), names);
+            }
+            if align <= 1 {
+                continue;
+            }
             self.sections[si].push(Fragment::new(
                 FragKind::Align {
                     align,
                     fill,
                     max_skip: None,
                     pad: 0,
+                    nop_state: exec.then_some(nop_state),
                 },
                 Span::DUMMY,
             ));
@@ -287,13 +308,14 @@ impl Assembler {
 
     /// Moves fragments to a larger candidate where the current one no longer
     /// reaches. `history` is only used by [`Self::repick`], for targets whose
-    /// sizes may also shrink.
+    /// sizes may also shrink, and by [`Self::repick_each_pass`], where it
+    /// holds the fragments whose size is settled.
     fn relax(&mut self, history: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
-        if self.any_arch_shrinks() {
-            return self.repick(history);
-        }
-        if self.any_arch_relaxes_in_order() {
-            return self.grow_in_order();
+        match self.relaxation() {
+            Relaxation::Shrinking => return self.repick(history),
+            Relaxation::EachPass => return self.repick_each_pass(history),
+            Relaxation::InOrder => return self.grow_in_order(),
+            Relaxation::FromLastPass => {}
         }
         let mut changed = false;
         for si in 0..self.sections.len() {
@@ -343,11 +365,12 @@ impl Assembler {
                         let (n, chosen) = (variants.len(), *chosen);
                         // In a file that also has code for a backend that
                         // does not shrink, that code keeps growing only.
-                        let lowest = if self.frag_arch(si, fi).0.relaxation_may_shrink() {
-                            0
-                        } else {
-                            chosen
-                        };
+                        let lowest =
+                            if self.frag_arch(si, fi).0.relaxation() == Relaxation::Shrinking {
+                                0
+                            } else {
+                                chosen
+                            };
                         let first_fit = (lowest..n)
                             .find(|&k| self.variant_fits(si, fi, k, stretch))
                             .unwrap_or(n - 1);
@@ -397,6 +420,120 @@ impl Assembler {
             }
         }
         changed
+    }
+
+    /// Picks every relaxable fragment's size afresh, walking each section in
+    /// order; see [`Relaxation::EachPass`]. `settled` holds the
+    /// fragments that took a larger size on a pass where nothing before them
+    /// had grown, which keep it.
+    ///
+    fn repick_each_pass(&mut self, settled: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
+        let mut changed = false;
+        for si in 0..self.sections.len() {
+            let mut off: u64 = 0;
+            for fi in 0..self.sections[si].frags.len() {
+                let old_off = self.sections[si].frags[fi].offset;
+                self.sections[si].frags[fi].offset = off;
+                let stretch = off as i64 - old_off as i64;
+                let size = match &self.sections[si].frags[fi].kind {
+                    FragKind::Bytes { variants, chosen }
+                        if variants.len() > 1 && !settled.contains_key(&(si, fi)) =>
+                    {
+                        let (n, chosen) = (variants.len(), *chosen);
+                        let pick = (0..n)
+                            .find(|&k| self.fits_stretched(si, fi, k, stretch))
+                            .unwrap_or(n - 1);
+                        if pick != chosen {
+                            changed = true;
+                        }
+                        if pick > 0 && stretch <= 0 {
+                            settled.insert((si, fi), (0, 0));
+                        }
+                        if let FragKind::Bytes { variants, chosen } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *chosen = pick;
+                            variants[pick].bytes.len() as u64
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    FragKind::Align { .. } => {
+                        let task = self.task_for(si, fi);
+                        let (pad, _) = self.compute_size(si, off, task);
+                        if let FragKind::Align { pad: slot, .. } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *slot = pad;
+                        }
+                        pad
+                    }
+                    _ => self.sections[si].frags[fi].size(),
+                };
+                off = off.saturating_add(size);
+            }
+            if self.sections[si].size != off {
+                self.sections[si].size = off;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Whether every fixup of candidate `k` of a fragment is in range for
+    /// [`Self::repick_each_pass`], which has moved everything up to the
+    /// fragment by `stretch` bytes this pass. A target in a later fragment
+    /// moves by that much too, rounded down to each alignment it is behind,
+    /// since the alignment would absorb the rest: GNU as's
+    /// `relaxed_symbol_addr`.
+    fn fits_stretched(&mut self, si: usize, fi: usize, k: usize, stretch: i64) -> bool {
+        let id = SectionId(si as u32);
+        let frag_off = self.sections[si].frags[fi].offset;
+        let fixups: Vec<(u32, ExprRef, FixupKind)> = match &self.sections[si].frags[fi].kind {
+            FragKind::Bytes { variants, .. } => variants[k]
+                .fixups
+                .iter()
+                .map(|f| (f.offset, f.expr, f.kind))
+                .collect(),
+            _ => return true,
+        };
+        for (off, e, kind) in fixups {
+            let Some(mut value) = self.fixup_value(e, &kind, id, fi, frag_off + off as u64) else {
+                return false;
+            };
+            let target = match self.eval(e) {
+                Ok(Value {
+                    plus: Some(p),
+                    minus: None,
+                    ..
+                }) if kind.pcrel && stretch != 0 => match self.symbols.get(p).value {
+                    SymbolValue::Label { section, frag } if section == id && frag as usize > fi => {
+                        Some(frag as usize)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(frag) = target {
+                let mut moved = stretch;
+                for f in &self.sections[si].frags[fi + 1..frag.min(self.sections[si].frags.len())] {
+                    if let FragKind::Align { align, .. } = f.kind
+                        && align > 1
+                    {
+                        let mask = align as i64 - 1;
+                        moved = moved.signum() * (moved.abs() & !mask);
+                        if moved == 0 {
+                            break;
+                        }
+                    }
+                }
+                value += moved;
+            }
+            if !kind.fits(value as i128) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Grows fragments walking each section in order, the way GNU as's
@@ -830,6 +967,13 @@ impl Assembler {
             }
             LinkValue::PairedLow if flat => return self.paired_low_value(e),
             LinkValue::LinkerOnly(_) if flat => return None,
+            LinkValue::Interwork(class) => match self.interwork(e, class, section, fi) {
+                Interwork::AsWritten => {}
+                Interwork::Relocate | Interwork::LinkerOnly(_) => return None,
+                Interwork::Becomes { kind, .. } => {
+                    return self.fixup_value(e, &kind, section, fi, at);
+                }
+            },
             LinkValue::Page(_)
             | LinkValue::Region(_)
             | LinkValue::PairedLow
@@ -849,7 +993,59 @@ impl Assembler {
                 FlatModifier::LinkerOnly => return None,
             }
         }
-        self.plain_fixup_value(e, kind, section, fi, at)
+        let value = self.plain_fixup_value(e, kind, section, fi, at)?;
+        // What a linker adds to the target in a field of this relocation
+        // type, which in a flat image is the core's to add.
+        if flat
+            && kind.reloc != 0
+            && let Ok(Value {
+                plus: Some(p),
+                minus: None,
+                ..
+            }) = self.eval(e)
+        {
+            let sym = self.symbols.get(p);
+            let (flags, ty) = (sym.target_flags, sym.ty);
+            let arch = self.frag_arch(section.0 as usize, fi).0;
+            return Some(value + arch.link_bias(kind.reloc, flags, ty));
+        }
+        Some(value)
+    }
+
+    /// For a [`LinkValue::Interwork`] fixup, what its instruction becomes
+    /// given the symbol it refers to; see [`Architecture::interwork`].
+    ///
+    /// [`Architecture::interwork`]: crate::arch::Architecture::interwork
+    pub(crate) fn interwork(
+        &mut self,
+        e: ExprRef,
+        class: u8,
+        section: SectionId,
+        fi: usize,
+    ) -> Interwork {
+        let Ok(Value {
+            plus: Some(p),
+            minus: None,
+            ..
+        }) = self.eval(e)
+        else {
+            return Interwork::AsWritten;
+        };
+        let sym = self.symbols.get(p);
+        let defined = sym.is_defined();
+        let target = InterworkTarget {
+            flags: sym.target_flags,
+            ty: sym.ty,
+            same_section: self.symbol_section(p) == Some(section),
+            global: sym.binding != Binding::Local || !defined,
+            preemptible: sym.binding == Binding::Weak
+                || (sym.binding == Binding::Global && sym.visibility == Visibility::Default)
+                || !defined,
+            relocatable: self.options.relocatable,
+        };
+        self.frag_arch(section.0 as usize, fi)
+            .0
+            .interwork(class, &target)
     }
 
     /// For a [`LinkValue::Region`] fixup, the target and the address past the
@@ -945,6 +1141,14 @@ impl Assembler {
                 ));
             }
             LinkValue::Split(_) => return None,
+            LinkValue::Interwork(class) => {
+                if let Interwork::LinkerOnly(what) = self.interwork(e, class, section, fi) {
+                    return Some(format!(
+                        "this branch needs {what}, which only a linker builds; a flat binary \
+                         has none"
+                    ));
+                }
+            }
             _ => {}
         }
         let m = self.find_modifier(e)?;
@@ -1072,8 +1276,21 @@ impl Assembler {
                 return None;
             }
             let target = self.resolve_value(v)?;
-            let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
-            let here = here & !(kind.pc_align.max(1) as i64 - 1);
+            let base = self.section(section).addr as i64;
+            let mask = !(kind.pc_align.max(1) as i64 - 1);
+            // A reference within its own section is one the assembler
+            // resolves before any linker places the section, so the PC is
+            // rounded from the section's start, as GNU as rounds it; that
+            // differs only for a section a linker puts at an address that is
+            // not itself a multiple of the rounding.
+            let here = if v
+                .plus
+                .is_some_and(|p| self.symbol_section(p) == Some(section))
+            {
+                base + ((at as i64 + kind.adjust as i64) & mask)
+            } else {
+                (base + at as i64 + kind.adjust as i64) & mask
+            };
             return Some(target - here);
         }
         // The distance between two labels in one section is fixed no matter
@@ -1121,8 +1338,25 @@ impl Assembler {
                             .collect(),
                         _ => continue,
                     };
-                for (off, e, kind, span) in list {
+                for (off, e, mut kind, span) in list {
                     let at = frag_off + off as u64;
+                    // A branch that becomes another instruction is rewritten
+                    // before its field is filled in, and filled in as the new
+                    // instruction's.
+                    if let LinkValue::Interwork(class) = kind.link
+                        && let Interwork::Becomes { patch, kind: k } =
+                            self.interwork(e, class, id, fi)
+                    {
+                        let endian = self.frag_arch(si, fi).0.endian();
+                        if let FragKind::Bytes { variants, chosen } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            let dst = &mut variants[*chosen].bytes
+                                [off as usize..off as usize + kind.size as usize];
+                            endian.write(dst, patch(endian.read(dst)));
+                        }
+                        kind = k;
+                    }
                     match self.fixup_value(e, &kind, id, fi, at) {
                         Some(v) => {
                             if !kind.fits(v as i128) {
@@ -1394,15 +1628,21 @@ impl Assembler {
     ) -> SymbolId {
         let binding = self.symbols.get(target).binding;
         let arch = self.frag_arch(si, fi).0;
-        let by_section = if self.options.dialect == crate::lexer::Dialect::Nasm {
-            !names_symbol && (binding == Binding::Local || self.symbols.get(target).is_defined())
-        } else {
-            match binding {
-                Binding::Local => true,
-                Binding::Global => arch.relocates_globals_by_section(),
-                Binding::Weak => false,
-            }
-        };
+        // A target may need the linker to see the symbol itself: an ARM
+        // function, whose instruction set a linker reads from it.
+        let sym = self.symbols.get(target);
+        let keep = arch.keeps_reloc_symbol(sym.target_flags, sym.ty);
+        let by_section = !keep
+            && if self.options.dialect == crate::lexer::Dialect::Nasm {
+                !names_symbol
+                    && (binding == Binding::Local || self.symbols.get(target).is_defined())
+            } else {
+                match binding {
+                    Binding::Local => true,
+                    Binding::Global => arch.relocates_globals_by_section(),
+                    Binding::Weak => false,
+                }
+            };
         match self.symbol_section(target) {
             Some(sec) if by_section && kind.reloc_symbol == RelocSymbol::Section => {
                 if kind.pcrel && binding == Binding::Local {
@@ -1466,10 +1706,12 @@ impl Assembler {
                 let size = self.sections[si].frags[fi].size() as usize;
                 let bytes = match &self.sections[si].frags[fi].kind {
                     FragKind::Bytes { .. } => continue,
-                    FragKind::Align { fill, .. } => {
+                    FragKind::Align {
+                        fill, nop_state, ..
+                    } => {
                         if fill.is_empty() && exec {
                             let (arch, state) = self.frag_arch(si, fi);
-                            arch.nop_fill(state, size as u64)
+                            arch.nop_fill(nop_state.as_ref().unwrap_or(state), size as u64)
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()
@@ -1590,6 +1832,15 @@ impl crate::expr::EvalCtx for AddressEnv<'_> {
 /// "out of range for a 4-byte field" sends the reader to the wrong limit, and
 /// calling a misaligned target "out of range" sends them to the wrong problem.
 fn range_message(kind: &FixupKind, v: i64) -> String {
+    let message = plain_range_message(kind, v);
+    match kind.range_hint {
+        Some(hint) => format!("{message}: {hint}"),
+        None => message,
+    }
+}
+
+/// [`range_message`] without the field's hint.
+fn plain_range_message(kind: &FixupKind, v: i64) -> String {
     let what = if kind.pcrel { "offset" } else { "value" };
     let align = kind.value_align as i128;
     if align > 1 && (v as i128) % align != 0 {

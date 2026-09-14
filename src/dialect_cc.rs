@@ -786,6 +786,7 @@ impl Assembler {
                 fill: vec![fill],
                 max_skip: None,
                 pad: 0,
+                nop_state: None,
             },
             span,
         ));
@@ -1240,6 +1241,7 @@ impl Assembler {
                 fill: vec![fill],
                 max_skip: None,
                 pad: 0,
+                nop_state: None,
             },
             span,
         ));

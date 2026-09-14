@@ -55,7 +55,7 @@ assembler, not against rsasm's own idea of the manual. See
 |---|---|---|---|
 | x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1594 |
 | AArch64 | `aarch64` | llvm-mc | 480 |
-| ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 371 |
+| ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1062 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
@@ -99,6 +99,9 @@ but 18 forms where both manuals show MAME to be wrong.
   `.irpc`, `.exitm` and `.purgem`
 - each target's own comment syntax, so ARM's `@`, AArch64's `//` and SPARC's
   `!` work, and `#` stays an immediate prefix where it is one
+- ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
+  `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
+  the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
 - diagnostics with source snippets that name the real limit, and assembly that
   continues past the first error
 
@@ -120,7 +123,10 @@ but 18 forms where both manuals show MAME to be wrong.
   refused with the reason)
 - Mach-O and PE/COFF
 - DWARF line tables (`.loc` and `.cfi_*` parse and are ignored)
-- ARM: `it` blocks, literal pools (`ldr r0, =x`), and `.thumb_func` interworking
+- ARM: `-mimplicit-it`, so a conditional Thumb instruction needs an `it` block
+  of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
+  pool entries; and the divided Thumb syntax GNU as reads without
+  `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - AArch64: most of NEON, SVE
 - PowerPC: AltiVec/VSX
 - RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
@@ -152,13 +158,15 @@ backend. Two such choices are worth knowing about:
   references do on nearly every target. The exceptions follow GNU as for
   x86, m68k, SuperH and RL78 (a jump GNU as relaxes to a global symbol is
   resolved on x86; only weak symbols are left to the linker on m68k; nothing
-  in the same section is on SuperH and RL78), and llvm-mc for ARM, where
-  every `bl` is relocated so the linker can make it a `blx`.
+  in the same section is on SuperH and RL78). On ARM GNU as is followed for
+  whole objects: a `bl` to a local label is resolved, and made a `blx` where
+  the label is a Thumb function, where llvm-mc relocates every `bl`.
 - **Default section alignment.** Sections start with the alignment the
   reference gives them: 16 for MIPS `.text`, `.data` and `.bss` (llvm-mc; GNU
-  as aligns only `.text`, to 4), 4 for `.text` on ARM, PowerPC and SPARC and
-  for every executable section on AArch64 (llvm-mc; GNU as gives 1, or aligns
-  once an instruction is assembled), 2 or 4 for RISC-V `.text` depending on
+  as aligns only `.text`, to 4), 4 for `.text` on PowerPC and SPARC and for
+  every executable section on AArch64 (llvm-mc; GNU as gives 1, or aligns
+  once an instruction is assembled), on ARM what GNU as gives (a section is
+  aligned by the first instruction in it, to 4 for ARM and 2 for Thumb), 2 or 4 for RISC-V `.text` depending on
   compressed instructions, 4 for m68k `.text`, `.data` and `.bss`, and 1
   otherwise, including on x86, where GNU as is followed and llvm-mc's `.text`
   is 4.
@@ -443,14 +451,16 @@ independent assembler, and compare the bytes:
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
   V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
   6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
-  CC-RX source paired with its GNU-syntax equivalent. `tools/oracles/build.sh`
-  builds the references from checksum-pinned sources. 7,219 of 7,219 match
-  across eighteen variants.
+  CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
+  compares whole objects, local and mapping symbols included, against GNU as,
+  the reference for literal pools and interworking. `tools/oracles/build.sh`
+  builds the references from checksum-pinned sources. 7,294 of 7,294 match
+  across twenty variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 108 of 108 match across twenty-two variants.
+  distances between sections. 120 of 120 match across twenty-four variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries and as ELF objects, relocations and global
@@ -480,6 +490,17 @@ the total length is fixed. In flat binaries it is branches between sections:
 a reference assembler cannot know how far away another section will be and
 takes the longest form, while rsasm, which lays the image out itself, takes
 the shortest that reaches; the flat corpora write those widths out.
+
+ARM has two references that disagree with each other. llvm-mc checks the
+encodings; GNU as, which the source was written for, decides everything that
+depends on more than one instruction: where literal pools go and what they
+share, mapping symbols, which branches become `blx` and which are left to
+the linker, how relaxation sizes Thumb instructions, and that a code
+section's end is padded to a word. rsasm follows
+GNU as there, and llvm-mc where the two only differ in spelling: Thumb
+alignment padding uses 16-bit no-ops, and `adds r0, r0, #1` keeps the
+three-operand form, where GNU as uses 32-bit no-ops and the 8-bit form. See
+`tools/xas-diff/README.md`.
 
 ## Design
 

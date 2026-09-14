@@ -7,7 +7,7 @@
 
 use crate::cursor::Cursor;
 use crate::diag::DiagBag;
-use crate::expr::{ExprArena, ExprParser};
+use crate::expr::{ExprArena, ExprParser, ExprRef};
 use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
 use crate::section::{FragKind, SectionId, Variant};
@@ -145,6 +145,44 @@ pub enum FlatModifier {
     LinkerOnly,
 }
 
+/// Something a backend asks the core to do to the section, which it cannot do
+/// itself because sections belong to the core. Queued on
+/// [`AsmCtx::requests`] and carried out once the statement is assembled.
+#[derive(Clone, Debug)]
+pub enum Request {
+    /// Pads to a multiple of `align` bytes with zeros, even in code: GNU as's
+    /// `frag_align (n, 0, 0)`, which ARM's `.arm` and literal pools use.
+    AlignZero(u64),
+    /// Raises the section's alignment to at least this many bytes, without
+    /// padding anything: GNU as's `record_alignment`.
+    RecordAlign(u64),
+    /// A value the instruction loads from the section's literal pool; see
+    /// [`AsmCtx::literal`].
+    Literal(LiteralRequest),
+    /// Writes out the section's literal pool here: `.ltorg`.
+    FlushLiterals,
+}
+
+/// One use of a literal pool entry.
+#[derive(Clone, Debug)]
+pub struct LiteralRequest {
+    /// The label the instruction refers to, defined where the entry lands.
+    pub label: Name,
+    pub value: Literal,
+    /// Entry width in bytes.
+    pub size: u8,
+    pub span: Span,
+}
+
+/// A literal pool entry's value.
+#[derive(Copy, Clone, Debug)]
+pub enum Literal {
+    /// A number, as it was when the instruction was read.
+    Const(i64),
+    /// Anything else, which the entry relocates if it has to.
+    Expr(ExprRef),
+}
+
 /// A PC-relative reference to a symbol defined in the fixup's own section,
 /// as [`Architecture::defers_to_linker`] is asked about it.
 #[derive(Copy, Clone, Debug)]
@@ -158,6 +196,42 @@ pub struct SameSectionRef<'a> {
     pub modifier: Option<&'a str>,
     /// Whether the instruction has more than one size to relax between.
     pub relaxable: bool,
+}
+
+/// How relaxation picks instruction sizes, as each reference assembler does;
+/// see [`Architecture::relaxation`]. Where a file uses backends that relax
+/// differently, the one listed last here wins for the whole file, since each
+/// is a refinement of the ones before it.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Relaxation {
+    /// Every size is chosen at once from the previous pass's addresses, and
+    /// only grows. Layout starts each instruction at its smallest candidate,
+    /// which finds the smallest layout whenever a form that reaches a target
+    /// also reaches every nearer one.
+    FromLastPass,
+    /// Sizes are chosen walking each section in order, as GNU as's generic
+    /// `relax_frag` chooses them, and only grow. The two can settle on
+    /// different layouts: a branch that was out of reach at the previous
+    /// pass's addresses, and is back in reach once an alignment has absorbed
+    /// an earlier branch's growth, stays short when sized in order and grows
+    /// when not. SuperH's GNU as works this way.
+    InOrder,
+    /// Sizes are picked afresh on every pass, walking each section in order,
+    /// the way GNU as's ARM port picks them (`arm_relax_frag`). A target in a
+    /// fragment the walk has yet to reach is taken to have moved by the
+    /// growth so far, less what each alignment in between would absorb of it
+    /// (GNU's `relaxed_symbol_addr`), which can let a fragment shrink back. A
+    /// fragment that takes a larger candidate on a pass where nothing before
+    /// it grew keeps that size for good, which is how GNU as stops the walk
+    /// from cycling.
+    EachPass,
+    /// Every size is re-picked on each pass, and may shrink, with a target
+    /// ahead moved by the growth so far as decided by its last-pass address.
+    /// RX needs it: `bra.s` reaches 3 to 10 bytes forward, not 0 to 10, so a
+    /// branch that was too close early on can come within reach once the code
+    /// around it grows. GNU as's RX port re-picks every size for this reason,
+    /// under a limit on how often one fragment may flip.
+    Shrinking,
 }
 
 /// Mutable, architecture-specific assembler state.
@@ -179,6 +253,46 @@ pub struct ArchState {
     /// options it was assembled with: GNU as for SuperH derives `e_flags` from
     /// the least capable CPU that has every instruction in the file.
     pub used: u64,
+    /// What one statement leaves for the next in the backend's own terms:
+    /// ARM's open `it` block, and a `.thumb_func` waiting for its label.
+    pub private: u64,
+}
+
+/// What a PC-relative reference's target is, for
+/// [`Architecture::interwork`].
+#[derive(Copy, Clone, Debug)]
+pub struct InterworkTarget {
+    /// The bits [`Architecture::label_flags`] gave the target's label.
+    pub flags: u8,
+    pub ty: crate::symbol::SymType,
+    /// Defined in the section the reference is in.
+    pub same_section: bool,
+    /// Global or weak, or not defined here at all: another definition may
+    /// take its place at link time.
+    pub global: bool,
+    /// Global with default visibility, weak, or undefined: another object's
+    /// definition can take its place even within one link.
+    pub preemptible: bool,
+    /// Whether the output is an object, with a linker still to come.
+    pub relocatable: bool,
+}
+
+/// What a branch becomes once its target is known; see
+/// [`Architecture::interwork`].
+#[derive(Copy, Clone, Debug)]
+pub enum Interwork {
+    /// Resolved, or relocated, as written.
+    AsWritten,
+    /// Left to the linker, however near the target is.
+    Relocate,
+    /// Something only a linker builds, described for the diagnostic.
+    LinkerOnly(&'static str),
+    /// Another instruction: the word, read in the target's byte order, put
+    /// through `patch`, and the field written as `kind` describes.
+    Becomes {
+        patch: fn(u64) -> u64,
+        kind: crate::section::FixupKind,
+    },
 }
 
 /// One instruction to assemble, as the generic parser saw it.
@@ -220,9 +334,33 @@ pub struct AsmCtx<'a> {
     /// a fragment that relaxation revisits, though it has one encoding here;
     /// see [`crate::section::Fragment::relaxable`].
     pub relaxable: bool,
+    /// What the statement needs done to the section beyond its own bytes;
+    /// see [`Request`].
+    pub requests: Vec<Request>,
 }
 
 impl AsmCtx<'_> {
+    /// Places `value` in the current section's literal pool and returns an
+    /// expression for the address of its entry.
+    ///
+    /// The pool is written out at the next `.ltorg`, or at the end of the
+    /// section, and equal entries are shared the way GNU as shares them: the
+    /// same number, or the same symbol plus the same addend. Until then the
+    /// entry's address is a label with a name no source can spell.
+    pub fn literal(&mut self, value: Literal, size: u8, span: Span) -> ExprRef {
+        // The arena only grows, and grows below, so its length names each
+        // entry once.
+        let n = self.exprs.len();
+        let label = self.interner.intern(&format!(".L\u{0}lit.{n}"));
+        self.requests.push(Request::Literal(LiteralRequest {
+            label,
+            value,
+            size,
+            span,
+        }));
+        self.exprs.alloc(crate::expr::ExprKind::Sym(label), span)
+    }
+
     pub fn expr_parser(&mut self) -> ExprParser<'_> {
         ExprParser {
             arena: self.exprs,
@@ -445,17 +583,10 @@ pub trait Architecture {
         2
     }
 
-    /// Whether relaxation may move an instruction back to a smaller form.
-    ///
-    /// Layout normally only grows candidates, starting from the smallest,
-    /// which finds the smallest layout whenever a form that reaches a target
-    /// also reaches every nearer one. RX breaks that: `bra.s` reaches 3 to 10
-    /// bytes forward, not 0 to 10, so a branch that was too close early on
-    /// can come within reach once the code around it grows. GNU as's RX port
-    /// re-picks every size on each pass for this reason, and a backend that
-    /// returns true gets the same treatment.
-    fn relaxation_may_shrink(&self) -> bool {
-        false
+    /// How relaxation picks the sizes of instructions with more than one
+    /// encoding; see [`Relaxation`].
+    fn relaxation(&self) -> Relaxation {
+        Relaxation::FromLastPass
     }
 
     /// Whether `.short`, `.word`, `.int`, `.long` and `.quad` must each start
@@ -468,19 +599,6 @@ pub trait Architecture {
     /// and so do the SuperH spellings `.uaword`, `.ualong` and `.uaquad`,
     /// which a target returning true also accepts.
     fn aligns_data(&self) -> bool {
-        false
-    }
-
-    /// Whether sizes are chosen walking each section in order, as GNU as's
-    /// generic `relax_frag` chooses them, rather than all at once from the
-    /// previous pass's addresses.
-    ///
-    /// Both only grow, but they can settle on different layouts: a branch
-    /// that was out of reach at the previous pass's addresses, and is back in
-    /// reach once an alignment has absorbed an earlier branch's growth, stays
-    /// short when sized in order and grows when not. SuperH's GNU as works
-    /// this way. [`Architecture::relaxation_may_shrink`] takes precedence.
-    fn relaxes_in_order(&self) -> bool {
         false
     }
 
@@ -608,6 +726,82 @@ pub trait Architecture {
     /// linker placing the next object's section sees it.
     fn pads_section_tail(&self, _flags: &crate::section::SectionFlags) -> bool {
         false
+    }
+
+    /// The most a section tail is padded to, where
+    /// [`Architecture::pads_section_tail`] pads it at all. ARM's GNU as pads
+    /// code to its alignment only up to a word.
+    fn section_tail_align_limit(&self) -> u64 {
+        u64::MAX
+    }
+
+    /// Whether no-op padding is for the state the last instruction before it
+    /// was assembled in, rather than the state in force where the padding is
+    /// written. GNU as's ARM port pads so (its PR 9814), so that padding
+    /// after Thumb code is Thumb no-ops even once `.arm` has been seen; its
+    /// x86 port pads for the mode in force. See `Section::nop_state`.
+    fn pads_as_last_instruction(&self) -> bool {
+        false
+    }
+
+    /// The mapping symbol that marks code this backend emits in `state`, and
+    /// the alignment in bytes such code gives its section, for a target whose
+    /// ELF objects mark code and data apart: ARM's `$a` and `$t`. `None`, the
+    /// default, for a target that does not.
+    ///
+    /// Where the marks go follows GNU as's ARM port; see
+    /// `Assembler::map_code`.
+    fn code_mapping(&self, _state: &ArchState) -> Option<(&'static str, u64)> {
+        None
+    }
+
+    /// The mapping symbol that marks data, for a target with
+    /// [`Architecture::code_mapping`].
+    fn data_mapping(&self) -> &'static str {
+        "$d"
+    }
+
+    /// Bits to record on a label as it is defined, in the backend's own
+    /// terms, from the state it is defined in: ARM marks a label in Thumb
+    /// code, and the one a `.thumb_func` names. `name` is the label's, and
+    /// `in_code` whether its section is executable.
+    fn label_flags(&self, _state: &mut ArchState, _name: &str, _in_code: bool) -> u8 {
+        0
+    }
+
+    /// The type and value an ELF symbol table gives a symbol with these
+    /// label flags: an ARM Thumb function is `STT_FUNC` with its low bit set.
+    fn elf_symbol(
+        &self,
+        _flags: u8,
+        ty: crate::symbol::SymType,
+        _defined: bool,
+        value: u64,
+    ) -> (crate::symbol::SymType, u64) {
+        (ty, value)
+    }
+
+    /// Whether a relocation against this local label names the label rather
+    /// than its section: an ARM linker needs to see a function symbol, to
+    /// know which instruction set it is in.
+    fn keeps_reloc_symbol(&self, _flags: u8, _ty: crate::symbol::SymType) -> bool {
+        false
+    }
+
+    /// What an ARM linker adds to a symbol's value in a field of relocation
+    /// type `reloc`, which a flat binary has to add itself: the low bit of a
+    /// Thumb function's address.
+    fn link_bias(&self, _reloc: u32, _flags: u8, _ty: crate::symbol::SymType) -> i64 {
+        0
+    }
+
+    /// For a fixup whose [`LinkValue`](crate::section::LinkValue) is
+    /// `Interwork(class)`, what the instruction becomes given its target:
+    /// an ARM `bl` to a Thumb function is a `blx`, and a branch to a function
+    /// in the other instruction set, which only a linker can make reach,
+    /// keeps its relocation. `class` is the backend's own.
+    fn interwork(&self, _class: u8, _target: &InterworkTarget) -> Interwork {
+        Interwork::AsWritten
     }
 
     /// Padding for `.align` in an executable section: real no-ops where the

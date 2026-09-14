@@ -92,6 +92,7 @@ impl Architecture for SuperH {
             features: u64::from(self.cpus),
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 
@@ -150,8 +151,8 @@ impl Architecture for SuperH {
     }
 
     /// `sh-elf-as` sizes branches with GNU as's generic relaxation.
-    fn relaxes_in_order(&self) -> bool {
-        true
+    fn relaxation(&self) -> crate::arch::Relaxation {
+        crate::arch::Relaxation::InOrder
     }
 
     /// `sh-elf-as` resolves a branch or PC-relative load to any symbol in the

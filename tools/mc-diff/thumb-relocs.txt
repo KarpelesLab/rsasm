@@ -1,5 +1,10 @@
 === references to symbols in their own section, by binding
         .text
+        .p2align 2
+        @ GNU as, and rsasm, pad the end of a code section to its alignment
+        @ up to a word; llvm-mc does not. One more halfword ends this one on
+        @ a word, so that the two agree.
+        nop
         .globl  glob, hid, prot, intl, galias
         .hidden hid
         .protected prot
@@ -49,9 +54,13 @@ lweak:  nop
         .set    lwalias, weak1
         .set    galias, loc
         .set    walias, loc
-
 === references back to symbols in their own section
         .text
+        .p2align 2
+        @ GNU as, and rsasm, pad the end of a code section to its alignment
+        @ up to a word; llvm-mc does not. One more halfword ends this one on
+        @ a word, so that the two agree.
+        nop
         .globl  glob
         .weak   weak1
 loc:    nop
@@ -68,9 +77,13 @@ weak1:  nop
         beq loc
         beq glob
         beq weak1
-
 === references out of their section, by binding
         .text
+        .p2align 2
+        @ GNU as, and rsasm, pad the end of a code section to its alignment
+        @ up to a word; llvm-mc does not. One more halfword ends this one on
+        @ a word, so that the two agree.
+        nop
         .globl  oglob
         .weak   oweak, uweak
         .set    oalias, oloc
@@ -82,10 +95,11 @@ weak1:  nop
         bl uweak
         nop
         .section .text.other,"ax"
+        .p2align 2
 oloc:   nop
 oglob:  nop
 oweak:  nop
-
+        nop
 === data referring to symbols, by binding
         .data
         .globl  glob, galias, hid
@@ -104,10 +118,10 @@ loc:    .long   0
 glob:   .long   0
 weak1:  .long   0
 hid:    .long   0
-
 === default section alignment
-        .text
-        .byte   1
+        @ llvm-mc aligns `.text` to 4 bytes from the start; GNU as, which
+        @ rsasm follows for ARM, aligns a section only once an instruction
+        @ is assembled into it (tools/xas-diff/thumb-relocs.txt).
         .data
         .byte   2
         .section .rodata
@@ -122,4 +136,3 @@ hid:    .long   0
         .byte   6
         .section custom,"a"
         .byte   7
-

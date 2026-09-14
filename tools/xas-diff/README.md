@@ -3,6 +3,8 @@
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
 and the 8-bit Z80, 6502 and 8080.
+And for ARM and Thumb whole objects, where GNU as is the reference that matters
+and llvm-mc answers differently; see [ARM](#arm).
 
 ```console
 $ tools/oracles/build.sh          # once: builds the pinned references
@@ -61,6 +63,46 @@ They leave out what rsasm deliberately writes differently:
 - A conditional branch on RX or V850 that is left to the linker: GNU as keeps
   it short, trusting the linker to reach; rsasm takes the longest form (see
   `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+| `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
+
+## ARM
+
+llvm-mc checks ARM and Thumb encodings in `tools/mc-diff`, but the source
+people write for ARM was written against GNU as, and for literal pools,
+mapping symbols and interworking the two disagree. So the `arm` and `thumb`
+corpora here, `arm-relocs.txt` and `thumb-relocs.txt`, compare whole objects
+against GNU as with `tools/mc-diff/canon.sh --full`: as for every other
+target, each allocated section's header and bytes and every relocation, and
+also `e_flags` and every symbol, local ones and mapping symbols included. A
+snippet named `refused: ...` matches when both assemblers reject it.
+
+GNU as is run with `-march=armv7-a`: without it, it assumes a CPU with no
+Thumb-2 and no `blx`. Every snippet starts with `.syntax unified`, because
+GNU as reads Thumb in the older divided syntax unless told otherwise, and
+rsasm only knows the unified one.
+
+Where the two still differ, on purpose:
+
+- **Alignment padding in Thumb code.** GNU as for ARMv7 pads with 32-bit
+  `nop.w`, after one 16-bit `nop` if the count is odd; rsasm, like llvm-mc,
+  uses 16-bit ones throughout. Snippets pad Thumb code with zeros, or not at
+  all.
+- **A three-operand Thumb immediate on one register.** GNU as assembles
+  `adds r0, r0, #1` (and `suble r0, r0, #1` in an `it` block) with the 8-bit
+  `adds r0, #1` form; rsasm, like llvm-mc, keeps the 3-bit form the spelling
+  asks for, which `tools/mc-diff` checks. Snippets write the two-operand form.
+- **`-mthumb-interwork`.** GNU as sets the low bit of a Thumb function's
+  address in an ARM `adr` only with that option, which rsasm does not have;
+  so the snippets, assembled without it, check that it does not.
+
+Where GNU as and llvm-mc disagree and GNU as is followed, as seen in these
+corpora: mapping symbols (llvm-mc marks neither alignment padding nor the
+zeros that align a literal pool), padding the end of a code section to a
+word (llvm-mc does not), which branches are left to the linker (llvm-mc
+relocates an ARM `bl` even to a label in the same section, and converts no
+`bl` to `blx` itself), and the size of a relaxable Thumb instruction (GNU as
+picks each afresh on every pass against the growth so far, and llvm-mc can
+widen one that GNU as keeps at 16 bits).
 
 ## Vendor syntax no reference reads
 

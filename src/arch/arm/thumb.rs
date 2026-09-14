@@ -19,7 +19,7 @@ use super::reg::{self, Reg};
 use super::{Insn, encode, reloc};
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 pub const NOP: u16 = 0xbf00;
@@ -42,21 +42,84 @@ fn wide(hw1: u16, hw2: u16) -> Vec<Variant> {
     vec![Variant::new(wide_bytes(hw1, hw2))]
 }
 
-/// Rejects a condition suffix on anything but a branch: predication in Thumb
-/// comes from an enclosing `it` block, which this backend does not implement.
+/// Rejects a condition suffix on anything but a branch outside an `it` block:
+/// predication in Thumb comes from the block. (Inside one, the condition has
+/// already been checked against the block's and taken off.)
 fn unconditional(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<()> {
     if ins.cond_written && ins.cond != AL {
         cx.error(
             ins.span,
             format!(
-                "`{}` is conditional, which in Thumb needs an `it` block; \
-                 `it` is not supported by this backend",
+                "`{}` is conditional, which in Thumb takes an `it` block",
                 ins.text
             ),
         );
         return None;
     }
     Some(())
+}
+
+/// Whether a 16-bit data-processing form that sets the flags outside an `it`
+/// block, and does not inside one, fits: `adds r0, r1, r2` outside a block
+/// and `addeq r0, r1, r2` inside one are both 16 bits, while `add` outside
+/// and `addseq` inside need 32.
+fn sets_flags16(ins: &Insn<'_>) -> bool {
+    ins.set_flags != ins.in_it
+}
+
+/// Where an `it` block's state lives in `ArchState::private`: the ITSTATE
+/// byte, the condition of the next instruction in the top nibble and the
+/// mask of the ones after it below.
+const IT_SHIFT: u32 = 8;
+
+fn itstate(cx: &AsmCtx<'_>) -> u8 {
+    (cx.state.private >> IT_SHIFT) as u8
+}
+
+fn set_itstate(cx: &mut AsmCtx<'_>, it: u8) {
+    cx.state.private = (cx.state.private & !(0xff << IT_SHIFT)) | ((it as u64) << IT_SHIFT);
+}
+
+/// Whether an instruction leaves its `it` block by changing the PC, which
+/// only the last instruction of a block may do.
+fn is_branch(ins: &Insn<'_>) -> bool {
+    matches!(ins.mnem, Mnem::B | Mnem::Bl | Mnem::Bx | Mnem::Blx)
+        || (matches!(ins.mnem, Mnem::Mov | Mnem::Add | Mnem::Ldr)
+            && ins.ops.first().and_then(|op| op.reg()) == Some(reg::PC))
+}
+
+/// `it`, `itt`, `ite` and the rest. `pattern` holds the letters after the
+/// first `t` as bits, `e` set, from the high bit down, followed by a set
+/// bit that ends them: the mask field for a condition whose low bit is
+/// clear.
+fn it_block(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, pattern: u8) -> Option<Vec<Variant>> {
+    encode::arity(cx, ins, &[1])?;
+    let op = &ins.ops[0];
+    let Some(cond) = op.word.as_deref().and_then(super::insn::condition) else {
+        cx.error(op.span, "expected a condition code");
+        return None;
+    };
+    // The letters are relative to the condition: a `t` repeats it, so with
+    // an odd condition every letter bit flips, and the end bit does not.
+    let end = pattern & pattern.wrapping_neg();
+    let letters = pattern & !end & 0xf;
+    let mask = if cond & 1 != 0 {
+        letters ^ (0xf & !(end | (end - 1)))
+    } else {
+        letters
+    } | end;
+    set_itstate(cx, (cond << 4) | mask);
+    Some(narrow(0xbf00 | ((cond as u16) << 4) | mask as u16))
+}
+
+/// The ITSTATE after one instruction of a block: the mask shifts into the
+/// condition's low bit, and the block ends with its end bit.
+fn it_advance(it: u8) -> u8 {
+    if it & 0x7 == 0 {
+        0
+    } else {
+        (it & 0xe0) | ((it << 1) & 0x1f)
+    }
 }
 
 fn want_narrow(ins: &Insn<'_>) -> bool {
@@ -85,9 +148,76 @@ fn no_encoding(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     None
 }
 
+/// Assembles one Thumb instruction, keeping track of the `it` block it is in.
+///
+/// The checks are GNU as's: an instruction in a block must carry the block's
+/// condition, or its inverse where the block says `e`; one that changes the
+/// PC must be the block's last; and an `al` block allows no instruction at
+/// all. Outside a block only a branch may carry a condition, as GNU as's
+/// default `-mimplicit-it=arm` has it: no block is made up for Thumb code.
+/// The instruction is then encoded without its condition, which the block
+/// supplies.
 pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    let it = itstate(cx);
+    if let Mnem::It(pattern) = ins.mnem {
+        if it & 0xf != 0 {
+            cx.error(
+                ins.span,
+                "`it` falls within the range of a previous `it` block",
+            );
+            return None;
+        }
+        return it_block(cx, ins, pattern);
+    }
+    if it & 0xf == 0 {
+        return encode_insn(cx, ins);
+    }
+    set_itstate(cx, it_advance(it));
+    let expected = it >> 4;
+    if !ins.cond_written || expected == AL {
+        cx.error(
+            ins.span,
+            format!(
+                "`{}` is not allowed in an `it` block without its condition",
+                ins.text
+            ),
+        );
+        return None;
+    }
+    if ins.cond != expected {
+        let want = super::insn::condition_name(expected);
+        cx.error(
+            ins.span,
+            format!(
+                "`{}` has the wrong condition for this `it` block, which expects `{want}` here",
+                ins.text
+            ),
+        );
+        return None;
+    }
+    if is_branch(ins) && it & 0xf != 0x8 {
+        cx.error(
+            ins.span,
+            format!(
+                "`{}` is a branch, which must be the last instruction in its `it` block",
+                ins.text
+            ),
+        );
+        return None;
+    }
+    let inner = Insn {
+        cond: AL,
+        cond_written: false,
+        in_it: true,
+        ..*ins
+    };
+    encode_insn(cx, &inner)
+}
+
+fn encode_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     use Mnem::*;
     match ins.mnem {
+        It(_) => None,
         B | Bl | Bx | Blx => branch(cx, ins),
         Mov | Mvn => mov(cx, ins),
         Add | Sub => add_sub(cx, ins),
@@ -101,6 +231,11 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         }
         Ldr | Str | Ldrb | Strb | Ldrh | Strh | Ldrsb | Ldrsh => load_store(cx, ins),
         Push | Pop => push_pop(cx, ins),
+        Adr => adr(cx, ins),
+        Adrl => {
+            cx.error(ins.span, "`adrl` is an ARM instruction; Thumb has `adr`");
+            None
+        }
         Ldm(_) | Stm(_) => block_transfer(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
@@ -172,6 +307,54 @@ fn scatter_bl(_word: u64, v: i64) -> u64 {
     scatter_t4(v, 0xd000)
 }
 
+/// `blx <label>`, which clears bit 12 of the second halfword. Its offset is
+/// from the PC rounded down to a word and lands on a word, and GNU as rounds
+/// an odd one up rather than refuse it.
+fn scatter_blx(_word: u64, v: i64) -> u64 {
+    scatter_t4((v + 3) & !3, 0xc000)
+}
+
+/// Thumb `bl label`.
+pub fn bl_kind() -> FixupKind {
+    FixupKind::pcrel(4, 4)
+        .with_field(25, 2)
+        .with_reloc(reloc::THM_CALL)
+        .link(LinkValue::Interwork(super::IW_THUMB_BL))
+        .scatter(scatter_bl)
+}
+
+/// Thumb `blx label`, into ARM code.
+pub fn blx_kind() -> FixupKind {
+    FixupKind::pcrel(4, 4)
+        .with_pc_align(4)
+        .with_field(25, 2)
+        .with_reloc(reloc::THM_CALL)
+        .link(LinkValue::Interwork(super::IW_THUMB_BLX))
+        .scatter(scatter_blx)
+}
+
+/// A `blx` GNU as turns into `bl`, for a call that stays in Thumb. It keeps
+/// the `blx`'s base, the PC rounded down to a word, so a call from an
+/// instruction that is not on a word boundary lands two bytes past its
+/// target; GNU as does that, and warns.
+pub fn blx_as_bl_kind() -> FixupKind {
+    FixupKind {
+        link: LinkValue::Plain,
+        ..blx_kind()
+    }
+    .scatter(scatter_bl)
+}
+
+/// `bl` rewritten as `blx`: bit 12 of the second halfword cleared.
+pub fn to_blx(w: u64) -> u64 {
+    w & !(0x1000 << 16)
+}
+
+/// `blx` rewritten as `bl`.
+pub fn to_bl(w: u64) -> u64 {
+    w | (0x1000 << 16)
+}
+
 /// `b<cond>.w`: a 20-bit range with the condition in the first halfword and
 /// the J bits stored directly rather than inverted.
 fn scatter_bcc_w(w: u64, v: i64) -> u64 {
@@ -219,22 +402,21 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     match ins.mnem {
         Mnem::Bl => {
             unconditional(cx, ins)?;
-            let kind = FixupKind::pcrel(4, 4)
-                .with_field(25, 2)
-                .with_reloc(reloc::THM_CALL)
-                .scatter(scatter_bl);
-            Some(vec![fixed(wide_bytes(0xf000, 0xd000), e, kind, ins.span)])
+            Some(vec![fixed(
+                wide_bytes(0xf000, 0xd000),
+                e,
+                bl_kind(),
+                ins.span,
+            )])
         }
         Mnem::Blx => {
-            // Thumb `blx <label>` measures its offset from the PC rounded down
-            // to a word boundary, which depends on where the instruction lands
-            // and so cannot be expressed as a fixed PC adjustment.
-            cx.error(
-                op.span,
-                "`blx <label>` from Thumb is not supported; use `bl` for Thumb \
-                 targets or `blx <register>`",
-            );
-            None
+            unconditional(cx, ins)?;
+            Some(vec![fixed(
+                wide_bytes(0xf000, 0xc000),
+                e,
+                blx_kind(),
+                ins.span,
+            )])
         }
         Mnem::Bx => {
             cx.error(op.span, "`bx` takes a register");
@@ -247,6 +429,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 // unresolved target escalates to the wide form instead.
                 let kind = FixupKind::pcrel(2, 4)
                     .with_field(9, 2)
+                    .link(LinkValue::Interwork(super::IW_THUMB_JUMP16))
                     .scatter(scatter_bcc16);
                 out.push(fixed(
                     (0xd000u16 | ((ins.cond as u16) << 8))
@@ -261,6 +444,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 let kind = FixupKind::pcrel(4, 4)
                     .with_field(21, 2)
                     .with_reloc(reloc::THM_JUMP19)
+                    .link(LinkValue::Interwork(super::IW_THUMB_JUMP))
                     .scatter(scatter_bcc_w);
                 // The condition sits in the first halfword; the scatter
                 // function reads it back out of the placeholder.
@@ -281,6 +465,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             if want_narrow(ins) {
                 let kind = FixupKind::pcrel(2, 4)
                     .with_field(12, 2)
+                    .link(LinkValue::Interwork(super::IW_THUMB_JUMP16))
                     .scatter(scatter_b16);
                 out.push(fixed(0xe000u16.to_le_bytes().to_vec(), e, kind, ins.span));
             }
@@ -288,6 +473,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 let kind = FixupKind::pcrel(4, 4)
                     .with_field(25, 2)
                     .with_reloc(reloc::THM_JUMP24)
+                    .link(LinkValue::Interwork(super::IW_THUMB_JUMP))
                     .scatter(scatter_bw);
                 out.push(fixed(wide_bytes(0xf000, 0x9000), e, kind, ins.span));
             }
@@ -318,7 +504,7 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if ins.mnem == Mnem::Mvn {
         // Only the flag-setting low-register form is 16 bits.
         if let Some(rm) = src.reg()
-            && ins.set_flags
+            && sets_flags16(ins)
             && low(rd)
             && low(rm)
             && want_narrow(ins)
@@ -329,8 +515,9 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     }
 
     if let Some(rm) = src.reg() {
-        if ins.set_flags && low(rd) && low(rm) && want_narrow(ins) {
-            // `movs rd, rm` is `lsls rd, rm, #0`.
+        if ins.set_flags && !ins.in_it && low(rd) && low(rm) && want_narrow(ins) {
+            // `movs rd, rm` is `lsls rd, rm, #0`, which in an `it` block
+            // would not set the flags.
             return Some(narrow(((rm as u16) << 3) | rd as u16));
         }
         if !ins.set_flags && want_narrow(ins) {
@@ -343,7 +530,7 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     }
 
     let v = encode::imm32(cx, src)?;
-    if ins.set_flags && low(rd) && v <= 0xff && want_narrow(ins) {
+    if sets_flags16(ins) && low(rd) && v <= 0xff && want_narrow(ins) {
         return Some(narrow(0x2000 | ((rd as u16) << 8) | v as u16));
     }
     if !want_wide(ins) {
@@ -417,7 +604,7 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let s = u16::from(ins.set_flags);
 
     if let Some(rm) = src.reg() {
-        if ins.set_flags && low(rd) && low(rn) && low(rm) && want_narrow(ins) {
+        if sets_flags16(ins) && low(rd) && low(rn) && low(rm) && want_narrow(ins) {
             let base = if sub { 0x1a00 } else { 0x1800 };
             return Some(narrow(
                 base | ((rm as u16) << 6) | ((rn as u16) << 3) | rd as u16,
@@ -468,7 +655,7 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         {
             return Some(narrow(0xa800 | ((rd as u16) << 8) | (v / 4) as u16));
         }
-        if ins.set_flags && low(rd) && low(rn) {
+        if sets_flags16(ins) && low(rd) && low(rn) {
             // Which 16-bit form wins depends on how the source spelled it:
             // `adds r0, #1` is the 8-bit form and `adds r0, r0, #1` the 3-bit
             // one, even though they mean the same thing. Both GNU as and LLVM
@@ -602,7 +789,7 @@ fn alu_reg(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         let rd = encode::reg_of(cx, &ins.ops[0])?;
         let rn = encode::reg_of(cx, &ins.ops[1])?;
         let v = encode::imm_of(cx, &ins.ops[2])?;
-        if v != 0 || !ins.set_flags || !low(rd) || !low(rn) || !want_narrow(ins) {
+        if v != 0 || !sets_flags16(ins) || !low(rd) || !low(rn) || !want_narrow(ins) {
             return no_encoding(cx, ins);
         }
         return Some(narrow(0x4000 | (op << 6) | ((rn as u16) << 3) | rd as u16));
@@ -617,7 +804,7 @@ fn alu_reg(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let Some(rm) = src.reg() else {
         return no_encoding(cx, ins);
     };
-    if !ins.set_flags || rd != rn || !low(rd) || !low(rm) || !want_narrow(ins) {
+    if !sets_flags16(ins) || rd != rn || !low(rd) || !low(rm) || !want_narrow(ins) {
         return no_encoding(cx, ins);
     }
     Some(narrow(0x4000 | (op << 6) | ((rm as u16) << 3) | rd as u16))
@@ -632,7 +819,7 @@ fn shift_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     } else {
         (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
     };
-    if !ins.set_flags || !low(rd) || !low(rm) || !want_narrow(ins) {
+    if !sets_flags16(ins) || !low(rd) || !low(rm) || !want_narrow(ins) {
         return no_encoding(cx, ins);
     }
     // A register shift amount is the flag-setting two-operand form, so the
@@ -684,6 +871,9 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
     let rt = encode::reg_of(cx, &ins.ops[0])?;
+    if let OperandKind::Literal(e) = ins.ops[1].kind {
+        return literal_load(cx, ins, rt, &ins.ops[1], e);
+    }
     let OperandKind::Mem(mem) = ins.ops[1].kind else {
         cx.error(
             ins.ops[1].span,
@@ -720,6 +910,167 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return None;
     }
     wide_load_store(cx, ins, rt, mem.base, off as u16)
+}
+
+/// 16-bit `adr rd, label`: a word count forward from the PC rounded down.
+fn scatter_adr16(w: u64, v: i64) -> u64 {
+    (w & 0xff00) | (((v >> 2) as u64) & 0xff)
+}
+
+/// 32-bit `addw rd, pc, #imm12`, or `subw` for a label behind.
+fn scatter_adr32(w: u64, v: i64) -> u64 {
+    let hw1: u64 = if v < 0 { 0xf2af } else { 0xf20f };
+    let m = v.unsigned_abs() & 0xfff;
+    let rd = (w >> 24) & 0xf;
+    let hw2 = ((m >> 8) & 7) << 12 | rd << 8 | (m & 0xff);
+    ((hw2 << 16) | hw1 | ((m >> 11) & 1) << 10) & 0xffff_ffff
+}
+
+/// `adr rd, label`. A low register gets GNU as's relaxable pair, a 16-bit
+/// form reaching 1020 bytes forward to a word-aligned label and a 32-bit one
+/// reaching 4095 bytes either way; anything else only the 32-bit form.
+fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    unconditional(cx, ins)?;
+    encode::no_flags(cx, ins)?;
+    encode::arity(cx, ins, &[2])?;
+    let rd = encode::reg_of(cx, &ins.ops[0])?;
+    if rd == reg::SP || rd == reg::PC {
+        cx.error(
+            ins.ops[0].span,
+            format!("`adr` cannot load `{}` in Thumb", reg::name_of(rd)),
+        );
+        return None;
+    }
+    let Some(e) = ins.ops[1].imm() else {
+        cx.error(ins.ops[1].span, "expected a label");
+        return None;
+    };
+    let span = ins.ops[1].span;
+    let e = encode::thumb_function_address(cx, e);
+    // Only the form GNU as relaxes learns about a Thumb function defined
+    // after the `adr`; see `Arm::interwork`.
+    let relaxed = low(rd) && ins.width == Width::Any;
+    let mut out = Vec::new();
+    if low(rd) && want_narrow(ins) {
+        let mut kind = FixupKind::pcrel(2, 4)
+            .with_pc_align(4)
+            .with_field(12, 4)
+            .with_limits(0, 1020)
+            .scatter(scatter_adr16);
+        if relaxed {
+            kind = kind.link(LinkValue::Interwork(super::IW_THUMB_ADR16));
+        }
+        out.push(fixed(
+            (0xa000u16 | ((rd as u16) << 8)).to_le_bytes().to_vec(),
+            e,
+            kind,
+            span,
+        ));
+    }
+    if want_wide(ins) {
+        let mut kind = adr32_kind();
+        if relaxed {
+            kind = kind.link(LinkValue::Interwork(super::IW_THUMB_ADR));
+        }
+        out.push(fixed(wide_bytes(0xf20f, (rd as u16) << 8), e, kind, span));
+    }
+    if out.is_empty() {
+        return no_encoding(cx, ins);
+    }
+    Some(out)
+}
+
+/// 32-bit `adr`: `addw` or `subw` from the PC rounded down to a word.
+pub fn adr32_kind() -> FixupKind {
+    FixupKind::pcrel(4, 4)
+        .with_pc_align(4)
+        .with_limits(-4095, 4095)
+        .scatter(scatter_adr32)
+}
+
+/// 16-bit `ldr rt, [pc, #imm8 * 4]`.
+fn scatter_literal16(w: u64, v: i64) -> u64 {
+    (w & 0xff00) | (((v >> 2) as u64) & 0xff)
+}
+
+/// 32-bit `ldr.w rt, [pc, #±imm12]`: the U bit is bit 7 of the first
+/// halfword, and set for an offset of zero.
+fn scatter_literal32(w: u64, v: i64) -> u64 {
+    let up = if v >= 0 { 0x80 } else { 0 };
+    (w & !0x0fff_0080) | up | ((v.unsigned_abs() & 0xfff) << 16)
+}
+
+/// `ldr rt, =expr` in T32.
+///
+/// A number GNU as can move instead is moved, always with a 32-bit `mov.w`,
+/// `mvn.w` or `movw` (a 16-bit `movs` would change the flags); the stack
+/// pointer and the PC cannot take those, so they always load. Otherwise the
+/// load reaches the pool from the PC rounded down to a word, as a 16-bit
+/// instruction that reaches 1020 bytes forward if the register is a low one,
+/// and as a 32-bit one that reaches 4095 bytes either way; layout picks.
+fn literal_load(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    rt: Reg,
+    op: &crate::arch::arm::operand::Operand,
+    e: ExprRef,
+) -> Option<Vec<Variant>> {
+    encode::literal_only_for_ldr(cx, ins, op)?;
+    let constant = encode::literal_constant(cx, op, e)?;
+    if let Some(v) = constant
+        && rt != reg::SP
+        && rt != reg::PC
+    {
+        if let Some(imm12) = imm::thumb_expand(v) {
+            let (i, rest) = expand_parts(imm12);
+            return Some(wide(0xf04f | (i << 10), rest | ((rt as u16) << 8)));
+        }
+        if let Some(imm12) = imm::thumb_expand(!v) {
+            let (i, rest) = expand_parts(imm12);
+            return Some(wide(0xf06f | (i << 10), rest | ((rt as u16) << 8)));
+        }
+        if v <= 0xffff {
+            return Some(move_wide_bits(rt, v, false));
+        }
+    }
+    let value = match cx.constant(e) {
+        Some(v) if constant.is_some() => crate::arch::Literal::Const(v),
+        _ => crate::arch::Literal::Expr(e),
+    };
+    let entry = cx.literal(value, 4, op.span);
+    let hint = "the literal pool is too far away; put an `.ltorg` nearer";
+    let mut out = Vec::new();
+    if low(rt) && want_narrow(ins) {
+        let kind = FixupKind::pcrel(2, 4)
+            .with_pc_align(4)
+            .with_field(12, 4)
+            .with_limits(0, 1020)
+            .with_range_hint(hint)
+            .scatter(scatter_literal16);
+        out.push(fixed(
+            (0x4800u16 | ((rt as u16) << 8)).to_le_bytes().to_vec(),
+            entry,
+            kind,
+            op.span,
+        ));
+    }
+    if want_wide(ins) {
+        let kind = FixupKind::pcrel(4, 4)
+            .with_pc_align(4)
+            .with_limits(-4095, 4095)
+            .with_range_hint(hint)
+            .scatter(scatter_literal32);
+        out.push(fixed(
+            wide_bytes(0xf85f, (rt as u16) << 12),
+            entry,
+            kind,
+            op.span,
+        ));
+    }
+    if out.is_empty() {
+        return no_encoding(cx, ins);
+    }
+    Some(out)
 }
 
 fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {
@@ -882,12 +1233,10 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             let rd = encode::reg_of(cx, &ops[0])?;
             let rn = encode::reg_of(cx, &ops[1])?;
             let rm = encode::reg_of(cx, &ops[2])?;
-            // `muls rdm, rn, rdm` is the 16-bit form.
-            if ins.set_flags && want_narrow(ins) {
-                if low(rd) && low(rn) && rd == rm {
-                    return Some(narrow(0x4340 | ((rn as u16) << 3) | rd as u16));
-                }
-                return no_encoding(cx, ins);
+            // `muls rdm, rn, rdm` is the 16-bit form, and `mul` in an `it`
+            // block, where it does not set the flags.
+            if sets_flags16(ins) && want_narrow(ins) && low(rd) && low(rn) && rd == rm {
+                return Some(narrow(0x4340 | ((rn as u16) << 3) | rd as u16));
             }
             if ins.set_flags || !want_wide(ins) {
                 return no_encoding(cx, ins);

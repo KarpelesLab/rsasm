@@ -109,6 +109,7 @@ impl Architecture for Riscv {
             features: STACK_BOTTOM | RVC,
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 
