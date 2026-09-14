@@ -13,7 +13,7 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{DEF64, Def, Enc, NOTACC, Op};
+use insn::{DEF64, Def, Enc, NO64, NOTACC, ONLY64, Op};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
 
 pub const NAMES: &[&str] = &["x86-64", "i386", "i8086"];
@@ -372,10 +372,16 @@ fn assemble_inner(
     }
     ops.retain(|o| o.rounding().is_none());
 
-    let matches = select(cx, bits, resolved.defs, &resolved, &ops);
+    let mut matches = select(cx, bits, resolved.defs, &resolved, &ops);
     if matches.is_empty() {
         report_no_match(cx, req, mnemonic, resolved.defs, &ops);
         return None;
+    }
+    // A form this mode cannot encode gives way to one it can, such as the
+    // one-byte `inc %eax` outside long mode; alone, it is reported as such.
+    let mode_bit = if bits == 64 { NO64 } else { ONLY64 };
+    if matches.iter().any(|d| d.flags & mode_bit == 0) {
+        matches.retain(|d| d.flags & mode_bit == 0);
     }
 
     let matches = prefer_default_size(bits, matches, &ops);

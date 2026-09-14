@@ -341,7 +341,14 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
     });
 
     for (mnem, ext) in [("inc", 0u8), ("dec", 1)] {
-        let mut defs = vec![d(vec![Op::Rm(1)], &[0xfe], ModRm::Ext(ext), 8)];
+        // Outside long mode, which took these opcodes for REX, a 16- or
+        // 32-bit register has a one-byte form, and GNU as uses it.
+        let short = 0x40 + 8 * ext;
+        let mut defs = vec![
+            d(vec![Op::R(4)], &[short], ModRm::None, 32).flags(PLUSREG | NO64),
+            d(vec![Op::R(2)], &[short], ModRm::None, 16).flags(PLUSREG | NO64),
+            d(vec![Op::Rm(1)], &[0xfe], ModRm::Ext(ext), 8),
+        ];
         for w in WIDTHS {
             defs.push(d(vec![Op::Rm(w)], &[0xff], ModRm::Ext(ext), opsize_bits(w)));
         }

@@ -82,7 +82,8 @@ impl Assembler {
             // The `.Nbyte` spellings are never aligned, even on a target whose
             // other data directives are; see `Architecture::aligns_data`.
             ".byte" => self.dir_data(&mut cur, 1, span, false),
-            ".short" | ".hword" | ".half" => self.dir_data(&mut cur, 2, span, true),
+            // `.value` is x86's spelling, which GCC writes in debug sections.
+            ".short" | ".hword" | ".half" | ".value" => self.dir_data(&mut cur, 2, span, true),
             ".2byte" => self.dir_data(&mut cur, 2, span, false),
             // `.word` is the one data directive whose width depends on the
             // target, so it asks the backend rather than assuming x86.
@@ -644,9 +645,23 @@ impl Assembler {
     fn dir_section(&mut self, cur: &mut Cursor<'_>, _span: Span, push: bool) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
+            // A name is everything up to a comma or a space, as GNU as reads
+            // it: `.note.GNU-stack` is one name, not a subtraction.
             TokKind::Ident(n) => {
-                cur.advance();
-                n
+                let first = cur.advance();
+                let mut last = first;
+                while !cur.peek().is_eol()
+                    && !cur.peek().is_punct(Punct::Comma)
+                    && !cur.peek().preceded_by_space
+                {
+                    last = cur.advance();
+                }
+                if last.span == first.span {
+                    n
+                } else {
+                    let text = self.sm.span_text(first.span.to(last.span)).to_string();
+                    self.interner.intern(&text)
+                }
             }
             TokKind::Str(i) => {
                 cur.advance();
