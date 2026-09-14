@@ -118,6 +118,10 @@ pub enum Op {
     /// The same, but only when written `fword ptr`, which is how Intel syntax
     /// tells `jmp fword ptr [eax]` from a near `jmp [eax]`.
     Fword,
+    /// A far pointer with a 16-bit offset, which GNU as's Intel syntax reads
+    /// `jmp dword ptr [bx]` as outside 32-bit mode: four bytes are a near
+    /// 32-bit target only where that is the operand size.
+    FarDword,
     /// The port register of `in` and `out`: `%dx`, which AT&T also writes as
     /// `(%dx)`.
     Dx,
@@ -140,7 +144,15 @@ impl Op {
             Op::Vm(k, 0) => k.width(),
             Op::Vm(_, w) => w,
             Op::Moffs(w) | Op::StrSrc(w) | Op::StrDst(w) => w,
-            Op::Seg | Op::Cr | Op::Dr | Op::St | Op::Far | Op::FarM | Op::Fword | Op::Dx => 0,
+            Op::Seg
+            | Op::Cr
+            | Op::Dr
+            | Op::St
+            | Op::Far
+            | Op::FarM
+            | Op::Fword
+            | Op::FarDword
+            | Op::Dx => 0,
         }
     }
 }
@@ -205,10 +217,6 @@ pub const ADDR32: u32 = 1 << 14;
 /// as the manual does.
 pub const ATT_ONLY: u32 = 1 << 15;
 pub const INTEL_ONLY: u32 = 1 << 16;
-/// An immediate that does not fit its field is an error rather than being
-/// truncated, as GNU as has it for the frame size of `enter` and the count of
-/// `ret`, whose rows otherwise look like any sized operation's.
-pub const STRICT_IMM: u32 = 1 << 17;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]

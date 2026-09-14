@@ -8,7 +8,7 @@
 //! suffixed spelling is a table entry of its own rather than something the
 //! generic suffix rule could work out.
 
-use super::{ATT_ONLY, Def, INTEL_ONLY, ModRm, Op, PLUSREG, Tbl, WAIT, add, d};
+use super::{ATT_ONLY, Def, INTEL_ONLY, ModRm, NO66, Op, PLUSREG, Tbl, WAIT, add, d};
 
 /// A memory form: the operand width, then the opcode and `/digit`.
 type MemForm = (u8, u8, u8);
@@ -42,7 +42,9 @@ fn family(
             .copied()
             .filter(|f| f.0 == w)
             .collect::<Vec<_>>();
-        add(t, name, mem_rows(&rows));
+        // Intel syntax says the width with a size keyword instead.
+        let rows = mem_rows(&rows).into_iter().map(|r| r.flags(ATT_ONLY)).collect();
+        add(t, name, rows);
     }
 }
 
@@ -226,15 +228,13 @@ pub fn install(t: &mut Tbl) {
         ("fcmovnbe", [0xdb, 0xd0]),
         ("fcmovnu", [0xdb, 0xd8]),
     ] {
-        add(
-            t,
-            mnem,
-            vec![
-                st(base),
-                d(vec![Op::Fixed("st"), Op::St], &base, ModRm::None, 0).flags(PLUSREG),
-                d(vec![], &[base[0], base[1] + 1], ModRm::None, 0),
-            ],
-        );
+        let mut defs = vec![d(vec![Op::Fixed("st"), Op::St], &base, ModRm::None, 0).flags(PLUSREG)];
+        // The conditional moves always name both registers.
+        if !mnem.starts_with("fcmov") {
+            defs.push(st(base));
+            defs.push(d(vec![], &[base[0], base[1] + 1], ModRm::None, 0));
+        }
+        add(t, mnem, defs);
     }
     add(
         t,
@@ -260,6 +260,11 @@ pub fn install(t: &mut Tbl) {
     ] {
         let flags = if wait { WAIT } else { 0 };
         let mut defs = vec![d(vec![Op::M(width)], &[op], ModRm::Ext(ext), 0).flags(flags)];
+        // The word forms may be written with the `w` suffix, which asks for
+        // no prefix: `fnstcww`.
+        if width == 2 {
+            defs.push(d(vec![Op::M(2)], &[op], ModRm::Ext(ext), 16).flags(flags | NO66 | ATT_ONLY));
+        }
         if mnem.ends_with("stsw") {
             defs.push(d(vec![Op::Fixed("ax")], &[0xdf, 0xe0], ModRm::None, 0).flags(flags));
         }

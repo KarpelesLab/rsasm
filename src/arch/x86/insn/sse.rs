@@ -16,7 +16,7 @@
 //! is why `avx.rs` can mirror these rows almost mechanically.
 
 use super::mmx::{PACKED_BINARY, SHIFT_IMM};
-use super::{Def, ModRm, Op, Tbl, Vk, add, d};
+use super::{ATT_ONLY, Def, ModRm, NO66, Op, Tbl, Vk, add, d};
 
 /// The four floating-point flavours: name suffix, mandatory prefix, and the
 /// width of a memory operand (a scalar form reads one element, not a vector).
@@ -226,6 +226,21 @@ fn install_moves(t: &mut Tbl) {
                 0,
             )
             .pfx(0x66),
+            // Both references also take a 64-bit register, as `movq`.
+            d(
+                vec![Op::V(Vk::Xmm), Op::R(8)],
+                &[0x0f, 0x6e],
+                ModRm::Reg,
+                64,
+            )
+            .pfx(0x66),
+            d(
+                vec![Op::R(8), Op::V(Vk::Xmm)],
+                &[0x0f, 0x7e],
+                ModRm::Reg,
+                64,
+            )
+            .pfx(0x66),
         ],
     );
     // See the note in `mmx.rs` on how AT&T `movq` reaches these rows.
@@ -415,13 +430,16 @@ fn install_conversions(t: &mut Tbl) {
             t,
             mnem,
             vec![
+                // The GPR is 32 bits in every mode without REX.W, 16-bit
+                // mode included, so the size is only for matching.
                 d(
                     vec![Op::V(Vk::Xmm), Op::Rm(4)],
                     &[0x0f, 0x2a],
                     ModRm::Reg,
                     32,
                 )
-                .pfx(pfx),
+                .pfx(pfx)
+                .flags(NO66),
                 d(
                     vec![Op::V(Vk::Xmm), Op::Rm(8)],
                     &[0x0f, 0x2a],
@@ -448,7 +466,8 @@ fn install_conversions(t: &mut Tbl) {
                     ModRm::Reg,
                     32,
                 )
-                .pfx(pfx),
+                .pfx(pfx)
+                .flags(NO66),
                 d(
                     vec![Op::R(8), Op::Vm(Vk::Xmm, memw)],
                     &[0x0f, op],
@@ -551,16 +570,20 @@ fn install_integer(t: &mut Tbl) {
         );
     }
 
-    add(
-        t,
-        "pmovmskb",
-        vec![d(vec![Op::R(4), Op::V(Vk::Xmm)], &[0x0f, 0xd7], ModRm::Reg, 0).pfx(0x66)],
-    );
-    for (mnem, pfx, op) in [("movmskps", 0x00u8, 0x50u8), ("movmskpd", 0x66, 0x50)] {
+    // The mask lands in a 32-bit register, which may be written as its
+    // 64-bit whole without asking for REX.W.
+    for (mnem, pfx, op) in [
+        ("pmovmskb", 0x66u8, 0xd7u8),
+        ("movmskps", 0x00, 0x50),
+        ("movmskpd", 0x66, 0x50),
+    ] {
         add(
             t,
             mnem,
-            vec![d(vec![Op::R(4), Op::V(Vk::Xmm)], &[0x0f, op], ModRm::Reg, 0).pfx(pfx)],
+            [4u8, 8]
+                .iter()
+                .map(|&w| d(vec![Op::R(w), Op::V(Vk::Xmm)], &[0x0f, op], ModRm::Reg, 0).pfx(pfx))
+                .collect(),
         );
     }
 
@@ -681,6 +704,13 @@ fn install_integer(t: &mut Tbl) {
                 0,
             )
             .pfx(0x66),
+            d(
+                vec![Op::R(8), Op::V(Vk::Xmm), Op::Imm(1)],
+                &[0x0f, 0xc5],
+                ModRm::Reg,
+                0,
+            )
+            .pfx(0x66),
             // The SSE4.1 form can write memory, which `0F C5` cannot.
             d(
                 vec![Op::M(2), Op::V(Vk::Xmm), Op::Imm(1)],
@@ -777,11 +807,13 @@ fn install_byte_elements(t: &mut Tbl) {
 
 fn install_scalar_bit_ops(t: &mut Tbl) {
     // `crc32` is written with an explicit suffix in AT&T because the suffix
-    // names the *source* width while the destination is a plain GPR.
+    // names the *source* width while the destination is a plain GPR. A word
+    // or doubleword source is read at the operand size, so `crc32w` has a
+    // `66` outside 16-bit mode and `crc32l` in it; a byte source has none.
     for (mnem, src, opcode, opsize) in [
         ("crc32b", 1u8, 0xf0u8, 0u8),
         ("crc32w", 2, 0xf1, 16),
-        ("crc32l", 4, 0xf1, 0),
+        ("crc32l", 4, 0xf1, 32),
         ("crc32q", 8, 0xf1, 64),
     ] {
         let dst = if src == 8 { 8 } else { 4 };
@@ -792,7 +824,8 @@ fn install_scalar_bit_ops(t: &mut Tbl) {
             opsize,
         )
         .pfx(0xf2);
-        add(t, mnem, vec![def.clone()]);
+        // The suffixed spellings are AT&T's.
+        add(t, mnem, vec![def.clone().flags(ATT_ONLY)]);
         add(t, "crc32", vec![def]);
     }
     // The 64-bit destination with a byte source needs REX.W but no `66`.
@@ -803,7 +836,7 @@ fn install_scalar_bit_ops(t: &mut Tbl) {
         64,
     )
     .pfx(0xf2);
-    add(t, "crc32b", vec![crc32bq.clone()]);
+    add(t, "crc32b", vec![crc32bq.clone().flags(ATT_ONLY)]);
     add(t, "crc32", vec![crc32bq]);
 
     for (mnem, op) in [("popcnt", 0xb8u8), ("lzcnt", 0xbd), ("tzcnt", 0xbc)] {

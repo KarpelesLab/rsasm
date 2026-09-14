@@ -12,7 +12,7 @@ use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
 use encode::Prefixes;
-use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op, STRICT_IMM};
+use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
 use reg::RegClass;
 
@@ -232,10 +232,33 @@ fn assemble_inner(
             PrefixKind::Lock => prefixes.lock = true,
             PrefixKind::Rep(r) => prefixes.rep = Some(r),
             PrefixKind::Segment(s) => prefixes.seg = Some(s),
-            // Either size is the mode's own in some mode, where the prefix
-            // asks for nothing; 64-bit addressing needs no `addr64`.
-            PrefixKind::Data(size) => prefixes.data |= (size == 16) != (bits == 16),
-            PrefixKind::Addr(size) => prefixes.addr |= size != bits.min(32) || bits == 64,
+            // A size prefix names the size it switches to, so the mode's own
+            // size is refused as redundant, and long mode has no 32-bit
+            // operand or 16-bit address prefix to write.
+            PrefixKind::Data(size) | PrefixKind::Addr(size) => {
+                let data = matches!(kind, PrefixKind::Data(_));
+                let (native, missing) = if data { (32, 32) } else { (64, 16) };
+                let native = if bits == 64 { native } else { bits };
+                if bits == 64 && size == missing {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` is not available in 64-bit mode"),
+                    );
+                    return None;
+                }
+                if size == native {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` is redundant in {bits}-bit mode"),
+                    );
+                    return None;
+                }
+                if data {
+                    prefixes.data = true;
+                } else {
+                    prefixes.addr = true;
+                }
+            }
         }
         let mut cur = req.cursor();
         if cur.at_end() {
@@ -283,6 +306,15 @@ fn assemble_inner(
         );
         return None;
     };
+    // A `q` suffix names a size only long mode has. (`movq` in 32-bit code
+    // is still the MMX and SSE move.)
+    if bits != 64 && resolved.opsize == Some(64) && resolved.fallback.is_empty() {
+        cx.error(
+            req.mnemonic_span,
+            format!("`{mnemonic}` is only available in 64-bit mode"),
+        );
+        return None;
+    }
 
     // Parse the operand list.
     let cur = req.cursor();
@@ -377,6 +409,21 @@ fn assemble_inner(
     }
     let gcc16 = cx.state.features & CODE16GCC != 0;
     let matches = prefer_default_size(bits, gcc16, stack, matches, &resolved);
+    // A stack instruction with only immediates is the mode's size, and an
+    // immediate that does not fit it is not a reason to pick another one:
+    // `push $0xffffffff` in 64-bit code is an error, not a `pushw`.
+    if stack
+        && resolved.opsize.is_none()
+        && !ops.is_empty()
+        && ops.iter().all(|o| matches!(o.kind, OperandKind::Imm(_)))
+        && matches[0].opsize != default_operand_size(bits, gcc16, stack)
+    {
+        cx.error(
+            req.span,
+            format!("the immediate does not fit `{mnemonic}` at the {bits}-bit mode's size"),
+        );
+        return None;
+    }
     let matches = prefer_evex_when_required(matches, &ops, rounding.is_some());
 
     // A relative branch gets one variant per displacement width, smallest
@@ -389,7 +436,10 @@ fn assemble_inner(
         let mut v: Vec<&Def> = matches
             .iter()
             .copied()
-            .filter(|d| d.ops.first().is_some_and(|o| matches!(o, Op::Rel(_))))
+            .filter(|d| {
+                d.opsize == matches[0].opsize
+                    && d.ops.first().is_some_and(|o| matches!(o, Op::Rel(_)))
+            })
             .collect();
         v.sort_by_key(|d| d.ops[0].width());
         v.dedup_by_key(|d| d.ops[0].width());
@@ -521,6 +571,8 @@ struct Resolved {
     /// Rows to try, unconstrained, when nothing in `defs` matched. See the
     /// note on `movq` in `resolve_mnemonic`.
     fallback: &'static [Def],
+    /// The suffix is on `jmp` or `call`, where it can name the mode's size.
+    branch: bool,
 }
 
 fn suffix_width(c: u8) -> Option<u8> {
@@ -548,6 +600,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
             opsize: Some(64),
             rm_width: None,
             fallback: vector,
+            branch: false,
         });
     }
 
@@ -559,6 +612,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
             opsize: None,
             rm_width: None,
             fallback: &[],
+            branch: false,
         });
     }
     if syntax != Syntax::Att {
@@ -586,6 +640,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
                 opsize: Some(dst * 8),
                 rm_width: Some(src),
                 fallback: &[],
+                branch: false,
             });
         }
     }
@@ -597,12 +652,30 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
         return None;
     }
     let w = suffix_width(last)?;
-    let defs = insn::lookup(&mnemonic[..mnemonic.len() - 1])?;
+    let stem = &mnemonic[..mnemonic.len() - 1];
+    let defs = insn::lookup(stem)?;
+    // On the Intel-style names of the extending moves, GNU as reads the
+    // suffix as the width of the source: `movsxb %al, %ecx`.
+    if matches!(stem, "movzx" | "movsx") {
+        return Some(Resolved {
+            defs,
+            opsize: None,
+            rm_width: Some(w),
+            fallback: &[],
+            branch: false,
+        });
+    }
+    // Only an instruction that comes in more than one size takes a suffix:
+    // `cwtl` and `lodsl` already name theirs, so `cwtll` is no instruction.
+    if defs.iter().all(|d| d.opsize == defs[0].opsize) {
+        return None;
+    }
     Some(Resolved {
         defs,
         opsize: Some(w * 8),
         rm_width: None,
         fallback: &[],
+        branch: matches!(stem, "jmp" | "call"),
     })
 }
 
@@ -659,13 +732,16 @@ fn select<'d>(
             out.push(def);
         }
     }
-    // A suffix that matched nothing may still be part of a symbol-like
-    // mnemonic; without one, fall back to the unconstrained set.
-    if out.is_empty() && resolved.opsize.is_some() && resolved.rm_width.is_none() {
+    // A relative `jmp` or `call` has no operand size of its own to match, but
+    // takes the suffix of the mode's: `calll` in 32-bit code, `callq` in
+    // 64-bit code. Any other suffix on an instruction without sizes is
+    // refused, as GNU as refuses it.
+    let branch_suffix = matches!((resolved.opsize, bits), (Some(32), 32) | (Some(64), 64));
+    if out.is_empty() && resolved.branch && branch_suffix {
         for def in defs {
             if def.ops.len() == ops.len()
                 && available(cx, bits, def)
-                && def.opsize == 0
+                && matches!(def.ops.first(), Some(Op::Rel(_)))
                 && def
                     .ops
                     .iter()
@@ -731,10 +807,12 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
                         // A 32-bit immediate in a 64-bit operation is
                         // sign-extended to 64 bits, so it must fit as signed.
                         (-(1i64 << 31)..(1i64 << 31)).contains(&v)
-                    } else if def.opsize != 0 && def.flags & STRICT_IMM == 0 {
-                        // The operand of a sized operation is truncated to
-                        // its field: GNU as warns and llvm-mc agrees on the
-                        // bytes, so `movb $0x100, %al` stores zero.
+                    } else if w * 8 == def.opsize {
+                        // An immediate as wide as the operation is truncated
+                        // to it: GNU as warns and llvm-mc agrees on the
+                        // bytes, so `movb $0x100, %al` stores zero. A narrower
+                        // field, like a shift count or the frame size of a
+                        // 32-bit `enter`, has to hold the value.
                         true
                     } else {
                         fits_unsigned_or_signed(v, w)
@@ -749,12 +827,14 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             let OperandKind::Imm(e) = &o.kind else {
                 return false;
             };
-            // The value is taken at the operation's size first, so a 16-bit
-            // `0xffff` is the -1 that fits a sign-extended byte.
+            // A value that fits the operation's size is taken at that size
+            // first, so a 16-bit `0xffff` is the -1 that fits a sign-extended
+            // byte. GNU as also reads anything that fits 32 bits as a 32-bit
+            // value, so `0xffffffff` is -1 to a 16-bit operation too.
             cx.constant(*e).is_some_and(|v| {
                 let v = match def.opsize {
-                    16 => v as i16 as i64,
-                    32 => v as i32 as i64,
+                    16 if (0..=0xffff).contains(&v) => v as i16 as i64,
+                    16 | 32 if (0..=0xffff_ffff).contains(&v) => v as i32 as i64,
                     _ => v,
                 };
                 (-128..=127).contains(&v)
@@ -817,7 +897,7 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
         // Neither reference checks that a string operand names `si` or `di`:
         // the registers only give the address size.
         Op::StrSrc(w) | Op::StrDst(w) => o.is_mem() && o.size_hint.is_none_or(|h| h == w),
-        Op::FarM | Op::Fword => {
+        Op::FarM | Op::Fword | Op::FarDword => {
             let is_mem = match &o.kind {
                 OperandKind::Mem(_) => true,
                 OperandKind::Indirect(inner) => matches!(**inner, OperandKind::Mem(_)),
@@ -826,6 +906,9 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             is_mem
                 && match *pat {
                     Op::Fword => o.size_hint == Some(6),
+                    Op::FarDword => {
+                        o.size_hint == Some(4) && bits != 32 && cx.state.syntax == Syntax::Intel
+                    }
                     _ => o.size_hint.is_none_or(|h| h == 6),
                 }
         }
@@ -892,17 +975,22 @@ fn prefer_default_size<'d>(
     {
         return matches;
     }
-    let default_size: u8 = match bits {
-        64 if stack => 64,
-        16 if !(gcc16 && stack) => 16,
-        _ => 32,
-    };
+    let default_size = default_operand_size(bits, gcc16, stack);
     let mut matches = matches;
     if let Some(pos) = matches.iter().position(|d| d.opsize == default_size) {
         let chosen = matches.remove(pos);
         matches.insert(0, chosen);
     }
     matches
+}
+
+/// The operand size an instruction has when nothing in the source names one.
+fn default_operand_size(bits: u8, gcc16: bool, stack: bool) -> u8 {
+    match bits {
+        64 if stack => 64,
+        16 if !(gcc16 && stack) => 16,
+        _ => 32,
+    }
 }
 
 /// True when an unsized memory operand leaves more than one width possible.

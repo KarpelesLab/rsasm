@@ -467,6 +467,13 @@ impl OperandParser<'_, '_> {
         let text = self.cx.interner.get(n).to_ascii_lowercase();
         match reg::lookup(&text) {
             Some(r) if r.class == RegClass::St => self.st_index(cur, r),
+            Some(r) if self.cx.state.bits != 64 && r.only_64() => {
+                self.cx.error(
+                    pct.span.to(tok.span),
+                    format!("`%{text}` is only available in 64-bit mode"),
+                );
+                None
+            }
             Some(r) => Some(r),
             None => {
                 self.cx
@@ -604,7 +611,7 @@ impl OperandParser<'_, '_> {
         // A bare register.
         if let TokKind::Ident(n) = cur.peek().kind {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
-            if let Some(r) = reg::lookup(&text) {
+            if let Some(r) = reg::lookup_in_mode(&text, self.cx.state.bits) {
                 cur.advance();
                 let r = if r.class == RegClass::St {
                     self.st_index(cur, r)?
@@ -791,7 +798,7 @@ impl OperandParser<'_, '_> {
         // `reg` or `reg*scale`
         if let TokKind::Ident(n) = cur.peek().kind {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
-            if let Some(r) = reg::lookup(&text) {
+            if let Some(r) = reg::lookup_in_mode(&text, self.cx.state.bits) {
                 let tok = cur.advance();
                 if negated {
                     self.cx.error(
@@ -892,7 +899,7 @@ impl OperandParser<'_, '_> {
             && let TokKind::Ident(n) = cur.nth(2).kind
         {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
-            if let Some(r) = reg::lookup(&text) {
+            if let Some(r) = reg::lookup_in_mode(&text, self.cx.state.bits) {
                 let tok = cur.peek();
                 if !matches!(v, 1 | 2 | 4 | 8) {
                     self.cx.error(tok.span, "scale must be 1, 2, 4 or 8");

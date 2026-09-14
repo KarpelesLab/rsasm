@@ -9,8 +9,8 @@
 //! row's size, so one row serves all three.
 
 use super::{
-    ADDR16, ADDR32, CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, NO66, NOTACC, ONLY64, Op,
-    PLUSREG, STRICT_IMM, Tbl, WIDTHS, add, d, opsize_bits,
+    ADDR16, ADDR32, ATT_ONLY, CONDITIONS, DEF64, Def, IMM64, INTEL_ONLY, ModRm, NO_REX_W, NO64,
+    NO66, NOTACC, ONLY64, Op, PLUSREG, Tbl, WIDTHS, add, d, opsize_bits,
 };
 
 /// `add`-style group: eight instructions sharing one opcode layout.
@@ -122,6 +122,22 @@ fn unary_group(table: &mut Tbl, mnem: &'static str, ext: u8) {
     let mut defs = vec![d(vec![Op::Rm(1)], &[0xf6], ModRm::Ext(ext), 8)];
     for w in WIDTHS {
         defs.push(d(vec![Op::Rm(w)], &[0xf7], ModRm::Ext(ext), opsize_bits(w)));
+    }
+    // In Intel syntax the multiplications and divisions may name the
+    // accumulator they work on as a first operand.
+    if ext >= 4 {
+        for (w, acc) in [(1u8, "al"), (2, "ax"), (4, "eax"), (8, "rax")] {
+            let op = if w == 1 { 0xf6 } else { 0xf7 };
+            defs.push(
+                d(
+                    vec![Op::Fixed(acc), Op::Rm(w)],
+                    &[op],
+                    ModRm::Ext(ext),
+                    opsize_bits(w),
+                )
+                .flags(INTEL_ONLY),
+            );
+        }
     }
     table.insert(mnem, defs);
 }
@@ -633,11 +649,15 @@ fn install_bits(t: &mut Tbl) {
     }
 
     for &(suffix, tttn) in CONDITIONS {
-        let setcc: &'static str = Box::leak(format!("set{suffix}").into_boxed_str());
-        t.insert(
-            setcc,
-            vec![d(vec![Op::Rm(1)], &[0x0f, 0x90 + tttn], ModRm::Ext(0), 8)],
-        );
+        // Both references also take `setneb` and friends in Intel syntax,
+        // whose byte suffix says nothing new.
+        for suffix in [suffix, &format!("{suffix}b")] {
+            let setcc: &'static str = Box::leak(format!("set{suffix}").into_boxed_str());
+            t.insert(
+                setcc,
+                vec![d(vec![Op::Rm(1)], &[0x0f, 0x90 + tttn], ModRm::Ext(0), 8)],
+            );
+        }
         let cmovcc: &'static str = Box::leak(format!("cmov{suffix}").into_boxed_str());
         t.insert(
             cmovcc,
@@ -734,12 +754,7 @@ fn install_stack(t: &mut Tbl) {
 
     t.insert(
         "enter",
-        stack_sizes(
-            |_| vec![Op::Imm(2), Op::Imm(1)],
-            &[0xc8],
-            ModRm::None,
-            STRICT_IMM,
-        ),
+        stack_sizes(|_| vec![Op::Imm(2), Op::Imm(1)], &[0xc8], ModRm::None, 0),
     );
     t.insert("leave", stack_sizes(|_| vec![], &[0xc9], ModRm::None, 0));
 }
@@ -759,10 +774,16 @@ fn install_branches(t: &mut Tbl) {
         0,
     ));
     jmp.push(d(vec![Op::Fword], &[0xff], ModRm::Ext(5), 32));
+    jmp.push(d(vec![Op::FarDword], &[0xff], ModRm::Ext(5), 16));
     jmp.extend(far_direct(0xea));
     t.insert("jmp", jmp);
 
-    let mut call = vec![d(vec![Op::Rel(4)], &[0xe8], ModRm::None, 0)];
+    // `callw` outside 16-bit mode is a 16-bit call, with a 16-bit
+    // displacement and return address. (`jmpw` is refused.)
+    let mut call = vec![
+        d(vec![Op::Rel(4)], &[0xe8], ModRm::None, 0),
+        d(vec![Op::Rel(2)], &[0xe8], ModRm::None, 16).flags(NO64),
+    ];
     call.extend(stack_sizes(
         |w| vec![Op::IndirectRm(w)],
         &[0xff],
@@ -770,6 +791,7 @@ fn install_branches(t: &mut Tbl) {
         0,
     ));
     call.push(d(vec![Op::Fword], &[0xff], ModRm::Ext(3), 32));
+    call.push(d(vec![Op::FarDword], &[0xff], ModRm::Ext(3), 16));
     call.extend(far_direct(0x9a));
     t.insert("call", call);
 
@@ -781,22 +803,14 @@ fn install_branches(t: &mut Tbl) {
     }
 
     let mut ret = stack_sizes(|_| vec![], &[0xc3], ModRm::None, 0);
-    ret.extend(stack_sizes(
-        |_| vec![Op::Imm(2)],
-        &[0xc2],
-        ModRm::None,
-        STRICT_IMM,
-    ));
+    ret.extend(stack_sizes(|_| vec![Op::Imm(2)], &[0xc2], ModRm::None, 0));
     t.insert("ret", ret);
     let mut lret = rex_sizes(|_| vec![], &[0xcb], ModRm::None, 0);
-    lret.extend(rex_sizes(
-        |_| vec![Op::Imm(2)],
-        &[0xca],
-        ModRm::None,
-        STRICT_IMM,
-    ));
+    lret.extend(rex_sizes(|_| vec![Op::Imm(2)], &[0xca], ModRm::None, 0));
     t.insert("lret", lret.clone());
-    t.insert("retf", lret);
+    t.insert("retf", lret.clone());
+    // Intel syntax names the 64-bit far return too.
+    t.insert("retfq", lret.into_iter().filter(|r| r.opsize == 64).collect());
     t.insert("iret", rex_sizes(|_| vec![], &[0xcf], ModRm::None, 0));
     for (name, bits) in [("iretw", 16u8), ("iretd", 32), ("iretq", 64)] {
         let rows = t["iret"]
@@ -912,7 +926,18 @@ fn install_strings(t: &mut Tbl) {
         t.insert(stem, all);
         for (suffix, bits) in [("b", 8u8), ("w", 16), ("l", 32), ("d", 32), ("q", 64)] {
             let name: &'static str = Box::leak(format!("{stem}{suffix}").into_boxed_str());
-            add(t, name, rows(bits));
+            // With operands, the `l` spelling is AT&T's and the `d` one
+            // Intel's.
+            let only = match suffix {
+                "l" => ATT_ONLY,
+                "d" => INTEL_ONLY,
+                _ => 0,
+            };
+            let rows = rows(bits)
+                .into_iter()
+                .map(|r| if r.ops.is_empty() { r } else { r.flags(only) })
+                .collect();
+            add(t, name, rows);
         }
     }
 
@@ -947,12 +972,13 @@ fn install_strings(t: &mut Tbl) {
             bits,
         ));
     }
-    // AT&T may leave the accumulator implied when a suffix names its size.
+    // AT&T may leave the accumulator implied.
     for (w, bits) in [(0u8, 8u8), (1, 16), (1, 32)] {
-        in_.push(d(vec![Op::Imm(1)], &[0xe4 + w], ModRm::None, bits));
-        in_.push(d(vec![Op::Dx], &[0xec + w], ModRm::None, bits));
-        out.push(d(vec![Op::Imm(1)], &[0xe6 + w], ModRm::None, bits));
-        out.push(d(vec![Op::Dx], &[0xee + w], ModRm::None, bits));
+        let implied = |ops: Vec<Op>, op: u8| d(ops, &[op + w], ModRm::None, bits).flags(ATT_ONLY);
+        in_.push(implied(vec![Op::Imm(1)], 0xe4));
+        in_.push(implied(vec![Op::Dx], 0xec));
+        out.push(implied(vec![Op::Imm(1)], 0xe6));
+        out.push(implied(vec![Op::Dx], 0xee));
     }
     t.insert("in", in_);
     t.insert("out", out);
@@ -976,13 +1002,30 @@ fn install_system(t: &mut Tbl) {
         ("sidt", 1),
         ("lgdt", 2),
         ("lidt", 3),
-        ("invlpg", 7),
     ] {
+        // AT&T may give these a suffix, which then asks for its operand size
+        // prefix; the CPU only cares in 16-bit mode, where it chooses a
+        // 24-bit base.
+        let row = |bits: u8, flags: u32| {
+            d(vec![Op::M(0)], &[0x0f, 0x01], ModRm::Ext(ext), bits).flags(flags)
+        };
         t.insert(
             mnem,
-            vec![d(vec![Op::M(0)], &[0x0f, 0x01], ModRm::Ext(ext), 0)],
+            vec![
+                row(0, 0),
+                row(16, NO64),
+                row(32, NO64),
+                row(64, ONLY64 | NO_REX_W),
+            ],
         );
+        // Both references take the word spelling in Intel syntax as well.
+        let name: &'static str = Box::leak(format!("{mnem}w").into_boxed_str());
+        t.insert(name, vec![row(16, NO64)]);
     }
+    t.insert(
+        "invlpg",
+        vec![d(vec![Op::M(0)], &[0x0f, 0x01], ModRm::Ext(7), 0)],
+    );
     t.insert("smsw", selector_rows(&[0x0f, 0x01], 4, true));
     t.insert("lmsw", selector_rows(&[0x0f, 0x01], 6, false));
 
@@ -1022,14 +1065,37 @@ fn install_system(t: &mut Tbl) {
         ("xrstor", &[0x0f, 0xae], 5),
         ("xsaveopt", &[0x0f, 0xae], 6),
         ("clflush", &[0x0f, 0xae], 7),
+        ("xrstors", &[0x0f, 0xc7], 3),
+        ("xsavec", &[0x0f, 0xc7], 4),
+        ("xsaves", &[0x0f, 0xc7], 5),
     ] {
-        t.insert(mnem, vec![d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 0)]);
+        let mut defs = vec![d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 0)];
+        // The state saves have 64-bit forms, `xsaveq` in AT&T, which differ
+        // by REX.W.
+        if ext != 7 {
+            defs.push(d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 64).flags(ONLY64));
+        }
+        t.insert(mnem, defs);
     }
 
     t.insert(
         "ud1",
         all_widths(|w| vec![Op::R(w), Op::Rm(w)], &[0x0f, 0xb9], ModRm::Reg),
     );
+
+    // Add with carry or overflow only, whose mandatory prefix is not an
+    // operand size override: 32 bits in every mode, 64 with REX.W.
+    for (mnem, pfx) in [("adcx", 0x66u8), ("adox", 0xf3)] {
+        t.insert(
+            mnem,
+            vec![
+                d(vec![Op::R(4), Op::Rm(4)], &[0x0f, 0x38, 0xf6], ModRm::Reg, 32)
+                    .pfx(pfx)
+                    .flags(NO66),
+                d(vec![Op::R(8), Op::Rm(8)], &[0x0f, 0x38, 0xf6], ModRm::Reg, 64).pfx(pfx),
+            ],
+        );
+    }
 }
 
 /// A selector operand: a word in memory, or a register of any size, whose
@@ -1039,6 +1105,8 @@ fn selector_rows(opcode: &[u8], ext: u8, stores: bool) -> Vec<Def> {
     if stores {
         defs.extend(all_widths(|w| vec![Op::R(w)], opcode, ModRm::Ext(ext)));
     } else {
+        // Unsized, so that a `w` suffix is one the instruction can take.
+        defs.insert(0, d(vec![Op::Rm(2)], opcode, ModRm::Ext(ext), 0));
         defs.push(d(vec![Op::R(2)], opcode, ModRm::Ext(ext), 16).flags(NO66));
     }
     defs
@@ -1085,6 +1153,15 @@ fn install_misc(t: &mut Tbl) {
     ] {
         t.insert(mnem, vec![d(vec![], bytes, ModRm::None, 0)]);
     }
+    // `sysretl` returns to 32-bit code and `sysretq` to 64-bit code.
+    if let Some(defs) = t.get_mut("sysret") {
+        defs.push(d(vec![], &[0x0f, 0x07], ModRm::None, 32).flags(NO66));
+        defs.push(d(vec![], &[0x0f, 0x07], ModRm::None, 64).flags(ONLY64));
+    }
+    t.insert(
+        "sysretq",
+        vec![d(vec![], &[0x0f, 0x07], ModRm::None, 64).flags(ONLY64)],
+    );
     t.insert("salc", vec![d(vec![], &[0xd6], ModRm::None, 0).flags(NO64)]);
     t.insert(
         "swapgs",

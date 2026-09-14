@@ -246,6 +246,28 @@ pub fn lookup(name: &str) -> Option<Reg> {
     tables().by_name.get(name).copied()
 }
 
+/// Looks up a register that exists in `bits`-bit mode. Outside 64-bit mode
+/// the registers only REX, EVEX or long mode can reach are not registers at
+/// all to GNU as: an unknown name in AT&T syntax, and an ordinary symbol in
+/// Intel syntax.
+pub fn lookup_in_mode(name: &str, bits: u8) -> Option<Reg> {
+    lookup(name).filter(|r| bits == 64 || !r.only_64())
+}
+
+impl Reg {
+    /// True for a register that only exists in 64-bit mode.
+    pub fn only_64(&self) -> bool {
+        match self.class {
+            RegClass::Gpr => self.size == 8 || self.num >= 8 || self.rex_required,
+            RegClass::Rip => self.size == 8,
+            RegClass::Xmm | RegClass::Ymm | RegClass::Zmm | RegClass::Control | RegClass::Debug => {
+                self.num >= 8
+            }
+            _ => false,
+        }
+    }
+}
+
 /// `st(n)`: the x87 stack register `n` places from the top.
 pub fn st(n: u8) -> Option<Reg> {
     (n < 8).then_some(Reg {

@@ -152,7 +152,7 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             };
         }
         match *pat {
-            Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) | Op::FarM | Op::Fword
+            Op::Rm(_) | Op::M(_) | Op::IndirectRm(_) | Op::FarM | Op::Fword | Op::FarDword
                 if roles.rm.is_none() =>
             {
                 roles.rm = Some(o)
@@ -349,6 +349,17 @@ pub fn encode(
                 return None;
             }
         },
+        // GNU as drops a segment prefix written before a direct `jmp` or
+        // `call`, which have no memory operand for it to apply to. It keeps
+        // `cs` and `ds`, which double as branch hints, and keeps everything
+        // before a conditional jump.
+        None if prefixes.seg.is_some_and(|p| p != 0x2e && p != 0x3e)
+            && (matches!(def.ops.as_slice(), [Op::Far])
+                || matches!(def.ops.as_slice(), [Op::Rel(_)])
+                    && matches!(def.opcode.as_slice(), [0xe8 | 0xe9 | 0xeb])) =>
+        {
+            None
+        }
         None => prefixes.seg,
     };
     if let Some(p) = seg_override {
@@ -358,12 +369,11 @@ pub fn encode(
     // Address-size override: the other address size the mode can reach, as
     // 32-bit addressing in 64-bit mode, or an implicit counter register of
     // the other size.
-    let mut addr_override = prefixes.addr
-        || match bits {
-            16 => def.flags & ADDR32 != 0,
-            32 => def.flags & ADDR16 != 0,
-            _ => def.flags & ADDR32 != 0,
-        };
+    let mut addr_override = match bits {
+        16 => def.flags & ADDR32 != 0,
+        32 => def.flags & ADDR16 != 0,
+        _ => def.flags & ADDR32 != 0,
+    };
     if let Some(m) = &mem {
         let uses_regs = m.base.is_some() || m.index.is_some();
         let native = bits / 8;
@@ -382,7 +392,11 @@ pub fn encode(
             }
         }
     }
-    if addr_override {
+    if addr_override && prefixes.addr {
+        cx.error(span, "the address size prefix is already implied by the operands");
+        return None;
+    }
+    if addr_override || prefixes.addr {
         bytes.push(0x67);
     }
 
@@ -434,6 +448,10 @@ pub fn encode(
                     32 => bits == 16,
                     _ => false,
                 };
+            if wants_66 && prefixes.data {
+                cx.error(span, "the operand size prefix is already implied by the operands");
+                return None;
+            }
             if wants_66 || prefixes.data {
                 bytes.push(0x66);
             }
@@ -691,9 +709,10 @@ pub fn encode(
             FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
         } else if width != 4 {
             FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
-        } else if bits == 64 {
+        } else if bits == 64 && mem.as_ref().is_none_or(|m| m.addr_size == 8) {
             // A 64-bit-mode displacement is sign-extended to the address
-            // width, so the linker has to range-check it as signed.
+            // width, so the linker has to range-check it as signed. With
+            // 32-bit addressing it is an unsigned address instead.
             FixupKind::data(4).with_reloc(abi.abs32_signed())
         } else if abi == reloc::Abi::I386 && names_got(cx, e) {
             got_distance(offset as u32)
@@ -793,10 +812,11 @@ fn got_load_is_relaxable(def: &Def, mem: Option<&Mem>) -> bool {
 }
 
 /// The number of the segment register an address uses by default: `ss` (2)
-/// when the base is `sp` or `bp` in any width, `ds` (3) otherwise.
+/// when the base is `sp` or `bp` in any width, `ds` (3) otherwise. `r12` and
+/// `r13` share their low bits but not the default.
 fn default_segment(m: &Mem) -> u8 {
     match m.base {
-        Some(b) if !m.rip_relative && matches!(b.num & 7, 4 | 5) => 2,
+        Some(b) if !m.rip_relative && matches!(b.num, 4 | 5) => 2,
         _ => 3,
     }
 }
@@ -1007,7 +1027,15 @@ fn encode_rm(
         return Some(());
     }
 
-    let disp_const = m.disp.and_then(|e| cx.constant(e));
+    // With 32-bit addressing a displacement that fits 32 bits is read as
+    // signed, so `-1` and `0xffffffff` are one and the same byte.
+    let disp_const = m.disp.and_then(|e| cx.constant(e)).map(|v| {
+        if m.addr_size == 4 && (-(1 << 31)..=0xffff_ffff).contains(&v) {
+            v as i32 as i64
+        } else {
+            v
+        }
+    });
     let has_disp = m.disp.is_some();
     let symbolic_disp = has_disp && disp_const.is_none();
 
@@ -1134,10 +1162,12 @@ fn encode_rm16(
         cx.error(m.span, "16-bit addressing has no scale factor");
         return None;
     }
-    // The displacement is taken modulo 2^16, as the CPU adds it. `bp` alone
-    // has no form without one.
+    // A displacement that fits 16 bits is read as a signed word, so `0xffff`
+    // is the byte -1; a wider one is truncated to a full word, as GNU as
+    // does with a warning. `bp` alone has no form without one.
     let disp = match disp_const {
         None if m.disp.is_some() => 2,
+        Some(v) if !(-0x8000..=0xffff).contains(&v) => 2,
         _ => {
             let v = disp_const.unwrap_or(0) as i16 as i64;
             if v == 0 && rm != 0b110 {

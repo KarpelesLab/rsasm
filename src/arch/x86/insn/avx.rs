@@ -346,6 +346,20 @@ fn install_moves(t: &mut Tbl) {
                 128,
                 false,
             ),
+            vex(
+                vec![Op::V(Vk::Xmm), Op::R(8)],
+                0x66,
+                &[0x0f, 0x6e],
+                128,
+                true,
+            ),
+            vex(
+                vec![Op::R(8), Op::V(Vk::Xmm)],
+                0x66,
+                &[0x0f, 0x7e],
+                128,
+                true,
+            ),
         ],
     );
     add(
@@ -496,7 +510,10 @@ fn install_moves(t: &mut Tbl) {
             add(
                 t,
                 mnem,
-                vec![vex(vec![Op::R(4), Op::V(vk(l))], pfx, esc, l, false)],
+                vec![
+                    vex(vec![Op::R(4), Op::V(vk(l))], pfx, esc, l, false),
+                    vex(vec![Op::R(8), Op::V(vk(l))], pfx, esc, l, false),
+                ],
             );
         }
     }
