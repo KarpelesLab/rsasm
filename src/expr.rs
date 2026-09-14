@@ -634,6 +634,17 @@ impl<'a> ExprParser<'a> {
             let rhs = self.parse_bp(cur, prec + 1)?;
             let span = self.arena.span(lhs).to(self.arena.span(rhs));
             lhs = self.arena.alloc(ExprKind::Binary(op, lhs, rhs), span);
+            // GNU as, and llvm-mc with it, make a true comparison -1 rather
+            // than 1 (`!`, `&&` and `||` still give 1); NASM, the Renesas
+            // assemblers and the 8-bit ones give 1.
+            if self.dialect == Dialect::Gas
+                && matches!(
+                    op,
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+                )
+            {
+                lhs = self.arena.alloc(ExprKind::Unary(UnOp::Neg, lhs), span);
+            }
         }
         Some(self.parse_postfix(cur, lhs))
     }
