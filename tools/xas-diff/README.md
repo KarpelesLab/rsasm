@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502, 8080 and 8051.
+MSP430, and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm).
 
@@ -30,6 +30,9 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `rl78` | `rl78` | `rl78-elf-as` |
 | `rx` | `rx` | `rx-elf-as` (code is in section `P`) |
 | `sh` / `shl` | `sh` / `shl` | `sh-elf-as` / `sh-elf-as -little` |
+| `msp430` / `msp430x` | `msp430` / `msp430x` | `msp430-elf-as -mcpu=430` / `-mcpu=430x` |
+| `msp430xv2` | `msp430xv2` | `msp430-elf-as -mcpu=430xv2`, on `msp430.txt` |
+| `msp430-poly` / `msp430x-poly` | `msp430` / `msp430x` | the same with `-mP`, for the polymorphic branches |
 | `rl78-ccrl` | `rl78`, CC-RL syntax | `rl78-elf-as`, on the GNU half of each pair |
 | `rh850-ccrh` | `rh850`, CC-RH syntax | `v850-elf-as -mv850e3v5`, likewise |
 | `rx-ccrx` | `rx`, CC-RX syntax | `rx-elf-as`, likewise |
@@ -66,6 +69,10 @@ They leave out what rsasm deliberately writes differently:
 - A conditional branch on RX or V850 that is left to the linker: GNU as keeps
   it short, trusting the linker to reach; rsasm takes the longest form (see
   `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+- On MSP430, what the header of `msp430-relocs.txt` lists: the addend GNU as
+  gives the last `R_MSP430_SYM_DIFF` in a section, where `.section .data`
+  puts its `__crt0_movedata` among the undefined symbols, and a number
+  `.set` after its use, which GNU as relocates against the symbol.
 | `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
 
 ## ARM
