@@ -316,8 +316,13 @@ impl Asm<'_, '_> {
             }
             Logic(base) => self.logic(&ops, base, sz.unwrap_or(Sz::W)),
             Eor => self.eor(&ops, sz.unwrap_or(Sz::W)),
+            // GNU as reads `dr:dq` as two operands, and so takes them written
+            // with a comma as well.
+            MulDiv(w, div, signed) if sz == Some(Sz::L) => {
+                self.muldiv(&pair_up(ops), w, div, signed, Sz::L)
+            }
             MulDiv(w, div, signed) => self.muldiv(&ops, w, div, signed, sz.unwrap_or(Sz::W)),
-            DivL(signed) => self.divl(&ops, signed),
+            DivL(signed) => self.divl(&pair_up(ops), signed),
             Chk => {
                 let size = sz.unwrap_or(Sz::W);
                 let (src, dst) = self.two(&ops)?;
@@ -562,16 +567,28 @@ impl Asm<'_, '_> {
             Mode::Usp => Some(rid::USP),
             _ => None,
         };
-        let (op, r, id, span) = match (ctl(a), ctl(b)) {
-            (Some(id), _) if reg(b).is_some() => (0x4e7a, reg(b)?, id, a.span),
-            (_, Some(id)) if reg(a).is_some() => (0x4e7b, reg(a)?, id, b.span),
-            _ => {
-                return self.err(
-                    a.span.to(b.span),
-                    "`movec` moves between a control register and a general register",
-                );
-            }
+        // GNU as also takes the register's 12-bit code as a number.
+        let (op, r, ctl_op) = match (&a.mode, &b.mode) {
+            (Mode::Imm(..), _) if reg(b).is_some() => (0x4e7a, reg(b)?, a),
+            (_, Mode::Imm(..)) if reg(a).is_some() => (0x4e7b, reg(a)?, b),
+            _ => match (ctl(a), ctl(b)) {
+                (Some(_), _) if reg(b).is_some() => (0x4e7a, reg(b)?, a),
+                (_, Some(_)) if reg(a).is_some() => (0x4e7b, reg(a)?, b),
+                _ => {
+                    return self.err(
+                        a.span.to(b.span),
+                        "`movec` moves between a control register and a general register",
+                    );
+                }
+            },
         };
+        if matches!(ctl_op.mode, Mode::Imm(..)) {
+            let code = self.constant(ctl_op, 0, 0xfff, "control register code")? as u16;
+            let mut bytes = (op as u16).to_be_bytes().to_vec();
+            bytes.extend_from_slice(&(r << 12 | code).to_be_bytes());
+            return Some(vec![Variant::new(bytes)]);
+        }
+        let (id, span) = (ctl(ctl_op)?, ctl_op.span);
         let Some(code) = super::reg::movec(id, self.cpu.ctrl) else {
             let cpu = self.cpu.describe();
             return self.err(
@@ -1041,11 +1058,18 @@ impl Asm<'_, '_> {
         mspan: Span,
     ) -> Option<Vec<Variant>> {
         let op = self.single(ops)?;
+        // GNU's `jra` and `jbsr` take any control address as well, as `jmp`
+        // and `jsr`.
+        if jb && cond <= 1 && size.is_none() && !matches!(op.mode, Mode::Abs(_)) {
+            self.check(op, CONTROL, "target")?;
+            let p = self.low(op, Sz::L)?;
+            return Some(build(if cond == 0 { 0x4ec0 } else { 0x4e80 }, vec![p]));
+        }
         let bsize = match size {
             Some('s' | 'b') => BranchSize::Short,
             Some('w') => BranchSize::Word,
             Some('l') => {
-                self.need(self.long_branches(), mspan, "a 32-bit branch")?;
+                self.need(super::long_branches(cond), mspan, "a 32-bit branch")?;
                 BranchSize::Long
             }
             // GNU as keeps an unsized `bra` at 16 bits and relaxes only its
@@ -1064,7 +1088,15 @@ impl Asm<'_, '_> {
         let Mode::Imm(e, span) = imm.mode else {
             return self.err(imm.span, "`link` needs an immediate displacement");
         };
-        let long = match (sz, self.cx.constant(e)) {
+        // A displacement is a 32-bit number to GNU as, so `#$ffffffff` is -1.
+        let constant = self.cx.constant(e).map(|v| {
+            if (0x8000_0000..=0xffff_ffff).contains(&v) {
+                v - (1 << 32)
+            } else {
+                v
+            }
+        });
+        let long = match (sz, constant) {
             (Some(Sz::L), _) => true,
             (Some(_), _) => false,
             // Too wide for `link.w`: GNU as uses the 68020's `link.l`.
@@ -1081,25 +1113,37 @@ impl Asm<'_, '_> {
             let part = Part::words(bytes, fixups);
             return Some(build(0x4808 | n, vec![part]));
         }
-        let (bytes, fixups) = match self.cx.constant(e) {
+        let (bytes, fixups) = match constant {
             Some(v) if !(-32768..=32767).contains(&v) => {
                 return self.err(
                     span,
                     format!("`link.w` displacement {v} does not fit in a word"),
                 );
             }
-            _ => encode::immediate(self.cx, e, Sz::W, span)?,
+            Some(v) => (((v as i16) as u16).to_be_bytes().to_vec(), Vec::new()),
+            None => encode::immediate(self.cx, e, Sz::W, span)?,
         };
         let part = Part::words(bytes, fixups);
         Some(build(0x4e50 | n, vec![part]))
     }
 }
 
-impl Asm<'_, '_> {
-    /// The CPUs with 32-bit branches, as a mask for [`Asm::need`].
-    fn long_branches(&self) -> u32 {
-        M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B
+/// `ea,dh,dl` as `ea,dh:dl`.
+fn pair_up(mut ops: Vec<Operand>) -> Vec<Operand> {
+    if let [_, h, l] = ops.as_slice()
+        && let (Mode::DReg(h), Mode::DReg(l)) = (&h.mode, &l.mode)
+        && ops[1].brace.is_empty()
+    {
+        let span = ops[1].span.to(ops[2].span);
+        let mode = Mode::Pair(*h, *l);
+        ops.truncate(1);
+        ops.push(Operand {
+            mode,
+            span,
+            brace: Vec::new(),
+        });
     }
+    ops
 }
 
 fn mask_bytes(mask: u16, reverse: bool) -> Part {

@@ -157,6 +157,7 @@ fn fits_place(place: u8, v: i64) -> bool {
 
 struct Matcher<'c, 'a> {
     cx: &'c AsmCtx<'a>,
+    cpu: Cpu,
 }
 
 impl Matcher<'_, '_> {
@@ -200,6 +201,20 @@ impl Matcher<'_, '_> {
             b'q' => match g {
                 DReg(_) | Ind(_) | Inc(_) | Dec(_) => true,
                 Disp { .. } => !g.pc(),
+                _ => false,
+            },
+            // ColdFire's `move` operands.
+            b'm' => matches!(g, DReg(_) | AReg(_) | Ind(_) | Inc(_) | Dec(_)),
+            b'n' => matches!(g, Disp { .. }),
+            b'o' => matches!(g, Full { .. } | Abs) || g.imm(),
+            b'Q' => self
+                .constant(op)
+                .is_some_and(|v| (1..=8).contains(&(v as u32))),
+            b'J' => match g {
+                Ctl(id) => {
+                    (rid::USP..=rid::MBO).contains(&id)
+                        && super::reg::movec(id, self.cpu.ctrl).is_some()
+                }
                 _ => false,
             },
             b'v' => match g {
@@ -332,7 +347,7 @@ pub fn assemble(
     }
     let mut ok_arch = 0;
     let mut chosen = None;
-    let m = Matcher { cx };
+    let m = Matcher { cx, cpu };
     for form in forms {
         let args = form.args.as_bytes();
         // The coprocessor number of an FPU instruction is an operand GNU as
@@ -379,6 +394,81 @@ pub fn assemble(
         coproc_branch: None,
     }
     .encode(form, &ops)
+}
+
+/// On a ColdFire, whether what the hand-written encoders wrote for `name`
+/// (GNU's spelling of the mnemonic, size letter included) is an instruction
+/// the CPU has.
+///
+/// Those encoders choose among the 68000's forms, and ColdFire dropped many
+/// of them — `addi` to memory, `movem` with `-(An)`, a shift of memory. So
+/// the first word written, and the second where the form has one, must match
+/// one of GNU's ColdFire forms of the mnemonic under its mask, with the
+/// operands that form takes.
+pub fn coldfire_check(
+    cx: &mut AsmCtx<'_>,
+    cpu: Cpu,
+    name: &str,
+    written: &str,
+    variant: &Variant,
+    req: &InsnRequest<'_>,
+) -> Option<()> {
+    let name = match table::CF_ALIASES.binary_search_by(|(a, _)| (*a).cmp(name)) {
+        Ok(i) => table::CF_ALIASES[i].1,
+        Err(_) => name,
+    };
+    let lo = table::CF_FORMS.partition_point(|x| x.form.name < name);
+    let hi = table::CF_FORMS.partition_point(|x| x.form.name <= name);
+    if lo == hi {
+        // A spelling of rsasm's own, which the CPU check has already let by.
+        return Some(());
+    }
+    let parsed = super::operand::parse_list(cx, &req.cursor())?;
+    let mut ops = Vec::new();
+    for op in parsed {
+        flatten(op, &mut ops);
+    }
+    let word = |i: usize| {
+        variant
+            .bytes
+            .get(2 * i..2 * i + 2)
+            .map_or(0, |b| u16::from_be_bytes([b[0], b[1]]) as u32)
+    };
+    let written_words = (word(0) << 16) | word(1);
+    let m = Matcher { cx, cpu };
+    let fits = table::CF_FORMS[lo..hi].iter().any(|cf| {
+        let form = &cf.form;
+        let mask = if form.words == 2 {
+            cf.mask
+        } else {
+            cf.mask & 0xffff_0000
+        };
+        let args = form.args.as_bytes();
+        form.arch & cpu.arch != 0
+            && written_words & mask == form.opcode & mask
+            && args.len() / 2 == ops.len()
+            && args
+                .chunks(2)
+                .zip(&ops)
+                .all(|(kp, op)| m.fits(kp[0], kp[1], op))
+    });
+    if fits {
+        return Some(());
+    }
+    let what: Vec<&str> = ops.iter().map(Operand::describe).collect();
+    let with = if what.is_empty() {
+        String::new()
+    } else {
+        format!(" with {}", join(&what))
+    };
+    cx.error(
+        req.span,
+        format!(
+            "`{written}`{with} is not an instruction a {} has",
+            cpu.describe()
+        ),
+    );
+    None
 }
 
 fn join(items: &[&str]) -> String {

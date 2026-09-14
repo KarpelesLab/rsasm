@@ -132,8 +132,10 @@ ENTRY_RE = re.compile(
 ALIAS_RE = re.compile(r'\{\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,?\s*\}')
 
 
-def opcodes(src):
-    """The forms and aliases of opcodes/m68k-opc.c, in table order."""
+def opcodes(src, with_match=False):
+    """The forms and aliases of opcodes/m68k-opc.c, in table order: each form
+    as (name, opcode, words, args, arch), with its match mask after the
+    opcode if `with_match`."""
     text = read(os.path.join(src, "opcodes/m68k-opc.c"))
     split = text.index("m68k_opcode_alias m68k_opcode_aliases")
     forms = []
@@ -154,7 +156,10 @@ def opcodes(src):
             args, words = args[1:], 2
         else:
             words = 2 if match & 0xFFFF else 1
-        forms.append((name, opcode, words, args, arch_mask(arch)))
+        if with_match:
+            forms.append((name, opcode, match, words, args, arch_mask(arch)))
+        else:
+            forms.append((name, opcode, words, args, arch_mask(arch)))
     aliases = [(m.group(1), m.group(2)) for m in ALIAS_RE.finditer(text[split:])]
     return forms, aliases
 
@@ -364,6 +369,39 @@ def main():
     out("pub const HAND_ARCH: &[(&str, u32)] = &[\n")
     for name in sorted(hand):
         out("    (%s, %#x),\n" % (rust_string(name), hand[name] & ~MAC))
+    out("];\n\n")
+
+    cf = ARCH_BITS["mcfisa_a"] | ARCH_BITS["mcfisa_aa"] | ARCH_BITS["mcfisa_b"] \
+        | ARCH_BITS["mcfisa_c"] | ARCH_BITS["mcfusp"] | ARCH_BITS["mcfhwdiv"] | ARCH_BITS["cfloat"]
+    cf_forms = [f for f in opcodes(src, with_match=True)[0]
+                if hand_written(f[0]) and f[5] & cf and not f[5] & MAC]
+    cf_forms.sort(key=lambda f: f[0])
+    cf_names = {f[0] for f in cf_forms}
+    out("/// The ColdFire forms of the mnemonics the hand-written encoders take,\n")
+    out("/// with the mask GNU's disassembler matches them by, sorted by name.\n")
+    out("/// ColdFire lacks many 68000 addressing modes, so what those encoders\n")
+    out("/// write for a ColdFire is checked against these.\n")
+    out("pub const CF_FORMS: &[CfForm] = &[\n")
+    for name, opcode, match, words, args, arch in cf_forms:
+        out(
+            "    cf(%s, %#010x, %#010x, %d, %s, %#x),\n"
+            % (rust_string(name), opcode, match, words, rust_string(args), arch)
+        )
+    out("];\n\n")
+    out("/// A form of [`CF_FORMS`].\n")
+    out("pub struct CfForm {\n")
+    out("    pub form: Form,\n")
+    out("    /// Which bits of [`Form::opcode`] are fixed.\n")
+    out("    pub mask: u32,\n")
+    out("}\n\n")
+    out("const fn cf(name: &'static str, opcode: u32, mask: u32, words: u8, args: &'static str, arch: u32) -> CfForm {\n")
+    out("    CfForm { form: f(name, opcode, words, args, arch), mask }\n")
+    out("}\n\n")
+    out("/// Aliases of the mnemonics in [`CF_FORMS`], sorted by the alias.\n")
+    out("pub const CF_ALIASES: &[(&str, &str)] = &[\n")
+    for alias, primary in sorted(all_aliases):
+        if primary in cf_names:
+            out("    (%s, %s),\n" % (rust_string(alias), rust_string(primary)))
     out("];\n\n")
 
     out("/// Mnemonics that mean another one, sorted by the alias.\n")

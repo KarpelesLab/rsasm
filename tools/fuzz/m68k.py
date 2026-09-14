@@ -591,7 +591,7 @@ class Gen:
         return True
 
 
-def deviates(k, p, op, g):
+def deviates(k, p, op, g, form):
     """Operands where rsasm refuses what GNU as accepts with a warning or
     writes something no one would want, all documented in the backend:
 
@@ -604,6 +604,10 @@ def deviates(k, p, op, g):
     They are left out of generated cases, since a line one assembler rejects
     and the other accepts shifts every later label in its batch."""
     syntax = g.syntax
+    if form.name == "linkw" and op.cls == IMM and (op.value or 0) > 32767:
+        # rsasm's `link.w` takes a signed displacement, where GNU as also
+        # takes 32768 to 65535 as the same bits (with `--all` only).
+        return True
     if op.cls == BIG:
         return not (k in "*~%;@!&$?/<>bpqvwyz|" and p in ("fFxp" if syntax == "vasm" else "fF"))
     if op.cls == BASEPC and not g.wide:
@@ -615,7 +619,8 @@ def deviates(k, p, op, g):
         v = op.value
         return {"T": not 0 <= v <= 15, "t": not 0 <= v <= 7, "k": not -64 <= v <= 63,
                 "x": not (v == -1 or 1 <= v <= 7), "M": not -128 <= v <= 127}.get(k, False) \
-            or (k in "#^" and p == "C" and not 0 <= v <= 127)
+            or (k in "#^" and p == "C" and not 0 <= v <= 127) \
+            or (k == "#" and p == "j" and not 0 <= v <= 4095)
     if k == "B" and op.cls == ABS and not re.match(r"^[a-z]", op.text):
         # A branch to a number: GNU as writes a `DBcc` displacement to one as
         # zero with no relocation, and refuses a word displacement to one out
@@ -625,7 +630,7 @@ def deviates(k, p, op, g):
     if op.cls == IMM and op.value is None:
         # A symbol in a floating-point operand stops GNU as with an internal
         # error.
-        return k in "TtkxM" or (k in "#^" and p in "3C") or p in "fFxp"
+        return k in "TtkxM" or (k in "#^" and p in "3Cj") or p in "fFxp"
     return False
 
 
@@ -740,7 +745,7 @@ def make_case(g, form, forms_of_name, rng, mutate=False, exclusive=False):
             if mutate and ops:
                 i = rng.randrange(len(ops))
                 ops[i] = g.mutant()
-            if any(deviates(k, p, o, g) for (k, p), o in zip(pairs[skip:], ops)):
+            if any(deviates(k, p, o, g, form) for (k, p), o in zip(pairs[skip:], ops)):
                 continue
             if exclusive and not mutate:
                 # No earlier form of the mnemonic may take these operands.

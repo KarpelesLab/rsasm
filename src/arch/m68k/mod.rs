@@ -46,6 +46,17 @@ pub const NAMES: &[&str] = &["m68k"];
 pub const M68000UP: u32 = f::M68000 | M68010UP;
 /// The 68020 and the CPUs after it.
 pub const M68020UP: u32 = f::M68020 | f::M68030 | f::M68040 | f::M68060;
+/// The CPUs with a 32-bit `BRA`.
+pub const LONG_BRANCH: u32 = M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B;
+
+/// The CPUs with a 32-bit branch on condition `cond`, 0 being `bra`.
+pub fn long_branches(cond: u8) -> u32 {
+    if cond == 0 {
+        LONG_BRANCH
+    } else {
+        LONG_BRANCH | f::MCFISA_C
+    }
+}
 /// The CPUs with the 68010's additions: `rtd`, `movec`, `move` from `ccr`.
 pub const M68010UP: u32 = f::M68010 | f::CPU32 | f::FIDO_A | M68020UP;
 
@@ -81,9 +92,15 @@ impl Cpu {
         self.has(M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_A)
     }
 
-    /// 32-bit `Bcc`, `BRA` and `BSR` displacements.
+    /// A 32-bit `BRA` displacement: GNU as's `HAVE_LONG_BRANCH`.
     pub fn long_branch(self) -> bool {
-        self.has(M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B)
+        self.has(LONG_BRANCH)
+    }
+
+    /// A 32-bit displacement for `bra` (condition 0), or for `bsr` or a
+    /// `Bcc`, which ColdFire ISA_C also has: GNU as's `HAVE_LONG_COND`.
+    pub fn long_branch_for(self, cond: u8) -> bool {
+        self.has(long_branches(cond))
     }
 
     /// What a message calls this CPU.
@@ -415,14 +432,21 @@ impl Architecture for M68k {
         let before = cx.diags.error_count();
         let out = match insn::resolve(&name) {
             Ok((def, size, stem)) => {
+                let gnu = format!("{stem}{}", size.map_or(String::new(), String::from));
                 let stem = stem.to_string();
                 let mut asm = ops::Asm {
                     cx,
                     cpu: self.cpu,
-                    name,
+                    name: name.clone(),
                     span: req.span,
                 };
-                asm.assemble(def, size, &stem, req)
+                let out = asm.assemble(def, size, &stem, req);
+                match out {
+                    Some(v) if self.cpu.coldfire() => {
+                        generic::coldfire_check(cx, self.cpu, &gnu, &name, &v[0], req).map(|()| v)
+                    }
+                    out => out,
+                }
             }
             // GNU as looks a mnemonic up with its dot removed, so `fadd.x` is
             // the table's `faddx`.

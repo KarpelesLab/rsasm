@@ -1061,6 +1061,43 @@ fn cpus_refuse_what_they_lack_and_say_what_it_needs() {
 }
 
 #[test]
+fn coldfire_refuses_the_68000_modes_it_dropped() {
+    // m68k-elf-as -mcpu=5475 refuses each of these; the 68000 encodings
+    // rsasm would otherwise write are not ColdFire instructions.
+    for (src, needle) in [
+        ("addil #5,%a0@\n", "is not an instruction a 5475 has"),
+        ("seq %a0@\n", "is not an instruction a 5475 has"),
+        ("moveml %d0-%d3,%sp@-\n", "is not an instruction a 5475 has"),
+        ("addb %d0,%d1\n", "this target is a 5475"),
+    ] {
+        err("5475", Gas, src, needle);
+    }
+    // And what it kept assembles as it does on a 68000.
+    assert_eq!(
+        hex(&text_dialect(
+            "5475",
+            Gas,
+            " moveml %d0-%d3/%a2,%sp@\n addl %d0,%a1@(8)\n"
+        )),
+        "48 d7 04 0f d1 a9 00 08"
+    );
+    // m68k-elf-as -mcpu=54455: ISA_C has 32-bit conditional branches and
+    // bsr, but reaches far with bra only by an absolute jump; `jra` to an
+    // address register is `jmp`.
+    let src = "top: nop\n jbne far\n jbsr far\n jra far\n jra %a0@\n .space 40000\nfar: rts\n";
+    let asm = assemble_dialect("54455", Gas, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&asm.section_bytes(SectionId(0))[..0x16]),
+        "4e 71 66 ff 00 00 9c 52 61 ff 00 00 9c 4c 4e f9 00 00 00 00 4e d0"
+    );
+}
+
+#[test]
 fn every_cpu_name_gnu_as_takes() {
     for name in [
         "68000",
