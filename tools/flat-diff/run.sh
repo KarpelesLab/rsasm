@@ -47,6 +47,10 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 #
 # There is no MIPS64 row: the MIPS GNU ld among the oracles emulates only o32,
 # so it cannot link an n64 object.
+#
+# AVR has a row per core, each with its own corpus: GNU ld refuses to link an
+# object for one AVR core into an image for another it is not compatible with,
+# so each is linked with its own emulation, and never with --relax.
 TARGETS="
 x86-64|x86-64|x86-64|x86_64-elf-as|--64|x86_64-elf-ld|-m elf_x86_64|0x401000
 i386|i386|i386|x86_64-elf-as|--32|x86_64-elf-ld|-m elf_i386|0x8048000
@@ -72,6 +76,11 @@ rx|rx|rx|rx-elf-as||rx-elf-ld||0x10000
 rl78|rl78|rl78|rl78-elf-as||rl78-elf-ld||0x2000
 v850|v850|v850|v850-elf-as||v850-elf-ld||0x100000
 rh850|v850,rh850|rh850|v850-elf-as|-mv850e3v5|v850-elf-ld||0x100000
+avr|avr|avr|avr-elf-as||avr-elf-ld||0x0
+avr5|avr5|avr5|avr-elf-as|-mmcu=avr5|avr-elf-ld|-m avr5|0x0
+avr51|avr51|avr51|avr-elf-as|-mmcu=avr51|avr-elf-ld|-m avr51|0x0
+avr6|avr6|avr6|avr-elf-as|-mmcu=avr6|avr-elf-ld|-m avr6|0x0
+avrtiny|avrtiny|avrtiny|avr-elf-as|-mmcu=avrtiny|avr-elf-ld|-m avrtiny|0x0
 "
 
 command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found; skipping" >&2; exit 0; }

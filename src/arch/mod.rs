@@ -146,11 +146,18 @@ pub enum FlatModifier {
     PcRelative,
     /// Something only a linker creates, such as a GOT entry; refused.
     LinkerOnly,
-    /// The value put through a function: AVR's `lo8(x)` is the low byte of
-    /// `x` whatever `x` is. Such a modifier is arithmetic rather than
-    /// something only a linker can do, so it applies wherever the value is
-    /// known — in an object as well as in a flat image.
-    Value(fn(i64) -> i64),
+    /// Part of the value, taken as it is written into the field: AVR's
+    /// `lo8(x)` is the low byte of `x`, and `pm(x)` is `x` counted in words,
+    /// which `x` has to be a multiple of `unit` for. Such a modifier is
+    /// arithmetic rather than something only a linker can do, so it applies
+    /// wherever the value is known, in an object as well as in a flat image.
+    /// `write` is the field's [`FieldEncoding::Scatter`] function.
+    ///
+    /// [`FieldEncoding::Scatter`]: crate::section::FieldEncoding::Scatter
+    Field {
+        write: fn(u64, i64) -> u64,
+        unit: u8,
+    },
 }
 
 /// Something a backend asks the core to do to the section, which it cannot do
@@ -501,6 +508,42 @@ impl AsmCtx<'_> {
     }
 }
 
+/// An alignment or `.org` in a code section, as the layout finally placed
+/// it; see [`Architecture::layout_records`].
+#[derive(Copy, Clone, Debug)]
+pub struct LayoutPlace {
+    pub kind: PlaceKind,
+    pub section: SectionId,
+    /// The offset just past the padding, where what follows it starts.
+    pub offset: u64,
+    /// The fill byte the source gave, or 0 where it gave none.
+    pub fill: u8,
+}
+
+/// What made a [`LayoutPlace`].
+#[derive(Copy, Clone, Debug)]
+pub enum PlaceKind {
+    /// `.align` or one of its relatives, or the padding that rounds a
+    /// section up to its alignment, which is a power of two: this is the
+    /// exponent.
+    Align(u32),
+    /// `.org`, or an assignment to `.`, with the constant part of its target
+    /// (4 in `. = . + 4`, 0 in `.org label`).
+    Org(i64),
+}
+
+/// A section of records about the finished layout; see
+/// [`Architecture::layout_records`].
+#[derive(Clone, Debug)]
+pub struct LayoutRecords {
+    pub name: &'static str,
+    pub bytes: Vec<u8>,
+    /// The four-byte fields in `bytes` that hold where a place is, each as its
+    /// offset and the index of the place: absolute references, which an
+    /// object relocates against the place's section.
+    pub refs: Vec<(u32, usize)>,
+}
+
 /// See [`Architecture::modifier_symbols`].
 #[derive(Copy, Clone, Default, Debug)]
 pub struct ModifierSymbols {
@@ -561,7 +604,7 @@ pub trait Architecture {
     /// What a source-level relocation modifier means where the value is
     /// known: in a flat binary, which has no relocation for it to choose and
     /// no linker to build what it names, and for a
-    /// [`FlatModifier::Value`] modifier in an object too. Only asked about
+    /// [`FlatModifier::Field`] modifier in an object too. Only asked about
     /// modifiers on fixups whose [`FixupKind::link`] is plain; the default
     /// refuses them all.
     ///
@@ -878,6 +921,18 @@ pub trait Architecture {
     /// keeps its relocation. `class` is the backend's own.
     fn interwork(&self, _class: u8, _target: &InterworkTarget) -> Interwork {
         Interwork::AsWritten
+    }
+
+    /// A section describing where the code sections were padded, for a
+    /// linker that deletes code and has to keep those places where they
+    /// belong: GNU as for AVR, preparing an object for linker relaxation,
+    /// writes every `.align` and `.org` in a code section to `.avr.prop`.
+    /// Given each of them in every executable section, section by section in
+    /// order (the padding that rounds a section's end up to its alignment
+    /// included), the backend returns the section to add, or `None` — the
+    /// default — to add none. Only asked for relocatable output.
+    fn layout_records(&self, _places: &[LayoutPlace]) -> Option<LayoutRecords> {
+        None
     }
 
     /// Padding for `.align` in an executable section: real no-ops where the

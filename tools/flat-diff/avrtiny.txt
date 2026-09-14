@@ -1,0 +1,12 @@
+Lines before the first snippet are not assembled.
+
+The reduced AVR-tiny core (-mmcu=avrtiny, -m avrtiny).
+
+=== AVR-tiny direct load and store
+        .text
+        .set    var, 0x60
+        lds     r16, var
+        sts     var + 1, r17
+        lds     r31, 0xbf
+        ret
+

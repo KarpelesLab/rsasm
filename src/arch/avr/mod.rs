@@ -26,13 +26,13 @@
 //!
 //! * `e_flags` carries `EF_AVR_LINKRELAX_PREPARED` (0x80) next to the machine
 //!   number.
-//! * A branch or call to a label in its own code section is still relocated,
+//! * A branch or call to a label is relocated even within its own section,
 //!   with the field left zero, since the linker may delete code between the
-//!   two. In a section that is not code it is resolved, as there.
+//!   two.
 //! * A relocation against a local label names the label, not its section, so
 //!   local labels that are referred to reach the symbol table.
 //! * An `.align` or `.org` in a code section is recorded in `.avr.prop`, for
-//!   the linker to keep while it deletes code.
+//!   the linker to keep while it deletes code; see [`prop`].
 //!
 //! # Lexing
 //!
@@ -65,6 +65,7 @@ pub mod encode;
 pub mod insn;
 pub mod isa;
 pub mod operand;
+pub mod prop;
 pub mod reloc;
 
 use crate::arch::{
@@ -147,8 +148,8 @@ impl Architecture for Avr {
     }
 
     fn flat_modifier(&self, name: &str) -> FlatModifier {
-        match reloc::modifier_value(name) {
-            Some(f) => FlatModifier::Value(f),
+        match reloc::modifier_field(name) {
+            Some((write, unit)) => FlatModifier::Field { write, unit },
             None => FlatModifier::LinkerOnly,
         }
     }
@@ -174,19 +175,16 @@ impl Architecture for Avr {
         cfg.dollar_in_idents = false;
     }
 
-    /// Outside a code section, GNU as for AVR resolves a PC-relative
-    /// reference to any symbol there but a weak one: it has no shared
-    /// libraries to preempt a global (`EXTERN_FORCE_RELOC 0`). In a code
-    /// section every such reference is relocated, which each fixup says for
-    /// itself; see [`encode`].
-    fn defers_to_linker(&self, r: &crate::arch::SameSectionRef<'_>) -> bool {
-        r.binding == crate::symbol::Binding::Weak
-    }
-
     /// `avr_fix_adjustable` keeps the symbol of every relocation against a
     /// label in a section that is not mergeable, which under linker
     /// relaxation is all of them.
     fn relocates_with_label(&self, _reloc: u32) -> bool {
+        true
+    }
+
+    /// `.align 3` is eight bytes, as on the other targets GNU as does not
+    /// list as counting bytes.
+    fn align_is_log2(&self) -> bool {
         true
     }
 
@@ -228,6 +226,13 @@ impl Architecture for Avr {
         insn::is_mnemonic(&name.to_ascii_lowercase())
     }
 
+    fn layout_records(
+        &self,
+        places: &[crate::arch::LayoutPlace],
+    ) -> Option<crate::arch::LayoutRecords> {
+        prop::records(places)
+    }
+
     /// `nop` is `0000`, so code padding is zeros, which is also what GNU as
     /// pads `.balign` with in `.text`.
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
@@ -236,15 +241,6 @@ impl Architecture for Avr {
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
-        let mut variants = encode::assemble(cx, req, &mnemonic, self.mcu)?;
-        // Linker relaxation: in a code section, a branch to a label in the
-        // same section is left to the linker too (`avr_force_relocation`).
-        let s = &cx.sections[cx.section.0 as usize];
-        if s.flags.exec && s.flags.alloc {
-            for f in variants.iter_mut().flat_map(|v| &mut v.fixups) {
-                f.kind = f.kind.relocated_in_objects();
-            }
-        }
-        Some(variants)
+        encode::assemble(cx, req, &mnemonic, self.mcu)
     }
 }

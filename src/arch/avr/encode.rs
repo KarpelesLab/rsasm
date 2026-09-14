@@ -91,7 +91,31 @@ pub fn assemble(
         index += 1;
     }
     let form = &forms[index];
-    encode(cx, req, form, &ops, mcu).map(|e| vec![e.variant()])
+    let mark = cx.exprs.len();
+    let enc = encode(cx, req, form, &ops, mcu)?;
+    dot_after(cx, mark, u64::from(form.words) * 2);
+    Some(vec![enc.variant()])
+}
+
+/// Moves every `.` in the operands just parsed to the end of the instruction.
+///
+/// `avr_operands` reserves the instruction's bytes with `frag_more` before it
+/// reads a single operand, so to GNU as for AVR `.` in an operand is already
+/// the address of the next instruction: `rjmp .` jumps to the instruction
+/// after it, not to itself. The nodes are bound to the statement's start
+/// later, so each becomes that start plus the instruction's length.
+fn dot_after(cx: &mut AsmCtx<'_>, mark: usize, len: u64) {
+    use crate::expr::{BinOp, ExprKind};
+    let end = cx.exprs.len();
+    for i in mark..end {
+        if !matches!(cx.exprs.nodes[i].kind, ExprKind::Here) {
+            continue;
+        }
+        let span = cx.exprs.nodes[i].span;
+        let here = cx.exprs.alloc(ExprKind::Here, span);
+        let n = cx.exprs.int(len, span);
+        cx.exprs.nodes[i].kind = ExprKind::Binary(BinOp::Add, here, n);
+    }
 }
 
 fn encode(
@@ -165,7 +189,6 @@ fn operand(
     op: Operand<'_>,
     mcu: Mcu,
 ) -> Option<u16> {
-    let size = form.words as u8 * 2;
     match c {
         b'r' | b'd' | b'w' | b'a' | b'v' => operand::register(cx, op, c, mcu),
         b'e' => operand::pointer(cx, op, mcu),
@@ -176,7 +199,6 @@ fn operand(
             Some(mask)
         }
         b'h' => {
-            debug_assert_eq!(size, 4);
             enc.field(0, operand::expr(cx, op)?, reloc::call());
             Some(0)
         }

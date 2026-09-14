@@ -71,8 +71,10 @@ impl Assembler {
         }
         // DWARF is written from the settled layout, into sections of its own
         // that nothing in the code refers to, so the layout of the code
-        // cannot change when it runs again to place them.
-        if self.emit_dwarf() && !self.settle_layout() {
+        // cannot change when it runs again to place them. So are a target's
+        // records of where the code was padded.
+        let dwarf = self.emit_dwarf();
+        if (self.emit_layout_records() || dwarf) && !self.settle_layout() {
             return false;
         }
 
@@ -187,6 +189,82 @@ impl Assembler {
                 Span::DUMMY,
             ));
         }
+    }
+
+    /// Adds the section a target's assembler writes about where the settled
+    /// layout padded its code, if it writes one; see
+    /// [`Architecture::layout_records`](crate::arch::Architecture::layout_records).
+    /// Returns whether a section was added.
+    fn emit_layout_records(&mut self) -> bool {
+        use crate::arch::{LayoutPlace, PlaceKind};
+        if !self.options.relocatable {
+            return false;
+        }
+        let mut places = Vec::new();
+        for (si, s) in self.sections.iter().enumerate() {
+            if !(s.flags.exec && s.flags.alloc) {
+                continue;
+            }
+            for f in &s.frags {
+                let offset = f.offset + f.size();
+                let section = SectionId(si as u32);
+                let (kind, fill) = match &f.kind {
+                    FragKind::Align { align, fill, .. } if *align > 1 => (
+                        PlaceKind::Align(align.trailing_zeros()),
+                        fill.first().copied().unwrap_or(0),
+                    ),
+                    FragKind::Org { target, fill, .. } => {
+                        let addend = self.eval_ref(*target).map_or(0, |v| v.addend);
+                        (PlaceKind::Org(addend), *fill)
+                    }
+                    _ => continue,
+                };
+                places.push(LayoutPlace {
+                    kind,
+                    section,
+                    offset,
+                    fill,
+                });
+            }
+        }
+        let Some(records) = self.target().layout_records(&places) else {
+            return false;
+        };
+        let name = self.interner.intern(records.name);
+        let id = self.get_or_create_section(name, SectionKind::Progbits, Default::default(), 1);
+        self.section_mut(id).mark_arch(0);
+        let reloc = self.target().data_reloc(4, false).unwrap_or(0);
+        let kind = FixupKind::data(4).with_reloc(reloc);
+        let mut fixups = Vec::new();
+        for (at, index) in records.refs {
+            let place = places[index];
+            let sym = self.section_symbol(place.section);
+            let base = self.exprs.alloc(ExprKind::SymId(sym), Span::DUMMY);
+            let off = self.exprs.int(place.offset, Span::DUMMY);
+            let expr = self.exprs.alloc(
+                ExprKind::Binary(crate::expr::BinOp::Add, base, off),
+                Span::DUMMY,
+            );
+            fixups.push(crate::section::Fixup {
+                offset: at,
+                expr,
+                kind,
+                span: Span::DUMMY,
+            });
+        }
+        let s = self.section_mut(id);
+        s.seal();
+        s.push(Fragment::new(
+            FragKind::Bytes {
+                variants: vec![crate::section::Variant {
+                    bytes: records.bytes,
+                    fixups,
+                }],
+                chosen: 0,
+            },
+            Span::DUMMY,
+        ));
+        true
     }
 
     /// Walks every section assigning fragment offsets, recomputing the sizes
@@ -997,15 +1075,12 @@ impl Assembler {
         }
         // A modifier on a plain reference (`.long foo@PLT`) only picks the
         // relocation in an object; in a flat image it decides the value. One
-        // that is arithmetic (AVR's `lo8()`) decides it either way.
-        if let Some(m) = self.find_modifier(e) {
+        // that takes part of the value (AVR's `lo8()`) does so as the field
+        // is written, whichever the output.
+        if flat && let Some(m) = self.find_modifier(e) {
             let name = self.interner.get(m);
             match self.frag_arch(section.0 as usize, fi).0.flat_modifier(name) {
-                FlatModifier::Value(f) => {
-                    return self.plain_fixup_value(e, kind, section, fi, at).map(f);
-                }
-                _ if !flat => {}
-                FlatModifier::Plain => {}
+                FlatModifier::Plain | FlatModifier::Field { .. } => {}
                 FlatModifier::PcRelative if kind.pcrel => {}
                 FlatModifier::PcRelative => {
                     let target = self.eval(e).ok().and_then(|v| self.resolve_value(v))?;

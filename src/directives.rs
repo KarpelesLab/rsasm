@@ -462,6 +462,7 @@ impl Assembler {
         }
         self.bind_here_to_item(e);
         let mut reloc = self.arch.data_reloc(size, false).unwrap_or(0);
+        let mut kind = crate::section::FixupKind::data(size);
         // A modifier the target does not recognise used to fall back to the
         // plain data relocation, so `.long foo@got` quietly became an
         // absolute reference to `foo`. That is a different program, so it is
@@ -471,7 +472,17 @@ impl Assembler {
         if let Some(m) = self.find_modifier(e) {
             let name = self.interner.get(m).to_string();
             match self.arch.modifier_reloc(&name, size, false) {
-                Some(r) => reloc = r,
+                Some(r) => {
+                    reloc = r;
+                    // One that takes part of the value writes the field
+                    // itself; the value it takes that part of is what has
+                    // to fit.
+                    if let crate::arch::FlatModifier::Field { write, unit } =
+                        self.arch.flat_modifier(&name)
+                    {
+                        kind = kind.with_field(63, unit).scatter(write);
+                    }
+                }
                 None => {
                     let espan = self.exprs.span(e);
                     // Spelled the way the target writes it: `lo8(x)` on AVR,
@@ -495,28 +506,24 @@ impl Assembler {
         }
         // Resolve now if it already has a value: a `.set` symbol is a
         // snapshot at each use, so a later redefinition must not reach back
-        // and change bytes that were already emitted. A modifier that is
-        // arithmetic, such as AVR's `lo8()`, applies to that value.
+        // and change bytes that were already emitted.
         if let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs()) {
-            let v = match self.find_modifier(e) {
-                Some(m) => match self.arch.flat_modifier(self.interner.get(m)) {
-                    crate::arch::FlatModifier::Value(f) => f(v),
-                    _ => v,
-                },
-                None => v,
-            };
-            let kind = crate::section::FixupKind::data(size);
             if !kind.fits(v as i128) {
                 let espan = self.exprs.span(e);
-                self.diags
-                    .error(espan, format!("value {v} does not fit in {size} byte(s)"));
+                let msg = if kind.value_align > 1 && v % kind.value_align as i64 != 0 {
+                    format!("value {v} is not a multiple of {}", kind.value_align)
+                } else {
+                    format!("value {v} does not fit in {size} byte(s)")
+                };
+                self.diags.error(espan, msg);
                 return;
             }
-            let bytes = self.arch.endian().bytes(v as u64, size as usize);
+            let mut bytes = vec![0; size as usize];
+            kind.write(self.arch.endian(), &mut bytes, v);
             self.cur_section().emit_bytes(&bytes, span);
             return;
         }
-        let kind = crate::section::FixupKind::data(size).with_reloc(reloc);
+        let kind = kind.with_reloc(reloc);
         let espan = self.exprs.span(e);
         self.cur_section().emit_fixup(size, e, kind, espan);
     }

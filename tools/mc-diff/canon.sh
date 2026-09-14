@@ -11,7 +11,8 @@
 #   .rela.text 0x4 R_RISCV_CALL_PLT foo+0x0
 #
 # A section is listed if it is allocated and not empty, with its bytes unless
-# it is SHT_NOBITS. What a reference writes of its own accord is left out:
+# it is SHT_NOBITS, and so is AVR's `.avr.prop`, which is not allocated but is
+# what the linker relaxes the code by. What a reference writes of its own accord is left out:
 # the ABI and attribute sections (`.reginfo`, `.MIPS.abiflags`,
 # `.riscv.attributes`, `.ARM.attributes`, `.note.*`, ...), and `.text`,
 # `.data` and `.bss` while they are empty, which GNU as always creates.
@@ -48,7 +49,8 @@ llvm-readobj --sections "$obj" | ${AWK:-awk} '
     return v
   }
   function flush() {
-    if (name == "" || !alloc || size == 0) return
+    # `.avr.prop` is not loaded, but is what a linker relaxing AVR code reads.
+    if (name == "" || (!alloc && name != ".avr.prop") || size == 0) return
     if (name ~ /^\.(reginfo|pdr|comment|gnu\.attributes|riscv\.attributes|note)/ || name ~ /^\.(MIPS|ARM)\./) return
     printf "%s %s %s flags=%s size=0x%x align=%d\n", idx, name, type, flags, size, align
   }

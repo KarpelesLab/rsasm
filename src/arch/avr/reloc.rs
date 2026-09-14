@@ -18,7 +18,7 @@
 //!
 //! [`FieldEncoding::Scatter`]: crate::section::FieldEncoding::Scatter
 
-use crate::section::{FixupKind, LinkValue};
+use crate::section::FixupKind;
 
 pub const R_AVR_NONE: u32 = 0;
 /// `.long sym`.
@@ -117,16 +117,24 @@ pub fn modifier(name: &str, size: u8, pcrel: bool) -> Option<u32> {
     }
 }
 
-/// What a data-directive modifier computes, for a value that is already a
-/// number. These are `md_apply_fix`'s `BFD_RELOC_AVR_8_*` and `16_PM` cases.
-pub fn modifier_value(name: &str) -> Option<fn(i64) -> i64> {
-    match name {
-        "lo8" => Some(|v| v & 0xff),
-        "hi8" => Some(|v| (v >> 8) & 0xff),
-        "hlo8" | "hh8" => Some(|v| (v >> 16) & 0xff),
-        "pm" | "gs" => Some(|v| v >> 1),
-        _ => None,
-    }
+/// A field's [`FieldEncoding::Scatter`] function.
+///
+/// [`FieldEncoding::Scatter`]: crate::section::FieldEncoding::Scatter
+pub type Write = fn(u64, i64) -> u64;
+
+/// How a data-directive modifier writes its field, and what the value it
+/// takes part of has to be a multiple of: `md_apply_fix`'s
+/// `BFD_RELOC_AVR_8_*` and `16_PM` cases. `pm()` counts in words, and GNU ld
+/// refuses an odd address for it ("relocation target address is odd").
+pub fn modifier_field(name: &str) -> Option<(Write, u8)> {
+    let write: Write = match name {
+        "lo8" => |_, v| v as u64 & 0xff,
+        "hi8" => |_, v| (v >> 8) as u64 & 0xff,
+        "hlo8" | "hh8" => |_, v| (v >> 16) as u64 & 0xff,
+        "pm" | "gs" => |_, v| (v >> 1) as u64 & 0xffff,
+        _ => return None,
+    };
+    Some((write, if matches!(name, "pm" | "gs") { 2 } else { 1 }))
 }
 
 /// The names [`modifier`] knows, as the expression parser reads them:
@@ -156,21 +164,55 @@ pub fn ldi() -> FixupKind {
 }
 
 /// One byte of an address in an `ldi`-family immediate, as `lo8()` and its
-/// relatives select it.
+/// relatives select it with relocation `reloc`.
 ///
-/// The modifier is arithmetic, so it is applied as a [`LinkValue::Split`]:
-/// where the value is known the byte is written here, and where it is not
-/// the relocation names which byte the linker is to take.
-pub fn ldi_part(reloc: u32, part: fn(i64) -> i64) -> FixupKind {
+/// The byte is taken as the field is written, from the whole value: where
+/// the value is known that is here, and where it is not the relocation tells
+/// the linker which byte to take. The value itself can be anything, except
+/// that one counted in words (the `_PM` and `_GS` forms) has to be even —
+/// GNU ld refuses an odd one, and GNU as an odd `call` target.
+pub fn ldi_part(reloc: u32) -> FixupKind {
+    let write: Write = match reloc {
+        R_AVR_LO8_LDI => |w, v| ldi_immediate(w, v),
+        R_AVR_HI8_LDI => |w, v| ldi_immediate(w, v >> 8),
+        R_AVR_HH8_LDI => |w, v| ldi_immediate(w, v >> 16),
+        R_AVR_MS8_LDI => |w, v| ldi_immediate(w, v >> 24),
+        R_AVR_LO8_LDI_NEG => |w, v| ldi_immediate(w, v.wrapping_neg()),
+        R_AVR_HI8_LDI_NEG => |w, v| ldi_immediate(w, v.wrapping_neg() >> 8),
+        R_AVR_HH8_LDI_NEG => |w, v| ldi_immediate(w, v.wrapping_neg() >> 16),
+        R_AVR_MS8_LDI_NEG => |w, v| ldi_immediate(w, v.wrapping_neg() >> 24),
+        R_AVR_LO8_LDI_PM | R_AVR_LO8_LDI_GS => |w, v| ldi_immediate(w, v >> 1),
+        R_AVR_HI8_LDI_PM | R_AVR_HI8_LDI_GS => |w, v| ldi_immediate(w, v >> 9),
+        R_AVR_HH8_LDI_PM => |w, v| ldi_immediate(w, v >> 17),
+        R_AVR_LO8_LDI_PM_NEG => |w, v| ldi_immediate(w, v.wrapping_neg() >> 1),
+        R_AVR_HI8_LDI_PM_NEG => |w, v| ldi_immediate(w, v.wrapping_neg() >> 9),
+        R_AVR_HH8_LDI_PM_NEG => |w, v| ldi_immediate(w, v.wrapping_neg() >> 17),
+        _ => unreachable!("relocation {reloc} is not an ldi modifier"),
+    };
+    let words = matches!(
+        reloc,
+        R_AVR_LO8_LDI_PM
+            | R_AVR_HI8_LDI_PM
+            | R_AVR_HH8_LDI_PM
+            | R_AVR_LO8_LDI_PM_NEG
+            | R_AVR_HI8_LDI_PM_NEG
+            | R_AVR_HH8_LDI_PM_NEG
+            | R_AVR_LO8_LDI_GS
+            | R_AVR_HI8_LDI_GS
+    );
     FixupKind::data(2)
         .with_reloc(reloc)
-        .with_field(8, 1)
-        .link(LinkValue::Split(part))
-        .scatter(ldi_immediate)
+        .with_field(63, if words { 2 } else { 1 })
+        .scatter(write)
 }
 
 /// A conditional branch: `R_AVR_7_PCREL`, ±64 words from the instruction
 /// after this one.
+///
+/// A branch to a symbol is always left to the linker in an object, even to a
+/// label a few words away in the same section: `TC_VALIDATE_FIX` in
+/// `gas/config/tc-avr.h` sends every such fixup straight to a relocation,
+/// since relaxation may delete code in between.
 ///
 /// The relocation is unbiased. `elf32_avr_relocate_section` computes
 /// `S + A - P - 2` with `P` the address of the instruction itself, so the
@@ -181,11 +223,12 @@ pub fn rel7() -> FixupKind {
         .with_reloc(R_AVR_7_PCREL)
         .with_field(8, 2)
         .unbiased_reloc()
+        .relocated_in_objects()
         .scatter(|word, v| word | ((((v >> 1) << 3) as u64) & 0x3f8))
 }
 
 /// `rjmp` and `rcall`: `R_AVR_13_PCREL`, ±2048 words. See [`rel7`] for why
-/// the relocation is unbiased.
+/// the relocation is always written and unbiased.
 ///
 /// `mega` says whether the device has more than 8K of program memory, where
 /// GNU as refuses a displacement that does not fit. Below that the address
@@ -195,6 +238,7 @@ pub fn rel13(mega: bool) -> FixupKind {
     let k = FixupKind::pcrel(2, 2)
         .with_reloc(R_AVR_13_PCREL)
         .unbiased_reloc()
+        .relocated_in_objects()
         .scatter(|word, v| word | (((v >> 1) as u64) & 0xfff));
     if mega {
         k.with_field(13, 2)

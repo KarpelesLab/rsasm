@@ -359,28 +359,6 @@ const MODIFIERS: &[Row] = &[
     ("hhi8", reloc::R_AVR_MS8_LDI, reloc::R_AVR_MS8_LDI_NEG, None),
 ];
 
-/// What each `ldi` relocation computes from a resolved value, as
-/// `md_apply_fix` computes it. The `_GS` pair only ever reaches a linker, but
-/// giving it the `_PM` arithmetic keeps a flat image working.
-fn part_of(reloc: u32) -> fn(i64) -> i64 {
-    match reloc {
-        reloc::R_AVR_LO8_LDI => |v| v & 0xff,
-        reloc::R_AVR_HI8_LDI => |v| (v >> 8) & 0xff,
-        reloc::R_AVR_HH8_LDI => |v| (v >> 16) & 0xff,
-        reloc::R_AVR_MS8_LDI => |v| (v >> 24) & 0xff,
-        reloc::R_AVR_LO8_LDI_NEG => |v| (-v) & 0xff,
-        reloc::R_AVR_HI8_LDI_NEG => |v| ((-v) >> 8) & 0xff,
-        reloc::R_AVR_HH8_LDI_NEG => |v| ((-v) >> 16) & 0xff,
-        reloc::R_AVR_MS8_LDI_NEG => |v| ((-v) >> 24) & 0xff,
-        reloc::R_AVR_LO8_LDI_PM | reloc::R_AVR_LO8_LDI_GS => |v| (v >> 1) & 0xff,
-        reloc::R_AVR_HI8_LDI_PM | reloc::R_AVR_HI8_LDI_GS => |v| (v >> 9) & 0xff,
-        reloc::R_AVR_HH8_LDI_PM => |v| (v >> 17) & 0xff,
-        reloc::R_AVR_LO8_LDI_PM_NEG => |v| ((-v) >> 1) & 0xff,
-        reloc::R_AVR_HI8_LDI_PM_NEG => |v| ((-v) >> 9) & 0xff,
-        _ => |v| ((-v) >> 17) & 0xff,
-    }
-}
-
 /// Peels a byte-selecting modifier off an `ldi` operand, if it has one.
 ///
 /// Returns `None` for an operand that is just an expression, and reports the
@@ -455,7 +433,7 @@ fn split_modifier<'t>(cx: &mut AsmCtx<'_>, op: Operand<'t>) -> Option<Modified<'
         };
     }
     Some(Modified {
-        kind: reloc::ldi_part(r, part_of(r)),
+        kind: reloc::ldi_part(r),
         inner,
     })
 }
