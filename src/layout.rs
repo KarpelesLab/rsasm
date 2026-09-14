@@ -18,7 +18,7 @@ use crate::expr::{self, EvalError, ExprKind, ExprRef, Value};
 use crate::intern::Name;
 use crate::lexer::LocalDir;
 use crate::section::{
-    FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
+    FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionFlags, SectionId, SectionKind,
 };
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId, SymbolValue, Visibility};
@@ -65,6 +65,7 @@ impl Assembler {
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
+        self.add_attributes_section();
 
         if !self.settle_layout() {
             return false;
@@ -79,6 +80,9 @@ impl Assembler {
         self.assign_addresses();
         self.report_misaligned_data();
         self.apply_fixups();
+        // After the fixups, which intern the symbols they name, so that these
+        // follow them in the symbol table as they do in GNU as's.
+        self.add_section_symbols();
         self.place_mapping_symbols();
         // Data references only enter the symbol table when their fixups are
         // built, so NASM's "symbol not defined" check runs after that.
@@ -148,6 +152,62 @@ impl Assembler {
 
     /// Rounds each section's end up to its alignment, on targets whose GNU as
     /// does. Done once, before layout, as a trailing alignment fragment.
+    /// Adds the build attributes section the target's GNU as writes into
+    /// every object; see [`Architecture::elf_attributes`].
+    ///
+    /// [`Architecture::elf_attributes`]: crate::arch::Architecture::elf_attributes
+    fn add_attributes_section(&mut self) {
+        if !self.options.relocatable {
+            return;
+        }
+        let (arch, state) = self.target_state();
+        let Some((name, bytes)) = arch.elf_attributes(state) else {
+            return;
+        };
+        let name = self.interner.intern(name);
+        let id =
+            self.get_or_create_section(name, SectionKind::Progbits, SectionFlags::default(), 1);
+        let s = self.section_mut(id);
+        s.mark_arch(0);
+        s.emit_bytes(&bytes, Span::default());
+    }
+
+    /// Refers to the undefined symbols the target asks for on behalf of each
+    /// section with contents; see [`Architecture::section_symbols`].
+    ///
+    /// GNU as asks section by section in its own order, which starts with the
+    /// `.text`, `.data` and `.bss` it creates before reading the source, so
+    /// those three are asked about first here too.
+    ///
+    /// [`Architecture::section_symbols`]: crate::arch::Architecture::section_symbols
+    fn add_section_symbols(&mut self) {
+        let mut order: Vec<usize> = (0..self.sections.len()).collect();
+        let rank = |asm: &Self, si: usize| match asm.interner.get(asm.sections[si].name) {
+            ".text" => 0,
+            ".data" => 1,
+            ".bss" => 2,
+            _ => 3,
+        };
+        order.sort_by_key(|&si| rank(self, si));
+        for si in order {
+            if self.sections[si].size == 0 {
+                continue;
+            }
+            let name = self.interner.get(self.sections[si].name).to_string();
+            for sym in self.target().section_symbols(&name) {
+                self.refer_to_symbol(sym, Span::default());
+            }
+        }
+    }
+
+    /// Makes `name` a symbol the object refers to, undefined unless the
+    /// source defines it.
+    pub(crate) fn refer_to_symbol(&mut self, name: &str, span: Span) {
+        let name = self.interner.intern(name);
+        let id = self.symbols.intern(name, span);
+        self.symbols.get_mut(id).used = true;
+    }
+
     fn pad_section_tails(&mut self) {
         for si in 0..self.sections.len() {
             let s = &self.sections[si];
@@ -1315,14 +1375,25 @@ impl Assembler {
         // final address, so a distance across sections is fixed too.
         if let (Some(p), Some(m)) = (v.plus, v.minus) {
             let (ps, ms) = (self.symbol_section(p), self.symbol_section(m));
-            if ps.is_some() && (ps == ms || !self.options.relocatable) {
+            // Unless the target's linker may move the labels apart; see
+            // `Architecture::defers_difference`.
+            let deferred = |asm: &Self| {
+                asm.options.relocatable
+                    && ps.is_some_and(|s| {
+                        let flags = asm.section(s).flags;
+                        let arch = asm.frag_arch(section.0 as usize, fi).0;
+                        arch.defers_difference(kind, &flags)
+                    })
+            };
+            if ps.is_some() && (ps == ms || !self.options.relocatable) && !deferred(self) {
                 return self.resolve_value(v);
             }
             return None;
         }
         // An absolute reference to a section-relative symbol can only be
-        // resolved here when the output is not going to be relocated.
-        if !v.is_absolute() && self.options.relocatable {
+        // resolved here when the output is not going to be relocated, and
+        // one the linker is to fill in in any case, not even a number.
+        if (!v.is_absolute() || kind.object_reloc) && self.options.relocatable {
             return None;
         }
         self.resolve_value(v)
@@ -1590,9 +1661,14 @@ impl Assembler {
         }
         let target = match v.plus {
             Some(t) => Some(t),
-            // A PC-relative reference to a plain number, relocated against
-            // no symbol at all (ELF symbol 0).
-            None if kind.pcrel && v.minus.is_none() && self.options.relocatable => None,
+            // A PC-relative reference to a plain number, or a number left to
+            // the linker, relocated against no symbol at all (ELF symbol 0).
+            None if (kind.pcrel || kind.object_reloc)
+                && v.minus.is_none()
+                && self.options.relocatable =>
+            {
+                None
+            }
             None => {
                 self.diags.error(span, "cannot resolve this value");
                 return Vec::new();
@@ -1683,7 +1759,12 @@ impl Assembler {
             addend,
             kind: reloc,
         }];
-        relocs.extend(subtrahend);
+        match subtrahend {
+            Some(sub) if self.frag_arch(si, fi).0.difference_subtrahend_first() => {
+                relocs.insert(0, sub)
+            }
+            sub => relocs.extend(sub),
+        }
         relocs
     }
 

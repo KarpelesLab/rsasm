@@ -2,8 +2,8 @@
 # Differential test against cross assemblers built by tools/oracles/build.sh.
 #
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
-# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, and the 8-bit Z80,
-# 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
+# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, MSP430, and the
+# 8-bit Z80, 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
 # compares the code bytes. ARM and Thumb, which llvm-mc does assemble, are here
 # too, as whole objects, for what GNU as decides and llvm-mc decides
 # differently: literal pools, interworking and mapping symbols.
@@ -51,6 +51,10 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # ld65; `p2bin` converts AS's code file. rsasm assembles a flat binary for all
 # three, so a leading `org` is the image's load address on both sides.
 #
+# MSP430 is checked for each ISA GNU as's `-mcpu` selects. The polymorphic
+# branches (`jump`, `beq`, ...) need `-mP` there, which also leaves more to
+# the linker in data sections, so they have corpora of their own.
+#
 # vasm is only a secondary reference, run with `-no-opt -devpac`. By default it
 # is an optimizing assembler that rewrites instructions (`move.l #1,d0` becomes
 # `moveq #1,d0`) and deletes branches, which is not what rsasm or GNU as do;
@@ -77,6 +81,11 @@ z80-gas|z80|gas|z80-elf-as|linked:z80-elf-ld|z80
 z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
+msp430|msp430|gas|msp430-elf-as -mcpu=430|elf:.text
+msp430x|msp430x|gas|msp430-elf-as -mcpu=430x|elf:.text
+msp430xv2|msp430xv2|gas|msp430-elf-as -mcpu=430xv2|elf:.text|msp430
+msp430-poly|msp430|gas|msp430-elf-as -mcpu=430 -mP|elf:.text
+msp430x-poly|msp430x|gas|msp430-elf-as -mcpu=430x -mP|elf:.text|msp430-poly
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
 "
 

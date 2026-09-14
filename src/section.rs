@@ -189,8 +189,10 @@ pub struct FixupKind {
     /// Left to the linker in relocatable output even where the value is
     /// known, for an instruction a linker may rewrite: an ARM `bl` becomes
     /// `blx` if its target turns out to be Thumb code, which llvm-mc allows
-    /// for even when the target is a local label. Unlike
-    /// [`FixupKind::always_reloc`], a flat binary still resolves it.
+    /// for even when the target is a local label. An absolute field is
+    /// relocated even for a plain number, against no symbol, as GNU as
+    /// relocates MSP430's `calla #addr`. Unlike [`FixupKind::always_reloc`],
+    /// a flat binary still resolves it.
     pub object_reloc: bool,
     /// What the value is, beyond the target itself; see [`LinkValue`].
     pub link: LinkValue,
