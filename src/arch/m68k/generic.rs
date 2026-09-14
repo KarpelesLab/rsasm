@@ -15,6 +15,9 @@
 //! Where GNU as would warn and write something anyway — a trap vector out of
 //! range becomes 0, a symbol where a constant belongs becomes its addend —
 //! this refuses with an error instead.
+//!
+//! The same matcher checks, on ColdFire, what the hand-written encoders wrote
+//! against GNU's ColdFire forms of the instruction: see [`coldfire_check`].
 
 use super::encode::{self, EaCtx, Part, Place, Sz, build};
 use super::float::Float;
