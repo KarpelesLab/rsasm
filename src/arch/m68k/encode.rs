@@ -411,7 +411,7 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
         Mode::Imm(e, s) if ecx.float.is_some() => {
             // An integer where a float is wanted is its own bit pattern,
             // zero-extended, as GNU as writes it.
-            let len = ecx.float.map_or(4, Float::len);
+            let len = ecx.float.map_or(4, Float::bytes_len);
             let Some(v) = cx.constant(*e) else {
                 cx.error(
                     *s,

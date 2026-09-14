@@ -83,7 +83,7 @@ pub enum Float {
 
 impl Float {
     /// How many bytes an immediate of this size takes.
-    pub fn len(self) -> usize {
+    pub fn bytes_len(self) -> usize {
         match self {
             Float::Single => 4,
             Float::Double => 8,
@@ -159,7 +159,7 @@ pub fn packed(f: f64) -> [u8; 12] {
         sign |= 0x40;
     }
     let e = e as u32;
-    let bcd = |v: u32| (((v / 10) % 10) << 4 | v % 10) as u8;
+    let bcd = |v: u32| ((((v / 10) % 10) << 4) | (v % 10)) as u8;
     out[0] = sign | bcd((e / 100) % 10);
     out[1] = bcd(e % 100);
     out[3] = bcd(int % 10);

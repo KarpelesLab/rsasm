@@ -17,14 +17,24 @@ rsasm, and the bytes, relocations and accept/reject decisions compared.
 `fuzz` classifies each case:
 
     agree     the reference and rsasm produced the same result.
-    rsasm     they differ. Each is an rsasm bug, or a deviation that belongs in
-              KNOWN below with the reason.
-    known     they differ in a way KNOWN explains (a float immediate GNU as
-              writes wrongly, say). Counted, not listed.
+    rsasm     they differ. Each is an rsasm bug, or a deviation to document
+              and leave out of generation (see `deviates` and `mri_skips`).
+              Listed, grouped by form; the exit status is 1 when there are any.
+    split     against vasm only: vasm and rsasm differ, and GNU as `--mri`,
+              given the same source, agrees with rsasm. vasm and GNU as part
+              ways by design often enough, and rsasm follows GNU as. Counted;
+              `--splits` lists them.
 
-`--syntax vasm` compares Motorola syntax against vasm instead, bytes only; its
-generator leaves out what vasm reads differently by design (see
-`Gen.vasm_ok`).
+`--syntax vasm` compares Motorola syntax against vasm (with GNU as `--mri` as
+the tie-breaker above), bytes outside relocated fields only, since vasm
+writes a RELA addend into its field. Mnemonics are spelled as vasm's own
+opcode table has them, and what vasm reads differently by design is not
+generated (see `Gen.vasm_ok`). This is where extended and packed float
+immediates are checked, which GNU as gets wrong or refuses.
+
+Generated cases leave out what rsasm deliberately does differently from
+GNU as, since a line one assembler takes and the other refuses moves every
+later label in its batch: see `deviates` and `mri_skips`.
 
 `corpus` prints, for every form of every instruction the CPU has, one line
 whose operands that form takes and no earlier form of the same mnemonic does,
@@ -77,7 +87,7 @@ CPUS = {
     "68030": (["-m68030"], "68030", ["-m68030", "-m68881", "-m68851"], "68030"),
     "68040": (["-m68040"], "68040", ["-m68040"], "68040"),
     "68060": (["-m68060"], "68060", ["-m68060"], "68060"),
-    "cpu32": (["-mcpu32"], "cpu32", ["-mcpu32"], "cpu32"),
+    "cpu32": (["-mcpu32"], "cpu32", ["-mcpu32", "-m68881"], "cpu32"),
     "fidoa": (["-mcpu=fidoa"], "fidoa", None, "fidoa"),
     "5206": (["-mcpu=5206"], "5206", None, "5206"),
     "5208": (["-mcpu=5208"], "5208", None, "5208"),
@@ -283,6 +293,9 @@ def fits(k, p, op):
         return ctl("nc", "ic", "dc", "bc")
     return False
 
+
+# Stands for the label of the case it is in.
+SELF = "SELF_LABEL"
 
 CTL_NAMES = ["sr", "ccr", "usp", "fpcr", "fpsr", "fpiar", "tc", "ac", "cal", "val", "scc",
              "drp", "srp", "crp", "psr", "pcsr", "tt0", "tt1", "sfc", "dfc", "nc", "ic", "dc",
@@ -524,6 +537,10 @@ class Gen:
             reg = ("d%d" if r.random() < 0.5 else "a%d") % n
             return Op(BASE, "(%s)" % self.reg(reg), index_reg=reg, noindexsize=True)
         if k in "B":
+            if self.syntax == "vasm":
+                # A branch to itself, so that a case vasm writes at another
+                # length (by design, as `pbbs ext`) moves no other target.
+                return Op(ABS, r.choice(["ext", SELF]))
             return Op(ABS, r.choice(["ext", "ext+6", "c0", "cend"]))
         if k == "_":
             return self.absolute() if r.random() < 0.8 else Op(ABS, "ext")
@@ -558,9 +575,20 @@ class Gen:
                               self.dec, self.disp, self.absolute, imm,
                               self.fimm, lambda: self.reglist(True)])()
 
-    def vasm_ok(self, text):
-        """vasm reads some things differently by design, or not at all."""
-        return "(pc" not in text and "@" not in text
+    def vasm_ok(self, ops, pairs):
+        """What vasm reads differently from GNU as and rsasm, by design: MIT
+        syntax it has no reading of; `n(pc)`, an address to it; with `-no-opt`
+        it keeps every absolute address and base displacement at 32 bits; an
+        integer immediate in a floating-point operand it converts to a float,
+        where GNU as and rsasm write its bits."""
+        for (k, p), o in zip(pairs, ops):
+            if "(pc" in o.text or "@" in o.text:
+                return False
+            if o.full or (o.cls == ABS and k != "_" and not re.match(r"^[a-z]", o.text)):
+                return False
+            if o.cls == IMM and p in "fFxp":
+                return False
+        return True
 
 
 def deviates(k, p, op, g):
@@ -626,6 +654,33 @@ def join_operands(form, ops, gnu):
     return ",".join(texts)
 
 
+VASM = {}
+
+
+def vasm_spelling(name):
+    """How vasm spells a mnemonic of GNU's table, if it has it: vasm splits a
+    size off with a dot where it takes one, and has no aliases of GNU's
+    (`fjeq`, `pbbsw`). Read from vasm's own opcode table."""
+    if not VASM:
+        sizes = {"UNS": "", "B": "b", "W": "w", "L": "l", "Q": "d", "SBWL": "sbwl", "BW": "bw",
+                 "WL": "wl", "BWL": "bwl", "WQ": "wd", "QW": "wd", "CFWL": "wl", "CFBWL": "bwl",
+                 "ANY": "bwlsdxp", "CFANY": "bwlsd", "FX": "x", "FD": "d"}
+        src = os.path.join(ORACLES, "src", "vasm", "cpus", "m68k", "opcodes.h")
+        row = re.compile(r'^\s*"(\w+)",.*?\},\s*\{[^}]*\},\s*\d\|([\w|]+),\s*([\w|]+)\s*\},')
+        for line in open(src):
+            m = row.match(line)
+            if not m or m.group(3) == "apollo" or "mgas" in m.group(3):
+                continue
+            letters = "".join(sizes.get(t, "") for t in m.group(2).split("|"))
+            VASM.setdefault(m.group(1), set()).update(letters or " ")
+    stem, c = name[:-1], name[-1]
+    if stem in VASM and c in VASM[stem]:
+        return stem + "." + c
+    if name in VASM:
+        return name
+    return None
+
+
 NAMES = set()
 
 
@@ -648,12 +703,10 @@ def spell_mnemonic(name, rng, gnu):
 
 
 class Case:
-    __slots__ = ("form", "text", "mutated", "float_xp")
+    __slots__ = ("form", "text", "mutated")
 
-    def __init__(self, form, text, mutated, float_xp=False):
+    def __init__(self, form, text, mutated):
         self.form, self.text, self.mutated = form, text, mutated
-        # A float literal written as an extended or packed real.
-        self.float_xp = float_xp
 
 
 def mri_skips(g, form, forms_of_name):
@@ -698,12 +751,15 @@ def make_case(g, form, forms_of_name, rng, mutate=False, exclusive=False):
                                zip(f.pairs()[1 if f.args.startswith("I") else 0:], ops))
                        for f in earlier):
                     continue
-            if g.syntax == "vasm" and not g.vasm_ok(" ".join(o.text for o in ops)):
+            if g.syntax == "vasm" and not g.vasm_ok(ops, pairs[skip:]):
                 continue
             mn = spell_mnemonic(form.name, rng, g.gnu)
+            if g.syntax == "vasm":
+                mn = vasm_spelling(form.name)
+                if mn is None:
+                    return None
             text = mn + ("\t" + join_operands(form, ops, g.gnu) if ops else "")
-            float_xp = any(o.float and p in "xp" for (_, p), o in zip(pairs[skip:], ops))
-            return Case(form, text, mutate, float_xp)
+            return Case(form, text, mutate)
     return None
 
 
@@ -771,9 +827,9 @@ def run(tool, cpu, syntax, source, workdir):
     if tool == "ref" and syntax == "vasm":
         cmd = [os.path.join(BIN, "vasmm68k_mot"), "-quiet", "-no-opt", "-devpac", "-Felf",
                "-o", obj] + vasm_flags + [src]
-    elif tool == "ref":
+    elif tool in ("ref", "gnu"):
         cmd = [os.path.join(BIN, "m68k-elf-as")] + gas_flags + \
-            (["--mri"] if syntax == "mot" else []) + ["-o", obj, src]
+            (["--mri"] if syntax != "gas" else []) + ["-o", obj, src]
     else:
         cmd = [RSASM, "-a", rs_arch, "-d", "gas" if syntax == "gas" else "motorola", "-o",
                obj, src]
@@ -794,7 +850,7 @@ def run(tool, cpu, syntax, source, workdir):
                 last = None
         if "panicked" in out:
             return None, {0: ["PANIC: " + out.strip().splitlines()[-1][:200]]}
-    elif syntax == "vasm":
+    elif syntax == "vasm" and tool == "ref":
         for ln in out.splitlines():
             m = VASM_RE.match(ln)
             if m and m.group(1) == "error":
@@ -836,7 +892,7 @@ def assemble(tool, cpu, syntax, cases, workdir, plan=None):
             lines.append(("c%d:" if syntax == "gas" else "c%d") % i)
             if i in rejected:
                 continue
-            lines.append("\t" + case.text)
+            lines.append("\t" + case.text.replace(SELF, "c%d" % i))
             owner[len(lines)] = i
         lines.append("cend:" if syntax == "gas" else "cend")
         lines.append("\t" + ("rts" if syntax == "gas" else "rts"))
@@ -879,28 +935,42 @@ def fmt(res, relocs=True):
     return s
 
 
-# Differences that are decided and documented: (description, predicate).
-KNOWN = [
-    ("extended and packed float immediates follow vasm (src/arch/m68k/float.rs)",
-     lambda case, ref, mine: case.float_xp),
-]
+RELOC_SIZE = {1: 4, 2: 2, 3: 1, 4: 4, 5: 2, 6: 1}
+
+
+def masked(res):
+    """vasm writes a relocation's addend into its field, where GNU as and
+    rsasm leave it zero for RELA; the bytes are compared without them."""
+    data, relocs = res
+    data = bytearray(data)
+    for off, typ, _sym, _add in relocs:
+        for i in range(off, min(off + RELOC_SIZE.get(typ, 0), len(data))):
+            data[i] = 0
+    return bytes(data), tuple((o, t) for o, t, _s, _a in relocs)
+
+
+def same(r, m, vasm):
+    if r[0] == "err" and m[0] == "err":
+        return True
+    return r[0] == m[0] == "ok" and (masked(r[1]) == masked(m[1]) if vasm else r[1] == m[1])
 
 
 def compare(cpu, syntax, cases):
+    """Against vasm, the same source also goes to GNU as `--mri`: vasm and
+    GNU as part ways by design often enough (which register names a 68000
+    has, `movep` to `(An)`, `fsub.x fp1` with one operand), and where they
+    do rsasm follows GNU as, so a case is only a finding when rsasm matches
+    neither. The others are counted as `split`."""
     with tempfile.TemporaryDirectory() as d:
         ref, plan = assemble("ref", cpu, syntax, cases, d)
         mine, _ = assemble("rsasm", cpu, syntax, cases, d, plan)
+        gnu = assemble("gnu", cpu, syntax, cases, d, plan)[0] if syntax == "vasm" else None
     out = []
-    for case, r, m in zip(cases, ref, mine):
-        if r[0] == "err" and m[0] == "err":
+    for i, (case, r, m) in enumerate(zip(cases, ref, mine)):
+        if same(r, m, syntax == "vasm"):
             out.append(("agree", case, r, m))
-            continue
-        same = r[0] == m[0] == "ok" and (
-            r[1] == m[1] if syntax != "vasm" else r[1][0] == m[1][0])
-        if same:
-            out.append(("agree", case, r, m))
-        elif any(p(case, r, m) for _, p in KNOWN):
-            out.append(("known", case, r, m))
+        elif gnu is not None and same(gnu[i], m, False):
+            out.append(("split", case, r, m))
         else:
             out.append(("rsasm", case, r, m))
     return out
@@ -962,7 +1032,7 @@ def fuzz(a):
         for cpu, syntax, results in ex.map(job, jobs):
             for kind, case, r, m in results:
                 tally[kind] += 1
-                if kind == "rsasm":
+                if kind == "rsasm" or (kind == "split" and a.splits):
                     key = (cpu, syntax, case.form.name, case.form.args, case.mutated,
                            r[0], m[0])
                     findings[key].append((case, r, m))
@@ -980,7 +1050,7 @@ def fuzz(a):
         print("    %s" % case.text)
         print("  ref:   %s" % fmt(r))
         print("  rsasm: %s" % fmt(m))
-    return 1 if findings else 0
+    return 1 if tally["rsasm"] else 0
 
 
 # The CPUs the corpora are for, in the order `corpus --first` gives each form
@@ -1072,6 +1142,8 @@ def main():
             p.add_argument("--mutations", type=float, default=0.15)
             p.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
             p.add_argument("--limit", type=int, default=40)
+            p.add_argument("--splits", action="store_true",
+                           help="list the cases vasm and GNU as part on, too")
         if name == "check":
             p.add_argument("--verbose", "-v", action="store_true")
             p.add_argument("file")

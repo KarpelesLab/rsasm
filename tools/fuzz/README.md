@@ -55,3 +55,41 @@ llvm-mc on are forms only GNU as accepts and nothing is written in: Intel
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
+
+# m68k
+
+`m68k.py` generates random 680x0 and ColdFire instructions for one CPU model
+at a time (`--cpu 68030`, `--cpu 5475`, `--cpu all`), in GNU syntax, in
+Motorola syntax against GNU as `--mri`, or in Motorola syntax against vasm,
+and compares the bytes, the relocations and the accept/reject decisions.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/m68k.py fuzz --cpu all --syntax all --count 400000
+$ tools/fuzz/m68k.py fuzz --cpu 68020,68040 --syntax vasm --count 50000
+$ tools/fuzz/m68k.py fuzz --cpu 68040 --syntax mot --only '^fmove' --seed 3
+$ tools/fuzz/m68k.py corpus --first --cpu 68040 --syntax gas
+$ tools/fuzz/m68k.py check --cpu 68020 --syntax gas lines.txt
+```
+
+Its forms are GNU's own opcode table, read out of the binutils source by
+`tools/m68k-opc/gen.py` rather than from rsasm's generated copy, and its
+operands are drawn per operand kind the way `tc-m68k.c` matches them: every
+addressing mode a kind takes, 68020 full extension words where the CPU has
+them, register lists, k-factors, float literals, MMU and control registers,
+symbols, and branches whose targets move as the batch relaxes. By default
+only the instructions rsasm encodes from that table are generated; `--all`
+adds the 68000-68020 integer set, where rsasm deliberately assembles what is
+written and GNU as substitutes (`addw #1` becomes `addq`), so expect findings.
+
+Against vasm each case also goes to GNU as `--mri`, and one where vasm alone
+differs from rsasm is a **split**, counted rather than listed (`--splits`
+lists them): vasm and GNU as part ways by design (which names a 68000 takes as
+registers, `movep` to `(An)`, one-operand `fsub.x`), and rsasm follows GNU as.
+That mode is where extended and packed float immediates are checked, which GNU
+as gets wrong or refuses.
+
+What rsasm deliberately does differently from GNU as is not generated, since
+one refused line moves every later label in its batch; `deviates` and
+`mri_skips` in the script list each with its reason. A run of 400,000 cases
+over every CPU in both syntaxes, and 100,000 against vasm, finds nothing.

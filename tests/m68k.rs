@@ -1027,7 +1027,11 @@ fn cpus_refuse_what_they_lack_and_say_what_it_needs() {
         ("68030", "callm #0,(%a0)\n", "needs a 68020;"),
         ("m68k", "bgnd\n", "needs a CPU32 or a Fido"),
         ("68060", "mvsw %d0,%d1\n", "ColdFire"),
-        ("5475", "bitrev %d0\n", "or a ColdFire ISA_C; this target is a 5475"),
+        (
+            "5475",
+            "bitrev %d0\n",
+            "or a ColdFire ISA_C; this target is a 5475",
+        ),
         ("cpu32", "movel ([4,%a0]),%d0\n", "not available on CPU32"),
         (
             "5475",
