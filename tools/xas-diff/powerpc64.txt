@@ -1,345 +1,3 @@
-# PowerPC 32-bit corpus.
-#
-# The 32-bit subset of powerpc64.txt: every instruction the 64-bit corpus holds
-# except the ones that only exist on a 64-bit implementation, which llvm-mc
-# rejects for this triple and which rsasm rejects too (see the `P64` flag in
-# src/arch/powerpc/insn.rs).
-#
-# As in powerpc64.txt, every line is assembled on its own at address zero.
-
-# ---- fixed-point arithmetic, XO-form
-add 3, 4, 5
-add. 3, 4, 5
-addo 3, 4, 5
-addo. 3, 4, 5
-add 0, 0, 0
-add 31, 31, 31
-addc 3, 4, 5
-addc. 3, 4, 5
-adde 3, 4, 5
-addme 3, 4
-addze 3, 4
-subf 3, 4, 5
-subf. 3, 4, 5
-subfo. 3, 4, 5
-subfc 3, 4, 5
-subfe 3, 4, 5
-subfme 3, 4
-subfze 3, 4
-neg 3, 4
-neg. 3, 4
-nego 3, 4
-mullw 3, 4, 5
-mullw. 3, 4, 5
-mulhw 3, 4, 5
-mulhwu 3, 4, 5
-divw 3, 4, 5
-divw. 3, 4, 5
-divwu 3, 4, 5
-
-# ---- fixed-point arithmetic, D-form
-addi 3, 4, 100
-addi 3, 4, -100
-addi 3, 0, 100
-addis 3, 4, -1
-addis 3, 4, 65535
-# Only the high-half loaders accept an unsigned spelling.
-addis 3, 4, 40000
-lis 3, 40000
-addi 3, 4, 32767
-addic 3, 4, 7
-addic. 3, 4, 7
-subfic 3, 4, 7
-mulli 3, 4, 7
-li 3, 0
-li 3, -1
-li 3, -32768
-li 3, 32767
-lis 3, 4660
-lis 3, -1
-la 3, 8(4)
-la 3, -8(31)
-subi 3, 4, 100
-subi 3, 4, -32767
-subis 3, 4, 100
-subic 3, 4, 100
-subic. 3, 4, 100
-sub 3, 4, 5
-subc 3, 4, 5
-
-# ---- relocation modifiers applied to constants
-lis 3, 0x8000@ha
-lis 3, 0x12348000@ha
-lis 3, 0x12348000@h
-addi 3, 3, 0x12348000@l
-ori 3, 3, 0x12348000@l
-lwz 3, 0x12348000@l(4)
-li 3, 0x1234@l
-
-# ---- logical
-and 3, 4, 5
-and. 3, 4, 5
-or 3, 4, 5
-xor 3, 4, 5
-nand 3, 4, 5
-nor 3, 4, 5
-eqv 3, 4, 5
-andc 3, 4, 5
-orc 3, 4, 5
-andi. 3, 4, 255
-andis. 3, 4, 255
-ori 3, 4, 255
-ori 3, 4, 65535
-oris 3, 4, 255
-xori 3, 4, 255
-xoris 3, 4, 255
-extsb 3, 4
-extsb. 3, 4
-extsh 3, 4
-cntlzw 3, 4
-cntlzw. 3, 4
-popcntw 3, 4
-mr 3, 4
-mr. 3, 4
-not 3, 4
-nop
-
-# ---- shifts
-slw 3, 4, 5
-srw 3, 4, 5
-sraw 3, 4, 5
-srawi 3, 4, 5
-srawi. 3, 4, 31
-
-# ---- rotate and mask, the characteristic PowerPC forms
-rlwinm 3, 4, 5, 6, 7
-rlwinm. 3, 4, 5, 6, 7
-rlwinm 3, 4, 0, 0, 31
-rlwinm 3, 4, 31, 31, 31
-rlwimi 3, 4, 5, 6, 7
-rlwimi. 3, 4, 5, 6, 7
-rlwnm 3, 4, 5, 6, 7
-
-# ---- extended rotate mnemonics, which is how these are actually written
-slwi 3, 4, 5
-slwi 3, 4, 0
-slwi. 3, 4, 31
-srwi 3, 4, 5
-srwi 3, 4, 0
-clrlwi 3, 4, 5
-clrrwi 3, 4, 5
-rotlwi 3, 4, 5
-rotrwi 3, 4, 5
-rotlw 3, 4, 5
-extlwi 3, 4, 5, 6
-extrwi 3, 4, 5, 6
-inslwi 3, 4, 5, 6
-insrwi 3, 4, 5, 6
-
-# ---- load and store, D-form
-lbz 3, 8(4)
-lbzu 3, 8(4)
-lhz 3, 8(4)
-lhzu 3, 8(4)
-lha 3, -8(4)
-lhau 3, 8(4)
-lwz 3, 8(4)
-lwz 3, 0(0)
-lwz 3, -32768(31)
-lwz 3, 32767(4)
-lwzu 3, 8(4)
-stb 3, 8(4)
-stbu 3, 8(4)
-sth 3, 8(4)
-sthu 3, 8(4)
-stw 3, 8(4)
-stwu 3, 8(4)
-lmw 3, 8(4)
-stmw 3, 8(4)
-
-# ---- load and store, DS-form (the displacement is a multiple of four)
-
-# ---- load and store, X-form
-lbzx 3, 4, 5
-lbzux 3, 4, 5
-lhzx 3, 4, 5
-lhax 3, 4, 5
-lwzx 3, 4, 5
-lwzux 3, 4, 5
-stbx 3, 4, 5
-sthx 3, 4, 5
-stwx 3, 4, 5
-stwux 3, 4, 5
-lhbrx 3, 4, 5
-lwbrx 3, 4, 5
-sthbrx 3, 4, 5
-stwbrx 3, 4, 5
-lwarx 3, 4, 5
-stwcx. 3, 4, 5
-
-# ---- branches
-b 0
-b 4
-b 0x1000
-b 0x1fffffc
-ba 0x1000
-bl 0x1000
-bla 0x1000
-bc 12, 0, 0x100
-bc 4, 2, 0x100
-bca 12, 0, 0x100
-bcl 12, 0, 0x100
-bcla 12, 0, 0x100
-beq 0x100
-bne 0x100
-blt 0x100
-bgt 0x100
-ble 0x100
-bge 0x100
-bso 0x100
-bns 0x100
-beq 7, 0x100
-bne 7, 0x100
-blt 2, 0x100
-bgt 1, 0x100
-beql 0x100
-bnel 0x100
-bt 5, 0x100
-bf 5, 0x100
-bdnz 0x100
-bdz 0x100
-bdnzt 0, 0x100
-bdnzf 0, 0x100
-bdzt 0, 0x100
-blr
-blrl
-bctr
-bctrl
-bclr 20, 0
-bclr 20, 0, 0
-bclr 20, 0, 3
-bcctr 20, 0
-bclrl 20, 0
-beqlr
-bnelr
-beqlr 7
-beqctr
-bnectr
-bdnzlr
-bdzlr
-
-# ---- comparison
-cmp 0, 0, 3, 4
-cmp 7, 1, 3, 4
-cmpi 0, 0, 3, 100
-cmpl 0, 1, 3, 4
-cmpli 0, 1, 3, 100
-cmpw 3, 4
-cmpw 7, 3, 4
-cmpwi 3, 100
-cmpwi 3, -1
-cmpwi 7, 3, 100
-cmplw 3, 4
-cmplwi 3, 65535
-
-# ---- condition register logic
-crand 3, 4, 5
-crandc 3, 4, 5
-creqv 3, 4, 5
-crnand 3, 4, 5
-crnor 3, 4, 5
-cror 3, 4, 5
-crorc 3, 4, 5
-crxor 3, 4, 5
-crnot 3, 4
-crmove 3, 4
-crclr 3
-crset 3
-mcrf 3, 4
-
-# ---- system and special registers
-mfspr 3, 8
-mfspr 3, 9
-mfspr 3, 1
-mtspr 8, 3
-mtspr 9, 3
-mflr 3
-mtlr 3
-mfctr 3
-mtctr 3
-mfxer 3
-mtxer 3
-mftb 3
-mfcr 3
-mtcrf 255, 3
-mtcrf 1, 3
-mtcr 3
-mfmsr 3
-mtmsr 3
-sync
-lwsync
-isync
-eieio
-sc
-sc 1
-trap
-tw 4, 3, 4
-twi 4, 3, 100
-tweq 3, 4
-twne 3, 4
-dcbz 3, 4
-icbi 3, 4
-
-# ---- floating point
-lfs 1, 8(4)
-lfsu 1, 8(4)
-lfd 1, 8(4)
-lfdu 1, 8(4)
-stfs 1, 8(4)
-stfsu 1, 8(4)
-stfd 1, 8(4)
-stfdu 1, 8(4)
-lfsx 1, 4, 5
-lfdx 1, 4, 5
-stfsx 1, 4, 5
-stfdx 1, 4, 5
-fadd 1, 2, 3
-fadd. 1, 2, 3
-fadds 1, 2, 3
-fsub 1, 2, 3
-fsubs 1, 2, 3
-fmul 1, 2, 3
-fmuls 1, 2, 3
-fdiv 1, 2, 3
-fdivs 1, 2, 3
-fsqrt 1, 2
-fsqrts 1, 2
-fmadd 1, 2, 3, 4
-fmadds 1, 2, 3, 4
-fmsub 1, 2, 3, 4
-fnmadd 1, 2, 3, 4
-fnmsub 1, 2, 3, 4
-fsel 1, 2, 3, 4
-fmr 1, 2
-fmr. 1, 2
-fneg 1, 2
-fabs 1, 2
-fnabs 1, 2
-frsp 1, 2
-fctiw 1, 2
-fctiwz 1, 2
-fcmpu 0, 1, 2
-fcmpo 7, 1, 2
-mffs 1
-mtfsf 1, 2
-fadd 31, 30, 29
-
-# ==== AltiVec, VSX and the POWER8, POWER9 and POWER10 additions ==============
-#
-# powerpc64.txt's vector section, less the doubleword instructions rsasm
-# rejects in 32-bit code (`maddld`, `mfvsrd`, `pld` and the rest flagged P64).
-
-# ---- AltiVec loads and stores
 dss 1
 dss 3
 dssall
@@ -384,8 +42,6 @@ stvx 2, 4, 5
 stvx 30, 0, 31
 stvxl 2, 4, 5
 stvxl 30, 0, 31
-
-# ---- AltiVec arithmetic and logic
 bcdadd. 2, 3, 4, 0
 bcdadd. 30, 1, 31, 1
 bcdcfn. 2, 4, 0
@@ -416,6 +72,12 @@ bcdus. 2, 3, 4
 bcdus. 30, 1, 31
 bcdutrunc. 2, 3, 4
 bcdutrunc. 30, 1, 31
+maddhd 3, 4, 5, 6
+maddhd 31, 0, 31, 0
+maddhdu 3, 4, 5, 6
+maddhdu 31, 0, 31, 0
+maddld 3, 4, 5, 6
+maddld 31, 0, 31, 0
 mtvsrbm 2, 5
 mtvsrbm 30, 31
 mtvsrbmi 2, 100
@@ -486,6 +148,10 @@ vbpermd 2, 3, 4
 vbpermd 30, 1, 31
 vbpermq 2, 3, 4
 vbpermq 30, 1, 31
+vcfpsxws 2, 4, 1
+vcfpsxws 30, 31, 31
+vcfpuxws 2, 4, 1
+vcfpuxws 30, 31, 31
 vcfsx 2, 4, 1
 vcfsx 30, 31, 31
 vcfuged 2, 3, 4
@@ -514,79 +180,54 @@ vclzw 2, 4
 vclzw 30, 31
 vcmpbfp 2, 3, 4
 vcmpbfp 30, 1, 31
-vcmpbfp. 30, 1, 31
 vcmpeqfp 2, 3, 4
 vcmpeqfp 30, 1, 31
-vcmpeqfp. 30, 1, 31
 vcmpequb 2, 3, 4
 vcmpequb 30, 1, 31
-vcmpequb. 30, 1, 31
 vcmpequd 2, 3, 4
 vcmpequd 30, 1, 31
-vcmpequd. 30, 1, 31
 vcmpequh 2, 3, 4
 vcmpequh 30, 1, 31
-vcmpequh. 30, 1, 31
 vcmpequq 2, 3, 4
 vcmpequq 30, 1, 31
-vcmpequq. 30, 1, 31
 vcmpequw 2, 3, 4
 vcmpequw 30, 1, 31
-vcmpequw. 30, 1, 31
 vcmpgefp 2, 3, 4
 vcmpgefp 30, 1, 31
-vcmpgefp. 30, 1, 31
 vcmpgtfp 2, 3, 4
 vcmpgtfp 30, 1, 31
-vcmpgtfp. 30, 1, 31
 vcmpgtsb 2, 3, 4
 vcmpgtsb 30, 1, 31
-vcmpgtsb. 30, 1, 31
 vcmpgtsd 2, 3, 4
 vcmpgtsd 30, 1, 31
-vcmpgtsd. 30, 1, 31
 vcmpgtsh 2, 3, 4
 vcmpgtsh 30, 1, 31
-vcmpgtsh. 30, 1, 31
 vcmpgtsq 2, 3, 4
 vcmpgtsq 30, 1, 31
-vcmpgtsq. 30, 1, 31
 vcmpgtsw 2, 3, 4
 vcmpgtsw 30, 1, 31
-vcmpgtsw. 30, 1, 31
 vcmpgtub 2, 3, 4
 vcmpgtub 30, 1, 31
-vcmpgtub. 30, 1, 31
 vcmpgtud 2, 3, 4
 vcmpgtud 30, 1, 31
-vcmpgtud. 30, 1, 31
 vcmpgtuh 2, 3, 4
 vcmpgtuh 30, 1, 31
-vcmpgtuh. 30, 1, 31
 vcmpgtuq 2, 3, 4
 vcmpgtuq 30, 1, 31
-vcmpgtuq. 30, 1, 31
 vcmpgtuw 2, 3, 4
 vcmpgtuw 30, 1, 31
-vcmpgtuw. 30, 1, 31
 vcmpneb 2, 3, 4
 vcmpneb 30, 1, 31
-vcmpneb. 30, 1, 31
 vcmpneh 2, 3, 4
 vcmpneh 30, 1, 31
-vcmpneh. 30, 1, 31
 vcmpnew 2, 3, 4
 vcmpnew 30, 1, 31
-vcmpnew. 30, 1, 31
 vcmpnezb 2, 3, 4
 vcmpnezb 30, 1, 31
-vcmpnezb. 30, 1, 31
 vcmpnezh 2, 3, 4
 vcmpnezh 30, 1, 31
-vcmpnezh. 30, 1, 31
 vcmpnezw 2, 3, 4
 vcmpnezw 30, 1, 31
-vcmpnezw. 30, 1, 31
 vcmpsq 0, 3, 4
 vcmpsq 5, 1, 31
 vcmpuq 0, 3, 4
@@ -599,6 +240,8 @@ vcntmbh 3, 4, 0
 vcntmbh 31, 31, 1
 vcntmbw 3, 4, 0
 vcntmbw 31, 31, 1
+vcsxwfp 2, 4, 1
+vcsxwfp 30, 31, 31
 vctsxs 2, 4, 1
 vctsxs 30, 31, 31
 vctuxs 2, 4, 1
@@ -615,6 +258,8 @@ vctzlsbb 3, 4
 vctzlsbb 31, 31
 vctzw 2, 4
 vctzw 30, 31
+vcuxwfp 2, 4, 1
+vcuxwfp 30, 31, 31
 vdivesd 2, 3, 4
 vdivesd 30, 1, 31
 vdivesq 2, 3, 4
@@ -1081,16 +726,12 @@ vsrw 2, 3, 4
 vsrw 30, 1, 31
 vstribl 2, 4
 vstribl 30, 31
-vstribl. 30, 31
 vstribr 2, 4
 vstribr 30, 31
-vstribr. 30, 31
 vstrihl 2, 4
 vstrihl 30, 31
-vstrihl. 30, 31
 vstrihr 2, 4
 vstrihr 30, 31
-vstrihr. 30, 31
 vsubcuq 2, 3, 4
 vsubcuq 30, 1, 31
 vsubcuw 2, 3, 4
@@ -1151,8 +792,6 @@ vupklsw 2, 4
 vupklsw 30, 31
 vxor 2, 3, 4
 vxor 30, 1, 31
-
-# ---- VSX loads, stores and moves
 lxsd 2, 8(4)
 lxsd 30, -8(0)
 lxsdx 1, 4, 5
@@ -1215,6 +854,10 @@ mfvrd 4, 2
 mfvrd 0, 30
 mfvrwz 4, 2
 mfvrwz 0, 30
+mfvsrd 4, 1
+mfvsrd 0, 63
+mfvsrld 4, 1
+mfvsrld 0, 63
 mfvsrwz 4, 1
 mfvsrwz 0, 63
 mtfprd 1, 4
@@ -1229,6 +872,10 @@ mtvrwa 2, 4
 mtvrwa 30, 0
 mtvrwz 2, 4
 mtvrwz 30, 0
+mtvsrd 1, 4
+mtvsrd 63, 0
+mtvsrdd 1, 4, 5
+mtvsrdd 63, 0, 31
 mtvsrwa 1, 4
 mtvsrwa 63, 0
 mtvsrws 1, 4
@@ -1283,8 +930,6 @@ stxvw4x 1, 4, 5
 stxvw4x 63, 0, 31
 stxvx 1, 4, 5
 stxvx 63, 0, 31
-
-# ---- VSX computation
 lxvkq 1, 1
 lxvkq 63, 31
 lxvp 2, 16(4)
@@ -1551,22 +1196,16 @@ xvadduwm 1, 2, 3
 xvadduwm 63, 40, 52
 xvcmpeqdp 1, 2, 3
 xvcmpeqdp 63, 40, 52
-xvcmpeqdp. 63, 40, 52
 xvcmpeqsp 1, 2, 3
 xvcmpeqsp 63, 40, 52
-xvcmpeqsp. 63, 40, 52
 xvcmpgedp 1, 2, 3
 xvcmpgedp 63, 40, 52
-xvcmpgedp. 63, 40, 52
 xvcmpgesp 1, 2, 3
 xvcmpgesp 63, 40, 52
-xvcmpgesp. 63, 40, 52
 xvcmpgtdp 1, 2, 3
 xvcmpgtdp 63, 40, 52
-xvcmpgtdp. 63, 40, 52
 xvcmpgtsp 1, 2, 3
 xvcmpgtsp 63, 40, 52
-xvcmpgtsp. 63, 40, 52
 xvcpsgndp 1, 2, 3
 xvcpsgndp 63, 40, 52
 xvcpsgnsp 1, 2, 3
@@ -1785,12 +1424,16 @@ xxlnand 1, 2, 3
 xxlnand 63, 40, 52
 xxlnor 1, 2, 3
 xxlnor 63, 40, 52
+xxlnot 1, 5
+xxlnot 63, 45
 xxlor 1, 2, 3
 xxlor 63, 40, 52
 xxlorc 1, 2, 3
 xxlorc 63, 40, 52
 xxlxor 1, 2, 3
 xxlxor 63, 40, 52
+xxmr 1, 5
+xxmr 63, 45
 xxmrghd 1, 2, 3
 xxmrghd 63, 40, 52
 xxmrghw 1, 2, 3
@@ -1817,27 +1460,36 @@ xxspltw 1, 3, 1
 xxspltw 63, 52, 3
 xxswapd 1, 5
 xxswapd 63, 45
-
-# ---- POWER9 and POWER10 scalar
 addex 3, 4, 5, 1
 addex 31, 0, 31, 3
 addpcis 3, 100
 addpcis 31, -32768
+brd 4, 3
+brd 0, 31
 brh 4, 3
 brh 0, 31
 brw 4, 3
 brw 0, 31
+cfuged 4, 3, 5
+cfuged 0, 31, 31
 cmpeqb 0, 4, 5
 cmpeqb 5, 0, 31
 cmprb 0, 0, 4, 5
 cmprb 5, 1, 0, 31
+cntlzdm 4, 3, 5
+cntlzdm 0, 31, 31
+cnttzd 4, 3
+cnttzd 0, 31
+cnttzdm 4, 3, 5
+cnttzdm 0, 31, 31
 cnttzw 4, 3
 cnttzw 0, 31
-cnttzw. 0, 31
 copy 4, 5
 copy 0, 31
 darn 3, 1
 darn 31, 3
+extswsli 4, 3, 5
+extswsli 0, 31, 63
 lnia 3
 lnia 31
 mcrxrx 0
@@ -1854,12 +1506,20 @@ mffscrni 1, 1
 mffscrni 31, 3
 mffsl 1
 mffsl 31
+modsd 3, 4, 5
+modsd 31, 0, 31
 modsw 3, 4, 5
 modsw 31, 0, 31
+modud 3, 4, 5
+modud 31, 0, 31
 moduw 3, 4, 5
 moduw 31, 0, 31
 paste. 4, 5
 paste. 0, 31
+pdepd 4, 3, 5
+pdepd 0, 31, 31
+pextd 4, 3, 5
+pextd 0, 31, 31
 scv 1
 scv 0
 setb 3, 1
@@ -1874,13 +1534,14 @@ setnbcr 3, 5
 setnbcr 31, 31
 subpcis 3, 100
 subpcis 31, 32767
-
-# ---- prefixed (POWER10)
 paddi 3, 4, 100, 0
 paddi 31, 0, -8589934592
+pla 3, 100(4), 0
 pla 31, -8589934592(0)
 plbz 3, 100(4), 0
 plbz 31, -8589934592(0)
+pld 3, 100(4), 0
+pld 31, -8589934592(0)
 plfd 1, 100(4), 0
 plfd 31, -8589934592(0)
 plfs 1, 100(4), 0
@@ -1891,6 +1552,8 @@ plhz 3, 100(4), 0
 plhz 31, -8589934592(0)
 pli 3, 100
 pli 31, -8589934592
+plwa 3, 100(4), 0
+plwa 31, -8589934592(0)
 plwz 3, 100(4), 0
 plwz 31, -8589934592(0)
 plxsd 2, 100(4), 0
@@ -1901,8 +1564,12 @@ plxv 3, 100(4), 0
 plxv 35, -8589934592(0)
 plxvp 2, 100(4), 0
 plxvp 34, -8589934592(0)
+pnop
+pnop
 pstb 3, 100(4), 0
 pstb 31, -8589934592(0)
+pstd 3, 100(4), 0
+pstd 31, -8589934592(0)
 pstfd 1, 100(4), 0
 pstfd 31, -8589934592(0)
 pstfs 1, 100(4), 0
@@ -1919,6 +1586,7 @@ pstxv 3, 100(4), 0
 pstxv 35, -8589934592(0)
 pstxvp 2, 100(4), 0
 pstxvp 34, -8589934592(0)
+psubi 3, 4, 100, 0
 psubi 31, 0, -100
 xxblendvb 1, 2, 3, 4
 xxblendvb 63, 40, 52, 33
@@ -1938,53 +1606,3 @@ xxspltidp 3, 305419896
 xxspltidp 35, -1
 xxspltiw 3, 305419896
 xxspltiw 35, -1
-
-# ---- vector register spellings
-# llvm-mc takes a register name only with its `%`, and then in any slot; rsasm
-# takes `v` names in vector slots and `vs` names in VSX slots, with or without
-# the sign, as GNU as does under -mregnames.
-vaddubm %v2, %v3, %v4
-vcmpequb. %v0, %v31, %v15
-xxlor %vs1, %vs40, %vs63
-xsadddp %vs0, %vs33, %vs2
-lxv %vs33, 16(%r3)
-stxv %vs63, -16(%r31)
-xxspltib %vs35, 255
-vspltisb %v2, -16
-lxvp %vs34, 32(%r4)
-
-# ---- field limits
-xxspltib 3, 0
-vspltisw 31, 15
-vsldoi 2, 3, 4, 15
-xxpermdi 63, 63, 63, 3
-xxsldwi 1, 2, 3, 3
-xxspltd 1, 2, 1
-xxspltw 60, 61, 3
-vextractub 2, 3, 15
-vinsertd 2, 3, 15
-lxv 3, -32768(4)
-lxv 3, 32752(4)
-stxsd 3, 32764(4)
-lxssp 3, -32768(4)
-addpcis 3, 65535
-addpcis 3, -32768
-subpcis 3, -32767
-xststdcdp 7, 63, 127
-xvtstdcsp 63, 63, 127
-xvtstdcdp 0, 1, 64
-
-# ---- prefixed instructions: the R bit, the 34-bit range and the 32-bit splits
-paddi 3, 0, 100, 1
-plxv 63, 8(0), 1
-pli 3, 8589934591
-pli 3, -8589934592
-paddi 3, 4, 8589934591, 0
-psubi 3, 4, -8589934591
-xxspltiw 3, 4294967295
-xxspltiw 35, -2147483648
-xxspltidp 63, 0x7ff00000
-xxsplti32dx 34, 1, 0xdeadbeef
-xxeval 63, 62, 61, 60, 255
-xxpermx 1, 2, 3, 4, 7
-xxblendvd 32, 33, 34, 35

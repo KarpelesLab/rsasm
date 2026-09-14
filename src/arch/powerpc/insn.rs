@@ -3,7 +3,10 @@
 //! Every instruction is a 32-bit word made of fixed opcode bits plus a handful
 //! of fields at known positions, so a definition is just the word with its
 //! fields zeroed plus a list saying which operand goes where. [`F`] names the
-//! fields; the bit positions live in [`super::encode`].
+//! fields; the bit positions live in [`super::encode`]. POWER10's prefixed
+//! instructions are two such words, and keep the prefix in the upper half of
+//! the same value. The AltiVec, VSX and POWER10 instructions are in a table of
+//! their own, [`super::vector`], which is looked up together with this one.
 //!
 //! Field names follow the ISA manual: the 6:10 slot is `RT`/`RS` depending on
 //! whether the instruction reads or writes it, 11:15 is `RA`, 16:20 is `RB`.
@@ -96,6 +99,80 @@ pub enum F {
     RotN(Rot),
     /// An extended rotate mnemonic taking a width and a bit position.
     RotNB(Rot2),
+
+    // ---- AltiVec and VSX; see [`super::vector`] ---------------------------
+    /// Vector register (VR) in bits 6:10, 11:15, 16:20 and 21:25 — the four
+    /// slots the GPR and FPR fields also use.
+    Vt,
+    Va,
+    Vb,
+    Vc,
+    /// One VR written into both the A and B slots, which is how `vmr vD, vS`
+    /// becomes `vor vD, vS, vS`.
+    VaVb,
+    /// VSX register (VSR), six bits: the low five in one of the same four
+    /// slots, and the sixth in the extension bit that slot owns at the bottom
+    /// of the word — TX is bit 31, AX 29, BX 30, CX 28.
+    Xt,
+    Xa,
+    Xb,
+    Xc,
+    /// One VSR written into both the A and B slots (`xxswapd`, `xxlnot`).
+    Xab,
+    /// The VSR of a DQ-form load or store, whose extension bit is bit 28.
+    Xtq,
+    /// The VSR of an 8RR-form prefixed instruction, extension bit 15.
+    Xts,
+    /// The VSR of `plxv` and `pstxv`, whose six bits are contiguous: the
+    /// suffix's primary opcode has a spare bit immediately below the slot.
+    Xtop,
+    /// An even-numbered VSR naming a pair, in the T, A and B slots. The pair
+    /// number is written out in full and the low bit dropped, and the
+    /// extension bit is again elsewhere: bit 10 for T, 29 and 30 for A and B.
+    Xtp,
+    Xap,
+    Xbp,
+    /// GPR in bits 21:25, where `maddld` keeps its addend.
+    Rc,
+    /// An unsigned immediate `bits` wide whose least significant bit is bit
+    /// `lsb` of the word, counted from the bottom as Rust counts bits.
+    ///
+    /// The vector forms carry two dozen one-off immediate fields — `vsldoi`'s
+    /// SHB, `xxpermdi`'s DM, `vspltw`'s UIM, `xxeval`'s IMM8 — with nothing
+    /// in common but a width and a position, so they share one field rather
+    /// than each earning a name.
+    Uim(u8, u8),
+    /// The same, read as signed: `vspltisb`'s SIM.
+    Sim(u8, u8),
+    /// The same again, accepting either sign, for `xxspltib`, whose byte is
+    /// written -128 to 255.
+    SimU(u8, u8),
+    /// `xxspltd`'s DM, which is written 0 or 1 and encoded as 0 or 3.
+    DmEx,
+    /// `xvtstdc*`'s DCMX, seven bits in three pieces.
+    Dcmxs,
+    /// `addpcis`'s D, a 16-bit signed value in three pieces, and the negated
+    /// form `subpcis` takes.
+    Dx,
+    NegDx,
+    /// `dq(rA)`: the displacement into bits 4:15 of the low halfword, so it
+    /// must be a multiple of 16.
+    MemDQ,
+
+    // ---- prefixed (POWER10) ------------------------------------------------
+    /// `d(rA)` of a prefixed instruction: a 34-bit displacement, its top 18
+    /// bits in the prefix word and the rest in the suffix.
+    MemD34,
+    /// The same 34-bit field holding an immediate rather than a displacement,
+    /// and the negated form `psubi` takes.
+    Simm34,
+    NegSimm34,
+    /// A 32-bit immediate split half into the prefix word and half into the
+    /// suffix (`xxspltiw`, `xxspltidp`).
+    Imm32,
+    /// The R bit of a prefixed instruction, bit 20 of the prefix word: the
+    /// displacement is relative to the instruction rather than to `rA`.
+    Pcrel,
 }
 
 /// Extended rotate mnemonics with a single immediate operand.
@@ -141,11 +218,17 @@ pub const P64: u8 = 1 << 2;
 pub const OPT1: u8 = 1 << 3;
 /// The last operand may be omitted and defaults to zero (`bclr`'s BH).
 pub const OPTL: u8 = 1 << 4;
+/// The instruction takes the `.` suffix, setting the *vector* record bit,
+/// which is bit 21 rather than bit 31: `vcmpequb.` sets CR6 where
+/// `add.` sets CR0.
+pub const VRC: u8 = 1 << 5;
 
 pub struct Def {
     pub name: &'static str,
-    /// The instruction word with every operand field zero.
-    pub word: u32,
+    /// The instruction word with every operand field zero. A prefixed
+    /// (POWER10) instruction keeps its prefix word in the upper 32 bits, and
+    /// is eight bytes long; every other instruction leaves them clear.
+    pub word: u64,
     pub ops: &'static [F],
     pub flags: u8,
 }
@@ -177,7 +260,7 @@ pub fn lookup(name: &str) -> Option<Resolved> {
     };
     if rc
         && let Some(def) = index().get(base)
-        && def.flags & RC != 0
+        && def.flags & (RC | VRC) != 0
     {
         return Some(Resolved {
             def,
@@ -195,10 +278,15 @@ pub fn lookup(name: &str) -> Option<Resolved> {
 
 fn index() -> &'static HashMap<&'static str, &'static Def> {
     static INDEX: OnceLock<HashMap<&'static str, &'static Def>> = OnceLock::new();
-    INDEX.get_or_init(|| DEFS.iter().map(|d| (d.name, d)).collect())
+    INDEX.get_or_init(|| {
+        DEFS.iter()
+            .chain(super::vector::DEFS)
+            .map(|d| (d.name, d))
+            .collect()
+    })
 }
 
-const fn d(name: &'static str, word: u32, ops: &'static [F], flags: u8) -> Def {
+pub(super) const fn d(name: &'static str, word: u64, ops: &'static [F], flags: u8) -> Def {
     Def {
         name,
         word,
@@ -208,40 +296,40 @@ const fn d(name: &'static str, word: u32, ops: &'static [F], flags: u8) -> Def {
 }
 
 /// Primary opcode in bits 0:5.
-const fn op(primary: u32) -> u32 {
-    primary << 26
+pub const fn op(primary: u32) -> u64 {
+    (primary as u64) << 26
 }
 
 /// XO-form extended opcode, bits 22:30 (opcode 31 arithmetic).
-const fn xo(primary: u32, x: u32) -> u32 {
-    op(primary) | (x << 1)
+const fn xo(primary: u32, x: u32) -> u64 {
+    op(primary) | ((x as u64) << 1)
 }
 
 /// X- and XL-form extended opcode, bits 21:30. Same shift as [`xo`]; named
 /// apart only because the field is one bit wider and so cannot hold OE.
-const fn x(primary: u32, ext: u32) -> u32 {
-    op(primary) | (ext << 1)
+pub const fn x(primary: u32, ext: u32) -> u64 {
+    op(primary) | ((ext as u64) << 1)
 }
 
 /// A-form extended opcode, bits 26:30.
-const fn a(primary: u32, ext: u32) -> u32 {
-    op(primary) | (ext << 1)
+const fn a(primary: u32, ext: u32) -> u64 {
+    op(primary) | ((ext as u64) << 1)
 }
 
 /// B-form branch word with BO and BI already placed.
-const fn bcond(bo: u32, bi: u32, aalk: u32) -> u32 {
-    op(16) | (bo << 21) | (bi << 16) | aalk
+const fn bcond(bo: u32, bi: u32, aalk: u32) -> u64 {
+    op(16) | ((bo as u64) << 21) | ((bi as u64) << 16) | aalk as u64
 }
 
 /// XL-form branch-to-register word (`bclr`/`bcctr`) with BO and BI placed.
-const fn breg(bo: u32, bi: u32, ext: u32, lk: u32) -> u32 {
-    op(19) | (bo << 21) | (bi << 16) | (ext << 1) | lk
+const fn breg(bo: u32, bi: u32, ext: u32, lk: u32) -> u64 {
+    op(19) | ((bo as u64) << 21) | ((bi as u64) << 16) | ((ext as u64) << 1) | lk as u64
 }
 
 /// `mfspr`/`mtspr` with a fixed SPR number, for `mflr` and friends. The 10-bit
 /// SPR field is stored with its two five-bit halves swapped.
-const fn spr(ext: u32, n: u32) -> u32 {
-    op(31) | (((n & 0x1f) << 16) | ((n >> 5) << 11)) | (ext << 1)
+const fn spr(ext: u32, n: u32) -> u64 {
+    op(31) | ((((n & 0x1f) << 16) | ((n >> 5) << 11)) as u64) | ((ext as u64) << 1)
 }
 
 use F::*;
@@ -617,12 +705,29 @@ static DEFS: &[Def] = &[
 mod tests {
     use super::*;
 
+    fn all() -> impl Iterator<Item = &'static Def> {
+        DEFS.iter().chain(super::super::vector::DEFS)
+    }
+
     #[test]
     fn names_are_unique() {
         let mut seen = std::collections::HashSet::new();
-        for d in DEFS {
+        for d in all() {
             assert!(seen.insert(d.name), "duplicate mnemonic `{}`", d.name);
         }
+    }
+
+    #[test]
+    fn vector_mnemonics_resolve_with_their_record_bits() {
+        let r = lookup("vcmpequb.").expect("vcmpequb. exists");
+        assert_eq!(r.def.name, "vcmpequb");
+        assert!(r.rc && !r.oe);
+        // `bcdadd.` has no unrecorded form, so the dot is part of its name.
+        assert!(!lookup("bcdadd.").expect("bcdadd.").rc);
+        assert!(lookup("bcdadd").is_none());
+        // `vaddubm` has no record form at all.
+        assert!(lookup("vaddubm.").is_none());
+        assert!(lookup("xxlor").is_some() && lookup("paddi").is_some());
     }
 
     #[test]
@@ -641,9 +746,17 @@ mod tests {
 
     #[test]
     fn every_definition_has_room_for_its_flags() {
-        for def in DEFS {
+        for def in all() {
             if def.flags & RC != 0 {
                 assert_eq!(def.word & 1, 0, "`{}` already sets Rc", def.name);
+            }
+            if def.flags & VRC != 0 {
+                assert_eq!(def.word & (1 << 10), 0, "`{}` already sets Rc", def.name);
+                assert_eq!(def.flags & RC, 0, "`{}` has two record bits", def.name);
+            }
+            if def.word >> 32 != 0 {
+                // A prefix word has primary opcode 1.
+                assert_eq!(def.word >> 58, 1, "`{}` has a stray prefix", def.name);
             }
             if def.flags & OE != 0 {
                 // OE is manual bit 21, which is word bit 10.

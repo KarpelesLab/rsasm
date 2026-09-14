@@ -78,6 +78,8 @@ z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
+powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
+powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mpower10|elf:.text
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }

@@ -6,7 +6,7 @@
 //! 11 — and `at` does that conversion once, so the rest of the file can name
 //! fields the way the manual does.
 
-use super::insn::{Def, F, OPT1, OPTL, Resolved, Rot, Rot2};
+use super::insn::{Def, F, OPT1, OPTL, Resolved, Rot, Rot2, VRC};
 use super::operand::{Mem, Operand, OperandKind, Value};
 use super::reg::{RegClass, describe};
 use super::reloc;
@@ -21,10 +21,10 @@ const fn at(last: u32) -> u32 {
     31 - last
 }
 
-const RT: u32 = at(10); // RT / RS / BO / TO / crbD
-const RA: u32 = at(15); // RA / BI / crbA
-const RB: u32 = at(20); // RB / SH / crbB
-const FRC: u32 = at(25); // FRC, and MB of an M-form rotate
+const RT: u32 = at(10); // RT / RS / BO / TO / crbD / VRT
+const RA: u32 = at(15); // RA / BI / crbA / VRA
+const RB: u32 = at(20); // RB / SH / crbB / VRB
+const FRC: u32 = at(25); // FRC, MB of an M-form rotate, VRC
 const ME: u32 = at(30);
 const CRFD: u32 = at(8);
 const CRFS: u32 = at(13);
@@ -36,12 +36,37 @@ const SPRF: u32 = at(20); // ten bits at 11:20
 const LEV: u32 = at(26); // seven bits at 20:26
 
 /// The `o` suffix sets OE, bit 21.
-const OE_BIT: u32 = 1 << at(21);
+const OE_BIT: u64 = 1 << at(21);
+/// The `.` suffix sets Rc, bit 31, except on the vector compares, where the
+/// record bit is bit 21 and the result goes to CR6.
+const RC_BIT: u64 = 1 << at(31);
+const VRC_BIT: u64 = 1 << at(21);
+
+// The VSX extension bits. A VSX register number is six bits: five in the
+// same slot a VR would use, and the sixth down here, one bit per slot.
+const TX: u32 = at(31);
+const AX: u32 = at(29);
+const BX: u32 = at(30);
+const CX: u32 = at(28);
+/// The DQ-form load and store target keeps its sixth bit at 28 instead, and
+/// the 8RR-form prefixed target at 15.
+const TX_DQ: u32 = at(28);
+const TX_8RR: u32 = at(15);
+/// A VSX register *pair* is named by its even first register, so the slot
+/// holds four bits and the sixth bit moves up to 10.
+const TX_PAIR: u32 = at(10);
+
+/// The R bit of a prefixed instruction: bit 11 of the prefix word, which is
+/// bit 52 of the pair read as one 64-bit value.
+const PFX_R: u32 = 32 + at(11);
 
 pub struct Encoder<'c, 'a> {
     cx: &'c mut AsmCtx<'a>,
     endian: Endian,
-    word: u32,
+    /// The instruction word. A prefixed instruction keeps its prefix in the
+    /// upper 32 bits, so one value covers both halves and a field can sit in
+    /// either.
+    word: u64,
     fixups: Vec<Fixup>,
     failed: bool,
 }
@@ -61,7 +86,11 @@ impl<'c, 'a> Encoder<'c, 'a> {
     pub fn encode(mut self, r: &Resolved, ops: &[Operand], span: Span) -> Option<Variant> {
         self.word = r.def.word;
         if r.rc {
-            self.word |= 1;
+            self.word |= if r.def.flags & VRC != 0 {
+                VRC_BIT
+            } else {
+                RC_BIT
+            };
         }
         if r.oe {
             self.word |= OE_BIT;
@@ -74,8 +103,17 @@ impl<'c, 'a> Encoder<'c, 'a> {
         if self.failed {
             return None;
         }
+        // A prefixed instruction is two words, the prefix first, each written
+        // in the target's byte order on its own.
+        let bytes = if prefixed(r.def) {
+            let mut b = self.endian.bytes(self.word >> 32, 4);
+            b.extend_from_slice(&self.endian.bytes(self.word & 0xffff_ffff, 4));
+            b
+        } else {
+            self.endian.bytes(self.word, 4)
+        };
         Some(Variant {
-            bytes: self.endian.bytes(self.word as u64, 4),
+            bytes,
             fixups: self.fixups,
         })
     }
@@ -168,7 +206,7 @@ impl<'c, 'a> Encoder<'c, 'a> {
             F::NegSimm => match self.constant(op, "immediate") {
                 // `subi rD, rA, v` is `addi rD, rA, -v`, so the range is the
                 // signed one mirrored.
-                Some(v) if (-32767..=32768).contains(&v) => self.word |= (-v) as u32 & 0xffff,
+                Some(v) if (-32767..=32768).contains(&v) => self.word |= (-v) as u64 & 0xffff,
                 Some(v) => self.reject(
                     op,
                     format!("immediate {v} is out of range: must be -32767 to 32768"),
@@ -189,12 +227,12 @@ impl<'c, 'a> Encoder<'c, 'a> {
             }
             F::Sh6 => {
                 if let Some(v) = self.small(op, 63, "shift count") {
-                    self.word |= md_sh(v);
+                    self.word |= md_sh(v) as u64;
                 }
             }
             F::M6 => {
                 if let Some(v) = self.small(op, 63, "mask bound") {
-                    self.word |= md_m(v);
+                    self.word |= md_m(v) as u64;
                 }
             }
             F::CrfD => {
@@ -232,7 +270,7 @@ impl<'c, 'a> Encoder<'c, 'a> {
             // CR field; naming a field moves it up by four bits per field.
             F::CrfBi => {
                 if let Some(n) = self.crf(op) {
-                    self.word |= (n * 4) << RA;
+                    self.word |= ((n * 4) as u64) << RA;
                 }
             }
             F::Bo => {
@@ -271,11 +309,11 @@ impl<'c, 'a> Encoder<'c, 'a> {
                 if let Some(n) = self.spr(op) {
                     // The ten-bit SPR number is stored with its two five-bit
                     // halves swapped, a quirk inherited from POWER.
-                    self.word |= (((n & 0x1f) << 5) | (n >> 5)) << SPRF;
+                    self.word |= ((((n & 0x1f) << 5) | (n >> 5)) as u64) << SPRF;
                 }
             }
-            F::MemD => self.mem(op, false),
-            F::MemDS => self.mem(op, true),
+            F::MemD => self.mem(op, Disp::D),
+            F::MemDS => self.mem(op, Disp::Ds),
             F::Rel24 => self.branch(op, 26, true),
             F::Abs24 => self.branch(op, 26, false),
             F::Rel14 => self.branch(op, 16, true),
@@ -284,6 +322,110 @@ impl<'c, 'a> Encoder<'c, 'a> {
                 if let Some(n) = self.constant(op, "shift count") {
                     let r = rot1(kind, n);
                     self.rotate(op, r);
+                }
+            }
+            F::Vt => {
+                let v = self.vr(op);
+                self.put(RT, v);
+            }
+            F::Va => {
+                let v = self.vr(op);
+                self.put(RA, v);
+            }
+            F::Vb => {
+                let v = self.vr(op);
+                self.put(RB, v);
+            }
+            F::Vc => {
+                let v = self.vr(op);
+                self.put(FRC, v);
+            }
+            F::VaVb => {
+                let v = self.vr(op);
+                self.put(RA, v);
+                self.put(RB, v);
+            }
+            F::Xt => self.vsx(op, RT, TX),
+            F::Xa => self.vsx(op, RA, AX),
+            F::Xb => self.vsx(op, RB, BX),
+            F::Xc => self.vsx(op, FRC, CX),
+            F::Xab => {
+                self.vsx(op, RA, AX);
+                self.vsx(op, RB, BX);
+            }
+            F::Xtq => self.vsx(op, RT, TX_DQ),
+            F::Xts => self.vsx(op, RT, TX_8RR),
+            F::Xtop => self.vsx(op, RT, at(5)),
+            F::Xtp => self.vsx_pair(op, RT, TX_PAIR),
+            F::Xap => self.vsx_pair(op, RA, AX),
+            F::Xbp => self.vsx_pair(op, RB, BX),
+            F::Rc => {
+                let v = self.gpr(op);
+                self.put(FRC, v);
+            }
+            F::Uim(bits, lsb) => {
+                let v = self.small(op, (1i64 << bits) - 1, "immediate");
+                self.put(lsb as u32, v);
+            }
+            F::Sim(bits, lsb) => {
+                let hi = (1i64 << (bits - 1)) - 1;
+                self.signed_field(op, -hi - 1, hi, bits, lsb);
+            }
+            F::SimU(bits, lsb) => {
+                self.signed_field(op, -(1i64 << (bits - 1)), (1i64 << bits) - 1, bits, lsb)
+            }
+            F::DmEx => match self.constant(op, "doubleword selector") {
+                // Written 0 or 1, encoded as the two-bit DM that `xxpermdi`
+                // takes: `xxspltd vT, vB, 1` is `xxpermdi vT, vB, vB, 3`.
+                Some(v @ (0 | 1)) => self.word |= ((v as u64) * 3) << at(23),
+                Some(v) => self.reject(op, format!("doubleword selector {v} must be 0 or 1")),
+                None => {}
+            },
+            F::Dcmxs => {
+                if let Some(v) = self.small(op, 127, "data class mask") {
+                    // Seven bits in three pieces: 16:20 hold the low five,
+                    // bit 29 the next and bit 25 the top one, since the
+                    // slot it shares with `xvtstdc*`'s VSX register is full.
+                    self.word |= (((v & 0x1f) << RA) | ((v & 0x20) >> 3) | (v & 0x40)) as u64;
+                }
+            }
+            F::Dx | F::NegDx => {
+                let neg = f == F::NegDx;
+                // Either sign, as for `lis`; `subpcis` mirrors the range.
+                let (lo, hi) = if neg {
+                    (-65535, 32768)
+                } else {
+                    (-32768, 65535)
+                };
+                match self.constant(op, "immediate") {
+                    Some(v) if (lo..=hi).contains(&v) => {
+                        self.word |= dx_field(if neg { -v } else { v });
+                    }
+                    Some(v) => self.reject(
+                        op,
+                        format!("immediate {v} is out of range: must be {lo} to {hi}"),
+                    ),
+                    None => {}
+                }
+            }
+            F::MemDQ => self.mem(op, Disp::Dq),
+            F::MemD34 => self.mem(op, Disp::D34),
+            F::Simm34 => self.imm34(op, false),
+            F::NegSimm34 => self.imm34(op, true),
+            F::Imm32 => match self.constant(op, "immediate") {
+                Some(v) if (-0x8000_0000..=0xffff_ffff).contains(&v) => {
+                    let v = v as u64;
+                    self.word |= ((v & 0xffff_0000) << 16) | (v & 0xffff);
+                }
+                Some(v) => self.reject(
+                    op,
+                    format!("immediate {v} is out of range: must be -2147483648 to 4294967295"),
+                ),
+                None => {}
+            },
+            F::Pcrel => {
+                if let Some(v) = self.small(op, 1, "R") {
+                    self.word |= (v as u64) << PFX_R;
                 }
             }
             F::RotNB(kind) => {
@@ -303,16 +445,54 @@ impl<'c, 'a> Encoder<'c, 'a> {
 
     fn put(&mut self, shift: u32, value: Option<u32>) {
         if let Some(v) = value {
-            self.word |= v << shift;
+            self.word |= (v as u64) << shift;
+        }
+    }
+
+    /// A six-bit VSX register: five bits in `slot` and the sixth in `ext`.
+    fn vsx(&mut self, op: &Operand, slot: u32, ext: u32) {
+        if let Some(v) = self.vsr(op) {
+            self.word |= (((v & 0x1f) << slot) | ((v >> 5) << ext)) as u64;
+        }
+    }
+
+    /// A VSX register pair, named by the even register it starts at. The low
+    /// bit of the number is not encoded, so an odd one is an error rather
+    /// than something to round.
+    fn vsx_pair(&mut self, op: &Operand, slot: u32, ext: u32) {
+        let Some(v) = self.vsr(op) else { return };
+        if v % 2 != 0 {
+            return self.reject(
+                op,
+                format!("vs{v} is not a register pair: it must be even-numbered"),
+            );
+        }
+        self.word |= (((v & 0x1e) << slot) | ((v >> 5) << ext)) as u64;
+    }
+
+    /// A signed immediate field of `bits` bits at `lsb`, accepting anything
+    /// from `lo` to `hi` so that a field written either way round — GNU as
+    /// takes `xxspltib`'s byte as -128 to 255 — is read the same.
+    fn signed_field(&mut self, op: &Operand, lo: i64, hi: i64, bits: u8, lsb: u8) {
+        match self.constant(op, "immediate") {
+            Some(v) if (lo..=hi).contains(&v) => {
+                let mask = (1u64 << bits) - 1;
+                self.word |= (v as u64 & mask) << lsb;
+            }
+            Some(v) => self.reject(
+                op,
+                format!("immediate {v} is out of range: must be {lo} to {hi}"),
+            ),
+            None => {}
         }
     }
 
     fn rotate(&mut self, op: &Operand, r: Result<RotFields, String>) {
         match r {
             Ok(RotFields::M { sh, mb, me }) => {
-                self.word |= (sh << RB) | (mb << FRC) | (me << ME);
+                self.word |= ((sh << RB) | (mb << FRC) | (me << ME)) as u64;
             }
-            Ok(RotFields::Md { sh, m }) => self.word |= md_sh(sh) | md_m(m),
+            Ok(RotFields::Md { sh, m }) => self.word |= (md_sh(sh) | md_m(m)) as u64,
             Err(msg) => self.reject(op, msg),
         }
     }
@@ -374,6 +554,36 @@ impl<'c, 'a> Encoder<'c, 'a> {
 
     fn fpr(&mut self, op: &Operand) -> Option<u32> {
         self.reg_in(op, RegClass::Fpr, "a floating-point register")
+    }
+
+    fn vr(&mut self, op: &Operand) -> Option<u32> {
+        self.reg_in(op, RegClass::Vr, "a vector register")
+    }
+
+    /// A VSX register, `vs0`-`vs63`. The bank is twice as wide as every other,
+    /// so a bare number here reaches 63.
+    fn vsr(&mut self, op: &Operand) -> Option<u32> {
+        match Self::plain(op) {
+            Some(Value::Reg(r)) if r.class == RegClass::Vsr => Some(r.num as u32),
+            Some(Value::Expr(e)) => match self.cx.constant(e) {
+                Some(v) if (0..=63).contains(&v) => Some(v as u32),
+                Some(v) => {
+                    self.reject(
+                        op,
+                        format!("register number {v} is out of range: must be 0 to 63"),
+                    );
+                    None
+                }
+                None => {
+                    self.reject(op, "expected a VSX register");
+                    None
+                }
+            },
+            _ => {
+                self.expected(op, "a VSX register");
+                None
+            }
+        }
     }
 
     /// A CR field number, written `cr3` or `3`.
@@ -467,9 +677,9 @@ impl<'c, 'a> Encoder<'c, 'a> {
         };
         match self.halfword_value(op, e) {
             Folded::Invalid => {}
-            Folded::Truncated(v) => self.word |= v as u32 & 0xffff,
-            Folded::Symbolic => self.halfword_fixup(e, op.span, false),
-            Folded::Plain(v) if range.bounds().contains(&v) => self.word |= v as u32 & 0xffff,
+            Folded::Truncated(v) => self.word |= v as u64 & 0xffff,
+            Folded::Symbolic => self.halfword_fixup(e, op.span, Disp::D),
+            Folded::Plain(v) if range.bounds().contains(&v) => self.word |= v as u64 & 0xffff,
             Folded::Plain(v) => {
                 let b = range.bounds();
                 self.reject(
@@ -487,7 +697,7 @@ impl<'c, 'a> Encoder<'c, 'a> {
     /// A `d(rA)` reference: the base into RA, the displacement into the low
     /// halfword. A DS-form displacement owns only 14 of those 16 bits, so it
     /// must be a multiple of four and is merged rather than overwritten.
-    fn mem(&mut self, op: &Operand, ds: bool) {
+    fn mem(&mut self, op: &Operand, disp_kind: Disp) {
         let OperandKind::Mem(Mem {
             disp,
             base,
@@ -505,9 +715,12 @@ impl<'c, 'a> Encoder<'c, 'a> {
         self.put(RA, v);
 
         let Some(e) = disp else { return };
+        if disp_kind == Disp::D34 {
+            return self.imm34_value(op, e, false);
+        }
         let v = match self.halfword_value(op, e) {
             Folded::Invalid => return,
-            Folded::Symbolic => return self.halfword_fixup(e, op.span, ds),
+            Folded::Symbolic => return self.halfword_fixup(e, op.span, disp_kind),
             Folded::Plain(v) if !Range16::Signed.bounds().contains(&v) => {
                 return self.reject(
                     op,
@@ -516,13 +729,103 @@ impl<'c, 'a> Encoder<'c, 'a> {
             }
             Folded::Plain(v) | Folded::Truncated(v) => v,
         };
-        if ds && v % 4 != 0 {
+        let step = disp_kind.step();
+        if v % step != 0 {
             return self.reject(
                 op,
-                format!("displacement {v} must be a multiple of 4 in a DS-form instruction"),
+                format!(
+                    "displacement {v} must be a multiple of {step} in a {} instruction",
+                    disp_kind.form()
+                ),
             );
         }
-        self.word |= v as u32 & 0xffff;
+        self.word |= v as u64 & 0xffff;
+    }
+
+    /// A 34-bit immediate, as `pli` and `paddi` take it.
+    fn imm34(&mut self, op: &Operand, neg: bool) {
+        let Some(Value::Expr(e)) = Self::plain(op) else {
+            self.expected(op, "an immediate");
+            return;
+        };
+        self.imm34_value(op, e, neg);
+    }
+
+    /// The 34-bit field of a prefixed instruction, resolved now or left to a
+    /// relocation. Its top 18 bits live in the prefix word and the rest in the
+    /// suffix, so nothing about it is contiguous.
+    fn imm34_value(&mut self, op: &Operand, e: ExprRef, neg: bool) {
+        let Some(v) = self.cx.constant(e) else {
+            return self.imm34_fixup(e, op.span, neg);
+        };
+        if self.modifier(e).is_some() {
+            self.reject(op, "a relocation modifier must apply to a symbol here");
+            return;
+        }
+        let v = if neg { -v } else { v };
+        if !(-0x2_0000_0000..=0x1_ffff_ffff).contains(&v) {
+            let (lo, hi) = if neg {
+                (-0x1_ffff_ffffi64, 0x2_0000_0000i64)
+            } else {
+                (-0x2_0000_0000, 0x1_ffff_ffff)
+            };
+            return self.reject(
+                op,
+                format!("immediate is out of range: must be {lo} to {hi}"),
+            );
+        }
+        self.word |= d34_bits(v);
+    }
+
+    /// The relocation a symbolic 34-bit field needs. `@pcrel` makes the field
+    /// relative to the instruction itself, which is what the R bit in the
+    /// prefix says too; the assembler does not set R from the modifier, since
+    /// both references make the source write it.
+    fn imm34_fixup(&mut self, e: ExprRef, span: Span, neg: bool) {
+        if neg {
+            self.cx
+                .error(span, "a negated immediate must be a constant");
+            self.failed = true;
+            return;
+        }
+        let (reloc, pcrel) = match self.modifier(e).as_deref() {
+            None => (reloc::D34, false),
+            Some("pcrel") => (reloc::PCREL34, true),
+            Some("got@pcrel") => (reloc::GOT_PCREL34, true),
+            Some(other) => {
+                self.cx.error(
+                    span,
+                    format!("relocation modifier `@{other}` is not supported here"),
+                );
+                self.failed = true;
+                return;
+            }
+        };
+        // llvm-mc leaves a PC-relative prefixed reference to the linker even
+        // where it could resolve it, since the linker may rewrite the
+        // instruction; GNU as resolves one to a local label.
+        let mut kind = if pcrel {
+            FixupKind::pcrel(8, 0).relocated_in_objects()
+        } else {
+            FixupKind::data(8).signed()
+        };
+        kind = kind
+            .with_reloc(reloc)
+            .with_field(34, 1)
+            .scatter(if self.endian == Endian::Big {
+                d34_scatter_be
+            } else {
+                d34_scatter_le
+            });
+        if reloc == reloc::GOT_PCREL34 {
+            kind = kind.link(LinkValue::LinkerOnly("a GOT entry"));
+        }
+        self.fixups.push(Fixup {
+            offset: 0,
+            expr: e,
+            kind,
+            span,
+        });
     }
 
     /// Reads a value destined for the low halfword, applying an `@l`, `@h` or
@@ -567,8 +870,9 @@ impl<'c, 'a> Encoder<'c, 'a> {
     /// ELF puts `r_offset` on the halfword itself rather than on the
     /// instruction, so on a big-endian target the fixup starts two bytes in
     /// and on a little-endian one at the instruction's first byte.
-    fn halfword_fixup(&mut self, e: ExprRef, span: Span, ds: bool) {
-        let reloc = match (self.modifier(e).as_deref(), ds) {
+    fn halfword_fixup(&mut self, e: ExprRef, span: Span, disp: Disp) {
+        let split = disp != Disp::D;
+        let reloc = match (self.modifier(e).as_deref(), split) {
             (None, false) => reloc::ADDR16,
             (None, true) => reloc::ADDR16_DS,
             (Some("l"), false) => reloc::ADDR16_LO,
@@ -590,10 +894,13 @@ impl<'c, 'a> Encoder<'c, 'a> {
         if let Some(half) = self.modifier(e).as_deref().and_then(half_function) {
             kind = kind.link(LinkValue::Split(half));
         }
-        // A DS-form halfword cannot be overwritten whole: its low two bits
-        // belong to the opcode.
-        if ds {
-            kind = kind.with_field(16, 4).scatter(ds_field);
+        // A DS- or DQ-form halfword cannot be overwritten whole: its low two
+        // or four bits belong to the opcode. Both take the same relocation,
+        // which is what the references write.
+        match disp {
+            Disp::D | Disp::D34 => {}
+            Disp::Ds => kind = kind.with_field(16, 4).scatter(ds_field),
+            Disp::Dq => kind = kind.with_field(16, 16).scatter(dq_field),
         }
         self.fixups.push(Fixup {
             offset: if self.endian == Endian::Big { 2 } else { 0 },
@@ -638,10 +945,18 @@ impl<'c, 'a> Encoder<'c, 'a> {
         });
     }
 
-    /// The `@`-modifier applied anywhere in an expression, lowercased.
+    /// The `@`-modifier applied anywhere in an expression, lowercased. A
+    /// stack of them comes back joined the way the source spells it:
+    /// `sym@got@pcrel` is `got@pcrel`.
     fn modifier(&self, e: ExprRef) -> Option<String> {
         match &self.cx.exprs.get(e).kind {
-            ExprKind::Modifier(n, _) => Some(self.cx.name(*n).to_ascii_lowercase()),
+            ExprKind::Modifier(n, inner) => {
+                let name = self.cx.name(*n).to_ascii_lowercase();
+                Some(match self.modifier(*inner) {
+                    Some(first) => format!("{first}@{name}"),
+                    None => name,
+                })
+            }
             ExprKind::Unary(_, a) => self.modifier(*a),
             ExprKind::Binary(_, a, b) => self.modifier(*a).or_else(|| self.modifier(*b)),
             _ => None,
@@ -655,6 +970,47 @@ fn arity(f: F) -> usize {
     match f {
         F::RotNB(_) => 2,
         _ => 1,
+    }
+}
+
+/// True for a prefixed (POWER10) instruction, which is eight bytes: two words,
+/// the prefix first. Nothing else sets any bit above 31.
+pub fn prefixed(def: &Def) -> bool {
+    def.word >> 32 != 0
+}
+
+/// The shape of a displacement field, which decides both what it must be a
+/// multiple of and which relocation a symbol in it takes.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Disp {
+    /// The whole low halfword, bits 16:31.
+    D,
+    /// Bits 16:29: a multiple of four.
+    Ds,
+    /// Bits 16:27: a multiple of sixteen.
+    Dq,
+    /// 34 bits spread across a prefixed instruction's two words.
+    D34,
+}
+
+impl Disp {
+    /// What the displacement must be a multiple of.
+    fn step(self) -> i64 {
+        match self {
+            Disp::D | Disp::D34 => 1,
+            Disp::Ds => 4,
+            Disp::Dq => 16,
+        }
+    }
+
+    /// The form's name, for the diagnostic.
+    fn form(self) -> &'static str {
+        match self {
+            Disp::D => "D-form",
+            Disp::Ds => "DS-form",
+            Disp::Dq => "DQ-form",
+            Disp::D34 => "prefixed",
+        }
     }
 }
 
@@ -719,6 +1075,40 @@ fn half_function(name: &str) -> Option<fn(i64) -> i64> {
 /// DS-form displacement: 14 bits of a halfword whose low two bits are opcode.
 fn ds_field(half: u64, v: i64) -> u64 {
     (half & 0x3) | (v as u64 & 0xfffc)
+}
+
+/// DQ-form displacement: 12 bits of a halfword whose low four bits are opcode
+/// and, on the VSX loads and stores, the target register's sixth bit.
+fn dq_field(half: u64, v: i64) -> u64 {
+    (half & 0xf) | (v as u64 & 0xfff0)
+}
+
+/// A 34-bit value placed in a prefixed instruction read as one 64-bit
+/// quantity: its top 18 bits in the prefix word's low half, the rest in the
+/// suffix's.
+fn d34_bits(v: i64) -> u64 {
+    let v = v as u64;
+    (((v >> 16) & 0x3_ffff) << 32) | (v & 0xffff)
+}
+
+/// The same as a fixup scatter. The two words reach memory as separate
+/// four-byte quantities, so reading all eight as one integer gives the prefix
+/// first on a big-endian target and second on a little-endian one, and the
+/// two byte orders need different functions.
+fn d34_scatter_be(word: u64, v: i64) -> u64 {
+    (word & !0x3_ffff_0000_ffff) | d34_bits(v)
+}
+
+fn d34_scatter_le(word: u64, v: i64) -> u64 {
+    d34_scatter_be(word.rotate_left(32), v).rotate_left(32)
+}
+
+/// `addpcis`'s 16-bit immediate, which the ISA splits into d1 (bits 16:20),
+/// d0 (6:15) and d2 (bit 31) so that its two register fields keep their
+/// usual places.
+fn dx_field(v: i64) -> u64 {
+    let v = v as u64 & 0xffff;
+    (v & 0xffc1) | ((v & 0x3e) << 15)
 }
 
 /// The six-bit SH of an MD- or XS-form rotate is split in two: its low five

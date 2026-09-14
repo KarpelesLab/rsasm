@@ -22,8 +22,9 @@ pub mod insn;
 pub mod operand;
 pub mod reg;
 pub mod reloc;
+pub mod vector;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Request, Syntax};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::Punct;
 use crate::section::Variant;
@@ -203,6 +204,17 @@ impl Architecture for PowerPc {
 
         let ops = operand::parse_list(cx, &cur)?;
         let variant = encode::Encoder::new(cx, self.endian()).encode(&resolved, &ops, req.span)?;
+        // A prefixed instruction may not straddle a 64-byte boundary, where
+        // the two words could land on different pages. Both references pad
+        // one that would with a no-op in front, and give the section the
+        // alignment that makes the rule mean the same after linking.
+        if encode::prefixed(resolved.def) {
+            cx.requests.push(Request::AlignCode {
+                align: 64,
+                max_skip: 4,
+            });
+            cx.requests.push(Request::RecordAlign(64));
+        }
         Some(vec![variant])
     }
 }
