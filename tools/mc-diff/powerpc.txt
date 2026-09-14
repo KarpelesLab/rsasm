@@ -1858,7 +1858,7 @@ modsw 3, 4, 5
 modsw 31, 0, 31
 moduw 3, 4, 5
 moduw 31, 0, 31
-paste. 4, 5
+paste. 4, 5, 0
 paste. 0, 31
 scv 1
 scv 0

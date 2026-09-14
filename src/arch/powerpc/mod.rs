@@ -24,7 +24,9 @@ pub mod reg;
 pub mod reloc;
 pub mod vector;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Request, Syntax};
+use crate::arch::{
+    ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Request, Syntax,
+};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::Punct;
 use crate::section::Variant;
@@ -127,6 +129,16 @@ impl Architecture for PowerPc {
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel, self.bits() == 64)
+    }
+
+    /// `@pcrel` only says the field is relative to the instruction, which a
+    /// flat image resolves as it would any PC-relative field.
+    fn flat_modifier(&self, name: &str) -> FlatModifier {
+        if name == "pcrel" {
+            FlatModifier::Plain
+        } else {
+            FlatModifier::LinkerOnly
+        }
     }
 
     /// llvm-mc's conventions, as for every PowerPC encoding: addresses in

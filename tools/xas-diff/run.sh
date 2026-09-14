@@ -83,6 +83,7 @@ arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
 powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
+powerpc|powerpc|gas|powerpc64-linux-gnu-as -a32 -mbig -mfuture|elf:.text
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }

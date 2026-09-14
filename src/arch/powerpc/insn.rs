@@ -134,6 +134,9 @@ pub enum F {
     Xbp,
     /// GPR in bits 21:25, where `maddld` keeps its addend.
     Rc,
+    /// `paste.`'s L, bit 10, which reads 1 when it is left out: the
+    /// definition carries the bit set, and writing 0 clears it.
+    L1,
     /// An unsigned immediate `bits` wide whose least significant bit is bit
     /// `lsb` of the word, counted from the bottom as Rust counts bits.
     ///

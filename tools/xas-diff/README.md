@@ -116,7 +116,7 @@ with `-mfuture`, since a few VSX instructions both references know
 The two references disagree, and rsasm takes the wider of the two where the
 encoding is not in doubt:
 
-- **Mnemonics only GNU as knows:** `xxmr`, `xxlnot`, `pnop`, and `vcfpsxws`,
+- **Mnemonics only GNU as knows:** `xxmr`, `xxlnot`, `pnop`, `fmrgew`, `fmrgow`, and `vcfpsxws`,
   `vcfpuxws`, `vcsxwfp` and `vcuxwfp` (spellings of `vctsxs`, `vctuxs`,
   `vcfsx` and `vcfux`); and the R operand of `pla` and `psubi`.
 - **Ranges only GNU as accepts:** a negative byte in `xxspltib` or immediate in

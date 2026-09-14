@@ -366,6 +366,11 @@ impl<'c, 'a> Encoder<'c, 'a> {
                 let v = self.gpr(op);
                 self.put(FRC, v);
             }
+            F::L1 => {
+                if self.small(op, 1, "L") == Some(0) {
+                    self.word &= !(1 << L_BIT);
+                }
+            }
             F::Uim(bits, lsb) => {
                 let v = self.small(op, (1i64 << bits) - 1, "immediate");
                 self.put(lsb as u32, v);
@@ -416,13 +421,17 @@ impl<'c, 'a> Encoder<'c, 'a> {
             F::Simm34 => self.imm34(op, false),
             F::NegSimm34 => self.imm34(op, true),
             F::Imm32 => match self.constant(op, "immediate") {
-                Some(v) if (-0x8000_0000..=0xffff_ffff).contains(&v) => {
+                // Both references take a 32-bit value written with its sign
+                // extended by hand, or with a borrow past the top, and keep
+                // the low 32 bits: GNU as allows -2^32 to 2^33-1 so that a
+                // 64-bit host reads `~0` and `0xffffffff` alike.
+                Some(v) if (-0x1_0000_0000..=0x1_ffff_ffff).contains(&v) => {
                     let v = v as u64;
                     self.word |= ((v & 0xffff_0000) << 16) | (v & 0xffff);
                 }
                 Some(v) => self.reject(
                     op,
-                    format!("immediate {v} is out of range: must be -2147483648 to 4294967295"),
+                    format!("immediate {v} is out of range: must be -4294967296 to 8589934591"),
                 ),
                 None => {}
             },
@@ -814,6 +823,14 @@ impl<'c, 'a> Encoder<'c, 'a> {
             self.failed = true;
             return;
         }
+        if self.cx.state.bits < 64 {
+            self.cx.error(
+                span,
+                "a symbol in a 34-bit field needs a 64-bit object: the relocations exist only for PowerPC64",
+            );
+            self.failed = true;
+            return;
+        }
         let (reloc, pcrel) = match self.modifier(e).as_deref() {
             None => (reloc::D34, false),
             Some("pcrel") => (reloc::PCREL34, true),
@@ -897,7 +914,10 @@ impl<'c, 'a> Encoder<'c, 'a> {
     /// instruction, so on a big-endian target the fixup starts two bytes in
     /// and on a little-endian one at the instruction's first byte.
     fn halfword_fixup(&mut self, e: ExprRef, span: Span, disp: Disp) {
-        let split = disp != Disp::D;
+        // The DS relocations exist only for 64-bit objects; GNU as writes the
+        // plain halfword ones in 32-bit code, where llvm-mc writes numbers
+        // `R_PPC_*` does not define.
+        let split = disp != Disp::D && self.cx.state.bits == 64;
         let reloc = match (self.modifier(e).as_deref(), split) {
             (None, false) => reloc::ADDR16,
             (None, true) => reloc::ADDR16_DS,

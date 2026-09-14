@@ -1546,6 +1546,10 @@ darn 31, 3
 extswsli 4, 3, 5
 extswsli 0, 31, 63
 extswsli. 0, 31, 63
+fmrgew 1, 2, 3
+fmrgew 31, 0, 31
+fmrgow 1, 2, 3
+fmrgow 31, 0, 31
 lnia 3
 lnia 31
 mcrxrx 0
@@ -1570,7 +1574,7 @@ modud 3, 4, 5
 modud 31, 0, 31
 moduw 3, 4, 5
 moduw 31, 0, 31
-paste. 4, 5
+paste. 4, 5, 0
 paste. 0, 31
 pdepd 4, 3, 5
 pdepd 0, 31, 31
