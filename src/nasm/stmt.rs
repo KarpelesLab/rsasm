@@ -1018,8 +1018,10 @@ impl Assembler {
                         Some(0) => align = Some(None),
                         Some(v) if v.is_power_of_two() && v <= 8192 => align = Some(Some(v)),
                         _ => {
-                            self.diags
-                                .error(t.span, "section alignment must be a power of two up to 8192");
+                            self.diags.error(
+                                t.span,
+                                "section alignment must be a power of two up to 8192",
+                            );
                             return;
                         }
                     }

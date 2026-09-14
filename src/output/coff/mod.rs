@@ -158,13 +158,35 @@ pub fn preset_characteristics(name: &str) -> Option<u32> {
         | ".gljmp$y" | ".giats$y" | ".gehcont$y" => RDATA,
         ".drectve" => SCN_LNK_INFO | SCN_LNK_REMOVE,
         ".sxdata" => SCN_LNK_INFO,
-        ".debug_abbrev" | ".debug_info" | ".debug_line" | ".debug_line_str" | ".debug_str"
-        | ".debug_str_offsets" | ".debug_frame" | ".debug_loc" | ".debug_loclists"
-        | ".debug_ranges" | ".debug_rnglists" | ".debug_aranges" | ".debug_addr"
-        | ".debug_macinfo" | ".debug_macro" | ".debug_names" | ".debug_pubnames"
-        | ".debug_pubtypes" | ".debug_gnu_pubnames" | ".debug_gnu_pubtypes"
-        | ".debug_cu_index" | ".debug_tu_index" | ".debug_abbrev.dwo" | ".debug_info.dwo"
-        | ".debug$S" | ".debug$T" | ".debug$H" | ".apple_names" | ".pseudo_probe"
+        ".debug_abbrev"
+        | ".debug_info"
+        | ".debug_line"
+        | ".debug_line_str"
+        | ".debug_str"
+        | ".debug_str_offsets"
+        | ".debug_frame"
+        | ".debug_loc"
+        | ".debug_loclists"
+        | ".debug_ranges"
+        | ".debug_rnglists"
+        | ".debug_aranges"
+        | ".debug_addr"
+        | ".debug_macinfo"
+        | ".debug_macro"
+        | ".debug_names"
+        | ".debug_pubnames"
+        | ".debug_pubtypes"
+        | ".debug_gnu_pubnames"
+        | ".debug_gnu_pubtypes"
+        | ".debug_cu_index"
+        | ".debug_tu_index"
+        | ".debug_abbrev.dwo"
+        | ".debug_info.dwo"
+        | ".debug$S"
+        | ".debug$T"
+        | ".debug$H"
+        | ".apple_names"
+        | ".pseudo_probe"
         | ".pseudo_probe_desc" => DEBUG,
         _ => return None,
     })
@@ -302,7 +324,7 @@ pub fn parse_flags(name: &str, letters: &str) -> Result<u32, char> {
 /// The alignment bits of a section's characteristics: `IMAGE_SCN_ALIGN_n` is
 /// `log2(n) + 1` in bits 20 to 23, and 8192 is the most COFF can say.
 fn align_bits(align: u64) -> u32 {
-    let n = align.max(1).min(8192).next_power_of_two().trailing_zeros();
+    let n = align.clamp(1, 8192).next_power_of_two().trailing_zeros();
     (n + 1) << 20
 }
 
@@ -512,7 +534,9 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     let mut placed: Vec<(u32, u32)> = Vec::new();
     for s in &secs {
         let uninitialized = s.characteristics & SCN_CNT_UNINITIALIZED_DATA != 0;
-        let data_at = if uninitialized || s.data.is_empty() {
+        // An empty section still points at where its bytes would be, as
+        // llvm-mc writes it; an uninitialized one has no bytes to point at.
+        let data_at = if uninitialized {
             0
         } else {
             let at = buf.len() as u32;
@@ -525,7 +549,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             let at = buf.len() as u32;
             for r in &s.relocs {
                 buf.u32(r.offset as u32);
-                buf.u32(r.symbol.and_then(|s| sym_index.get(&s).copied()).unwrap_or(0));
+                buf.u32(
+                    r.symbol
+                        .and_then(|s| sym_index.get(&s).copied())
+                        .unwrap_or(0),
+                );
                 buf.u16(r.kind as u16);
             }
             at

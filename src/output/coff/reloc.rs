@@ -43,10 +43,6 @@ pub mod pseudo {
     pub const SECREL: u32 = 0x8000_0002;
     /// The one-based index of the target's section: `.secidx`.
     pub const SECIDX: u32 = 0x8000_0003;
-
-    pub fn is_pseudo(reloc: u32) -> bool {
-        reloc >= IMGREL && reloc <= SECIDX
-    }
 }
 
 // ---- IMAGE_REL_AMD64_* ------------------------------------------------------

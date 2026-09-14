@@ -1452,7 +1452,9 @@ impl Assembler {
                             }
                             for mut r in self.build_relocation(e, &kind, id, fi, at, span) {
                                 if let Some(machine) = coff {
-                                    if !self.coff_relocation(machine, &mut r, &kind, si, fi, off, span) {
+                                    if !self
+                                        .coff_relocation(machine, &mut r, &kind, si, fi, off, span)
+                                    {
                                         continue;
                                     }
                                     relocs.push(r);

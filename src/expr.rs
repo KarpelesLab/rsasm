@@ -943,7 +943,10 @@ impl<'a> ExprParser<'a> {
                     let base = self.interner.intern(&base);
                     let modifier = self.interner.intern(&modifier);
                     let sym = self.arena.alloc(ExprKind::Sym(base), tok.span);
-                    return Some(self.arena.alloc(ExprKind::Modifier(modifier, sym), tok.span));
+                    return Some(
+                        self.arena
+                            .alloc(ExprKind::Modifier(modifier, sym), tok.span),
+                    );
                 }
                 Some(self.arena.alloc(ExprKind::Sym(n), tok.span))
             }
@@ -1073,9 +1076,25 @@ fn split_modifier(name: &str) -> Option<(String, String)> {
     }
     let lower = suffix.to_ascii_lowercase();
     const KNOWN: &[&str] = &[
-        "imgrel", "secrel32", "secrel", "secidx", "plt", "got", "gotoff", "gotpc", "gotpcrel",
-        "tlsgd", "tlsld", "tlsldm", "dtpoff", "ntpoff", "tpoff", "gottpoff", "gotntpoff",
-        "indntpoff", "size",
+        "imgrel",
+        "secrel32",
+        "secrel",
+        "secidx",
+        "plt",
+        "got",
+        "gotoff",
+        "gotpc",
+        "gotpcrel",
+        "tlsgd",
+        "tlsld",
+        "tlsldm",
+        "dtpoff",
+        "ntpoff",
+        "tpoff",
+        "gottpoff",
+        "gotntpoff",
+        "indntpoff",
+        "size",
     ];
     KNOWN
         .contains(&lower.as_str())

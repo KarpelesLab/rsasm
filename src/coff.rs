@@ -383,7 +383,14 @@ impl Assembler {
 
     /// `.lcomm name, size[, align]`: an uninitialized object in `.bss`,
     /// which is where COFF keeps one, since it has no local common blocks.
-    pub(crate) fn coff_lcomm(&mut self, name: crate::intern::Name, nspan: Span, size: u64, align: u64, span: Span) {
+    pub(crate) fn coff_lcomm(
+        &mut self,
+        name: crate::intern::Name,
+        nspan: Span,
+        size: u64,
+        align: u64,
+        span: Span,
+    ) {
         let bss = self.standard_section(".bss");
         let saved = self.cur;
         self.set_section(bss);
@@ -578,7 +585,12 @@ impl Assembler {
         // `.xdata` and `.pdata` sections of their own, associated with it, so
         // they are discarded together; one object would need two sections of
         // each name for that, which rsasm cannot have yet.
-        if self.coff.sections.get(&self.cur).is_some_and(|i| i.comdat.is_some()) {
+        if self
+            .coff
+            .sections
+            .get(&self.cur)
+            .is_some_and(|i| i.comdat.is_some())
+        {
             self.diags.error(
                 span,
                 "unwind data for a function in a COMDAT section is not supported yet",
@@ -630,8 +642,10 @@ impl Assembler {
         match seh_register(&name) {
             Some(r) => Some(r),
             None => {
-                self.diags
-                    .error(span, format!("`{name}` is not a register unwind data names"));
+                self.diags.error(
+                    span,
+                    format!("`{name}` is not a register unwind data names"),
+                );
                 None
             }
         }
@@ -791,8 +805,7 @@ impl Assembler {
     /// once every instruction has its final length. Returns whether anything
     /// was written, so layout can settle again.
     pub(crate) fn emit_coff_unwind(&mut self) -> bool {
-        if self.coff.open.is_some() {
-            let span = self.coff.open.as_ref().expect("just checked").span;
+        if let Some(span) = self.coff.open.as_ref().map(|p| p.span) {
             self.diags
                 .error(span, "unterminated `.seh_proc`, expected `.seh_endproc`");
         }
@@ -886,7 +899,7 @@ impl Assembler {
             }
         }
         // The array is a whole number of four-byte words.
-        if slots % 2 != 0 {
+        if !slots.is_multiple_of(2) {
             b.int(0, 2);
         }
         if let Some((e, _)) = p.handler {
@@ -956,7 +969,10 @@ pub(crate) fn parse_section_attributes(
                 {
                     symbol = Some(asm.symbols.intern(sn, sspan));
                 }
-                comdat = Some(Comdat { selection: sel, symbol });
+                comdat = Some(Comdat {
+                    selection: sel,
+                    symbol,
+                });
             }
             None => asm
                 .diags
