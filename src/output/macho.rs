@@ -32,6 +32,7 @@
 //! `.build_version`.
 
 mod directives;
+mod relocations;
 
 use super::OutputError;
 use crate::assembler::{Assembler, Relocation};
@@ -762,6 +763,14 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             asm.target().name()
         ))
     })?;
+
+    if asm.options.dialect == crate::lexer::Dialect::Nasm {
+        return Err(OutputError::Unsupported(
+            "NASM source is assembled to ELF objects and flat binaries; Mach-O output \
+             reads GNU-style source"
+                .into(),
+        ));
+    }
 
     let mut secs = collect_sections(asm)?;
     assign_addresses(&mut secs);

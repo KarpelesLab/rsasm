@@ -12,8 +12,9 @@
 # Corpora live in tools/macho-diff/<arch>.txt, one statement per line, each
 # assembled as a file of its own, and tools/macho-diff/<arch>-programs.txt,
 # multi-line snippets separated by `=== <name>` lines. A line in the first can
-# name an undefined symbol and a label on a line of its own after it with
-# `;`, which starts a new statement in either assembler.
+# hold several statements separated by `;`, which becomes a new line before
+# either assembler sees it (Darwin's arm64 assembly comments with `;`). The
+# machine's llvm-mc corpora in tools/mc-diff run as well, in the same way.
 #
 # Matching objects are also compared byte for byte, and the count printed;
 # set MACHO_DIFF_BYTES=1 to list the ones that only match canonically.
@@ -25,10 +26,10 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
-# arch | rsasm target | llvm triple
+# arch | rsasm target | llvm triple | the machine's corpus in tools/mc-diff
 ARCHES="
-x86-64|x86_64-apple-macos|x86_64-apple-macos
-arm64|arm64-apple-macos|arm64-apple-macos
+x86-64|x86_64-apple-macos|x86_64-apple-macos|x86-64
+arm64|arm64-apple-macos|arm64-apple-macos|aarch64
 "
 
 for tool in llvm-mc llvm-readobj llvm-objdump; do
@@ -98,27 +99,38 @@ snippets() { # file, arch, rsasm target, triple
   return 0
 }
 
-run_arch() { # arch, rsasm target, triple
-  local arch=$1 lines="$here/$1.txt" progs="$here/$1-programs.txt"
-  local before=$((pass + fail))
-  if [ -f "$lines" ]; then
-    while IFS= read -r line; do
-      [ -z "$line" ] && continue
-      case "$line" in \#*) continue ;; esac
-      compare "$@" "$line" "$(printf '%s\n' "$line" | tr ';' '\n')"
-    done < "$lines"
-  fi
-  [ -f "$progs" ] && snippets "$progs" "$@"
-  echo "[$arch] $((pass + fail - before)) cases"
+# Runs `compare` over each line of a file.
+lines() { # file, arch, rsasm target, triple
+  local file=$1 line
+  shift
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    compare "$@" "$line" "$(printf '%s\n' "$line" | tr ';' '\n')"
+  done < "$file"
+}
+
+run_arch() { # arch, rsasm target, triple, mc-diff corpus
+  local arch=$1 mc="$root/tools/mc-diff/$4" before=$((pass + fail)) own
+  set -- "$1" "$2" "$3"
+  [ -f "$here/$arch.txt" ] && lines "$here/$arch.txt" "$@"
+  [ -f "$here/$arch-programs.txt" ] && snippets "$here/$arch-programs.txt" "$@"
+  own=$((pass + fail - before))
+  # The ELF corpus for the same machine, which is written for llvm-mc too:
+  # every instruction in it has to come out the same in a Mach-O object, and
+  # every reference in it relocated as llvm-mc relocates it there.
+  [ -f "$mc.txt" ] && lines "$mc.txt" "$@"
+  [ -f "$mc-programs.txt" ] && snippets "$mc-programs.txt" "$@"
+  echo "[$arch] $own cases, and $((pass + fail - before - own)) from tools/mc-diff"
 }
 
 wanted="${*:-}"
-while IFS='|' read -r arch target triple; do
+while IFS='|' read -r arch target triple mc; do
   [ -z "$arch" ] && continue
   if [ -n "$wanted" ]; then
     case " $wanted " in *" $arch "*) ;; *) continue ;; esac
   fi
-  run_arch "$arch" "$target" "$triple"
+  run_arch "$arch" "$target" "$triple" "$mc"
 done <<< "$ARCHES"
 
 echo "--- $pass matched, $fail differed ($identical of the objects byte for byte)"
