@@ -53,3 +53,18 @@ entry:
         .byte   2
         .section .rodata
         .byte   3
+
+=== FPU operands reading labels, in and out of their section
+ .text
+ .p2align 2
+ fmovex near,%fp0
+ faddd msg,%fp1
+ fbeql sub
+ fdbne %d0,here
+here: rts
+near: .long 0,0,0
+ .data
+ .p2align 2
+ .space 0x100
+msg: .long 1,2
+sub: rts

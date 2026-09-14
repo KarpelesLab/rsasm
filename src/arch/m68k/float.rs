@@ -58,7 +58,10 @@ pub fn parse(text: &str, dialect: Dialect) -> Option<f64> {
     if !number
         .bytes()
         .all(|c| c.is_ascii_digit() || matches!(c, b'.' | b'e' | b'E' | b'+' | b'-'))
-        || !number.as_bytes().first().is_some_and(|c| c.is_ascii_digit() || *c == b'.')
+        || !number
+            .as_bytes()
+            .first()
+            .is_some_and(|c| c.is_ascii_digit() || *c == b'.')
     {
         return None;
     }
@@ -191,21 +194,20 @@ mod tests {
     fn formats() {
         assert_eq!(single(1.5), [0x3f, 0xc0, 0, 0]);
         assert_eq!(single(0.1), [0x3d, 0xcc, 0xcc, 0xcd]);
-        assert_eq!(double(0.1), [0x3f, 0xb9, 0x99, 0x99, 0x99, 0x99, 0x99, 0x9a]);
         assert_eq!(
-            extended(1.5),
-            [0x3f, 0xff, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0]
+            double(0.1),
+            [0x3f, 0xb9, 0x99, 0x99, 0x99, 0x99, 0x99, 0x9a]
         );
+        assert_eq!(extended(1.5), [0x3f, 0xff, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
             extended(0.1),
-            [0x3f, 0xfb, 0, 0, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xd0, 0]
+            [
+                0x3f, 0xfb, 0, 0, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xd0, 0
+            ]
         );
         assert_eq!(packed(1.5), [0, 0, 0, 1, 0x50, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(packed(0.1), [0x40, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
-        assert_eq!(
-            packed(-1.0e-5),
-            [0xc0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]
-        );
+        assert_eq!(packed(-1.0e-5), [0xc0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
         assert_eq!(
             packed(12345.678),
             [0, 4, 0, 1, 0x23, 0x45, 0x67, 0x80, 0, 0, 0, 0]

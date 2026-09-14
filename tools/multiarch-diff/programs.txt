@@ -232,3 +232,17 @@
         movew   #0x2700, %sr            | m68k: `#` is an immediate, `|` a comment
         .arch   sh
         mov     #1, r0                  ! SuperH: `!` is the comment
+=== one 680x0 file for three CPUs, and x86 between them
+.arch 68040
+        move16  %a0@+,%a1@+
+        fsaddx  %fp0,%fp1
+        cinva   %ic
+.arch x86-64
+        ret
+.arch cpu32
+        bgnd
+        fmovex  %fp2,%fp3
+.arch 5475
+        mvsw    %d0,%d1
+        mov3ql  #-1,%d2
+        fmoved  %fp0,%fp1

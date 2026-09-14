@@ -42,6 +42,10 @@ use table::feature as f;
 
 pub const NAMES: &[&str] = &["m68k"];
 
+/// The [`Architecture::interwork`] class of a field that only resolves to a
+/// label in its own section.
+pub const IW_SAME_SECTION: u8 = 1;
+
 /// Every 68k CPU, as against ColdFire.
 pub const M68000UP: u32 = f::M68000 | M68010UP;
 /// The 68020 and the CPUs after it.
@@ -97,7 +101,11 @@ impl Cpu {
             .chain(table::M68K_CPUS)
             .find(|c| c.name == self.name)
             .map_or(self.arch, |c| c.arch);
-        for (bit, ext) in [(f::M68881, "68881"), (f::M68851, "68851"), (f::CFLOAT, "FPU")] {
+        for (bit, ext) in [
+            (f::M68881, "68881"),
+            (f::M68851, "68851"),
+            (f::CFLOAT, "FPU"),
+        ] {
             if self.arch & bit != 0 && base & bit == 0 {
                 s.push_str(" with ");
                 s.push_str(ext);
@@ -266,6 +274,59 @@ impl Architecture for M68k {
         4 // EM_68K
     }
 
+    /// What GNU as's `m68k_elf_final_processing` records: a 68000 or 68010,
+    /// CPU32, Fido, or which ColdFire ISA, divide, USP, FPU and MAC the code
+    /// was assembled for. A linker refuses to mix some of them.
+    fn elf_flags(&self, _state: &ArchState) -> u32 {
+        const CPU32: u32 = 0x0081_0000;
+        const M68000: u32 = 0x0100_0000;
+        const CFV4E: u32 = 0x0000_8000;
+        const FIDO: u32 = 0x0200_0000;
+        const CF_FLOAT: u32 = 0x40;
+        let a = self.cpu.arch;
+        let mut flags = 0;
+        if a & f::CFLOAT != 0 {
+            flags |= CFV4E;
+        }
+        if a & f::CPU32 != 0 {
+            flags |= CPU32;
+        } else if a & f::FIDO_A != 0 {
+            flags |= FIDO;
+        } else if a & M68000UP != 0 && a & M68020UP == 0 {
+            flags |= M68000;
+        }
+        if a & f::MCFISA_A != 0 {
+            let isa = a
+                & (f::MCFISA_A
+                    | f::MCFISA_AA
+                    | f::MCFISA_B
+                    | f::MCFISA_C
+                    | f::MCFHWDIV
+                    | f::MCFUSP);
+            let cf = [
+                (0x01, f::MCFISA_A),
+                (0x02, f::MCFISA_A | f::MCFHWDIV),
+                (0x03, f::MCFISA_A | f::MCFISA_AA | f::MCFHWDIV | f::MCFUSP),
+                (0x04, f::MCFISA_A | f::MCFISA_B | f::MCFHWDIV),
+                (0x05, f::MCFISA_A | f::MCFISA_B | f::MCFHWDIV | f::MCFUSP),
+                (0x06, f::MCFISA_A | f::MCFISA_C | f::MCFHWDIV | f::MCFUSP),
+                (0x07, f::MCFISA_A | f::MCFISA_C | f::MCFUSP),
+            ];
+            if let Some(&(bits, _)) = cf.iter().find(|&&(_, pattern)| pattern == isa) {
+                flags |= bits;
+                if a & f::CFLOAT != 0 {
+                    flags |= CF_FLOAT | CFV4E;
+                }
+                flags |= match a & (f::MCFMAC | f::MCFEMAC) {
+                    f::MCFMAC => 0x10,
+                    f::MCFEMAC => 0x20,
+                    _ => 0,
+                };
+            }
+        }
+        flags
+    }
+
     fn pcrel_number_is_address(&self) -> bool {
         true
     }
@@ -344,6 +405,19 @@ impl Architecture for M68k {
             _ => numbered_register(name, "d", 7)
                 .or_else(|| numbered_register(name, "a", 6).map(|n| 8 + n))
                 .or_else(|| numbered_register(name, "fp", 7).map(|n| 16 + n)),
+        }
+    }
+
+    /// A PC-relative word standing in for an absolute address reaches only
+    /// its own section.
+    fn interwork(
+        &self,
+        class: u8,
+        target: &crate::arch::InterworkTarget,
+    ) -> crate::arch::Interwork {
+        match class {
+            IW_SAME_SECTION if !target.same_section => crate::arch::Interwork::Relocate,
+            _ => crate::arch::Interwork::AsWritten,
         }
     }
 

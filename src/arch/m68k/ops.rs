@@ -54,7 +54,10 @@ impl Asm<'_, '_> {
         let cpu = self.cpu.describe();
         self.err(
             span,
-            format!("{what} needs {}; this target is a {cpu}", describe_arch(arch)),
+            format!(
+                "{what} needs {}; this target is a {cpu}",
+                describe_arch(arch)
+            ),
         )
     }
 
@@ -1070,7 +1073,11 @@ impl Asm<'_, '_> {
             (None, None) => false,
         };
         if long {
-            self.need(M68020UP | f::CPU32 | f::FIDO_A, span, "a 32-bit `link` displacement")?;
+            self.need(
+                M68020UP | f::CPU32 | f::FIDO_A,
+                span,
+                "a 32-bit `link` displacement",
+            )?;
             let (bytes, fixups) = encode::immediate(self.cx, e, Sz::L, span)?;
             let part = Part::words(bytes, fixups);
             return Some(build(0x4808 | n, vec![part]));

@@ -334,7 +334,10 @@ fn need_020(cx: &mut AsmCtx<'_>, cpu: Cpu, span: Span, what: &str) -> Option<()>
     }
     cx.error(
         span,
-        format!("{what} needs a 68020 or later; this target is a {}", cpu.describe()),
+        format!(
+            "{what} needs a 68020 or later; this target is a {}",
+            cpu.describe()
+        ),
     );
     None
 }
@@ -451,12 +454,16 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
         }
         Mode::Abs(v) if ecx.pc_abs && v.width.is_none() && cx.constant(v.e).is_none() => {
             // GNU as's `ABSTOPCREL`: a PC-relative word if the address is in
-            // this section and within reach, else the absolute long.
+            // this section and within reach, else the absolute long. Another
+            // section is never in reach, even in a flat image, where GNU as
+            // could not have known how far it would be.
+            let mut near = pc_kind(2, 0);
+            near.link = crate::section::LinkValue::Interwork(super::IW_SAME_SECTION);
             vec![
                 Alt {
                     field: 0o72,
                     bytes: vec![0, 0],
-                    fixups: vec![fixup(0, v.e, pc_kind(2, 0), v.span)],
+                    fixups: vec![fixup(0, v.e, near, v.span)],
                 },
                 absolute(cx, v)?,
             ]

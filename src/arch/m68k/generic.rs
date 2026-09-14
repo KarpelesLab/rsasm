@@ -54,10 +54,16 @@ enum G {
     Inc(u8),
     Dec(u8),
     /// A displacement from an address register or the PC, no index.
-    Disp { pc: bool, reg: Option<u8> },
+    Disp {
+        pc: bool,
+        reg: Option<u8>,
+    },
     /// Everything with a full extension word or an index: GNU's `BASE`,
     /// `PRE` and `POST`.
-    Full { pc: bool, memind: bool },
+    Full {
+        pc: bool,
+        memind: bool,
+    },
     List(u32),
 }
 
@@ -78,9 +84,7 @@ impl G {
             Mode::PostInc(n) => G::Inc(*n),
             Mode::PreDec(n) => G::Dec(*n),
             Mode::Indexed {
-                base,
-                index: None,
-                ..
+                base, index: None, ..
             } if *base != Base::None => G::Disp {
                 pc: *base == Base::Pc,
                 reg: match base {
@@ -170,9 +174,15 @@ impl Matcher<'_, '_> {
         let g = G::of(op);
         let ctl = |ids: &[u16]| matches!(g, Ctl(id) if ids.contains(&id));
         match k {
-            b'!' => !matches!(g, DReg(_) | AReg(_) | FReg(_) | Ctl(_) | Inc(_) | Dec(_) | List(_))
-                && !g.imm(),
-            b'<' => !matches!(g, DReg(_) | AReg(_) | FReg(_) | Ctl(_) | Dec(_) | List(_)) && !g.imm(),
+            b'!' => {
+                !matches!(
+                    g,
+                    DReg(_) | AReg(_) | FReg(_) | Ctl(_) | Inc(_) | Dec(_) | List(_)
+                ) && !g.imm()
+            }
+            b'<' => {
+                !matches!(g, DReg(_) | AReg(_) | FReg(_) | Ctl(_) | Dec(_) | List(_)) && !g.imm()
+            }
             b'>' => match g {
                 DReg(_) | AReg(_) | FReg(_) | Ctl(_) | Imm | Big | Inc(_) | List(_) => false,
                 Abs => true,
@@ -283,7 +293,9 @@ impl Matcher<'_, '_> {
             },
             b's' => ctl(&[rid::FPI, rid::FPS, rid::FPC]),
             b'S' => ctl(&[rid::SR]),
-            b't' => self.constant(op).is_some_and(|v| (0..=7).contains(&(v as u32))),
+            b't' => self
+                .constant(op)
+                .is_some_and(|v| (0..=7).contains(&(v as u32))),
             b'U' => ctl(&[rid::USP]),
             b'x' => self
                 .constant(op)
@@ -344,16 +356,16 @@ pub fn assemble(
             let cpu = cpu.describe();
             cx.error(
                 req.mnemonic_span,
-                format!("`{name}` needs {}; this target is a {cpu}", describe_arch(ok_arch)),
+                format!(
+                    "`{name}` needs {}; this target is a {cpu}",
+                    describe_arch(ok_arch)
+                ),
             );
         } else if ops.is_empty() {
             cx.error(req.span, format!("`{name}` needs operands"));
         } else {
             let what: Vec<&str> = ops.iter().map(Operand::describe).collect();
-            cx.error(
-                req.span,
-                format!("`{name}` cannot take {}", join(&what)),
-            );
+            cx.error(req.span, format!("`{name}` cannot take {}", join(&what)));
         }
         return None;
     };
@@ -461,10 +473,8 @@ impl Encoder<'_, '_> {
 
     fn operand(&mut self, k: u8, p: u8, op: &Operand) -> Option<()> {
         match k {
-            b'*' | b'~' | b'%' | b';' | b'@' | b'!' | b'&' | b'$' | b'?' | b'/' | b'<'
-            | b'>' | b'b' | b'p' | b'q' | b'v' | b'w' | b'y' | b'z' | b'|' => {
-                self.general(k, p, op)
-            }
+            b'*' | b'~' | b'%' | b';' | b'@' | b'!' | b'&' | b'$' | b'?' | b'/' | b'<' | b'>'
+            | b'b' | b'p' | b'q' | b'v' | b'w' | b'y' | b'z' | b'|' => self.general(k, p, op),
             b'#' | b'^' => self.immediate(p, op),
             b'+' | b'-' | b'A' | b'a' => {
                 let n = match op.mode {
@@ -498,7 +508,9 @@ impl Encoder<'_, '_> {
             b'r' => {
                 let n = match &op.mode {
                     Mode::Ind(n) => 8 | *n,
-                    Mode::Indexed { index: Some(ix), .. } => ix.reg,
+                    Mode::Indexed {
+                        index: Some(ix), ..
+                    } => ix.reg,
                     _ => 0,
                 };
                 self.install(p, n as u16);
@@ -518,7 +530,8 @@ impl Encoder<'_, '_> {
                 let d = match self.cx.constant(v.e) {
                     Some(d) if (-32768..=32767).contains(&d) => d,
                     Some(d) => {
-                        return self.err(v.span, format!("displacement {d} does not fit in a word"));
+                        return self
+                            .err(v.span, format!("displacement {d} does not fit in a word"));
                     }
                     None => {
                         return self.err(
@@ -674,7 +687,11 @@ impl Encoder<'_, '_> {
             pc_abs: !matches!(k, b'~' | b'%' | b'&' | b'$' | b'?'),
         };
         let alts = encode::ea(self.cx, op, ecx)?;
-        let place = if p == b'd' { Place::MoveDst } else { Place::Low };
+        let place = if p == b'd' {
+            Place::MoveDst
+        } else {
+            Place::Low
+        };
         self.appended.push(Part { alts, place });
         Some(())
     }
@@ -737,7 +754,10 @@ impl Encoder<'_, '_> {
         match p {
             b'8' => {
                 if mask & 0x0ff_ffff != 0 {
-                    return self.err(op.span, "this register list holds only `fpcr`, `fpsr` and `fpiar`");
+                    return self.err(
+                        op.span,
+                        "this register list holds only `fpcr`, `fpsr` and `fpiar`",
+                    );
                 }
                 self.install(p, (mask >> 24) as u16);
             }
@@ -760,7 +780,8 @@ impl Encoder<'_, '_> {
         if v.width.is_some() {
             return self.err(v.span, "a branch target takes no `.w` or `.l`");
         }
-        let pc = |size: u8| FixupKind::pcrel(size, 0).with_reloc(reloc::data(size, true).unwrap_or(0));
+        let pc =
+            |size: u8| FixupKind::pcrel(size, 0).with_reloc(reloc::data(size, true).unwrap_or(0));
         match p {
             b'W' | b'w' => {
                 self.appended.push(Part::words(
