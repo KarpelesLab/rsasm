@@ -615,6 +615,10 @@ fn collect_symbols(
         };
 
         let bind = match sym.binding {
+            // An undefined symbol is the linker's to find, so it is global
+            // whether or not the source said `.globl`, as in both references;
+            // a linker refuses a local one.
+            Binding::Local if !sym.is_defined() => STB_GLOBAL,
             Binding::Local => STB_LOCAL,
             Binding::Global => STB_GLOBAL,
             Binding::Weak => STB_WEAK,
@@ -654,8 +658,7 @@ fn collect_symbols(
             value,
             size,
         };
-        // An undefined symbol is always global: the linker has to find it.
-        if bind == STB_LOCAL && sym.is_defined() {
+        if bind == STB_LOCAL {
             locals.push(out);
         } else {
             globals.push(out);
