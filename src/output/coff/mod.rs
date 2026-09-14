@@ -402,6 +402,18 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
     let mut secs: Vec<OutSec> = Vec::new();
     let mut number = 0u16;
+    // NASM writes the sections the source named, in that order, and the
+    // default `.text` only if something went into it.
+    let nasm = asm.options.dialect == crate::lexer::Dialect::Nasm;
+    if nasm {
+        standard.clear();
+        order = asm
+            .sections
+            .iter()
+            .filter(|s| s.size > 0 || asm.coff.sections.contains_key(&s.id))
+            .map(|s| s.id)
+            .collect();
+    }
     // The three llvm-mc always writes come first, made up where the source
     // never used them, then everything else in the order it was named.
     for (name, id) in &standard {
@@ -439,7 +451,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         secs.iter().map(|s| (s.id, s.number as i16)).collect();
 
     // ---- symbols ----------------------------------------------------------
-    let (syms, sym_index) = collect_symbols(asm, &secs, &sec_number);
+    let (syms, sym_index) = collect_symbols(asm, &secs, &sec_number, nasm);
 
     // ---- lay the file out -------------------------------------------------
     let mut buf = Buf::default();
@@ -627,6 +639,7 @@ fn collect_symbols(
     asm: &Assembler,
     secs: &[OutSec],
     sec_number: &HashMap<SectionId, i16>,
+    nasm: bool,
 ) -> (Vec<OutSym>, HashMap<SymbolId, u32>) {
     let mut out: Vec<OutSym> = Vec::new();
     let mut index: HashMap<SymbolId, u32> = HashMap::new();
@@ -660,7 +673,12 @@ fn collect_symbols(
                 aux: vec![Aux::Section {
                     length: s.data.len() as u32,
                     relocs: s.relocs.len().min(u16::MAX as usize) as u16,
-                    checksum: if uninitialized { 0 } else { jam_crc(&s.data) },
+                    // NASM leaves the checksum out.
+                    checksum: if uninitialized || nasm {
+                        0
+                    } else {
+                        jam_crc(&s.data)
+                    },
                     number: s.number,
                     selection: s.comdat.map_or(0, |c| c.selection),
                 }],
@@ -735,7 +753,40 @@ fn collect_symbols(
         index.insert(id, push(&mut out, &mut next, s));
     }
 
-    for name in &asm.coff.files {
+    // NASM names the source file whether or not the source did, and adds
+    // two absolute symbols of its own: `.absolut`, and in an i386 object
+    // `@feat.00`, whose 1 tells the linker the object is safe for SAFESEH.
+    let mut files = asm.coff.files.clone();
+    if nasm {
+        if files.is_empty()
+            && let Some(f) = asm
+                .sm
+                .files()
+                .iter()
+                .find(|f| !f.name.to_string_lossy().starts_with('<'))
+        {
+            files.push(f.name.to_string_lossy().into_owned());
+        }
+        let mut extra = vec![(".absolut", 0)];
+        if machine(asm.target()) == Some(MACHINE_I386) {
+            extra.push(("@feat.00", 1));
+        }
+        for (name, value) in extra {
+            push(
+                &mut out,
+                &mut next,
+                OutSym {
+                    name: name.to_string(),
+                    value,
+                    section: SYM_ABSOLUTE,
+                    ty: 0,
+                    class: SYM_CLASS_STATIC,
+                    aux: Vec::new(),
+                },
+            );
+        }
+    }
+    for name in &files {
         push(
             &mut out,
             &mut next,

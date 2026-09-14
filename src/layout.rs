@@ -1757,15 +1757,16 @@ impl Assembler {
         // function, whose instruction set a linker reads from it.
         let sym = self.symbols.get(target);
         let keep = arch.keeps_reloc_symbol(sym.target_flags, sym.ty);
-        // COFF keeps the local symbols the source named, and llvm-mc
-        // relocates against them by name; only the assembler's own labels,
-        // which never reach the symbol table, go through their section.
+        // NASM's rule holds for its COFF objects too. Otherwise COFF keeps
+        // the local symbols the source named, and llvm-mc relocates against
+        // them by name; only the assembler's own labels, which never reach
+        // the symbol table, go through their section.
         let by_section = !keep
-            && if self.options.format.is_coff() {
-                !crate::coff::keeps_symbol(self, target)
-            } else if self.options.dialect == crate::lexer::Dialect::Nasm {
+            && if self.options.dialect == crate::lexer::Dialect::Nasm {
                 !names_symbol
                     && (binding == Binding::Local || self.symbols.get(target).is_defined())
+            } else if self.options.format.is_coff() {
+                !crate::coff::keeps_symbol(self, target)
             } else {
                 match binding {
                     Binding::Local => true,

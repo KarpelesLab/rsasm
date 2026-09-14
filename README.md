@@ -95,6 +95,10 @@ but 18 forms where both manuals show MAME to be wrong.
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
   and flat binaries
+- PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
+  `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
+  `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
+  [PE/COFF](#pecoff)
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
@@ -125,7 +129,11 @@ but 18 forms where both manuals show MAME to be wrong.
   string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
-- Mach-O and PE/COFF
+- Mach-O
+- PE/COFF: DWARF (`-g`, `.loc` and `.cfi_*` are refused with `-f coff`) and
+  CodeView debug information, unwind data for ARM64 (its `.seh_*` directives
+  are refused), i386 `.safeseh`, and associative COMDAT sections, so the
+  unwind data of a function in a COMDAT section is not discarded with it
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
@@ -185,7 +193,8 @@ rsasm [options] <input.s>...
 
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64, coff,
+                     win64, win32 or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
@@ -654,6 +663,7 @@ $ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
 $ tools/nasm-diff/run.sh    # needs NASM from tools/oracles/build.sh
 $ tools/multiarch-diff/run.sh  # needs all of the above
 $ tools/dwarf-diff/run.sh   # needs llvm-mc and tools/oracles/build.sh
+$ tools/coff-diff/run.sh    # needs llvm-mc and tools/oracles/build.sh
 ```
 
 ## License

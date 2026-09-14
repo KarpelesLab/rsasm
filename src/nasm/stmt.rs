@@ -871,6 +871,10 @@ impl Assembler {
                 .span_text(first.span.to(args[end - 1].span))
                 .to_string(),
         };
+        if self.options.format.is_coff() {
+            self.nasm_coff_section(name, &args[end..], span);
+            return;
+        }
         let relocatable = self.options.relocatable;
         let (mut kind, mut flags, mut align) = if relocatable {
             elf_section_defaults(&name)
@@ -968,6 +972,110 @@ impl Assembler {
         if explicit_align {
             self.nasm.explicit_align.insert(id);
         }
+        self.set_section(id);
+        self.nasm.absolute = None;
+    }
+
+    /// `section` in a `win32` or `win64` object, as NASM's COFF writer reads
+    /// it: one of the words `code` (or `text`), `data`, `rdata`, `bss` and
+    /// `info` choosing the characteristics outright, and `align=`. Without a
+    /// word, the name decides, and a name NASM does not know is code.
+    fn nasm_coff_section(&mut self, name: String, args: &[Token], span: Span) {
+        use crate::output::coff as c;
+        let win64 = c::machine(self.target()) == Some(c::MACHINE_AMD64);
+        let mut chosen = None;
+        let mut align = None;
+        let mut i = 0;
+        while i < args.len() {
+            let t = args[i];
+            i += 1;
+            let Some(n) = t.ident() else {
+                self.diags.error(t.span, "expected a section attribute");
+                return;
+            };
+            let attr = self.interner.get(n).to_ascii_lowercase();
+            match attr.as_str() {
+                "code" | "text" => chosen = Some(NASM_TEXT),
+                "data" => chosen = Some(NASM_DATA),
+                "rdata" => chosen = Some(NASM_RDATA),
+                "bss" => chosen = Some(NASM_BSS),
+                "info" => chosen = Some(NASM_INFO),
+                "align" if args.get(i).is_some_and(|t| t.is_punct(Punct::Eq)) => {
+                    i += 1;
+                    let mut j = i;
+                    while j < args.len() && !(args[j].preceded_by_space && j > i) {
+                        j += 1;
+                    }
+                    let mut c = Cursor::new(&args[i..j]);
+                    i = j;
+                    let Some(e) = self.parse_expr(&mut c) else {
+                        return;
+                    };
+                    let v: Option<u64> = self
+                        .eval_absolute(e, "a section alignment")
+                        .map(|v| v.max(-1) as u64);
+                    match v {
+                        Some(0) => align = Some(None),
+                        Some(v) if v.is_power_of_two() && v <= 8192 => align = Some(Some(v)),
+                        _ => {
+                            self.diags
+                                .error(t.span, "section alignment must be a power of two up to 8192");
+                            return;
+                        }
+                    }
+                }
+                _ => {
+                    self.diags
+                        .error(t.span, format!("unknown COFF section attribute `{attr}`"));
+                    return;
+                }
+            }
+        }
+        let n = self.interner.intern(&name);
+        let existing = self.sections.iter().find(|s| s.name == n).map(|s| s.id);
+        let flags = match (chosen, existing) {
+            (Some(f), _) => Some(f),
+            (None, Some(_)) => None,
+            (None, None) => Some(match name.as_str() {
+                ".data" => NASM_DATA,
+                ".rdata" => NASM_RDATA,
+                ".bss" => NASM_BSS,
+                ".pdata" if win64 => NASM_PDATA,
+                ".xdata" if win64 => NASM_XDATA,
+                _ => NASM_TEXT,
+            }),
+        };
+        let id = match existing {
+            Some(id) => id,
+            None => {
+                let kind = if flags.is_some_and(|f| f & c::SCN_CNT_UNINITIALIZED_DATA != 0) {
+                    SectionKind::Nobits
+                } else {
+                    SectionKind::Progbits
+                };
+                let core = crate::coff::section_flags(flags.unwrap_or(NASM_TEXT));
+                self.get_or_create_section(n, kind, core, 1)
+            }
+        };
+        if let Some(f) = flags {
+            // The alignment lives in the characteristics word too; `align=`
+            // replaces it, and `align=0` goes back to the default.
+            let bits = (f & c::SCN_ALIGN_MASK) >> 20;
+            let default = if bits == 0 { 1 } else { 1u64 << (bits - 1) };
+            self.section_mut(id).align = default;
+            let info = self.coff_section_info(id);
+            info.characteristics = f & !c::SCN_ALIGN_MASK;
+        } else {
+            // Named again without attributes: nothing changes, but the
+            // section is still one the source named, which is what puts an
+            // empty one in the object.
+            self.coff_section_info(id);
+        }
+        if let Some(Some(a)) = align {
+            self.section_mut(id).align = a;
+            self.nasm.explicit_align.insert(id);
+        }
+        let _ = span;
         self.set_section(id);
         self.nasm.absolute = None;
     }
@@ -1183,6 +1291,16 @@ fn pad_to(bytes: &mut Vec<u8>, width: usize) {
         bytes.resize(bytes.len() + width - rem, 0);
     }
 }
+
+// The characteristics NASM's COFF writer gives each kind of section,
+// alignment included (`outcoff.c`).
+const NASM_TEXT: u32 = 0x6050_0020;
+const NASM_DATA: u32 = 0xc030_0040;
+const NASM_BSS: u32 = 0xc030_0080;
+const NASM_RDATA: u32 = 0x4040_0040;
+const NASM_PDATA: u32 = 0x4030_0040;
+const NASM_XDATA: u32 = 0x4040_0040;
+const NASM_INFO: u32 = 0x0010_0a00;
 
 /// The type, flags and alignment NASM's ELF writer gives a section it
 /// knows by name, and otherwise progbits, allocated, aligned to 1.
