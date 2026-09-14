@@ -516,13 +516,13 @@ independent assembler, and compare the bytes:
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
   the reference for literal pools and interworking. `tools/oracles/build.sh`
-  builds the references from checksum-pinned sources. 7,294 of 7,294 match
-  across twenty variants.
+  builds the references from checksum-pinned sources. 12,843 of 12,843 match
+  across twenty-five variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 120 of 120 match across twenty-four variants.
+  distances between sections. 168 of 168 match across twenty-six variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries and as ELF objects, relocations and global
@@ -534,7 +534,7 @@ independent assembler, and compare the bytes:
   against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
-  Clang. 1,005 of 1,005 match across twenty-one target variants.
+  Clang. 1,083 of 1,083 match across twenty-three target variants.
 
 The x86 and MSP430 backends are also fuzzed: `tools/fuzz/x86.py` generates random
 instructions from a table of forms written from the Intel manual, in all three

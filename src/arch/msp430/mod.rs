@@ -47,14 +47,32 @@
 //!
 //! # Deliberate differences from the reference
 //!
+//! Where the reference writes something no linker can make sense of, rsasm
+//! refuses the source instead:
+//!
+//! * operands an instruction does not take, which the reference ignores
+//!   (`nop r5`, `mov r5, r6, r7`);
+//! * a `pushm` or `popm` count outside 1 to 16, which it folds into the
+//!   opcode;
+//! * a polymorphic branch to anything but a label, whose addend it drops
+//!   (`beq lab+2` branches to `lab`).
+//!
+//! And where the object differs without the linked program differing:
+//!
 //! * The polymorphic branches (`jump`, `beq`, `bgt`, …) need GNU as's `-mP`,
 //!   and are always taken in their long form, as GNU as takes them without
 //!   `-mQ`; rsasm accepts them without an option.
 //! * `R_MSP430_SYM_DIFF`'s addend is zero, which is what the reference writes
 //!   for all but the last such pair in a section, where it writes the
 //!   negated value of the subtrahend. The GNU linker reads neither.
+//! * A number `.set` after the code that uses it is written into the field;
+//!   the reference relocates the field against the symbol.
+//! * The `__crt0_*` references a `.section` directive adds follow the
+//!   undefined symbols the file relocates against in the symbol table, where
+//!   the reference puts them where the directive is.
 //! * A bare number is a register (`mov 5, r6` moves `r5`) by value here and by
-//!   spelling in the reference, which reads `0b101` as an address.
+//!   spelling in the reference, which reads `0b101` and `0x0` as numbers and
+//!   `010` as octal.
 //!
 //! # Not implemented
 //!
