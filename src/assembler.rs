@@ -487,6 +487,12 @@ impl Assembler {
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
             self.arch.tune_lexer(&mut config);
+            // COFF names carry `@`: MSVC's mangled C++ names, clang's
+            // `__xmm@...` constants, `@feat.00`. A relocation modifier is then
+            // split off the end of a name by the expression parser.
+            if self.options.format.is_coff() {
+                config.at_in_idents = true;
+            }
         }
         if self.options.dialect == Dialect::EightBit {
             config.mnemonic = self.arch.mnemonics();

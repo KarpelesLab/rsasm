@@ -934,6 +934,17 @@ impl<'a> ExprParser<'a> {
             }
             TokKind::Ident(n) => {
                 cur.advance();
+                // Where `@` is part of a name, GNU syntax still means a
+                // relocation modifier when what follows the last `@` names
+                // one: `foo@IMGREL`, but not `__xmm@0f0e0d0c`.
+                if self.dialect == Dialect::Gas
+                    && let Some((base, modifier)) = split_modifier(self.interner.get(n))
+                {
+                    let base = self.interner.intern(&base);
+                    let modifier = self.interner.intern(&modifier);
+                    let sym = self.arena.alloc(ExprKind::Sym(base), tok.span);
+                    return Some(self.arena.alloc(ExprKind::Modifier(modifier, sym), tok.span));
+                }
                 Some(self.arena.alloc(ExprKind::Sym(n), tok.span))
             }
             TokKind::LocalRef(n, dir) => {
@@ -1048,6 +1059,27 @@ fn peek_binop(cur: &Cursor<'_>, dialect: Dialect) -> Option<BinOp> {
         Punct::OrOr => LogicalOr,
         _ => return None,
     })
+}
+
+/// A name with a relocation modifier on the end, `foo@IMGREL`, as the base
+/// name and the modifier lowercased, where the lexer keeps `@` inside names;
+/// `None` if what follows the last `@` names no modifier, so that the whole
+/// word is the name. The list is the modifiers some backend or object format
+/// here knows.
+fn split_modifier(name: &str) -> Option<(String, String)> {
+    let (base, suffix) = name.rsplit_once('@')?;
+    if base.is_empty() {
+        return None;
+    }
+    let lower = suffix.to_ascii_lowercase();
+    const KNOWN: &[&str] = &[
+        "imgrel", "secrel32", "secrel", "secidx", "plt", "got", "gotoff", "gotpc", "gotpcrel",
+        "tlsgd", "tlsld", "tlsldm", "dtpoff", "ntpoff", "tpoff", "gottpoff", "gotntpoff",
+        "indntpoff", "size",
+    ];
+    KNOWN
+        .contains(&lower.as_str())
+        .then(|| (base.to_string(), lower))
 }
 
 #[cfg(test)]

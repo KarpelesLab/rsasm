@@ -27,6 +27,7 @@
 #   <target>-programs.txt  multi-line cases separated by `=== name` lines
 #   <target>-llvm.txt      `=== name` cases compared against llvm-mc alone
 #   <target>-padding.txt   the same, for alignment padding in code
+#   <target>-compiler.txt  the same, for Clang's output (see compiler.sh)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -133,6 +134,7 @@ run_target() { # target, rsasm arch, triple, gas
   [ -f "$here/$target-programs.txt" ] && snippets "$here/$target-programs.txt" 1 "$@"
   [ -f "$here/$target-llvm.txt" ] && snippets "$here/$target-llvm.txt" 0 "$@"
   [ -f "$here/$target-padding.txt" ] && snippets "$here/$target-padding.txt" 0 "$@"
+  [ -f "$here/$target-compiler.txt" ] && snippets "$here/$target-compiler.txt" 0 "$@"
   echo "[$target] $((pass + fail - before)) comparisons"
 }
 

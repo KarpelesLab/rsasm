@@ -799,6 +799,7 @@ impl Assembler {
         // different things, and a COMDAT selection where ELF has a type.
         if self.options.format.is_coff() {
             let mut info = None;
+            let mut key = name;
             if cur.eat_punct(Punct::Comma).is_some() {
                 let (characteristics, comdat, k) =
                     crate::coff::parse_section_attributes(self, &mut *cur, &text, span);
@@ -808,10 +809,16 @@ impl Assembler {
                     characteristics,
                     comdat,
                 });
+                // llvm-mc tells sections apart by name and COMDAT symbol.
+                if let Some(sym) = comdat.and_then(|c| c.symbol) {
+                    let sym = self.interner.get(self.symbols.get(sym).name).to_string();
+                    key = self.interner.intern(&format!("{text}\u{0}{sym}"));
+                }
             }
-            let id = self.get_or_create_section(name, kind, flags, 1);
+            let id = self.get_or_create_section(key, kind, flags, 1);
+            // The first description of a section is the one that counts.
             if let Some(info) = info {
-                self.coff.sections.insert(id, info);
+                self.coff.sections.entry(id).or_insert(info);
             }
             if push {
                 self.push_section_stack();
@@ -972,8 +979,9 @@ impl Assembler {
         let Some((tname, tspan)) = self.expect_name(cur) else {
             return true;
         };
+        // Where `@` may start a name (COFF), `@function` is one word.
         let t = self.interner.get(tname).to_ascii_lowercase();
-        let ty = match t.trim_start_matches("stt_") {
+        let ty = match t.trim_start_matches('@').trim_start_matches("stt_") {
             "function" | "func" => SymType::Func,
             "object" => SymType::Object,
             "notype" => SymType::NoType,

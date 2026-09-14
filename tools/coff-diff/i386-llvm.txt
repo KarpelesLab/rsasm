@@ -22,3 +22,13 @@ _f:     ret
         .globl  _func
 _func:  ret
         call    _func
+# Private labels: llvm-mc's i386 Windows objects keep any local label that
+# starts with a capital L out of the symbol table, `Label` included, and keep
+# `.Lfoo`, which x86-64 and ARM64 leave out.
+=== private labels
+        .text
+Lx:     ret
+.Ly:    ret
+Label:  ret
+        .long   Lx, .Ly, Label
+        call    Label

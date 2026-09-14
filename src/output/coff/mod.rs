@@ -644,7 +644,7 @@ fn write_symbol(buf: &mut Buf, s: &OutSym, strtab: &mut StrTab) {
 
 fn out_section(asm: &Assembler, id: SectionId, number: u16) -> OutSec {
     let s = asm.section(id);
-    let name = asm.interner.get(s.name).to_string();
+    let name = coff::section_name(asm.interner.get(s.name)).to_string();
     let info = asm.coff.sections.get(&id);
     let base = match info {
         Some(i) => i.characteristics,

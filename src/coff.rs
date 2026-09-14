@@ -175,9 +175,12 @@ fn seh_register(name: &str) -> Option<u8> {
 /// Whether a symbol reaches the COFF symbol table.
 ///
 /// The assembler's own labels — numeric locals, the anonymous ones standing
-/// in for `.`, and anything spelled `.L` — stay out of it, as they do in ELF
-/// and as llvm-mc keeps them out here; a relocation that would have named one
-/// names its section and an offset instead.
+/// in for `.`, and the private ones — stay out of it, as llvm-mc keeps them
+/// out; a relocation that would have named one names its section and an
+/// offset instead. A private label is spelled `.L` as in ELF, except for
+/// i386, where llvm-mc takes Microsoft's `L`: any local label whose name
+/// starts with a capital L, `Loop` too, and not `.Lfoo`. NASM keeps every
+/// label the source wrote.
 pub fn keeps_symbol(asm: &Assembler, id: SymbolId) -> bool {
     let sym = asm.symbols.get(id);
     let name = asm.interner.get(sym.name);
@@ -190,7 +193,14 @@ pub fn keeps_symbol(asm: &Assembler, id: SymbolId) -> bool {
     if !sym.is_defined() && !sym.used {
         return false;
     }
-    !(name.starts_with(".L") && sym.binding == Binding::Local && sym.is_defined())
+    if asm.options.dialect == crate::lexer::Dialect::Nasm {
+        return true;
+    }
+    let private = match coff::machine(asm.target()) {
+        Some(coff::MACHINE_I386) => "L",
+        _ => ".L",
+    };
+    !(name.starts_with(private) && sym.binding == Binding::Local && sym.is_defined())
 }
 
 /// The storage class a symbol is written with: what `.def` said, or the
@@ -478,6 +488,12 @@ impl Assembler {
                 if cur.eat_punct(Punct::At).is_some() {
                     let _ = self.expect_name(cur);
                     info = 1;
+                } else if let Some((n, _)) = cur.peek().ident().map(|n| (n, ())) {
+                    // A COFF name may start with `@`, so `@code` is one word.
+                    if self.interner.get(n).eq_ignore_ascii_case("@code") {
+                        cur.advance();
+                        info = 1;
+                    }
                 }
                 self.seh_code(span, UWOP_PUSH_MACHFRAME, info, Vec::new());
             }
@@ -486,6 +502,12 @@ impl Assembler {
             ".seh_savereg" | ".seh_savexmm" => self.seh_save(name, cur, span),
             ".seh_handler" => self.seh_handler(cur, span),
             ".seh_handlerdata" => self.seh_handlerdata(span),
+            // Epilogues only reach the unwind data in version 2 of it, which
+            // `.seh_unwindversion 2` asks for and rsasm does not write; in
+            // version 1 llvm-mc checks them and writes nothing.
+            ".seh_startepilogue" | ".seh_endepilogue" => {
+                self.seh_open(span);
+            }
             _ => self
                 .diags
                 .error(span, format!("`{name}` is not a directive rsasm knows")),
@@ -734,7 +756,13 @@ impl Assembler {
             let Some((n, nspan)) = self.expect_name(cur) else {
                 return;
             };
-            match self.interner.get(n).to_ascii_lowercase().as_str() {
+            match self
+                .interner
+                .get(n)
+                .trim_start_matches('@')
+                .to_ascii_lowercase()
+                .as_str()
+            {
                 "except" => flags |= UNW_FLAG_EHANDLER,
                 "unwind" => flags |= UNW_FLAG_UHANDLER,
                 other => {
@@ -915,19 +943,10 @@ pub(crate) fn parse_section_attributes(
                 .error(span, format!("unknown COFF section flag `{c}`")),
         }
     }
-    let characteristics = coff::preset_characteristics(name)
-        .or(characteristics)
-        .unwrap_or_else(|| coff::parse_flags(name, "").unwrap_or(0));
-    let kind = if characteristics & coff::SCN_CNT_UNINITIALIZED_DATA != 0 {
-        SectionKind::Nobits
-    } else {
-        SectionKind::Progbits
-    };
     let mut comdat = None;
-    if cur.eat_punct(Punct::Comma).is_some() {
-        let Some((n, nspan)) = asm.expect_name(cur) else {
-            return (characteristics, comdat, kind);
-        };
+    if cur.eat_punct(Punct::Comma).is_some()
+        && let Some((n, nspan)) = asm.expect_name(cur)
+    {
         let text = asm.interner.get(n).to_ascii_lowercase();
         match selection(&text) {
             Some(sel) => {
@@ -944,5 +963,25 @@ pub(crate) fn parse_section_attributes(
                 .error(nspan, format!("unknown COMDAT selection `{text}`")),
         }
     }
+    // A section llvm-mc knows by name keeps its own characteristics, unless
+    // a COMDAT symbol makes it another section of the same name.
+    let keyed = comdat.is_some_and(|c| c.symbol.is_some());
+    let characteristics = coff::preset_characteristics(name)
+        .filter(|_| !keyed)
+        .or(characteristics)
+        .unwrap_or_else(|| coff::parse_flags(name, "").unwrap_or(0));
+    let kind = if characteristics & coff::SCN_CNT_UNINITIALIZED_DATA != 0 {
+        SectionKind::Nobits
+    } else {
+        SectionKind::Progbits
+    };
     (characteristics, comdat, kind)
+}
+
+/// The name a section is written under. Sections of one name that COMDAT
+/// symbols tell apart — `.rdata` once per constant a compiler folds — are
+/// kept apart in the assembler under a name that adds the symbol after a NUL,
+/// which no source can spell.
+pub fn section_name(name: &str) -> &str {
+    name.split('\u{0}').next().unwrap_or(name)
 }
