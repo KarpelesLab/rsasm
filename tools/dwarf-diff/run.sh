@@ -33,7 +33,8 @@ root=$(cd "$here/../.." && pwd)
 bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 awkscript="$root/tools/mc-diff/relocs.awk"
 
-# key | rsasm arch | reference: `xas <tool> <flags>` or `mc <triple> <flags>`
+# key | rsasm arch, and options | reference: `xas <tool> <flags>` or
+# `mc <triple> <flags>`
 # | what differs: `cfi` where the reference has call frame information,
 # `P` where it names the code section `P` (RX; rsasm writes `.text`), and
 # `norelocs` where its relocations are not compared (RL78, whose GNU as leaves
@@ -55,7 +56,7 @@ mipsel|mipsel|mc mipsel|cfi
 mips64|mips64|mc mips64|cfi
 sparc|sparc|mc sparc|cfi
 sparcv9|sparcv9|mc sparcv9|cfi
-m68k|m68k|xas m68k-elf-as|cfi
+m68k|m68k -d gas|xas m68k-elf-as|cfi
 sh|sh|xas sh-elf-as|cfi
 shl|shl|xas sh-elf-as -little|cfi
 rx|rx|xas rx-elf-as|P
@@ -92,8 +93,9 @@ canon() { # object
     rm -f "$o.bin" "$o.tmp"
   done
   llvm-readobj --symbols "$o" > "$o.syms"
+  # Grouped by section, since the order the sections come in says nothing.
   llvm-readobj --relocs --expand-relocs "$o" | ${AWK:-awk} -f "$awkscript" "$o.syms" - |
-    grep -E '^\.rela?(\.debug_line|\.debug_line_str|\.eh_frame|\.debug_frame) '
+    grep -E '^\.rela?(\.debug_line|\.debug_line_str|\.eh_frame|\.debug_frame) ' | sort -s -k1,1
 }
 
 compare() { # key, rsasm arch, reference, quirks, name, source
@@ -116,7 +118,8 @@ compare() { # key, rsasm arch, reference, quirks, name, source
   else
     m="REF-ERROR: $(grep -m3 -iE 'error|missing' "$d/ref.log" | tr '\n' ' ')"
   fi
-  if (cd "$d" && "$rsasm" -a "$rs" -o rs.o in.s) > "$d/rs.log" 2>&1; then
+  # shellcheck disable=SC2086
+  if (cd "$d" && "$rsasm" -a $rs -o rs.o in.s) > "$d/rs.log" 2>&1; then
     r=$(canon "$d/rs.o")
   else
     r="RSASM-ERROR: $(grep -m3 -i error "$d/rs.log" | tr '\n' ' ')"

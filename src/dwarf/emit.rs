@@ -104,6 +104,16 @@ impl Blob {
     }
 }
 
+/// What every sequence of a line program is written with.
+struct ProgramCx {
+    target: super::DwarfTarget,
+    version: u16,
+    ptr: u8,
+    /// An address advance that is not a whole number of instructions has
+    /// been reported.
+    unaligned: bool,
+}
+
 impl Assembler {
     /// Writes `.debug_line`, `.eh_frame` and `.debug_frame` from what the
     /// source asked for, now that layout has settled. Returns whether it added
@@ -118,7 +128,13 @@ impl Assembler {
         if self.dwarf.line.has_views {
             self.assign_views();
         }
-        if self.dwarf.line.is_used() {
+        // GNU as writes no table without a row; llvm-mc writes one for a
+        // numbered `.file` alone.
+        let lines = match self.dwarf_target().flavor {
+            Flavor::Gnu => !self.dwarf.line.sequences.is_empty(),
+            Flavor::Llvm => self.dwarf.line.is_used(),
+        };
+        if lines {
             self.emit_debug_line();
             added = true;
         }
@@ -448,8 +464,14 @@ impl Assembler {
 
         let line_pos = self.next_pos(line_sec);
         let sequences = std::mem::take(&mut self.dwarf.line.sequences);
+        let mut cx = ProgramCx {
+            target,
+            version,
+            ptr,
+            unaligned: false,
+        };
         for (section, rows) in &sequences {
-            self.line_program(&mut b, &target, version, ptr, *section, rows);
+            self.line_program(&mut b, &mut cx, *section, rows);
         }
         self.dwarf.line.sequences = sequences;
 
@@ -496,13 +518,13 @@ impl Assembler {
     fn line_program(
         &mut self,
         b: &mut Blob,
-        target: &super::DwarfTarget,
-        version: u16,
-        ptr: u8,
+        cx: &mut ProgramCx,
         section: SectionId,
         rows: &[super::line::Row],
     ) {
+        let (target, version, ptr) = (&cx.target, cx.version, cx.ptr);
         let flavor = target.flavor;
+        let fixed = target.fixed_advance_pc;
         let min = target.min_insn_length.max(1) as u64;
         let (mut file, mut line, mut column, mut isa) = (1u32, 1i64, 0u32, 0u32);
         let mut is_stmt = true;
@@ -554,10 +576,12 @@ impl Assembler {
                 // address of its own, so that consumers restart the count.
                 Some(prev) if !(loc.view == Some(View::Reset) && prev == addr) => {
                     let delta = addr.saturating_sub(prev);
-                    if target.fixed_advance_pc {
+                    if fixed {
                         self.fixed_advance(b, Some(line_delta), delta, row.pos, ptr);
                     } else {
-                        if delta % min != 0 && flavor == Flavor::Gnu {
+                        // GNU as says so once, however many rows are off.
+                        if delta % min != 0 && flavor == Flavor::Gnu && !cx.unaligned {
+                            cx.unaligned = true;
                             self.diags.error(
                                 loc.span,
                                 "unaligned opcodes detected in executable segment",
@@ -577,7 +601,7 @@ impl Assembler {
         let end = self.sequence_end(section);
         let prev = last.unwrap_or(end);
         let delta = end.saturating_sub(prev);
-        if target.fixed_advance_pc {
+        if fixed {
             let end_pos = (section, self.section(section).frags.len() as u32);
             self.fixed_advance(b, None, delta, end_pos, ptr);
         } else {

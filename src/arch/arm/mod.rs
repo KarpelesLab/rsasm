@@ -125,6 +125,12 @@ impl Architecture for Arm {
         reloc::data(size, pcrel)
     }
 
+    /// llvm-mc names a local label in every relocation but these two (its
+    /// `ARMELFObjectWriter::needsRelocateWithSymbol`).
+    fn relocates_with_label(&self, reloc: u32) -> bool {
+        !matches!(reloc, reloc::ABS32 | reloc::PREL31)
+    }
+
     /// llvm-mc's conventions, as for every ARM encoding, in either
     /// instruction set.
     fn dwarf(&self, _state: &ArchState) -> DwarfTarget {

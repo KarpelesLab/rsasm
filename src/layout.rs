@@ -1010,6 +1010,20 @@ impl Assembler {
                                     if rela {
                                         r.addend = 0;
                                     }
+                                } else if r.addend != 0
+                                    && arch.local_value_in_field(r.kind)
+                                    && r.symbol.is_some_and(|s| {
+                                        self.symbols.get(s).ty == crate::symbol::SymType::Section
+                                    })
+                                {
+                                    let endian = arch.endian();
+                                    if let FragKind::Bytes { variants, chosen } =
+                                        &mut self.sections[si].frags[fi].kind
+                                    {
+                                        let dst = &mut variants[*chosen].bytes
+                                            [off as usize..off as usize + kind.size as usize];
+                                        kind.write(endian, dst, r.addend);
+                                    }
                                 }
                                 relocs.push(r);
                             }
@@ -1127,6 +1141,7 @@ impl Assembler {
                     .modifier_reloc(&name, kind.size, kind.pcrel)
             })
             .unwrap_or(kind.reloc);
+        let reloc = self.frag_arch(si, fi).0.reloc_at(reloc, at);
         if reloc == 0 {
             self.diags.error(
                 span,
@@ -1147,12 +1162,15 @@ impl Assembler {
         let mut addend = v.addend - bias;
 
         // Local symbols are relocated against their section, which is what
-        // linkers expect and what keeps local labels out of the symbol table.
+        // linkers expect and what keeps local labels out of the symbol table,
+        // unless the target's reference names the label for this relocation.
+        let names_label = self.frag_arch(si, fi).0.relocates_with_label(reloc);
         let symbol = target.map(|target| {
             let sym = self.symbols.get(target);
             if sym.binding == Binding::Local
                 && matches!(sym.value, SymbolValue::Label { .. })
                 && kind.reloc_symbol == RelocSymbol::Section
+                && !names_label
             {
                 let sec = self.symbol_section(target).expect("label has a section");
                 addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;

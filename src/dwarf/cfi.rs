@@ -116,6 +116,15 @@ impl Default for CfiState {
     }
 }
 
+/// A pointer's encoding and value, as a symbol, a symbol subtracted and an
+/// addend.
+type PointerKey = (
+    u8,
+    Option<crate::symbol::SymbolId>,
+    Option<crate::symbol::SymbolId>,
+    i64,
+);
+
 /// The size of a pointer in encoding `enc`.
 fn encoding_size(enc: u8, ptr: u8) -> u8 {
     match enc & 7 {
@@ -659,6 +668,7 @@ impl Assembler {
             ra: u32,
             signal: bool,
             per: Option<(u8, ExprRef)>,
+            per_key: Option<PointerKey>,
             lsda: u8,
             insns: Vec<Insn>,
             offset: u64,
@@ -674,6 +684,7 @@ impl Assembler {
             } else {
                 (None, DW_EH_PE_OMIT)
             };
+            let per_key = self.pointer_key(per);
             // The leading instructions a CIE can take: up to the first
             // advance, `remember_state` or escape.
             let lead = insns
@@ -684,7 +695,7 @@ impl Assembler {
                 c.ra == ra
                     && c.signal == fde.signal
                     && c.lsda == lsda
-                    && self.same_personality(c.per, per)
+                    && c.per_key == per_key
                     && c.insns.len() <= insns.len()
                     && c.insns[..] == insns[..c.insns.len()]
                     && c.insns.iter().all(gnu_cie_comparable)
@@ -702,6 +713,7 @@ impl Assembler {
                         ra,
                         signal: fde.signal,
                         per,
+                        per_key,
                         lsda,
                         insns: insns[..lead].to_vec(),
                         offset,
@@ -760,20 +772,13 @@ impl Assembler {
         self.push_blob(sec, b, Span::DUMMY);
     }
 
-    fn same_personality(&self, a: Option<(u8, ExprRef)>, b: Option<(u8, ExprRef)>) -> bool {
-        match (a, b) {
-            (None, None) => true,
-            (Some((ea, xa)), Some((eb, xb))) => {
-                ea == eb
-                    && match (self.eval_ref(xa), self.eval_ref(xb)) {
-                        (Ok(va), Ok(vb)) => {
-                            va.plus == vb.plus && va.minus == vb.minus && va.addend == vb.addend
-                        }
-                        _ => false,
-                    }
-            }
-            _ => false,
-        }
+    /// What two personality pointers are compared by when GNU as decides
+    /// whether FDEs can share a CIE: the encoding and the value, as a symbol
+    /// and an addend.
+    fn pointer_key(&mut self, p: Option<(u8, ExprRef)>) -> Option<PointerKey> {
+        let (enc, e) = p?;
+        let v = self.eval(e).ok()?;
+        Some((enc, v.plus, v.minus, v.addend))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1031,7 +1036,9 @@ impl Assembler {
                 };
                 Self::write_insn(&mut b, &insn, Flavor::Llvm, data_align, unit);
             }
-            let fde_align = if eh && n + 1 < count { 4 } else { ptr as u64 };
+            // To the width of the address fields, and the last FDE to a
+            // pointer's.
+            let fde_align = if n + 1 < count { size as u64 } else { ptr as u64 };
             b.align(0, fde_align, 0);
             let len = b.len() - after;
             b.patch(len_at, len, 4);

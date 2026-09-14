@@ -541,6 +541,10 @@ impl Assembler {
                 .error(span, "`.fill` would emit more than 256 MiB");
             return true;
         }
+        // llvm-mc writes `.fill` as values, which consume a `.loc`.
+        if self.dwarf.line.pending {
+            self.dwarf_data();
+        }
         let unit = self.arch.endian().bytes(value as u64, size as usize);
         let mut bytes = Vec::with_capacity(total as usize);
         for _ in 0..count {

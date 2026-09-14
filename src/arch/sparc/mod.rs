@@ -95,6 +95,17 @@ impl Architecture for Sparc {
         4
     }
 
+    /// llvm-mc writes the unaligned variant of an absolute data relocation
+    /// for a field that is not on its width's boundary, as a DWARF section's
+    /// fields often are not.
+    fn reloc_at(&self, reloc: u32, offset: u64) -> u32 {
+        match reloc {
+            reloc::ABS32 if !offset.is_multiple_of(4) => reloc::UA32,
+            reloc::ABS64 if !offset.is_multiple_of(8) => reloc::UA64,
+            r => r,
+        }
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         if pcrel {
             reloc::pcrel(size)

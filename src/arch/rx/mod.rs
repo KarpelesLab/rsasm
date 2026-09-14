@@ -160,6 +160,13 @@ impl Architecture for Rx {
         4
     }
 
+    /// GNU as leaves a local label's value in every relocated field, a
+    /// PC-relative one included (checked: `.long lab+4`, `bsr lab` across
+    /// sections).
+    fn local_value_in_field(&self, _reloc: u32) -> bool {
+        true
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
     }
