@@ -90,7 +90,10 @@ pub fn jump_fixup() -> FixupKind {
     FixupKind::data(4)
         .with_field(64, 4)
         .with_reloc(reloc::R26)
-        .link(LinkValue::Region(28))
+        .link(LinkValue::Region {
+            bits: 28,
+            numbers: false,
+        })
         .scatter(field_target26)
 }
 

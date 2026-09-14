@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502 and 8080.
+and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm).
 
@@ -12,8 +12,8 @@ $ tools/xas-diff/run.sh           # every target with a corpus
 $ tools/xas-diff/run.sh m68k-mot  # just one
 ```
 
-The references are GNU binutils 2.47, vasm, cc65 2.19's ca65 and the Macro
-Assembler AS, built into `target/oracles/`,
+The references are GNU binutils 2.47, vasm, cc65 2.19's ca65, the Macro
+Assembler AS and SDCC 4.4.0's sdas8051 and sdld, built into `target/oracles/`,
 or wherever `RSASM_ORACLES` points — useful for sharing one build between
 worktrees, since binutils takes minutes per target.
 See `tools/oracles/build.sh` for why the versions are pinned.
@@ -39,6 +39,11 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `z80-gas` | `z80`, GNU syntax | `z80-elf-as`, on `z80.txt` |
 | `z80-vasm` | `z80`, 8-bit syntax | `vasmz80_oldstyle`, on `z80.txt` and its own programs |
 | `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
+| `powerpc64` / `powerpc64le` | `powerpc64` / `powerpc64le` | `powerpc64-linux-gnu-as -a64 -mfuture` with `-mbig` / `-mlittle`, both on `powerpc64.txt`; see [PowerPC](#powerpc) |
+| `powerpc` | `powerpc`, relocations only | `powerpc64-linux-gnu-as -a32 -mfuture` |
+| `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
+| `i8051-sdas` | `8051`, 8-bit syntax | `sdas8051`, linked by `sdld` into Intel HEX |
+| `i8051-hex` | `8051`, 8-bit syntax, `-f ihex` | `asl -cpu 8051`, converted by `p2hex`; the text is compared |
 
 ## Comparing objects
 
@@ -104,6 +109,42 @@ relocates an ARM `bl` even to a label in the same section, and converts no
 picks each afresh on every pass against the growth so far, and llvm-mc can
 widen one that GNU as keeps at 16 bits).
 
+## PowerPC
+
+llvm-mc is the reference for PowerPC, in `tools/mc-diff`. GNU as is here as a
+second opinion on the AltiVec, VSX and POWER8-10 instructions, whose table
+rsasm derives from binutils' own, and for what only GNU as accepts. It runs
+with `-mfuture`, since a few VSX instructions both references know
+(`xvadduhm`, `lxvrl` and their relatives) are enabled only there.
+
+The two references disagree, and rsasm takes the wider of the two where the
+encoding is not in doubt:
+
+- **Mnemonics only GNU as knows:** `xxmr`, `xxlnot`, `pnop`, `fmrgew`,
+  `fmrgow`, and `vcfpsxws`, `vcfpuxws`, `vcsxwfp` and `vcuxwfp` (spellings of
+  `vctsxs`, `vctuxs`, `vcfsx` and `vcfux`); and the R operand of `pla` and
+  `psubi`.
+- **Ranges only GNU as accepts:** a negative byte in `xxspltib` or immediate in
+  `mtvsrbmi`, `subpcis` outside -32768 to 32767, and `xxgenpcv*m` modes 16-31.
+- **Mnemonics only llvm-mc knows** are not in the table: the POWER11
+  `xxaes*` and `xxgfmul128*` instructions, which GNU as 2.47 refuses short of
+  `-mfuture` and which llvm-mc encodes with the 192- and 256-bit key forms
+  swapped.
+- **Relocations.** Only GNU as writes `R_PPC64_D34`, for an absolute symbol in
+  a prefixed instruction; llvm-mc refuses it. A PC-relative prefixed
+  reference to a label in its own section is resolved by GNU as, which also
+  writes a relocation's addend into the field; llvm-mc leaves it to the
+  linker with the field zero, and rsasm follows llvm-mc, so
+  `powerpc64-relocs.txt` here holds only absolute references.
+- **Relocations in 32-bit code.** For a symbol in a DS- or DQ-form
+  displacement, llvm-mc writes the PowerPC64 relocation numbers, which
+  `R_PPC_*` does not define, and GNU as the plain `R_PPC_ADDR16` and
+  `R_PPC_ADDR16_LO`; rsasm follows GNU as, which `powerpc-relocs.txt` checks.
+  A 34-bit field cannot be relocated there at all.
+- **`@pcrel` with the R operand 0**, where the instruction would read a
+  PC-relative value as an offset from `rA`: GNU as writes it; llvm-mc refuses
+  it on `paddi` and mis-encodes it on a load with R left out; rsasm refuses it.
+
 ## Vendor syntax no reference reads
 
 No Renesas assembler can be run here, so CC-RL, CC-RH and CC-RX source cannot be
@@ -164,6 +205,22 @@ reference, and a second where one reads the same syntax:
   and AS does, with two gaps of its own: it has no `D` radix suffix or `AND`-
   style word operators, and its `$` in a data list is the statement's
   address rather than the item's.
+- **8051: AS, and sdas8051.** AS reads ASM51's syntax and defines no register
+  names of its own, so every `i8051` snippet is assembled after the
+  `stddef51.inc` AS ships, which is where rsasm's predefined names come from.
+  SDCC's sdas8051 is the second: an asxxxx assembler with its own directives,
+  `0x` numbers and `.` for the location counter, so it has a corpus of its
+  own in the spelling both read, `i8051-sdas.txt`, generated with the AS one
+  by `tools/fuzz/mcs51.py corpus`. It needs an absolute area before an `.org`,
+  which the harness supplies; it writes `.dw` high byte first, where AS's
+  `DW` is low byte first, so its corpus has no words; and sdld refuses a
+  numeric `AJMP` target outside block 0, so its programs use labels. Where
+  the two disagree rsasm follows AS, apart from what `i8051-pairs.txt` pairs
+  with the AS source that means the same: ASM51's `DATA`, `IDATA`, `XDATA`
+  and `CODE`, which AS lacks and are its `EQU`; and an `AJMP` or `ACALL` in
+  the last two bytes of a 2 KiB block, which both references check against
+  the instruction's own address and the CPU, and rsasm, against the address
+  after it — the pair is AS's generic `JMP`, which uses that address too.
 
 A reference that refuses a case never matches, so the corpora hold only
 source every reference for the key accepts.

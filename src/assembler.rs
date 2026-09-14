@@ -130,6 +130,8 @@ pub struct Assembler {
     lex_epoch: u64,
     /// The anonymous label standing in for `.` in the current statement.
     pub(crate) here_sym: Option<SymbolId>,
+    /// The labels written on the current statement's own line.
+    stmt_labels: Vec<SymbolId>,
     cond: Vec<Cond>,
     /// Guards against runaway `.include` recursion.
     include_depth: u32,
@@ -180,6 +182,11 @@ pub struct Assembler {
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
+    /// The backends whose [`Architecture::prelude`] has been assembled.
+    pub(crate) arch_preludes: Vec<&'static str>,
+    /// Where each assembled prelude's text lies in the source map, as
+    /// (start, end) positions; a label may take a name defined there.
+    pub(crate) arch_prelude_text: Vec<(u32, u32)>,
 }
 
 impl Assembler {
@@ -213,6 +220,7 @@ impl Assembler {
             options,
             lex_epoch: 0,
             here_sym: None,
+            stmt_labels: Vec::new(),
             cond: Vec::new(),
             include_depth: 0,
             macros: HashMap::new(),
@@ -232,6 +240,8 @@ impl Assembler {
             literal_pools: HashMap::new(),
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
+            arch_preludes: Vec::new(),
+            arch_prelude_text: Vec::new(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -253,7 +263,36 @@ impl Assembler {
             }
             asm.nasm_prelude();
         }
+        asm.arch_prelude();
         asm
+    }
+
+    /// Assembles what the active backend predefines, the first time that
+    /// backend is active; see [`Architecture::prelude`].
+    pub(crate) fn arch_prelude(&mut self) {
+        let name = self.arch.name();
+        if self.arch_preludes.contains(&name) {
+            return;
+        }
+        self.arch_preludes.push(name);
+        let text = self.arch.prelude(self.options.dialect);
+        if text.is_empty() {
+            return;
+        }
+        let file = self.sm.add(format!("<{name} predefined names>"), text);
+        let f = self.sm.file(file);
+        self.arch_prelude_text.push((f.start, f.end()));
+        self.assemble_file(file);
+    }
+
+    /// Whether symbol `id` was last defined by a backend's prelude, which a
+    /// label is allowed to replace: `P0:` is a label to sdas8051, which
+    /// predefines `P0` too, and to AS, which does not.
+    fn predefined(&self, id: crate::symbol::SymbolId) -> bool {
+        let at = self.symbols.get(id).def_span.lo;
+        self.arch_prelude_text
+            .iter()
+            .any(|&(lo, hi)| at >= lo && at < hi)
     }
 
     // ---- sections ---------------------------------------------------------
@@ -354,7 +393,7 @@ impl Assembler {
         id
     }
 
-    pub(crate) fn define_label(&mut self, label: &LabelDef) {
+    pub(crate) fn define_label(&mut self, label: &LabelDef) -> Option<SymbolId> {
         let (id, span) = match *label {
             LabelDef::Named(name, span) => {
                 let id = self.symbols.intern(name, span);
@@ -365,14 +404,14 @@ impl Assembler {
                 (id, span)
             }
         };
-        if self.symbols.get(id).is_defined() {
+        if self.symbols.get(id).is_defined() && !self.predefined(id) {
             let prev = self.symbols.get(id).def_span;
             let name = self.display_name(id);
             self.diags.emit(
                 Diagnostic::error(span, format!("symbol `{name}` is already defined"))
                     .with_note(prev, "previous definition is here"),
             );
-            return;
+            return None;
         }
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
@@ -394,6 +433,7 @@ impl Assembler {
             let name = self.interner.get(name).to_string();
             self.dwarf_source_label(&name, span);
         }
+        Some(id)
     }
 
     /// The name to show for a symbol in diagnostics.
@@ -476,7 +516,9 @@ impl Assembler {
         }
         if self.options.dialect == Dialect::EightBit {
             config.mnemonic = self.arch.mnemonics();
+            config.equates = self.arch.equates();
         }
+        config.bit_dot = self.arch.bit_addressing();
         config
     }
 
@@ -1203,6 +1245,7 @@ impl Assembler {
         // Comment characters and number spellings are the backend's, so every
         // file being read takes its rules again from its next statement.
         self.lex_epoch += 1;
+        self.arch_prelude();
     }
 
     /// A backend `.arch` made active at some point, with its state: the
@@ -1289,8 +1332,11 @@ impl Assembler {
             return;
         }
 
+        self.stmt_labels.clear();
         for l in &stmt.labels {
-            self.define_label(l);
+            if let Some(id) = self.define_label(l) {
+                self.stmt_labels.push(id);
+            }
         }
 
         // `.` refers to where the statement starts, so the anonymous label
@@ -1416,7 +1462,10 @@ impl Assembler {
             let Some(id) = self.symbols.lookup(name) else {
                 continue;
             };
+            // A backend's predefined name stays a reference, so that a label
+            // of the same name later in the file takes it over.
             if let SymbolValue::Expr(e) = self.symbols.get(id).value
+                && !self.predefined(id)
                 && let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs())
             {
                 self.symbols.get_mut(id).used = true;
@@ -1521,6 +1570,7 @@ impl Assembler {
             dollar_is_here: self.options.dialect.dollar_is_here(),
             star_is_here: self.options.dialect.star_is_here(),
             dialect: self.options.dialect,
+            bit_dot: self.arch.bit_addressing(),
             strings: Some(&self.pool),
         };
         p.parse(cur)
@@ -1686,7 +1736,7 @@ impl Assembler {
         mnemonic_span: Span,
         span: Span,
     ) {
-        let Some((variants, relaxable, requests)) =
+        let Some((variants, relaxable, mut requests)) =
             self.assemble_instruction(operands, mnemonic, mnemonic_span, span)
         else {
             return;
@@ -1698,6 +1748,16 @@ impl Assembler {
         }
         if self.check_nobits(span) {
             return;
+        }
+        // Padding the instruction asked to be placed in front of it.
+        let (before, after): (Vec<_>, Vec<_>) = requests
+            .drain(..)
+            .partition(|r| matches!(r, crate::arch::Request::AlignCode { .. }));
+        requests = after;
+        if !before.is_empty() {
+            let at = self.cur_section().next_frag_index();
+            self.run_requests(before, span);
+            self.reattach_labels(at);
         }
         self.map_code();
         if self.dwarf.line.pending || self.dwarf.line.source.on {
@@ -1714,6 +1774,32 @@ impl Assembler {
             self.cur_section().nop_state = Some(state);
         }
         self.run_requests(requests, span);
+    }
+
+    /// Moves the labels written on the current statement's line, and its `.`,
+    /// from fragment `from` past the padding just pushed there. Padding an
+    /// instruction asks for goes between it and a label on its own line, as
+    /// GNU as and llvm-mc both place it; a label on a line of its own stays
+    /// in front of the padding.
+    fn reattach_labels(&mut self, from: u32) {
+        let section = self.cur;
+        self.cur_section().seal();
+        let to = self.cur_section().next_frag_index();
+        let ids: Vec<SymbolId> = self
+            .stmt_labels
+            .iter()
+            .copied()
+            .chain(self.here_sym)
+            .collect();
+        for id in ids {
+            let sym = self.symbols.get_mut(id);
+            if let SymbolValue::Label { section: s, frag } = sym.value
+                && s == section
+                && frag == from
+            {
+                sym.value = SymbolValue::Label { section, frag: to };
+            }
+        }
     }
 
     /// The candidate encodings of an instruction, and whether its fragment
@@ -1751,6 +1837,7 @@ impl Assembler {
             ..
         } = self;
         let dialect = options.dialect;
+        let bit_dot = arch.bit_addressing();
         let mut cx = AsmCtx {
             interner,
             exprs,
@@ -1759,6 +1846,7 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            bit_dot,
             sections,
             section: *cur,
             relaxable: false,

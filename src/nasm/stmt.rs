@@ -132,7 +132,9 @@ impl Assembler {
                 let id = self.symbols.intern(full, span);
                 self.symbols.get_mut(id).redefinable = false;
             }
-            None => self.define_label(&LabelDef::Named(full, span)),
+            None => {
+                self.define_label(&LabelDef::Named(full, span));
+            }
         }
     }
 

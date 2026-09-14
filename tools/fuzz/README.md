@@ -1,5 +1,9 @@
 # Differential fuzzing
 
+Three fuzzers: one for x86, one for PowerPC's vector and POWER8-10
+instructions (see [PowerPC](#powerpc)), and one for whole 8051 programs (see
+[The 8051](#the-8051)).
+
 `x86.py` generates random x86 instructions in 16-, 32- and 64-bit mode, in
 AT&T and Intel syntax, assembles them with GNU as, llvm-mc and rsasm, and
 compares the bytes, the relocations and whether each assembler accepted the
@@ -88,3 +92,79 @@ llvm-mc, as the corpora note.
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
+
+## PowerPC
+
+`powerpc.py` generates random AltiVec, VSX, POWER8, POWER9 and POWER10
+instructions for `powerpc64`, `powerpc64le` and `powerpc`, assembles them with
+GNU as 2.47 (`-mfuture`), llvm-mc and rsasm, and compares the same way: bytes,
+relocations and accept/reject decision, one section per case.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/oracles/build.sh                              # GNU as and the binutils source
+$ tools/fuzz/powerpc.py fuzz --count 120000 --seed 1   # all three targets
+$ tools/fuzz/powerpc.py fuzz --target powerpc64le --only '^xx' --seed 3
+$ tools/fuzz/powerpc.py check --target powerpc lines.txt
+```
+
+The forms come from binutils' `opcodes/ppc-opc.c`, read at run time for each
+instruction's mnemonic and the kind and range of each operand, never for its
+encoding, so the fuzzer shares nothing with rsasm but the list of
+instructions. Operands are drawn per kind: register numbers written bare or
+with their `%v`, `%vs`, `%r` or `%f` names, immediates at and near the ends of
+their range, displacements at the multiple their form requires, the R bit,
+and `sym@l` and `sym@pcrel` references. `--mutations` (default 0.25) makes a
+fraction invalid: out-of-range or misaligned values, a register past its bank
+or from another one, an odd VSX pair, an operand too many or too few, an R of
+1 with a base register. The instructions README.md lists as not implemented
+(the MMA accumulators, POWER11's AES instructions, the privileged set) are left
+out of the table.
+
+The classes are x86.py's, plus **deviation**: both references agree and rsasm
+refuses on purpose. There are two: a doubleword instruction in 32-bit code,
+and a register name from the wrong bank (`%vs3` where a GPR goes), which both
+references read as its number, GNU as with a warning. The known splits
+between the references are GNU as accepting more mnemonics, operands and
+ranges than llvm-mc (rsasm accepts them too), llvm-mc accepting register
+numbers and immediates past the end of their field (rsasm refuses them, as
+GNU as does), the relocations llvm-mc writes for DS-form and `@pcrel`
+references in 32-bit code (rsasm writes GNU as's), and `@pcrel` with an R of
+0 (GNU as writes it, llvm-mc refuses or mis-encodes it, and rsasm refuses
+it). A run of 600,000 instructions, 200,000 per target, finds no case where
+rsasm differs from both references and no split outside those.
+
+| Variable | Default |
+|---|---|
+| `RSASM` | `target/debug/rsasm` under the repository root |
+| `RSASM_ORACLES` | `target/oracles`, for `bin/powerpc64-linux-gnu-as` and `src/binutils-2.47` |
+| `GAS` | `$RSASM_ORACLES/bin/powerpc64-linux-gnu-as` |
+| `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
+
+# The 8051
+
+`mcs51.py` generates random whole 8051 programs from a table of forms written
+from Intel's MCS-51 instruction set — labels with forward and backward
+references, generic `JMP` and `CALL`, bit addresses, `DB`/`DW`/`DS`, and
+code placed just short of a 2 KiB block boundary — and assembles each with
+rsasm, with the Macro Assembler AS and with SDCC's sdas8051 and sdld, all
+from `tools/oracles/build.sh`. A program both references can read is written
+in both spellings and compared four ways; the rest, AS only.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/mcs51.py fuzz --count 20000
+$ tools/fuzz/mcs51.py fuzz --count 20000 --as-only --seed 7
+$ tools/fuzz/mcs51.py corpus as     # the one-line corpus for tools/xas-diff
+```
+
+`--mutations` (default 0.25) is the fraction of programs made invalid: an
+operand out of range, reserved space that pushes a branch out of reach.
+Programs are classified as in the module comment: **rsasm** findings, and
+the known places where the references and rsasm part — **lenient** (sdas8051
+truncates an operand AS and rsasm refuse), **strict** (sdld refuses an `LJMP`
+below 0 that AS takes as a 16-bit value), **boundary** (an `AJMP` or `ACALL`
+in the last two bytes of a block; see `tools/xas-diff/README.md`) and
+**first-pass** (AS stops after a first pass in which it guessed a forward
+`JMP` or `CALL` short). Two runs of 40,000 programs each, one mixed and one
+AS-only, find no case where rsasm differs.
