@@ -12,6 +12,8 @@
 pub mod avx;
 pub mod avx512;
 pub mod base;
+pub mod cmpalias;
+pub mod fma;
 pub mod mmx;
 pub mod sse;
 pub mod x87;
@@ -343,9 +345,10 @@ pub struct Def {
     /// Vector length in bits: 128, 256 or 512, for the VEX/EVEX `L` bits.
     pub vlen: u16,
     pub tuple: Tuple,
-    /// 3DNow! selects the operation with a byte *after* the ModRM and any
-    /// displacement, where an immediate would go. It is not an immediate: the
-    /// source never writes it, and it is part of the opcode.
+    /// A byte the source never writes, emitted *after* the ModRM, any
+    /// displacement and any immediate. 3DNow! selects the operation with one,
+    /// and the named compare predicates (`cmpeqps`) fold their immediate into
+    /// the mnemonic the same way.
     pub suffix: Option<u8>,
 }
 
@@ -460,6 +463,8 @@ fn build() -> Tbl {
     sse::install(&mut t);
     avx::install(&mut t);
     avx512::install(&mut t);
+    fma::install(&mut t);
+    cmpalias::install(&mut t);
     t
 }
 
@@ -554,7 +559,12 @@ mod tests {
             assert!((1..=3).contains(&d.map), "`{m}`: bad map in {d:?}");
             assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
             assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
-            assert!(d.suffix.is_none(), "`{m}`: only 3DNow! has a suffix");
+            // A VEX or EVEX suffix byte is a folded compare predicate; 3DNow!
+            // is the only legacy family that has one.
+            assert!(
+                d.suffix.is_none() || m.starts_with("vcmp"),
+                "`{m}`: unexpected suffix byte"
+            );
             if d.enc == Enc::Vex {
                 assert!(d.vlen != 512 && d.tuple == Tuple::None, "`{m}`: {d:?}");
             }

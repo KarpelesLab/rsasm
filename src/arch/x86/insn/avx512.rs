@@ -26,7 +26,7 @@ fn leak(s: String) -> &'static str {
 }
 
 /// An EVEX row, written with legacy opcode bytes like the VEX rows are.
-fn ev(ops: Vec<Op>, pfx: u8, esc: &[u8], vlen: u16, w: bool, tuple: Tuple) -> Def {
+pub fn ev(ops: Vec<Op>, pfx: u8, esc: &[u8], vlen: u16, w: bool, tuple: Tuple) -> Def {
     let (map, op) = split_escape(esc);
     d(ops, &[op], ModRm::Reg, if w { 64 } else { 0 })
         .pfx(pfx)
