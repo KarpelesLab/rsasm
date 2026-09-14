@@ -1,8 +1,8 @@
 //! Output writers.
 
 pub mod elf;
-pub mod macho;
 pub mod ihex;
+pub mod macho;
 pub mod raw;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
