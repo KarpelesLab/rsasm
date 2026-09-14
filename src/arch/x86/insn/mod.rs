@@ -94,6 +94,12 @@ pub enum Op {
     /// A gather/scatter memory operand, whose SIB index is a vector register
     /// of this class rather than a GPR.
     Vsib(Vk),
+    /// A segment register, in ModRM.reg (`mov ds, ax`).
+    SReg,
+    /// A control register, in ModRM.reg (`mov cr0, eax`).
+    CReg,
+    /// A debug register, in ModRM.reg (`mov dr0, eax`).
+    DReg,
 }
 
 impl Op {
@@ -107,6 +113,7 @@ impl Op {
             Op::V(k) | Op::Nds(k) | Op::Is4(k) | Op::Vsib(k) => k.width(),
             Op::Vm(k, 0) => k.width(),
             Op::Vm(_, w) => w,
+            Op::SReg | Op::CReg | Op::DReg => 0,
         }
     }
 }

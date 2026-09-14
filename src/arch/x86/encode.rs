@@ -129,6 +129,8 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             Op::Nds(_) => roles.nds = o.reg(),
             Op::Is4(_) => roles.is4 = o.reg(),
             Op::R(_) if takes_reg_field && roles.reg.is_none() => roles.reg = o.reg(),
+            // A segment, control or debug register is always in ModRM.reg.
+            Op::SReg | Op::CReg | Op::DReg => roles.reg = o.reg(),
             // An encoding with no reg field puts its register in r/m instead.
             Op::R(_) if roles.rm.is_none() => roles.rm = Some(o),
             Op::Imm(w) => {
@@ -267,21 +269,37 @@ pub fn encode(
 
     // Address-size override: a 32-bit address in 64-bit mode, or vice versa.
     if let Some(m) = &mem {
-        let uses_regs = m.base.is_some() || m.index.is_some();
-        let native = if bits == 64 { 8 } else { 4 };
-        if uses_regs && m.addr_size != native {
-            if (bits == 64 && m.addr_size == 4) || (bits == 32 && m.addr_size == 2) {
-                bytes.push(0x67);
-            } else {
-                cx.error(
-                    m.span,
-                    format!(
-                        "{}-bit addressing is not available in {bits}-bit mode",
-                        m.addr_size * 8
-                    ),
-                );
-                return None;
-            }
+        // A memory operand's address size is its registers', or the mode's
+        // when it names none. The override prefix appears whenever it differs
+        // from the mode's native size: 16-bit code addresses with 32-bit
+        // registers, or 32-/16-bit code the other way round.
+        let native = match bits {
+            64 => 8,
+            32 => 4,
+            _ => 2,
+        };
+        let addr_size = if m.base.is_some() || m.index.is_some() {
+            m.addr_size
+        } else {
+            native
+        };
+        let ok = match bits {
+            64 => addr_size == 8 || addr_size == 4,
+            32 => addr_size == 4 || addr_size == 2,
+            _ => addr_size == 2 || addr_size == 4,
+        };
+        if !ok {
+            cx.error(
+                m.span,
+                format!(
+                    "{}-bit addressing is not available in {bits}-bit mode",
+                    addr_size * 8
+                ),
+            );
+            return None;
+        }
+        if addr_size != native {
+            bytes.push(0x67);
         }
     }
 
@@ -450,7 +468,7 @@ pub fn encode(
     // ---- ModRM / SIB / displacement ---------------------------------------
     // A RIP-relative displacement is measured from the end of the whole
     // instruction, so its fixup is built after the immediate has been emitted.
-    let mut disp_fixup: Option<(usize, ExprRef, Span, bool)> = None;
+    let mut disp_fixup: Option<(usize, ExprRef, Span, bool, u8)> = None;
 
     // EVEX scales an 8-bit displacement by the size of the memory access, so
     // one byte still spans a 512-bit stride. See `Tuple`.
@@ -546,8 +564,8 @@ pub fn encode(
 
     // A displacement fixup can only be built now that the instruction length,
     // and therefore the RIP-relative bias, is known.
-    if let Some((offset, e, dspan, rip_relative)) = disp_fixup {
-        let trailing = (bytes.len() - offset - 4) as i8;
+    if let Some((offset, e, dspan, rip_relative, width)) = disp_fixup {
+        let trailing = (bytes.len() - offset - width as usize) as i8;
         let kind = if rip_relative {
             FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
         } else if bits == 64 {
@@ -555,7 +573,7 @@ pub fn encode(
             // width, so the linker has to range-check it as signed.
             FixupKind::data(4).with_reloc(abi.abs32_signed())
         } else {
-            FixupKind::data(4).with_reloc(abi.abs(4).unwrap_or(0))
+            FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
         };
         fixups.push(Fixup {
             offset: offset as u32,
@@ -572,8 +590,11 @@ pub fn encode(
         // GNU as routes a plain 64-bit-mode call through the PLT but leaves a
         // 32-bit-mode one PC-relative, and that follows the mode rather than
         // the object: `.code32` inside an x86-64 object gets `R_X86_64_PC32`.
+        // NASM emits a plain `R_X86_64_PC32` for every branch, reserving the
+        // PLT for an explicit `wrt ..plt`.
+        let nasm = cx.dialect == crate::lexer::Dialect::Nasm;
         let reloc = match width {
-            4 if bits == 64 => abi.plt32(),
+            4 if bits == 64 && !nasm => abi.plt32(),
             4 => abi.pcrel(4).unwrap_or(0),
             _ => 0,
         };
@@ -723,7 +744,7 @@ fn encode_rm(
     cx: &mut AsmCtx<'_>,
     bits: u8,
     bytes: &mut Vec<u8>,
-    disp_fixup: &mut Option<(usize, ExprRef, Span, bool)>,
+    disp_fixup: &mut Option<(usize, ExprRef, Span, bool, u8)>,
     reg_field: u8,
     rm_operand: &Operand,
     mem: Option<&Mem>,
@@ -745,6 +766,14 @@ fn encode_rm(
         );
         return None;
     };
+
+    // 16-bit addressing has its own ModRM layout, with no SIB byte and a
+    // fixed set of base+index pairs.
+    let addr16 = m.addr_size == 2 && (m.base.is_some() || m.index.is_some())
+        || (m.base.is_none() && m.index.is_none() && bits == 16);
+    if addr16 && !m.rip_relative {
+        return encode_rm16(cx, bytes, disp_fixup, reg_field, m);
+    }
 
     // RIP-relative: mod=00, rm=101, always a 32-bit displacement.
     if m.rip_relative {
@@ -775,7 +804,7 @@ fn encode_rm(
                     }
                     bytes[at..at + 4].copy_from_slice(&(v as i32).to_le_bytes());
                 }
-                None => *disp_fixup = Some((at, e, m.span, true)),
+                None => *disp_fixup = Some((at, e, m.span, true, 4)),
             },
         }
         return Some(());
@@ -865,10 +894,91 @@ fn encode_rm(
     Some(())
 }
 
+/// Emits a 16-bit-addressing ModRM byte and its displacement.
+///
+/// The 8086 addressing modes are a fixed table: `[bx+si]`, `[bx+di]`,
+/// `[bp+si]`, `[bp+di]`, `[si]`, `[di]`, `[bp]` and `[bx]`, in that order,
+/// with `[bp]` displaced by the disp16 form when there is no displacement.
+fn encode_rm16(
+    cx: &mut AsmCtx<'_>,
+    bytes: &mut Vec<u8>,
+    disp_fixup: &mut Option<(usize, ExprRef, Span, bool, u8)>,
+    reg_field: u8,
+    m: &Mem,
+) -> Option<()> {
+    let base = m.base.map(|r| r.num);
+    let index = m.index.map(|r| r.num);
+    if m.scale != 1 {
+        cx.error(m.span, "16-bit addressing has no scale factor");
+        return None;
+    }
+    // bx=3, bp=5, si=6, di=7 are the only registers 16-bit addressing takes.
+    let rm = match (base, index) {
+        (Some(3), Some(6)) | (Some(6), Some(3)) => 0b000, // bx+si
+        (Some(3), Some(7)) | (Some(7), Some(3)) => 0b001, // bx+di
+        (Some(5), Some(6)) | (Some(6), Some(5)) => 0b010, // bp+si
+        (Some(5), Some(7)) | (Some(7), Some(5)) => 0b011, // bp+di
+        (Some(6), None) | (None, Some(6)) => 0b100,       // si
+        (Some(7), None) | (None, Some(7)) => 0b101,       // di
+        (Some(5), None) | (None, Some(5)) => 0b110,       // bp
+        (Some(3), None) | (None, Some(3)) => 0b111,       // bx
+        (None, None) => 0b110,                            // disp16
+        _ => {
+            cx.error(
+                m.span,
+                "invalid 16-bit memory operand; the base is bx or bp and the index si or di",
+            );
+            return None;
+        }
+    };
+    let no_regs = base.is_none() && index.is_none();
+    let disp_const = m.disp.and_then(|e| cx.constant(e));
+    let symbolic = m.disp.is_some() && disp_const.is_none();
+    // `[bp]` with no displacement must use the disp8 form, since rm=110 with
+    // mod=00 means disp16.
+    let force_disp = rm == 0b110 && !no_regs;
+    let disp_size: u8 = if no_regs || symbolic {
+        2
+    } else {
+        let v = disp_const.unwrap_or(0);
+        match () {
+            _ if v == 0 && !force_disp => 0,
+            _ if (-128..=127).contains(&v) => 1,
+            _ => 2,
+        }
+    };
+    let mod_bits = if no_regs {
+        0b00
+    } else {
+        match disp_size {
+            0 => 0b00,
+            1 => 0b01,
+            _ => 0b10,
+        }
+    };
+    bytes.push((mod_bits << 6) | ((reg_field & 7) << 3) | rm);
+    match disp_size {
+        0 => {}
+        1 => bytes.push(disp_const.unwrap_or(0) as u8),
+        _ => match disp_const {
+            Some(v) => bytes.extend_from_slice(&(v as i16).to_le_bytes()),
+            None => {
+                let at = bytes.len();
+                bytes.extend_from_slice(&[0, 0]);
+                let e = m.disp.unwrap_or_else(|| cx.exprs.int(0, m.span));
+                // The two-byte 16-bit displacement is a data fixup, not the
+                // four-byte one `disp_fixup` carries.
+                *disp_fixup = Some((at, e, m.span, false, 2));
+            }
+        },
+    }
+    Some(())
+}
+
 fn push_disp32(
     cx: &mut AsmCtx<'_>,
     bytes: &mut Vec<u8>,
-    disp_fixup: &mut Option<(usize, ExprRef, Span, bool)>,
+    disp_fixup: &mut Option<(usize, ExprRef, Span, bool, u8)>,
     m: &Mem,
     disp_const: Option<i64>,
 ) {
@@ -878,7 +988,7 @@ fn push_disp32(
             let at = bytes.len();
             bytes.extend_from_slice(&[0; 4]);
             let e = m.disp.unwrap_or_else(|| cx.exprs.int(0, m.span));
-            *disp_fixup = Some((at, e, m.span, false));
+            *disp_fixup = Some((at, e, m.span, false, 4));
         }
     }
 }

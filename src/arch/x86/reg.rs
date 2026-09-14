@@ -140,6 +140,13 @@ static REGS: &[Entry] = &{
         e("es", Segment, 0, 2, false), e("cs", Segment, 1, 2, false),
         e("ss", Segment, 2, 2, false), e("ds", Segment, 3, 2, false),
         e("fs", Segment, 4, 2, false), e("gs", Segment, 5, 2, false),
+        // Control and debug registers, for `mov cr0, eax` and the like.
+        e("cr0", Control, 0, 4, false), e("cr2", Control, 2, 4, false),
+        e("cr3", Control, 3, 4, false), e("cr4", Control, 4, 4, false),
+        e("cr8", Control, 8, 4, false),
+        e("dr0", Debug, 0, 4, false), e("dr1", Debug, 1, 4, false),
+        e("dr2", Debug, 2, 4, false), e("dr3", Debug, 3, 4, false),
+        e("dr6", Debug, 6, 4, false), e("dr7", Debug, 7, 4, false),
         // Instruction pointer, usable only as a memory base.
         e("rip", Rip, 0, 8, false), e("eip", Rip, 0, 4, false),
         // MMX. The eight registers alias the x87 stack, which is why `emms`

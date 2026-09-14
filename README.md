@@ -86,6 +86,10 @@ but 18 forms where both manuals show MAME to be wrong.
 **Working**
 
 - AT&T and Intel syntax on x86, switchable mid-file; `.code16`/`.code32`/`.code64`
+- NASM source (`-d nasm`): its preprocessor (`%macro`, `%rep`, `%if`, `%define`,
+  `%assign`, contexts, `%include`), `db`/`resb`/`times`/`equ`/`struc`, sections
+  with attributes, `default rel`, and NASM's operand syntax and `wrt`
+  relocations; see [Dialects](#dialects)
 - several targets in one file, switched with `.arch`; see
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
@@ -100,7 +104,13 @@ but 18 forms where both manuals show MAME to be wrong.
 
 **Not yet**
 
-- the NASM dialect (its lexing rules are in place; its directives are not)
+- in NASM source: the multi-pass immediate-size optimizer for a value known
+  only after layout, so `mov r64, len` where `len` is a label difference stays
+  the sign-extending form rather than NASM's shorter 32-bit load (a constant or
+  a symbol is optimized); x87, `enter`, far direct `jmp`/`call seg:off`, `[rip]`
+  addressing (NASM uses `[rel]`), the `..gotpc`/`..gotoff`/`..tlsie` `wrt`
+  targets and 16-bit object formats; `-f bin` follows NASM except that a
+  trailing `.bss` is written as zeros rather than trimmed
 - in CC-RL and CC-RH source: bit symbols, `$label`/`%label` gp- and
   ep-relative references, `STARTOF`/`SIZEOF`, and CC-RL's `HIGH`/`LOWW` of a
   relocatable label (all refused with the reason)
@@ -160,7 +170,7 @@ rsasm [options] <input.s>...
 
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default) or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
@@ -195,7 +205,7 @@ source is normally written in.
 | `ccrh` | `.dw #label`, `$IF`, `0x10` (Renesas CC-RH) | — |
 | `ccrx` | `.SECTION P,CODE`, `.LWORD 10H`, `#1:8` (Renesas CC-RX) | — |
 | `8bit` | `lda #$12`, `ld a,(ix+5)`, `MVI A,12H`, `DB 1`, `; comment` | 6502, Z80, 8080 |
-| `nasm` | lexing only, so far | — |
+| `nasm` | `db 1`, `; comment`, `mov eax, [rel x]`, `%macro`, `0FFh` | — |
 
 ```console
 $ cat intena.s
@@ -331,6 +341,54 @@ bytes for the first to equal GNU as's for the second. Placement is the
 linker's: an `AT` attribute or `.ORG` names the section (CC-RL, CC-RH) or pads
 it (CC-RX) as the manual says, but the start address is not recorded.
 
+### NASM
+
+`-d nasm` reads source written for NASM, the flat-binary and ELF assembler most
+x86 hand-written code targets. The whole language people reach for is there:
+
+- a preprocessor run a line at a time as NASM's is — `%define`/`%xdefine`/
+  `%assign`/`%undef`, `%macro` with parameter ranges, defaults, greedy `+`
+  params, `%0`, `%rotate`, `%%` labels and `%00` label capture, `%rep`/
+  `%exitrep`, the `%if`/`%elif`/`%else` family (`%ifdef`, `%ifmacro`, `%ifidn`,
+  `%ifnum`, `%ifstr`, `%ifctx` …), `%include`, `%strlen`/`%substr`/`%defstr`,
+  `%push`/`%pop` contexts with `%$` locals, and `%error`/`%warning`
+- `db`/`dw`/`dd`/`dq`/`dt` with single-, double- and backquoted strings, the
+  `resb` family, `times n <stmt>` (including `times 510-($-$$) db 0`), `incbin`,
+  `equ`, `struc`/`endstruc`/`istruc`/`at`/`iend`, `align`/`alignb`, and
+  `absolute`
+- `section`/`segment` with attributes (`progbits`, `nobits`, `alloc`, `exec`,
+  `write`, `align=`), `bits 16/32/64`, `org`, `global`/`extern`/`common`/
+  `static` with `:function`/`:data` and sizes, `default rel`/`abs`, `$`/`$$`
+  and `.local`/`..@` labels
+- NASM's operand syntax: the `byte`/`word`/`dword`/`qword` size keywords with
+  no `ptr`, `[rel x]` and `[abs x]`, segment overrides `[es:di]`, the moffs
+  accumulator forms, and 8086 16-bit addressing; and the `wrt ..plt`,
+  `wrt ..got`, `wrt ..sym` and `wrt ..gotoff` ELF relocations
+
+Much of what looks like NASM directive syntax — `section`, `global`, `struc`,
+`align` — is macros in NASM's standard macro set wrapping a bracketed
+primitive, `[section .data]`; rsasm defines the same macros, so `__SECT__` and
+the rest behave as they do there.
+
+```console
+$ cat boot.asm
+        org     0x7c00
+        bits    16
+start:  mov     ax, 0x1234
+        jmp     start
+        times   510-($-$$) db 0
+        dw      0xaa55
+$ rsasm -d nasm -f bin -o boot.bin boot.asm   # a 512-byte boot sector
+```
+
+`tools/nasm-diff/run.sh` assembles a corpus of whole programs with rsasm
+`-d nasm` and with NASM 2.16.03 (built by `tools/oracles/build.sh`), and
+compares the flat binaries byte for byte and the ELF objects section by
+section, relocations and global symbols included. 373 of 373 match. Local
+symbols are not compared: NASM writes every label into the symbol table, where
+rsasm, like GNU as, keeps them to itself, and a linker never sees the
+difference.
+
 ## Multi-architecture files
 
 `.arch <name>` switches the target for everything after it, so one file can
@@ -394,6 +452,10 @@ independent assembler, and compare the bytes:
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
   distances between sections. 108 of 108 match across twenty-two variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
+- `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
+  programs compared as flat binaries and as ELF objects, relocations and global
+  symbols included. 373 of 373 match. `tools/oracles/build.sh` builds NASM from
+  a checksum-pinned source.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.
 
@@ -407,7 +469,7 @@ each binding — local, global, weak, hidden and the other visibilities, `.set`
 aliases either way round, `.globl` after use, another section, undefined —
 through branches, calls, PC-relative loads and data.
 
-All five run in CI. The expected bytes in the hermetic tests under `tests/` were
+All six run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
@@ -503,6 +565,7 @@ $ tools/gas-diff/run.sh     # needs binutils
 $ tools/mc-diff/run.sh      # needs llvm-mc and llvm-objcopy
 $ tools/flat-diff/run.sh    # needs cross binutils with ld, and llvm-mc
 $ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
+$ tools/nasm-diff/run.sh    # needs NASM from tools/oracles/build.sh
 $ tools/multiarch-diff/run.sh  # needs all of the above
 ```
 

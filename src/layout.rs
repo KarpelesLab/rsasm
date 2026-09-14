@@ -12,7 +12,9 @@
 
 use crate::arch::FlatModifier;
 use crate::assembler::{Assembler, Relocation};
-use crate::expr::{ExprKind, ExprRef, Value};
+use crate::expr::{self, EvalError, ExprKind, ExprRef, Value};
+use crate::intern::Name;
+use crate::lexer::LocalDir;
 use crate::section::{
     FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
 };
@@ -97,6 +99,11 @@ impl Assembler {
         self.assign_addresses();
         self.report_misaligned_data();
         self.apply_fixups();
+        // Data references only enter the symbol table when their fixups are
+        // built, so NASM's "symbol not defined" check runs after that.
+        if self.options.dialect == crate::lexer::Dialect::Nasm {
+            self.nasm_report_undefined();
+        }
         self.materialize();
         !self.diags.has_errors()
     }
@@ -685,8 +692,84 @@ impl Assembler {
 
     /// Evaluates an expression, ignoring errors (the caller reports its own).
     fn eval_absolute_quiet(&mut self, e: ExprRef) -> Option<i64> {
-        let v = self.eval(e).ok()?;
-        self.resolve_value(v)
+        match self.eval(e) {
+            Ok(v) => self.resolve_value(v),
+            Err(_) => self.placement_free_value(e),
+        }
+    }
+
+    /// The value of an expression the symbolic evaluator cannot keep in
+    /// `plus - minus + addend` form, such as NASM's `(($-$$) % 8)`, worked
+    /// out from the labels' addresses, if it does not depend on where the
+    /// sections end up.
+    ///
+    /// In a flat image the addresses are final, so one evaluation settles
+    /// it. In an object each section may still move, so the expression is
+    /// evaluated a second time with every section moved by a different odd
+    /// amount, and only a value that stays the same counts.
+    pub(crate) fn placement_free_value(&self, e: ExprRef) -> Option<i64> {
+        struct Addresses<'a> {
+            asm: &'a Assembler,
+            moved: bool,
+            depth: u32,
+        }
+        impl expr::EvalCtx for Addresses<'_> {
+            fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError> {
+                match self.asm.symbols.lookup(name) {
+                    Some(id) => self.symbol_value(id, span),
+                    None => Err(EvalError::new(span, "undefined symbol")),
+                }
+            }
+            fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, EvalError> {
+                match self.asm.symbols.get(id).value {
+                    SymbolValue::Expr(e) if self.depth < 64 => {
+                        self.depth += 1;
+                        let v = expr::eval(&self.asm.exprs, e, self);
+                        self.depth -= 1;
+                        v
+                    }
+                    SymbolValue::Label { section, .. } => {
+                        let addr = self
+                            .asm
+                            .symbol_addr(id)
+                            .ok_or_else(|| EvalError::new(span, "no address"))?;
+                        let shift = if self.moved {
+                            (section.0 as i64 + 1).wrapping_mul(0x1_0000_0001)
+                        } else {
+                            0
+                        };
+                        Ok(Value::abs(addr.wrapping_add(shift)))
+                    }
+                    _ => Err(EvalError::new(span, "not a number")),
+                }
+            }
+            fn here(&mut self, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+            fn section_start(&mut self, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+            fn local_ref(&mut self, _: u32, _: LocalDir, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+            fn modifier(&mut self, _: Name, _: Value, span: Span) -> Result<Value, EvalError> {
+                Err(EvalError::new(span, "not a number"))
+            }
+        }
+        let mut env = Addresses {
+            asm: self,
+            moved: false,
+            depth: 0,
+        };
+        let v = expr::eval(&self.exprs, e, &mut env).ok()?.as_abs()?;
+        if self.options.relocatable {
+            env.moved = true;
+            let w = expr::eval(&self.exprs, e, &mut env).ok()?.as_abs()?;
+            if v != w {
+                return None;
+            }
+        }
+        Some(v)
     }
 
     /// Resolves an expression to an offset within `section`.
@@ -1152,7 +1235,8 @@ impl Assembler {
         {
             let mut addend = 0;
             let mut reloc = sub;
-            let symbol = self.relocation_symbol(minus, &kind, si, fi, &mut addend, &mut reloc);
+            let symbol =
+                self.relocation_symbol(minus, &kind, si, fi, false, &mut addend, &mut reloc);
             subtrahend = Some(Relocation {
                 section,
                 offset: at,
@@ -1263,8 +1347,17 @@ impl Assembler {
         };
         let mut addend = v.addend - bias;
         let mut reloc = reloc;
-        let symbol =
-            target.map(|t| self.relocation_symbol(t, kind, si, fi, &mut addend, &mut reloc));
+        // A GOT, PLT or `..sym` modifier in NASM source always names the
+        // symbol, since that is what the linker looks up.
+        let names_symbol = self.find_modifier(e).is_some_and(|m| {
+            matches!(
+                self.interner.get(m),
+                "got" | "gotpcrel" | "plt" | "sym" | "gotoff" | "gotpc"
+            )
+        });
+        let symbol = target.map(|t| {
+            self.relocation_symbol(t, kind, si, fi, names_symbol, &mut addend, &mut reloc)
+        });
 
         let mut relocs = vec![Relocation {
             section,
@@ -1284,21 +1377,31 @@ impl Assembler {
     /// linkers expect and what keeps local labels out of the symbol table.
     /// So is a local alias of a label, even of a global one, and on some
     /// targets a global symbol too.
+    ///
+    /// NASM goes further: it relocates a reference to any symbol defined in
+    /// the module against its section, keeping only external symbols by name,
+    /// unless a modifier (`wrt ..plt`, `..got`, `..sym`) names the symbol.
+    #[allow(clippy::too_many_arguments)]
     fn relocation_symbol(
         &mut self,
         target: SymbolId,
         kind: &FixupKind,
         si: usize,
         fi: usize,
+        names_symbol: bool,
         addend: &mut i64,
         reloc: &mut u32,
     ) -> SymbolId {
         let binding = self.symbols.get(target).binding;
         let arch = self.frag_arch(si, fi).0;
-        let by_section = match binding {
-            Binding::Local => true,
-            Binding::Global => arch.relocates_globals_by_section(),
-            Binding::Weak => false,
+        let by_section = if self.options.dialect == crate::lexer::Dialect::Nasm {
+            !names_symbol && (binding == Binding::Local || self.symbols.get(target).is_defined())
+        } else {
+            match binding {
+                Binding::Local => true,
+                Binding::Global => arch.relocates_globals_by_section(),
+                Binding::Weak => false,
+            }
         };
         match self.symbol_section(target) {
             Some(sec) if by_section && kind.reloc_symbol == RelocSymbol::Section => {

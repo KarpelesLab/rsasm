@@ -541,13 +541,18 @@ impl OperandParser<'_, '_> {
         if let TokKind::Ident(n) = cur.peek().kind {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
             if let Some(sz) = size_keyword(&text) {
-                // Only a size keyword if what follows can start a memory
-                // operand; `byte` might legitimately be a symbol name.
+                // Only a size keyword if what follows can start an operand;
+                // `byte` might legitimately be a symbol name. NASM makes the
+                // size words reserved, so there it also qualifies an
+                // immediate: `mov [eax], byte 1`.
                 let next = cur.nth(1);
                 let looks_like_ptr = matches!(next.kind, TokKind::Ident(m)
                     if self.cx.interner.get(m).eq_ignore_ascii_case("ptr"))
                     || next.is_punct(Punct::LBracket);
-                if looks_like_ptr {
+                let nasm_hint = self.cx.dialect == crate::lexer::Dialect::Nasm
+                    && !next.is_eol()
+                    && !next.is_punct(Punct::Comma);
+                if looks_like_ptr || nasm_hint {
                     cur.advance();
                     if let TokKind::Ident(m) = cur.peek().kind
                         && self.cx.interner.get(m).eq_ignore_ascii_case("ptr")
@@ -621,6 +626,38 @@ impl OperandParser<'_, '_> {
         let mut m = Mem::empty(start);
         m.addr_size = self.addr_size;
 
+        // `[rel x]` forces a RIP-relative reference, `[abs x]` an absolute one,
+        // overriding `default rel`.
+        let mut force_abs = false;
+        if let TokKind::Ident(n) = cur.peek().kind {
+            match self.cx.interner.get(n).to_ascii_lowercase().as_str() {
+                "rel" => {
+                    cur.advance();
+                    m.rip_relative = true;
+                }
+                "abs" => {
+                    cur.advance();
+                    force_abs = true;
+                }
+                _ => {}
+            }
+        }
+
+        // A segment override written inside the brackets, `[es:eax]`, the way
+        // NASM spells it.
+        if let TokKind::Ident(n) = cur.peek().kind
+            && cur.nth(1).is_punct(Punct::Colon)
+        {
+            let text = self.cx.interner.get(n).to_ascii_lowercase();
+            if let Some(r) = reg::lookup(&text)
+                && r.class == RegClass::Segment
+            {
+                cur.advance();
+                cur.advance();
+                m.seg = Some(r);
+            }
+        }
+
         // Terms are accumulated into a displacement expression as they are
         // recognised, so `[rax + 4*8 + sym]` folds naturally.
         let mut disp: Option<ExprRef> = None;
@@ -683,7 +720,32 @@ impl OperandParser<'_, '_> {
         }
         m.disp = disp;
         m.span = start.to(close.span);
+        // `default rel` makes a reference to a symbol RIP-relative when it has
+        // no register of its own and was not written `[abs …]`. A pure number
+        // stays absolute, as NASM leaves it.
+        let default_rel = self.cx.state.features & crate::arch::FEATURE_DEFAULT_REL != 0;
+        if default_rel
+            && !force_abs
+            && !m.rip_relative
+            && m.base.is_none()
+            && m.index.is_none()
+            && m.disp.is_some_and(|e| self.disp_is_symbolic(e))
+        {
+            m.rip_relative = true;
+        }
         Some(m)
+    }
+
+    /// Whether a displacement expression names a symbol, so `default rel`
+    /// applies to it. A plain constant does not.
+    fn disp_is_symbolic(&self, e: ExprRef) -> bool {
+        use crate::expr::ExprKind::*;
+        match &self.cx.exprs.get(e).kind {
+            Sym(_) | SymId(_) | Here | SectionStart | LocalRef(..) => true,
+            Unary(_, a) | Modifier(_, a) => self.disp_is_symbolic(*a),
+            Binary(_, a, b) => self.disp_is_symbolic(*a) || self.disp_is_symbolic(*b),
+            Int(_) => false,
+        }
     }
 
     /// One `+`-separated term inside `[...]`. Registers are stored into `m`;
@@ -736,6 +798,20 @@ impl OperandParser<'_, '_> {
                     let stok = cur.peek();
                     // Only the scale itself, not the `+ disp` that may follow.
                     let e = self.intel_disp_term(cur)?;
+                    // NASM folds `reg*3`, `reg*5` and `reg*9` into
+                    // `reg + reg*2/4/8` when there is no base yet, since
+                    // those scales have no encoding of their own.
+                    if let Some(s @ (3 | 5 | 9)) = self.cx.constant(e)
+                        && m.base.is_none()
+                        && m.index.is_none()
+                        && r.valid_index()
+                    {
+                        m.base = Some(r);
+                        m.index = Some(r);
+                        m.scale = (s - 1) as u8;
+                        note_addr_size(m, r);
+                        return Some(None);
+                    }
                     let Some(s @ (1 | 2 | 4 | 8)) = self.cx.constant(e) else {
                         self.cx.error(stok.span, "scale must be 1, 2, 4 or 8");
                         return None;

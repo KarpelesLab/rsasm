@@ -78,6 +78,18 @@ pub enum BinOp {
     Shr32,
     /// CC-RH's `>>`: an arithmetic shift of the value's 32 bits.
     Sar32,
+    /// NASM's `/`, which divides the 64-bit values as unsigned; its signed
+    /// `//` is [`BinOp::Div`].
+    DivU,
+    /// NASM's `%`, the unsigned remainder; `%%` is [`BinOp::Rem`].
+    RemU,
+    /// NASM's `>>>`: an arithmetic shift of the 64-bit value.
+    Sar,
+    /// NASM's `^^`: 1 if exactly one side is non-zero.
+    LogicalXor,
+    /// NASM's `<=>`: -1, 0 or 1 as the left side is less than, equal to or
+    /// greater than the right, signed.
+    Compare,
 }
 
 impl BinOp {
@@ -96,27 +108,43 @@ impl BinOp {
                     Add | Sub => 3,
                     And | Or | Xor => 4,
                     Mul | Div | Rem | Shl | Shr | Shr32 | Sar32 => 5,
+                    // NASM's operators, which no Renesas lexer produces.
+                    DivU | RemU | Sar | LogicalXor | Compare => 5,
                 }
             }
+            // The NASM manual's §3.5, lowest first: comparisons bind looser
+            // than the bitwise operators, unlike C.
+            Dialect::Nasm => match self {
+                LogicalOr => 1,
+                LogicalXor => 2,
+                LogicalAnd => 3,
+                Eq | Ne | Lt | Gt | Le | Ge | Compare => 4,
+                Or => 5,
+                Xor => 6,
+                And => 7,
+                Shl | Shr | Sar | Shr32 | Sar32 => 8,
+                Add | Sub => 9,
+                Mul | Div | Rem | DivU | RemU => 10,
+            },
             // CC-RX Table 5.11 (R20UT3248EJ0115 page 462), which has no
             // logical operators and puts the shifts below `+`.
             Dialect::CcRx => match self {
-                LogicalOr | LogicalAnd | Eq | Ne | Lt | Gt | Le | Ge => 1,
+                LogicalOr | LogicalAnd | LogicalXor | Eq | Ne | Lt | Gt | Le | Ge | Compare => 1,
                 Or | Xor => 2,
                 And => 3,
-                Shl | Shr | Shr32 | Sar32 => 4,
+                Shl | Shr | Shr32 | Sar32 | Sar => 4,
                 Add | Sub => 5,
-                Mul | Div | Rem => 6,
+                Mul | Div | Rem | DivU | RemU => 6,
             },
             _ => match self {
                 LogicalOr => 1,
-                LogicalAnd => 2,
+                LogicalAnd | LogicalXor => 2,
                 Or | Xor => 3,
                 And => 4,
-                Eq | Ne | Lt | Gt | Le | Ge => 5,
-                Shl | Shr | Shr32 | Sar32 => 6,
+                Eq | Ne | Lt | Gt | Le | Ge | Compare => 5,
+                Shl | Shr | Shr32 | Sar32 | Sar => 6,
                 Add | Sub => 7,
-                Mul | Div | Rem => 8,
+                Mul | Div | Rem | DivU | RemU => 8,
             },
         }
     }
@@ -129,6 +157,7 @@ impl BinOp {
             Shl => "<<", Shr | Shr32 | Sar32 => ">>", And => "&", Or => "|", Xor => "^",
             Eq => "==", Ne => "!=", Lt => "<", Gt => ">", Le => "<=", Ge => ">=",
             LogicalAnd => "&&", LogicalOr => "||",
+            DivU => "/", RemU => "%", Sar => ">>>", LogicalXor => "^^", Compare => "<=>",
         }
     }
 }
@@ -456,6 +485,24 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
                 ((a as i32) >> b) as i64
             }
         }
+        DivU => {
+            if b == 0 {
+                return Err(EvalError::new(span, "division by zero"));
+            }
+            ((a as u64) / (b as u64)) as i64
+        }
+        RemU => {
+            if b == 0 {
+                return Err(EvalError::new(span, "remainder by zero"));
+            }
+            ((a as u64) % (b as u64)) as i64
+        }
+        Sar => a >> (b as u64).min(63),
+        LogicalXor => ((a != 0) != (b != 0)) as i64,
+        // NASM 2.16.03 computes -1 for "less" and then takes -1 as its
+        // marker for an unknown value, which ends up as 0; `3 <=> 5` is 0
+        // there, and so it is here.
+        Compare => (a.cmp(&b) as i64).max(0),
         And => a & b,
         Or => a | b,
         Xor => a ^ b,
@@ -615,11 +662,50 @@ pub struct ExprParser<'a> {
     /// Decides operator precedence and the dialect's own operators, such as
     /// CC-RL's `HIGH` and `LOWW`.
     pub dialect: Dialect,
+    /// The string literals, where a quoted string can stand for a number: in
+    /// NASM, `'ab'` is `0x6261`.
+    pub strings: Option<&'a crate::lexer::LitPool>,
 }
 
 impl<'a> ExprParser<'a> {
     pub fn parse(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
-        self.parse_bp(cur, 0)
+        let e = self.parse_bp(cur, 0)?;
+        if self.dialect == Dialect::Nasm {
+            return self.nasm_wrt(cur, e);
+        }
+        Some(e)
+    }
+
+    /// NASM's `expr wrt ..plt`, which applies to the whole expression before
+    /// it, and names the relocation the way `@PLT` does in GNU syntax: it
+    /// becomes the same [`ExprKind::Modifier`], named without the dots. The
+    /// segment form, `wrt seg`, only means something to 16-bit object formats
+    /// rsasm does not write, and is refused.
+    fn nasm_wrt(&mut self, cur: &mut Cursor<'_>, e: ExprRef) -> Option<ExprRef> {
+        let tok = cur.peek();
+        let Some(n) = tok.ident() else {
+            return Some(e);
+        };
+        if !self.interner.get(n).eq_ignore_ascii_case("wrt") {
+            return Some(e);
+        }
+        cur.advance();
+        let target = cur.peek();
+        let name = target
+            .ident()
+            .map(|t| self.interner.get(t).to_ascii_lowercase())
+            .and_then(|t| t.strip_prefix("..").map(str::to_string));
+        let Some(name) = name else {
+            self.diags.error(
+                tok.span.to(target.span),
+                "expected a special symbol such as `..plt` or `..got` after `wrt`",
+            );
+            return None;
+        };
+        cur.advance();
+        let span = self.arena.span(e).to(target.span);
+        let name = self.interner.intern(&name);
+        Some(self.arena.alloc(ExprKind::Modifier(name, e), span))
     }
 
     fn parse_bp(&mut self, cur: &mut Cursor<'_>, min_prec: u8) -> Option<ExprRef> {
@@ -779,6 +865,18 @@ impl<'a> ExprParser<'a> {
                 cur.advance();
                 Some(self.arena.alloc(ExprKind::Int(v), tok.span))
             }
+            // A NASM string used as a number packs its first eight bytes
+            // little-endian, so `'ab'` is 0x6261.
+            TokKind::Str(i) if self.dialect == Dialect::Nasm && self.strings.is_some() => {
+                cur.advance();
+                let bytes = self.strings.map_or(&[][..], |p| p.get(i));
+                let v = bytes
+                    .iter()
+                    .take(8)
+                    .rev()
+                    .fold(0u64, |v, &b| (v << 8) | b as u64);
+                Some(self.arena.alloc(ExprKind::Int(v), tok.span))
+            }
             // The lexer leaves malformed numbers unreported because only the
             // consumer can tell whether they are errors. In an expression they
             // are.
@@ -911,10 +1009,20 @@ fn peek_binop(cur: &Cursor<'_>, dialect: Dialect) -> Option<BinOp> {
     let TokKind::Punct(p) = cur.peek().kind else {
         return None;
     };
+    let nasm = dialect == Dialect::Nasm;
     Some(match p {
         Punct::Plus => Add,
         Punct::Minus => Sub,
         Punct::Star => Mul,
+        Punct::Slash if nasm => DivU,
+        Punct::Percent if nasm => RemU,
+        Punct::SlashSlash => Div,
+        Punct::PercentPercent => Rem,
+        Punct::Sar => Sar,
+        Punct::CaretCaret => LogicalXor,
+        Punct::Spaceship => Compare,
+        // NASM spells equality `=` as well as `==`.
+        Punct::Eq if nasm => Eq,
         Punct::Slash => Div,
         Punct::Percent => Rem,
         Punct::Shl => Shl,
@@ -1005,6 +1113,7 @@ mod tests {
                 dollar_is_here: false,
                 star_is_here: false,
                 dialect: Dialect::Gas,
+                strings: None,
             };
             p.parse(&mut cur)
         };
