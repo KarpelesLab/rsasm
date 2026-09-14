@@ -101,6 +101,11 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         }
         Ldr | Str | Ldrb | Strb | Ldrh | Strh | Ldrsb | Ldrsh => load_store(cx, ins),
         Push | Pop => push_pop(cx, ins),
+        Adr => adr(cx, ins),
+        Adrl => {
+            cx.error(ins.span, "`adrl` is an ARM instruction; Thumb has `adr`");
+            None
+        }
         Ldm(_) | Stm(_) => block_transfer(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
@@ -723,6 +728,67 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return None;
     }
     wide_load_store(cx, ins, rt, mem.base, off as u16)
+}
+
+/// 16-bit `adr rd, label`: a word count forward from the PC rounded down.
+fn scatter_adr16(w: u64, v: i64) -> u64 {
+    (w & 0xff00) | (((v >> 2) as u64) & 0xff)
+}
+
+/// 32-bit `addw rd, pc, #imm12`, or `subw` for a label behind.
+fn scatter_adr32(w: u64, v: i64) -> u64 {
+    let hw1: u64 = if v < 0 { 0xf2af } else { 0xf20f };
+    let m = v.unsigned_abs() & 0xfff;
+    let rd = (w >> 24) & 0xf;
+    let hw2 = ((m >> 8) & 7) << 12 | rd << 8 | (m & 0xff);
+    ((hw2 << 16) | hw1 | ((m >> 11) & 1) << 10) & 0xffff_ffff
+}
+
+/// `adr rd, label`. A low register gets GNU as's relaxable pair, a 16-bit
+/// form reaching 1020 bytes forward to a word-aligned label and a 32-bit one
+/// reaching 4095 bytes either way; anything else only the 32-bit form.
+fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    unconditional(cx, ins)?;
+    encode::no_flags(cx, ins)?;
+    encode::arity(cx, ins, &[2])?;
+    let rd = encode::reg_of(cx, &ins.ops[0])?;
+    if rd == reg::SP || rd == reg::PC {
+        cx.error(
+            ins.ops[0].span,
+            format!("`adr` cannot load `{}` in Thumb", reg::name_of(rd)),
+        );
+        return None;
+    }
+    let Some(e) = ins.ops[1].imm() else {
+        cx.error(ins.ops[1].span, "expected a label");
+        return None;
+    };
+    let span = ins.ops[1].span;
+    let mut out = Vec::new();
+    if low(rd) && want_narrow(ins) {
+        let kind = FixupKind::pcrel(2, 4)
+            .with_pc_align(4)
+            .with_field(12, 4)
+            .with_limits(0, 1020)
+            .scatter(scatter_adr16);
+        out.push(fixed(
+            (0xa000u16 | ((rd as u16) << 8)).to_le_bytes().to_vec(),
+            e,
+            kind,
+            span,
+        ));
+    }
+    if want_wide(ins) {
+        let kind = FixupKind::pcrel(4, 4)
+            .with_pc_align(4)
+            .with_limits(-4095, 4095)
+            .scatter(scatter_adr32);
+        out.push(fixed(wide_bytes(0xf20f, (rd as u16) << 8), e, kind, span));
+    }
+    if out.is_empty() {
+        return no_encoding(cx, ins);
+    }
+    Some(out)
 }
 
 /// 16-bit `ldr rt, [pc, #imm8 * 4]`.

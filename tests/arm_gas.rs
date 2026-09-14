@@ -127,6 +127,50 @@ fn a_pool_out_of_reach_is_refused() {
     assert!(errors_for("arm", "ldr r0, =0x100000000").contains("32-bit word"));
 }
 
+// ---- adr and adrl ----------------------------------------------------------------
+
+/// ARM `adr` is an `add` or `sub` from the PC; `adrl` adds a second one, or a
+/// no-op where one reaches.
+#[test]
+fn arm_adr_and_adrl() {
+    assert_eq!(
+        hex(&text_for(
+            "arm",
+            "back: nop\nadr r0, back\nadr r1, fwd\nadreq r2, fwd\nadr lr, back + 4\nfwd: bx lr\n"
+        )),
+        "00 f0 20 e3 0c 00 4f e2 04 10 8f e2 00 20 8f 02 14 e0 4f e2 1e ff 2f e1"
+    );
+    let far = text_for(
+        "arm",
+        "back: adrl r0, near\nadrl r1, far\nadrl r2, back\nnear: nop\n.space 0x10000\n\
+         far: adrl r3, back\nadrlne r4, near\nbx lr\n",
+    );
+    assert_eq!(
+        hex(&far[..24]),
+        "10 00 8f e2 00 00 a0 e1 0c 10 8f e2 01 18 81 e2 18 20 4f e2 00 00 a0 e1"
+    );
+    assert_eq!(
+        hex(&far[0x1001c..0x1002c]),
+        "24 30 4f e2 01 38 43 e2 14 40 4f 12 01 48 44 12"
+    );
+    let e = errors_for("arm", "adr r0, far\n.space 1014\nfar: bx lr\n");
+    assert!(e.contains("try `adrl`"), "{e}");
+}
+
+/// Thumb `adr` is 16 bits for a low register and a word-aligned label up to
+/// 1020 bytes ahead, and `addw`/`subw` from the PC otherwise.
+#[test]
+fn thumb_adr() {
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            "back: nop\nadr r0, back\nadr r1, fwd\nadr r8, fwd\nadr.w r2, fwd\n\
+             adr r3, odd\n.p2align 2, 0\nfwd: bx lr\nodd: bx lr\n"
+        )),
+        "00 bf af f2 04 00 03 a1 0f f2 08 08 0f f2 04 02 0f f2 02 03 70 47 70 47"
+    );
+}
+
 // ---- mapping symbols -----------------------------------------------------------
 
 /// Every change between code and data is marked, alignment padding with no-ops

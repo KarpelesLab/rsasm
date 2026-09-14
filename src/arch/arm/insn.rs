@@ -81,6 +81,9 @@ pub enum Mnem {
     Stm(BlockMode),
     Push,
     Pop,
+    // PC-relative addresses: `adr` is one instruction, `adrl` two.
+    Adr,
+    Adrl,
     // Branches.
     B,
     Bl,
@@ -220,6 +223,7 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("stmda", Stm(da)); add("stmed", Stm(da));
         add("stmdb", Stm(db)); add("stmfd", Stm(db));
         add("push", Push); add("pop", Pop);
+        add("adr", Adr); add("adrl", Adrl);
         add("b", B); add("bl", Bl); add("bx", Bx); add("blx", Blx);
         add("mul", Mul); add("mla", Mla); add("mls", Mls);
         add("umull", Umull); add("umlal", Umlal);

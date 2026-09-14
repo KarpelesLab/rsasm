@@ -147,3 +147,37 @@ label:  bx      lr
         .ltorg
         .space  8
         ldr     r1, =0x12345678
+=== adr forward and back
+        .syntax unified
+back:   nop
+        adr     r0, back
+        adr     r1, fwd
+        adreq   r2, fwd
+        adr     r3, .
+        adr     lr, back + 4
+fwd:    bx      lr
+=== adr to a label an add can reach only at a rotated offset
+        .syntax unified
+        adr     r0, far
+        .space  1012
+far:    bx      lr
+=== refused: adr to an offset no modified immediate holds
+        .syntax unified
+        adr     r0, far
+        .space  1014
+far:    bx      lr
+=== adrl in one instruction and in two
+        .syntax unified
+back:   adrl    r0, near
+        adrl    r1, far
+        adrl    r2, back
+near:   nop
+        .space  0x10000
+far:    adrl    r3, back
+        adrlne  r4, near
+        bx      lr
+=== refused: adr to another section
+        .syntax unified
+        adr     r0, other
+        .data
+other:  .word   0

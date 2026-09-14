@@ -163,6 +163,7 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Ldr | Str | Ldrb | Strb => load_store(cx, ins),
         Ldrh | Strh | Ldrsb | Ldrsh => load_store_extra(cx, ins),
         Ldm(_) | Stm(_) | Push | Pop => block_transfer(cx, ins),
+        Adr | Adrl => adr(cx, ins),
         B | Bl | Bx | Blx => branch(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
@@ -644,6 +645,138 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             | ((rn as u32) << 16)
             | list as u32,
     )))
+}
+
+// ---- adr and adrl ------------------------------------------------------------
+
+/// `add rd, pc, #imm` or `sub rd, pc, #imm` for a PC-relative value, as its
+/// data-processing opcode bits and immediate field: GNU as's
+/// `encode_arm_immediate`, then the negated value with the opposite
+/// operation.
+fn adr_one(v: i64) -> Option<(u32, u32)> {
+    const ADD: u32 = 0x0080_0000;
+    const SUB: u32 = 0x0040_0000;
+    let v = v as u32;
+    if (v as i32) >= 0
+        && let Some(field) = imm::modified(v)
+    {
+        return Some((ADD, field));
+    }
+    imm::modified(v.wrapping_neg()).map(|field| (SUB, field))
+}
+
+/// GNU as's `validate_immediate_twopart`: `v` as the sum of two modified
+/// immediates, the low one first.
+fn adr_two(v: u32) -> Option<(u32, u32)> {
+    for i in (0..32).step_by(2) {
+        let a = v.rotate_left(i);
+        if a & 0xff == 0 {
+            continue;
+        }
+        let high = if a & 0xff00 != 0 {
+            if a & !0xffff != 0 {
+                continue;
+            }
+            (a >> 8) | ((i + 24) << 7)
+        } else if a & 0x00ff_0000 != 0 {
+            if a & 0xff00_0000 != 0 {
+                continue;
+            }
+            (a >> 16) | ((i + 16) << 7)
+        } else {
+            (a >> 24) | ((i + 8) << 7)
+        };
+        return Some(((a & 0xff) | (i << 7), high));
+    }
+    None
+}
+
+fn adr_reaches(v: i64) -> bool {
+    adr_one(v).is_some()
+}
+
+fn adrl_reaches(v: i64) -> bool {
+    adr_one(v).is_some()
+        || adr_two(v as u32).is_some()
+        || adr_two((v as u32).wrapping_neg()).is_some()
+}
+
+/// `adr`: one `add` or `sub` from the PC.
+fn scatter_adr(w: u64, v: i64) -> u64 {
+    let (op, field) = adr_one(v).unwrap_or((0, 0));
+    (w & 0xf000_f000) | 0x020f_0000 | op as u64 | field as u64
+}
+
+/// `adrl`: the `add` or `sub` of `adr` followed by a no-op where one
+/// instruction reaches, and otherwise two, the second adding to (or
+/// subtracting from) the register the first set. The field is both words,
+/// the first in the low half.
+fn scatter_adrl(w: u64, v: i64) -> u64 {
+    let first = w & 0xf000_f000;
+    let rd = (first >> 12) & 0xf;
+    let (low, high) = match adr_one(v) {
+        Some((op, field)) => (first | 0x020f_0000 | op as u64 | field as u64, 0xe1a0_0000),
+        None => {
+            let (op, (lo, hi)) = match adr_two(v as u32) {
+                Some(parts) => (0x0080_0000, parts),
+                None => (
+                    0x0040_0000,
+                    adr_two((v as u32).wrapping_neg()).unwrap_or((0, 0)),
+                ),
+            };
+            let insn = first | 0x0200_0000 | op;
+            (
+                insn | 0x000f_0000 | lo as u64,
+                insn | (rd << 16) | hi as u64,
+            )
+        }
+    };
+    low | (high << 32)
+}
+
+/// `adr rd, label` and `adrl rd, label`, which GNU as resolves within the
+/// section and refuses to relocate.
+fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    no_flags(cx, ins)?;
+    arity(cx, ins, &[2])?;
+    let rd = reg_of(cx, &ins.ops[0])? as u32;
+    let Some(e) = ins.ops[1].imm() else {
+        cx.error(ins.ops[1].span, "expected a label");
+        return None;
+    };
+    let long = ins.mnem == Mnem::Adrl;
+    let (size, reaches, what): (u8, fn(i64) -> bool, _) = if long {
+        (
+            8,
+            adrl_reaches,
+            "`adrl` reaches this far only with an address two `add`s can build",
+        )
+    } else {
+        (
+            4,
+            adr_reaches,
+            "`adr` reaches only an 8-bit value rotated by an even amount; try `adrl`",
+        )
+    };
+    let kind = FixupKind::pcrel(size, 8)
+        .accepting(reaches)
+        .with_range_hint(what)
+        .scatter(if long { scatter_adrl } else { scatter_adr });
+    let w = word(ins.cond, rd << 12) as u64;
+    let bytes = if long {
+        (w | (0xe1a0_0000 << 32)).to_le_bytes().to_vec()
+    } else {
+        (w as u32).to_le_bytes().to_vec()
+    };
+    Some(vec![Variant {
+        bytes,
+        fixups: vec![Fixup {
+            offset: 0,
+            expr: e,
+            kind,
+            span: ins.ops[1].span,
+        }],
+    }])
 }
 
 // ---- branches --------------------------------------------------------------

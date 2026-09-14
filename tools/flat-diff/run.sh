@@ -54,6 +54,8 @@ aarch64|aarch64|aarch64|mc:aarch64||aarch64-elf-ld||0x400000
 aarch64-gas|aarch64-gas|aarch64|aarch64-elf-as||aarch64-elf-ld||0x400000
 arm|arm|arm|mc:armv7||arm-none-eabi-ld||0x8000
 thumb|thumb|thumb|mc:thumbv7||arm-none-eabi-ld||0x8000
+arm-gas|arm-gas|arm|arm-none-eabi-as|-march=armv7-a|arm-none-eabi-ld||0x8000
+thumb-gas|thumb-gas|thumb|arm-none-eabi-as|-march=armv7-a -mthumb|arm-none-eabi-ld||0x8000
 riscv32|riscv|riscv32|mc:riscv32|-mattr=+m,+a,+f,+d,+c|riscv64-elf-ld|-m elf32lriscv --no-relax|0x10000
 riscv64|riscv|riscv64|mc:riscv64|-mattr=+m,+a,+f,+d,+c|riscv64-elf-ld|-m elf64lriscv --no-relax|0x10000
 powerpc|powerpc|powerpc|mc:powerpc||powerpc64-linux-gnu-ld|-m elf32ppc|0x10000000
