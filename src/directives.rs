@@ -336,9 +336,17 @@ impl Assembler {
             self.align_data(size as u64, span);
         }
         loop {
+            let mark = self.exprs.len();
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            // `.` in each value is the address of that value, not of the
+            // statement: `.long a - ., b - .` is two PC-relative values in
+            // GNU as and llvm-mc alike.
+            if self.here_sym.is_some() {
+                self.here_sym = Some(self.anon_label(span));
+                self.bind_positional(mark);
+            }
             self.emit_value(size, e, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;

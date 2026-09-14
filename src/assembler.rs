@@ -120,7 +120,7 @@ pub struct Assembler {
     /// without comparing configurations on every statement.
     lex_epoch: u64,
     /// The anonymous label standing in for `.` in the current statement.
-    here_sym: Option<SymbolId>,
+    pub(crate) here_sym: Option<SymbolId>,
     cond: Vec<Cond>,
     /// Guards against runaway `.include` recursion.
     include_depth: u32,
@@ -286,7 +286,7 @@ impl Assembler {
     // ---- symbols ----------------------------------------------------------
 
     /// Creates an unnamed label pinned to the current position.
-    fn anon_label(&mut self, span: Span) -> SymbolId {
+    pub(crate) fn anon_label(&mut self, span: Span) -> SymbolId {
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
         let section = self.cur;
@@ -1316,7 +1316,7 @@ impl Assembler {
 
     /// Rewrites `.` and `1f`/`1b` nodes created by this statement into direct
     /// symbol references, now that the statement's position is known.
-    fn bind_positional(&mut self, mark: usize) {
+    pub(crate) fn bind_positional(&mut self, mark: usize) {
         if self.exprs.len() == mark {
             return;
         }
