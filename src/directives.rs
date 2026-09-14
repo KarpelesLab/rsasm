@@ -457,6 +457,24 @@ impl Assembler {
     /// Emits `size` bytes for `e`, as literal bytes when it already folds to a
     /// constant and as a fixup otherwise.
     pub(crate) fn emit_value(&mut self, size: u8, e: ExprRef, span: Span) {
+        // A zero takes space in a section with no contents, in GNU as and
+        // llvm-mc alike: Clang writes a zero-initialised AVR global as
+        // `.short 0` in `.bss`. Anything else has nowhere to go.
+        if self.section(self.cur).kind == SectionKind::Nobits
+            && self.eval_ref(e).ok().and_then(|v| v.as_abs()) == Some(0)
+        {
+            let size = self.exprs.int(size as u64, span);
+            let fill = self.exprs.int(0, span);
+            self.push_frag(
+                FragKind::Space {
+                    size,
+                    fill,
+                    resolved: 0,
+                },
+                span,
+            );
+            return;
+        }
         if self.check_nobits(span) {
             return;
         }

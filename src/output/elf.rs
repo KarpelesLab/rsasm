@@ -605,7 +605,11 @@ fn collect_symbols(
         } else {
             raw
         };
-        if !sym.is_defined() && !sym.used {
+        // A symbol declared global and never defined is written even if
+        // nothing refers to it, as both references write it: it makes the
+        // linker pull in whatever defines it, which is what the
+        // `.globl __do_copy_data` avr-gcc and Clang emit is for.
+        if !sym.is_defined() && !sym.used && sym.binding != Binding::Global {
             continue;
         }
         // A `.L` label is local to the assembly, by the ELF convention GNU as
