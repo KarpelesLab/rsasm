@@ -23,6 +23,7 @@ llvm-mc encode exactly that way.
 
 import argparse
 import collections
+import itertools
 import multiprocessing
 import os
 import pickle
@@ -76,63 +77,108 @@ SIMD_KINDS = {"v", "vidx", "vidxa", "s", "z", "zidx", "p", "pm", "pz",
 SKIP_TEXT = re.compile(r"\b(za\b|za\d|zt0|pn\d+|vgx\d|\{\s*z\d+\.\w+,\s*z\d+\.\w+\s*\}"
                        r"|mode|sm\b|everything)")
 
-# Spellings llvm-mc accepts but never prints, so the sweep cannot find them.
-# Syntax only: what each one encodes is measured like everything else. `%s`
-# stands for a register number, filled in with 0.
+# Spellings llvm-mc accepts but never prints, so the sweep cannot find them:
+# the preferred alias is what it prints for their encodings. Syntax only: what
+# each one encodes is measured like everything else. `<a|b|c>` stands for each
+# alternative in turn, and groups with as many alternatives go together; a
+# line llvm-mc refuses is dropped.
 ALIASES = """
-sxtl v0.8h, v0.8b
-sxtl2 v0.8h, v0.16b
-uxtl v0.8h, v0.8b
-uxtl2 v0.8h, v0.16b
-mov v0.b[0], v0.b[0]
-mov v0.b[0], w0
+sxtl v0.<8h|4s|2d>, v0.<8b|4h|2s>
+uxtl v0.<8h|4s|2d>, v0.<8b|4h|2s>
+sxtl2 v0.<8h|4s|2d>, v0.<16b|8h|4s>
+uxtl2 v0.<8h|4s|2d>, v0.<16b|8h|4s>
+ins v0.<b|h|s>[0], w0
+ins v0.d[0], x0
+ins v0.<b|h|s|d>[0], v0.<b|h|s|d>[0]
+mov v0.<b|h|s|d>[0], v0.<b|h|s|d>[0]
+mov v0.<b|h|s>[0], w0
+mov v0.d[0], x0
+umov w0, v0.<b|h|s>[0]
+umov x0, v0.d[0]
 mov w0, v0.s[0]
 mov x0, v0.d[0]
-mov b0, v0.b[0]
-mvn v0.8b, v0.8b
-bic v0.4h, #0
-bic v0.4h, #0, lsl #0
-orr v0.4h, #0
-orr v0.4h, #0, lsl #0
-movi v0.2s, #0, lsl #0
-fmov s0, #1.0
-fmov d0, #1.0
-fmov h0, #1.0
-fmov v0.2s, #1.0
-fmov v0.4h, #1.0
-cmle v0.8b, v0.8b, v0.8b
-cmlt v0.8b, v0.8b, v0.8b
-fcmle v0.2s, v0.2s, v0.2s
-fcmlt v0.2s, v0.2s, v0.2s
-facle v0.2s, v0.2s, v0.2s
-faclt v0.2s, v0.2s, v0.2s
-mov z0.b, z0.b
-mov z0.b, p0/m, z0.b
-mov z0.b, p0/z, z0.b
-mov z0.b, w0
-mov z0.b, b0
-mov z0.b, #0
-mov z0.b, p0/m, #0
-mov z0.b, p0/m, w0
-mov z0.b, p0/m, b0
-mov z0.b, z0.b[0]
+mov <b|h|s|d>0, v0.<b|h|s|d>[0]
+not v0.<8b|16b>, v0.<8b|16b>
+mvn v0.<8b|16b>, v0.<8b|16b>
+<bic|orr> v0.<4h|8h|2s|4s>, #0
+<bic|orr> v0.<4h|8h|2s|4s>, #0, lsl #0
+<movi|mvni> v0.<4h|8h|2s|4s>, #0
+<movi|mvni> v0.<4h|8h|2s|4s>, #0, lsl #0
+movi v0.<8b|16b>, #0, lsl #0
+movi d0, #0
+fmov <h|s|d>0, #<1.0|0.0>
+fmov v0.<4h|8h|2s|4s|2d>, #1.0
+<cmle|cmlt|cmls|cmlo> v0.<8b|16b|4h|8h|2s|4s|2d>, v0.<8b|16b|4h|8h|2s|4s|2d>, v0.<8b|16b|4h|8h|2s|4s|2d>
+<cmle|cmlt|cmls|cmlo> d0, d0, d0
+<fcmle|fcmlt|facle|faclt> v0.<4h|8h|2s|4s|2d>, v0.<4h|8h|2s|4s|2d>, v0.<4h|8h|2s|4s|2d>
+<fcmle|fcmlt|facle|faclt> <h|s|d>0, <h|s|d>0, <h|s|d>0
+mov z0.<b|h|s|d>, z0.<b|h|s|d>
+mov z0.<b|h|s|d>, p0/<m|z>, z0.<b|h|s|d>
+mov z0.<b|h|s>, w0
+mov z0.d, x0
+mov z0.<b|h|s|d>, <b|h|s|d>0
+mov z0.<b|h|s|d>, #0
+mov z0.<b|h|s|d>, p0/<m|z>, #0
+mov z0.<b|h|s>, p0/m, w0
+mov z0.d, p0/m, x0
+mov z0.<b|h|s|d>, p0/m, <b|h|s|d>0
+mov z0.<b|h|s|d>, z0.<b|h|s|d>[0]
 mov p0.b, p0.b
-mov p0.b, p0/m, p0.b
-mov p0.b, p0/z, p0.b
+mov p0.b, p0/<m|z>, p0.b
 movs p0.b, p0.b
 movs p0.b, p0/z, p0.b
-not p0.b, p0/z, p0.b
-nots p0.b, p0/z, p0.b
-fmov z0.h, #1.0
-fmov z0.h, p0/m, #1.0
+<not|nots> p0.b, p0/z, p0.b
+fmov z0.<h|s|d>, #<1.0|0.0>
+fmov z0.<h|s|d>, p0/m, #<1.0|0.0>
+fcpy z0.<h|s|d>, p0/m, #1.0
+<cmple|cmplt|cmplo|cmpls> p0.<b|h|s|d>, p0/z, z0.<b|h|s|d>, z0.<b|h|s|d>
+<fcmle|fcmlt|facle|faclt> p0.<h|s|d>, p0/z, z0.<h|s|d>, z0.<h|s|d>
+dup z0.<b|h|s|d>, #<1|0>
+dup z0.<h|s|d>, #<256|-256>
+dup z0.<h|s|d>, #1, lsl #8
+dupm z0.<b|h|s|d>, #<1|0x3f>
+cpy z0.<b|h|s|d>, p0/<m|z>, #1
+cpy z0.<h|s|d>, p0/<m|z>, #<256|-256>
+cpy z0.<h|s|d>, p0/<m|z>, #1, lsl #8
+cpy z0.<b|h|s>, p0/m, <w0|wsp>
+cpy z0.d, p0/m, <x0|sp>
+cpy z0.<b|h|s|d>, p0/m, <b|h|s|d>0
+fdup z0.<h|s|d>, #1.0
+fcpy z0.<h|s|d>, p0/m, #1.0
+<orn|eon|bic> z0.<b|h|s|d>, z0.<b|h|s|d>, #1
+sel z0.<b|h|s|d>, p0, z0.<b|h|s|d>, z0.<b|h|s|d>
 """
+
+
+def expand_aliases(text):
+    """Each template line of ALIASES, with its `<a|b>` groups expanded."""
+    out = []
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        groups = re.findall(r"<([^>]*)>", line)
+        if not groups:
+            out.append(line)
+            continue
+        alts = [g.split("|") for g in groups]
+        sizes = sorted({len(a) for a in alts})
+        # Groups of one size vary together; groups of different sizes vary
+        # independently of each other.
+        for combo in itertools.product(*[range(n) for n in sizes]):
+            pick = dict(zip(sizes, combo))
+            text_ = line
+            for a in alts:
+                text_ = re.sub(r"<[^>]*>", a[pick[len(a)]], text_, count=1)
+            out.append(text_)
+    return out
 
 
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
-def interesting(mn, atoms, text):
+def interesting(mn, atoms, text, word):
     if SKIP_TEXT.search(text):
         return False
     kinds = {a.kind[0] for a in atoms}
@@ -142,7 +188,16 @@ def interesting(mn, atoms, text):
         return False
     if mn.startswith("b.") or mn.startswith("bc."):
         return False
-    return bool(kinds & SIMD_KINDS)
+    # A general-purpose form of an instruction the backend does not write by
+    # hand is kept too, and dropped after the sweep unless the same mnemonic
+    # has a SIMD form: `ldapur x0, [x1]` goes with `ldapur d0, [x1]`.
+    return bool(kinds & SIMD_KINDS) or mn not in HANDWRITTEN or sve_space(word)
+
+
+def sve_space(word):
+    """True for a word in the SVE encoding group, bits 28-25 `0010`: `cntd
+    x0` and `addvl sp, sp, #1` are SVE though they name no SVE register."""
+    return (word >> 25) & 0xf == 0b0010
 
 
 def shape_key(mn, atoms):
@@ -158,29 +213,67 @@ def sweep(words):
             mn, atoms = parse_line(text)
         except ValueError:
             continue
-        if not interesting(mn, atoms, text):
+        if not interesting(mn, atoms, text, w):
             continue
         out[shape_key(mn, atoms)].append((w, atoms))
     return out
 
 
+SAMPLES = 64
+
+
+class Reservoir:
+    """Up to SAMPLES samples of each shape, a uniform choice of all seen, so
+    that the first prefixes swept do not decide which operand values a shape
+    is fitted from."""
+
+    def __init__(self, seed):
+        self.rng = random.Random(seed)
+        self.found = {}
+        self.seen = collections.Counter()
+
+    def add(self, key, sample):
+        self.seen[key] += 1
+        cur = self.found.setdefault(key, [])
+        if len(cur) < SAMPLES:
+            cur.append(sample)
+        else:
+            j = self.rng.randrange(self.seen[key])
+            if j < SAMPLES:
+                cur[j] = sample
+
+    def add_all(self, part):
+        for k, v in part.items():
+            for smp in v:
+                self.add(k, smp)
+
+
+def words_job(args):
+    """Given words."""
+    words, seed = args
+    res = Reservoir(seed)
+    for i in range(0, len(words), 50000):
+        try:
+            res.add_all(sweep(words[i:i + 50000]))
+        except RuntimeError as e:
+            print("sweep: %s" % e, file=sys.stderr)
+    return res.found, res.seen
+
+
 def sweep_job(args):
+    """Random words."""
     seed, n = args
     rng = random.Random(seed)
-    found = collections.defaultdict(list)
+    res = Reservoir(seed)
     done = 0
     while done < n:
         batch = min(50000, n - done)
         done += batch
         try:
-            part = sweep([rng.getrandbits(32) for _ in range(batch)])
+            res.add_all(sweep([rng.getrandbits(32) for _ in range(batch)]))
         except RuntimeError as e:
             print("sweep: %s" % e, file=sys.stderr)
-            continue
-        for k, v in part.items():
-            if len(found[k]) < 12:
-                found[k].extend(v[:12])
-    return {k: v[:12] for k, v in found.items()}
+    return res.found, res.seen
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +585,10 @@ def grow(accepted, model, b0, step, lo_limit=None, hi_limit=None, most=None, pri
             end = start + (most - 1) * step
             if end > hi:
                 break
-            taken = sum(1 for v in skip if start <= v <= end)
-            held = sum(1 for p in printed if start <= p <= end and p not in skip)
+            # Only the values on this form's ladder count either way.
+            taken = sum(1 for v in skip if start <= v <= end and (v - start) % step == 0)
+            held = sum(1 for p in printed
+                       if start <= p <= end and (p - start) % step == 0 and p not in skip)
             aligned = start == 0 or start == -(most // 2) * step
             key = (taken, -held, not aligned, max(abs(start), abs(end)), abs(start))
             if best is None or key < best[0]:
@@ -521,14 +616,27 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
     ints = kind != "fimm" and isinstance(b0, int)
     options = []  # (explained, preference, encoding, values)
 
+    # A range is fitted over the values the disassembler prints back, where
+    # there are any: llvm-mc takes `mov z0.h, #65520` too, as `#-16`, and a
+    # range of such aliases is a form of its own to nobody else.
+    ranged, ranged_all = accepted, everything
+    words_all = {w for v, w in everything.items() if isinstance(v, int)}
+    words_printed = {everything[v] for v in printed if v in everything}
+    # Only where most encodings are printed back in this shape: an alias
+    # spelling (`mov z0.h, #1, lsl #8`, printed as `#256`) has few or none.
+    if printed and not reg and len(words_printed) * 2 >= len(words_all):
+        keep = set(printed) | {b0}
+        ranged = {v: w for v, w in accepted.items() if v in keep}
+        ranged_all = {v: w for v, w in everything.items() if v in keep}
+
     if ints:
-        top = max(abs(v) for v in accepted if isinstance(v, int))
-        bits = bits_from_probes(accepted, b0, base_word, lambda v: v,
+        top = max(abs(v) for v in ranged if isinstance(v, int))
+        bits = bits_from_probes(ranged, b0, base_word, lambda v: v,
                                 min(top, 1 << 24), partial=True)
         if bits:
             n = nbits(bits)
             model = scatter_model(bits, base_word, b0)
-            lo, hi = grow(everything, model, b0, 1, 0 if reg else None,
+            lo, hi = grow(ranged_all, model, b0, 1, 0 if reg else None,
                           (1 << n) - 1, most=1 << n, printed=printed, skip=claimed)
             if kind in ("cond", "pat", "prf"):
                 # Only a name reaches the field, so its width is the range.
@@ -541,12 +649,12 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
                 else:
                     enc = ("scatter", bits, lo, hi)
                 options.append((hi - lo + 1, 0, enc, None, ()))
-        for step in _steps(accepted, b0):
+        for step in _steps(ranged, b0):
             raws = []
-            if b0 + step in accepted:
-                raws.append((accepted[b0 + step] - base_word) & 0xffffffff)
-            if b0 - step in accepted:
-                raws.append((base_word - accepted[b0 - step]) & 0xffffffff)
+            if b0 + step in ranged:
+                raws.append((ranged[b0 + step] - base_word) & 0xffffffff)
+            if b0 - step in ranged:
+                raws.append((base_word - ranged[b0 - step]) & 0xffffffff)
             for sign, d in [(1, r) for r in raws] + [(-1, (-r) & 0xffffffff) for r in raws]:
                 if d == 0 or d & (d - 1):
                     continue
@@ -555,7 +663,7 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
                     if forbidden & (((1 << width) - 1) << lsb):
                         break
                     model = affine_model(base_word, b0, lsb, width, sign, step)
-                    lo, hi = grow(everything, model, b0, step, 0 if reg else None,
+                    lo, hi = grow(ranged_all, model, b0, step, 0 if reg else None,
                                   None, most=1 << width, printed=printed, skip=claimed)
                     count = (hi - lo) // step + 1
                     if count >= 3 and (step == 1 or count >= 8):
@@ -564,13 +672,14 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
 
     if kind in ("imm", "shift") and ints:
         for esize in ([esize_hint] if esize_hint else []) + [64, 32, 16, 8]:
-            xf = lambda v, e=esize: _logfield(v, e)
-            for place in _placements(accepted, b0, base_word, xf, 13):
-                model = xform_model(xf, place, base_word, b0)
-                score = model and _score(accepted, model)
-                if score:
-                    options.append((score[0], 2, ("logimm", place, esize), score[1],
-                                    score[2]))
+            for name, fn in (("logimm", _logfield), ("notlogimm", _notlogfield)):
+                xf = lambda v, e=esize, fn=fn: fn(v, e)
+                for place in _placements(accepted, b0, base_word, xf, 13):
+                    model = xform_model(xf, place, base_word, b0)
+                    score = model and _score(accepted, model)
+                    if score:
+                        options.append((score[0], 2, (name, place, esize), score[1],
+                                        score[2]))
         for place in _placements(accepted, b0, base_word, _bytemask, 8):
             model = xform_model(_bytemask, place, base_word, b0)
             score = model and _score(accepted, model)
@@ -714,6 +823,7 @@ def _place(word, place, x):
 
 XFORMS = {"fpimm": lambda v, enc: fp_imm8(v),
           "logimm": lambda v, enc: _logfield(v, enc[2]),
+          "notlogimm": lambda v, enc: _notlogfield(v, enc[2]),
           "bytemask": lambda v, enc: _bytemask(v)}
 
 
@@ -739,11 +849,38 @@ def contribution(enc, v, word):
     raise ValueError(enc)
 
 
-def encode_form(slots, base, vals):
+def encode_form(slots, base, vals, wrap=0):
     w = base
     for s, v in zip(slots, vals):
-        w = contribution(s["enc"], v, w)
+        w = contribution(s["enc"], wrapped(s["enc"], v, wrap), w)
     return w & 0xffffffff
+
+
+def measure_wrap(mn, atoms, slots, base, sp, rng):
+    """The element width a form's signed immediates wrap at, if llvm-mc
+    agrees they do: each is tried as the element's bits, and the form wraps
+    only if every such line encodes as the negative number does."""
+    e = esize_of(atoms[0].kind) if atoms else None
+    signed = [i for i, sl in enumerate(slots)
+              if sl.get("kind") == "imm" and enc_range(sl["enc"]) and enc_range(sl["enc"])[0] < 0]
+    if e not in (8, 16, 32) or not signed:
+        return 0, []
+    cases = []
+    for i in signed:
+        lo, hi, step = enc_range(slots[i]["enc"])
+        negatives = list(range(lo, min(hi, -1) + 1, step))
+        for v in {negatives[0], negatives[-1], rng.choice(negatives)}:
+            vals = pick_values(slots, rng)
+            vals[i] = v
+            alias = list(vals)
+            alias[i] = v + (1 << e)
+            cases.append((vals, alias))
+    lines = [render(mn, apply_values(atoms, slots, alias, sp)) for _, alias in cases]
+    got = assemble(lines)
+    for (vals, _), w in zip(cases, got):
+        if w != encode_form(slots, base, vals):
+            return 0, []
+    return e, list(zip(lines, got))
 
 
 def enc_bits(enc):
@@ -843,17 +980,22 @@ def fit_form(mn, samples, rng, earlier=()):
         elif accepted[s][31] == w:
             sp.add((s, "both"))
 
-    esize_hint = esize_of(atoms0[0].kind)
+    esize_hint = esize_of(atoms0[0].kind) if atoms0 else None
 
     def claimed_for(s):
+        """The values of one number an earlier form encodes as llvm-mc does,
+        with every other operand as the probes had it."""
         out = set()
         if is_reg_slot(base_atoms[s[0]], s[1]):
             return out
+        ai, vi = s
         for prior in earlier:
-            psl = [sl for sl in prior if sl["slot"] == s][0]
-            rejects = set(psl.get("rejects", ()))
-            out.update(v for v in accepted[s]
-                       if covers_value(psl["enc"], v, None) and v not in rejects)
+            for v, w in accepted[s].items():
+                probe = with_val(base_atoms, ai, vi, v)
+                if covers(prior["slots"], probe, prior["wrap"]):
+                    vals = [probe[sl["slot"][0]].vals[sl["slot"][1]] for sl in prior["slots"]]
+                    if encode_form(prior["slots"], prior["base"], vals, prior["wrap"]) == w:
+                        out.add(v)
         return out
 
     # Which of the values llvm-mc took are the ones its disassembler prints
@@ -980,7 +1122,11 @@ def fit_form(mn, samples, rng, earlier=()):
                    (bad[0]["slot"][0], len(vals), vals[:4], vals[-2:]))
     for sl in slots:
         s = sl["slot"]
-        if sl["enc"][0] == "fixed" and len(svals[s]) > 1:
+        # A register that will not move is one this fit failed to tie; an
+        # immediate that will not move is a narrow form of its own, like
+        # `fmov d0, #0.0`, which is `fmov d0, xzr`.
+        if sl["enc"][0] == "fixed" and len(svals[s]) > 1 and \
+                is_reg_slot(base_atoms[s[0]], s[1]):
             raise Fail("operand %d varies in the samples but not on its own" % s[0])
 
     # The opcode with every operand at its origin: zero, or the bottom of an
@@ -1008,12 +1154,14 @@ def fit_form(mn, samples, rng, earlier=()):
 
 def _logfield(v, esize):
     """The 13-bit `N:immr:imms` of a bitmask immediate for an element of
-    `esize` bits. A negative value is taken as its low `esize` bits, as
-    llvm-mc takes `and z0.b, z0.b, #-2`."""
+    `esize` bits. A negative value that fits the element signed is taken as
+    its low `esize` bits, as both references take `and z0.b, z0.b, #-2`.
+    llvm-mc goes further, and takes any number modulo the element size, but a
+    value only that reading makes encodable is refused rather than modelled."""
     if not isinstance(v, int):
         return None
     if esize < 64:
-        if not -(1 << esize) < v < (1 << esize):
+        if not -(1 << (esize - 1)) <= v < (1 << esize):
             return None
         v &= (1 << esize) - 1
     elif not -(1 << 63) <= v < (1 << 64):
@@ -1023,6 +1171,19 @@ def _logfield(v, esize):
         return None
     n, immr, imms = r
     return (n << 12) | (immr << 6) | imms
+
+
+def _notlogfield(v, esize):
+    """The bitmask immediate of the complement of `v` in an element of
+    `esize` bits: `bic z0.b, z0.b, #0xf0` is `and z0.b, z0.b, #0x0f`."""
+    if not isinstance(v, int):
+        return None
+    if esize < 64:
+        if not -(1 << (esize - 1)) <= v < (1 << esize):
+            return None
+    elif not -(1 << 63) <= v < (1 << 64):
+        return None
+    return _logfield(~v & ((1 << esize) - 1), esize)
 
 
 def _bytemask(v):
@@ -1094,7 +1255,7 @@ def check_form(mn, atoms, slots, base, sp_at_31, rng, rounds=10, earlier=()):
 
     def claimed(vals):
         probe = apply_values(atoms, slots, vals, sp_at_31)
-        return any(covers(prior, probe) for prior in earlier)
+        return any(covers(prior["slots"], probe, prior["wrap"]) for prior in earlier)
     cases = [v for v in cases if not claimed(v)]
     lines = [render(mn, apply_values(atoms, slots, v, sp_at_31)) for v in cases]
     got = assemble(lines)
@@ -1184,6 +1345,8 @@ def xf_rust(enc):
         return "X::FpImm"
     if t == "logimm":
         return "X::LogImm(%d)" % enc[2]
+    if t == "notlogimm":
+        return "X::NotLogImm(%d)" % enc[2]
     return "X::ByteMask"
 
 
@@ -1249,7 +1412,7 @@ def emit_rust(forms, path):
             text = "Slot { kind: %s, a: %s, b: %s }" % (kind_rust(kind, spelling), a, b)
             sids.append(slot_pool.setdefault(text, len(slot_pool)))
         shape = shape_pool.setdefault(tuple(sids), len(shape_pool))
-        rows.append((mnem_index[f["mn"]], shape, f["base"]))
+        rows.append((mnem_index[f["mn"]], shape, f["base"], f.get("wrap", 0)))
     rows.sort(key=lambda r: r[0])  # stable: the forms of a mnemonic keep their order
 
     slots = sorted(slot_pool, key=slot_pool.get)
@@ -1280,10 +1443,10 @@ def emit_rust(forms, path):
     for sh in shapes:
         out.append("    &[%s],\n" % ", ".join(str(x) for x in sh))
     out.append("];\n")
-    out.append("\n/// `(mnemonic, shape, opcode)`, sorted by mnemonic.\n")
+    out.append("\n/// `(mnemonic, shape, opcode, wrap)`, sorted by mnemonic.\n")
     out.append("pub static FORMS: &[Form] = &[\n")
-    for mn, sh, base in rows:
-        out.append("    Form(%d, %d, 0x%08x),\n" % (mn, sh, base))
+    for mn, sh, base, wrap in rows:
+        out.append("    Form(%d, %d, 0x%08x, %d),\n" % (mn, sh, base, wrap))
     out.append("];\n")
     with open(path, "w") as fh:
         fh.write("".join(out))
@@ -1322,11 +1485,10 @@ pub static PREFETCHES: &[(&str, u8)] = &[
 def alias_groups():
     """The spellings in ALIASES, as groups the fitter can work on."""
     out = {}
-    lines = [l.strip() for l in ALIASES.strip().split("\n") if l.strip()]
+    lines = expand_aliases(ALIASES)
     words = assemble(lines)
     for line, w in zip(lines, words):
         if w is None:
-            print("alias not accepted by llvm-mc: %s" % line, file=sys.stderr)
             continue
         try:
             mn, atoms = parse_line(line)
@@ -1338,36 +1500,69 @@ def alias_groups():
 
 
 def prefix_job(args):
-    """Every value of the top 22 bits of a word, with the rest zero and then
-    random: an instance of every class whose opcode bits live above bit 10."""
-    lo, hi, seed = args
+    """Every value of the top `bits` bits of a word, each with a few fills of
+    the rest: an instance of every class whose opcode bits live above them."""
+    lo, hi, seed, bits = args
     rng = random.Random(seed)
-    found = collections.defaultdict(list)
-    for start in range(lo, hi, 25000):
-        # Low bits of zero make every register operand `0`, which nearly every
-        # form takes; random ones reach the forms that need something else.
-        words = [(p << 10) | fill for p in range(start, min(start + 25000, hi))
-                 for fill in (0, rng.getrandbits(10), rng.getrandbits(10))]
+    res = Reservoir(seed)
+    low = 32 - bits
+    mask = (1 << low) - 1
+    for start in range(lo, hi, 4096):
+        words = []
+        for p in range(start, min(start + 4096, hi)):
+            if bits == 22:
+                # Low bits of zero make every register operand `0`, which
+                # nearly every form takes; bits 5-9 set are the SVE `all`
+                # pattern, which `sqincw z0.s` needs; random ones reach the
+                # rest.
+                fills = (0, 0x3e0, 0x3ff, rng.getrandbits(low), rng.getrandbits(low))
+            else:
+                fills = [rng.getrandbits(low) for _ in range(64)]
+            words.extend((p << low) | (f & mask) for f in fills)
         try:
-            part = sweep(words)
+            res.add_all(sweep(words))
         except RuntimeError as e:
             print("sweep: %s" % e, file=sys.stderr)
-            continue
-        for k, v in part.items():
-            if len(found[k]) < 12:
-                found[k].extend(v[:12])
-    return {k: v[:12] for k, v in found.items()}
+    return res.found, res.seen
 
 
-def merge(into, part):
-    for k, v in part.items():
-        cur = into.setdefault(k, [])
-        if len(cur) < 12:
-            cur.extend(v[:12 - len(cur)])
+def merge(into, part, rng=random.Random(0)):
+    """Adds one job's reservoir to the whole sweep's, keeping the choice of
+    samples uniform over everything either saw."""
+    found, seen = part
+    for k, v in found.items():
+        cur = into.setdefault(k, ([], 0))
+        pool, count = cur
+        total = count + seen[k]
+        merged = pool + v
+        if len(merged) > SAMPLES:
+            # Each side's samples stand for as many words as it saw.
+            weights = [count / max(len(pool), 1)] * len(pool) + \
+                [seen[k] / max(len(v), 1)] * len(v)
+            chosen = set()
+            while len(chosen) < SAMPLES:
+                chosen.add(rng.choices(range(len(merged)), weights)[0])
+            merged = [merged[i] for i in sorted(chosen)]
+        into[k] = (merged, total)
 
 
-def covers_value(enc, v, fixed):
+def wrapped(enc, v, wrap):
+    """`v` as a signed range reads it. Both references take a number of an
+    SVE element's width as that element's bits: `mov z0.h, #0xfff0` is
+    `#-16`. A form `wrap` is set for does the same."""
+    if isinstance(v, int) and (1 << 63) <= v < (1 << 64):
+        # The backend reads a number as a 64-bit integer.
+        v -= 1 << 64
+    r = enc_range(enc)
+    if wrap and r and r[0] < 0 and isinstance(v, int) and \
+            (1 << (wrap - 1)) <= v < (1 << wrap) and v > r[1]:
+        return v - (1 << wrap)
+    return v
+
+
+def covers_value(enc, v, fixed, wrap=0):
     """True if one number's encoding holds the value `v`."""
+    v = wrapped(enc, v, wrap)
     t = enc[0]
     if t == "fixed":
         return fixed is None or v == fixed
@@ -1385,13 +1580,13 @@ def covers_value(enc, v, fixed):
     return XFORMS[t](v, enc) is not None
 
 
-def covers(slots, atoms):
+def covers(slots, atoms, wrap=0):
     """True if a fitted form encodes these operand values: they are in its
     ranges, and none is a value its transform was seen to get wrong."""
     for sl in slots:
         ai, vi = sl["slot"]
         v = atoms[ai].vals[vi]
-        if not covers_value(sl["enc"], v, sl["base"]) or v in sl.get("rejects", ()):
+        if not covers_value(sl["enc"], v, sl["base"], wrap) or v in sl.get("rejects", ()):
             return False
     return True
 
@@ -1426,11 +1621,12 @@ def fit_job(args):
     real = sorted(samples, key=size)
     queue += real
     pending = []  # (|value|, atoms) a tolerated transform got wrong
+    from_rejects = []
     earlier, out, why = [], [], []
     retried = set()
 
     def covered(atoms):
-        return any(covers(prior, atoms) for prior in earlier)
+        return any(covers(prior["slots"], atoms, prior["wrap"]) for prior in earlier)
 
     for _ in range(32):
         queue = [smp for smp in queue if not covered(smp[1])]
@@ -1440,15 +1636,20 @@ def fit_job(args):
                 break
             pending.sort(key=lambda p: p[0])
             queue.append((None, pending.pop(0)[1]))
+            from_rejects.append(queue[-1])
         anchor = queue[0]
         order = [anchor] + [smp for smp in queue[1:] + real
                             if smp[0] is not None and smp is not anchor]
         try:
             atoms, slots, base, sp = fit_form(mn, order, rng, earlier)
             lines = check_form(mn, atoms, slots, base, sp, rng, earlier=earlier)
-            if not covers(slots, anchor[1]) and not any(
-                    covers(slots, smp[1]) for smp in queue if smp[0] is not None):
-                raise Fail("the fit does not encode its own sample")
+            # A form has to encode something the disassembler printed, or a
+            # value an earlier transform was seen to get wrong. A fit from the
+            # zero or one filled in, alone, can be of values llvm-mc only takes
+            # because it truncates them: `ucvtf d0, x0, #67`.
+            explains = any(covers(slots, smp[1]) and not covered(smp[1]) for smp in real)
+            if not explains and not (anchor in from_rejects and covers(slots, anchor[1])):
+                raise Fail("the fit encodes no sample of its own")
         except Exception as e:  # noqa: BLE001 - a generator, not a library
             why.append(str(e) if isinstance(e, Fail) else "%s: %s" % (type(e).__name__, e))
             queue = queue[1:]
@@ -1459,11 +1660,13 @@ def fit_job(args):
                 retried.add(id(anchor))
                 queue.append(anchor)
             continue
+        wrap, wrap_lines = measure_wrap(mn, atoms, slots, base, sp, rng)
         out.append(("ok", {
             "mn": mn, "kinds": kinds, "slots": slots, "base": base, "sp": sp,
-            "lines": lines, "order": len(out), "atoms": atoms,
+            "lines": lines[:3] + wrap_lines[:1] + lines[3:], "order": len(out),
+            "atoms": atoms, "wrap": wrap,
         }))
-        earlier.append(slots)
+        earlier.append({"slots": slots, "base": base, "wrap": wrap})
         for sl in slots:
             ai, vi = sl["slot"]
             for v in sl["rejects"]:
@@ -1489,8 +1692,8 @@ def main():
     ap.add_argument("--no-prefix-sweep", action="store_true")
     ap.add_argument("--only", default=None, help="only mnemonics matching this regex")
     ap.add_argument("--out", default=os.path.join(ROOT, "src", "arch", "aarch64"))
-    ap.add_argument("--corpus", default=os.path.join(ROOT, "tools", "mc-diff",
-                                                     "aarch64-simd.txt"))
+    ap.add_argument("--corpus", default=os.path.join(ROOT, "tools", "mc-diff"),
+                    help="directory for the aarch64-*-words.txt corpora")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--groups", default=None,
                     help="keep the swept shapes in this file, and read them from it next time")
@@ -1502,28 +1705,58 @@ def main():
     pool = multiprocessing.Pool(args.jobs)
 
     groups = {}
+    loaded = False
     if args.groups and os.path.exists(args.groups):
+        loaded = True
         with open(args.groups, "rb") as fh:
             groups = pickle.load(fh)
         args.no_prefix_sweep, args.words = True, 0
         print("%d forms from %s" % (len(groups), args.groups))
     if not args.no_prefix_sweep:
-        span = 1 << 22
-        chunk = span // args.jobs + 1
-        jobs = [(i, min(i + chunk, span), args.seed + i) for i in range(0, span, chunk)]
-        for part in pool.imap_unordered(prefix_job, jobs):
-            merge(groups, part)
-        print("prefix sweep: %d forms" % len(groups))
+        for bits in (22, 16):
+            span = 1 << bits
+            chunk = span // (args.jobs * 4) + 1
+            jobs = [(i, min(i + chunk, span), args.seed + i, bits)
+                    for i in range(0, span, chunk)]
+            for part in pool.imap_unordered(prefix_job, jobs):
+                merge(groups, part)
+            print("sweep of the top %d bits: %d forms" % (bits, len(groups)))
     if args.words:
         per = args.words // args.jobs + 1
         for part in pool.imap_unordered(sweep_job,
                                         [(args.seed * 1000 + i, per) for i in range(args.jobs)]):
             merge(groups, part)
         print("with random words: %d forms" % len(groups))
-    merge(groups, alias_groups())
+    if not loaded:
+        # A form whose opcode bits the sweeps rarely hit is usually one bit
+        # away from one they did: `uqincw z0.s, #25` from `uqincw z0.s, #25,
+        # mul #2`. So every bit of a few words of each shape is flipped, until
+        # that finds nothing new.
+        for round_ in range(4):
+            words = []
+            for k, (samples, _) in sorted(groups.items()):
+                for w, _atoms in samples[:4]:
+                    words.extend(w ^ (1 << b) for b in range(32))
+            before = len(groups)
+            chunk = len(words) // args.jobs + 1
+            jobs = [(words[i:i + chunk], args.seed + round_) for i in range(0, len(words), chunk)]
+            for part in pool.imap_unordered(words_job, jobs):
+                merge(groups, part)
+            print("neighbours, round %d: %d forms" % (round_ + 1, len(groups)))
+            if len(groups) == before:
+                break
+        simd = {k[0] for k, (samples, _) in groups.items()
+                if {t[0] for t in k[1]} & SIMD_KINDS or any(sve_space(w) for w, _ in samples)}
+        groups = {k: v for k, v in groups.items() if k[0] in simd}
+        print("of mnemonics with a SIMD form: %d forms" % len(groups))
+        groups = {k: v[0] for k, v in groups.items()}
     if args.groups and not os.path.exists(args.groups):
         with open(args.groups, "wb") as fh:
             pickle.dump(groups, fh)
+    for k, v in alias_groups().items():
+        cur = groups.setdefault(k, [])
+        seen = {smp[0] for smp in cur}
+        cur.extend(smp for smp in v if smp[0] not in seen)
     if args.only:
         pat = re.compile(args.only)
         groups = {k: v for k, v in groups.items() if pat.search(k[0])}
@@ -1581,11 +1814,25 @@ def domain(slots):
             n *= (hi - lo) // step + 1
         elif t == "choice":
             n *= len(enc[3])
-        elif t == "logimm":
+        elif t in ("logimm", "notlogimm"):
             n *= 1 << 16
         elif t in ("fpimm", "bytemask"):
             n *= 256
     return n
+
+
+def fits_i64(f):
+    for sl in f["slots"]:
+        r = enc_range(sl["enc"])
+        nums = list(r[:2]) if r else []
+        if sl["enc"][0] == "fixed" and isinstance(sl["enc"][1], int):
+            nums.append(sl["enc"][1])
+        if sl["enc"][0] == "choice":
+            nums.extend(v for v, _ in sl["enc"][3])
+        if any(not -(1 << 63) <= v < (1 << 63) for v in nums):
+            print("dropped, a number beyond 64 bits: %s" % f["lines"][0][0].replace("\t", " "))
+            return False
+    return True
 
 
 def resolve(forms):
@@ -1594,6 +1841,7 @@ def resolve(forms):
     fitter assembled, as the backend will try them."""
     seen = {}
     out = []
+    forms = [f for f in forms if fits_i64(f)]
     for f in sorted(forms, key=lambda f: (f["mn"], str(f["kinds"]))):
         sig = (f["mn"], f["kinds"], tuple(str(sl["enc"]) for sl in f["slots"]), f["base"])
         if sig in seen:
@@ -1608,9 +1856,9 @@ def resolve(forms):
 
     def matched(fs, atoms, word, text):
         for g in fs:
-            if covers(g["slots"], atoms):
+            if covers(g["slots"], atoms, g.get("wrap", 0)):
                 vals = [atoms[sl["slot"][0]].vals[sl["slot"][1]] for sl in g["slots"]]
-                got = encode_form(g["slots"], g["base"], vals)
+                got = encode_form(g["slots"], g["base"], vals, g.get("wrap", 0))
                 if got != word:
                     print("order: %s gives %08x, llvm-mc %08x" % (text, got, word))
                     return 1
@@ -1620,7 +1868,7 @@ def resolve(forms):
 
     for key, fs in by.items():
         for f in fs:
-            if len(fs) > 1:
+            if len(fs) > 1 or f.get("wrap"):
                 for line, word in f["lines"]:
                     mn, atoms = parse_line(line)
                     wrong += matched(fs, atoms, word, line.replace("\t", " "))
@@ -1636,25 +1884,36 @@ def resolve(forms):
     return out
 
 
-def write_corpus(forms, path):
-    lines = []
+def write_corpus(forms, directory):
+    """Three lines of each form, split into the SVE forms and the rest."""
+    files = {"sve": set(), "simd": set()}
     for f in forms:
-        for l, _ in f["lines"][:3]:
-            lines.append(l.replace("\t", " ").strip())
-    lines = sorted(set(lines))
-    with open(path, "w") as fh:
-        fh.write("""\
-# AArch64 SIMD, floating-point and SVE, one form of each instruction at a
-# time.
+        # A `movprfx` must be followed by the instruction it prefixes, which
+        # a corpus of lone lines cannot give it; aarch64-programs.txt has one.
+        if f["mn"] == "movprfx":
+            continue
+        for line, _ in f["lines"][:3]:
+            line = line.replace("\t", " ").strip()
+            sve = re.search(r"\b[zp]\d+\b|\b[zp]\d+[./]", line)
+            files["sve" if sve else "simd"].add(line)
+    about = {
+        "simd": "AdvSIMD (NEON), floating point and the cryptographic extensions",
+        "sve": "SVE and SVE2",
+    }
+    for name, lines in files.items():
+        path = os.path.join(directory, "aarch64-%s-words.txt" % name)
+        with open(path, "w") as fh:
+            fh.write("""\
+# AArch64 %s: every form of every instruction, at the ends of each operand's
+# range and somewhere inside it.
 #
-# Generated by tools/aarch64-tables/gen.py, which took every line here from a
-# run of llvm-mc: each is a form of the encoding table with its operands at
-# the ends of their ranges, or somewhere random inside them. Regenerate rather
-# than edit.
-""")
-        for l in lines:
-            fh.write(l + "\n")
-    print("wrote %d corpus lines" % len(lines))
+# Generated by tools/aarch64-tables/gen.py, which took each line from a run of
+# llvm-mc while measuring the encoding table; regenerate rather than edit. One
+# instruction per line, compared a batch at a time by run.sh.
+""" % about[name])
+            for l in sorted(lines):
+                fh.write(l + "\n")
+        print("wrote %d lines to %s" % (len(lines), path))
 
 
 if __name__ == "__main__":

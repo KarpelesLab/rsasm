@@ -11,15 +11,20 @@
 //! [`crate::section::FieldEncoding::Scatter`] to weave its value through the
 //! instruction word; the scatter functions live in [`encode`].
 //!
+//! # Two encoders
+//!
+//! The general-purpose instruction set is written out family by family in
+//! [`insn`], where the interesting work is in the aliases. SIMD, floating
+//! point and SVE are thousands of forms that differ in a few opcode bits, and
+//! come from a table measured against llvm-mc; see [`table`]. A line goes to
+//! the table if only the table has its mnemonic, or if an operand is a
+//! register only a table form takes.
+//!
 //! # The `#` sigil
 //!
-//! A64 source conventionally writes immediates as `#imm`, and the operand
-//! parser accepts that. The GAS-dialect lexer, however, currently treats `#`
-//! as the start of a line comment for every architecture, so `add x0, x1, #1`
-//! reaches this backend as `add x0, x1,`. GNU as only makes `#` a comment
-//! at the start of a line on AArch64. Until the lexer learns that per
-//! architecture, write immediates bare — `add x0, x1, 1` — which both GNU as
-//! and llvm-mc accept too.
+//! A64 source conventionally writes immediates as `#imm`. `#` is a comment
+//! only in the first column (see `comments` below), so both `add x0, x1,
+//! #1` and the bare `add x0, x1, 1` that GNU as and llvm-mc also accept work.
 
 pub mod encode;
 pub mod insn;
@@ -182,11 +187,23 @@ impl Architecture for AArch64 {
         // v1.8b, v2.8b` and `add d0, d1, d2` are not, and `ldr d0, [x0]` is
         // handwritten again, since loads and stores take the scalar SIMD
         // registers themselves.
+        // The one SME instruction beyond `smstart`/`smstop`, whose `{za}` the
+        // operand grammar has no other use for.
+        if mnemonic == "zero" {
+            return insn::sme_zero(cx, req);
+        }
         if table::knows(&mnemonic)
             && (!insn::handwritten(&mnemonic)
                 || table::has_simd_operand(cx, req.operands, !insn::loads(&mnemonic)))
         {
             return table::assemble(cx, &mnemonic, req.mnemonic_span, req.operands);
+        }
+        if !insn::handwritten(&mnemonic) {
+            cx.error(
+                req.mnemonic_span,
+                format!("unknown instruction `{mnemonic}`"),
+            );
+            return None;
         }
         let cur = req.cursor();
         let ops = operand::parse_list(cx, &cur)?;

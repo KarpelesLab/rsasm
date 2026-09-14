@@ -140,6 +140,9 @@ pub enum Xf {
     FpImm,
     /// The bitmask immediate, for elements of this many bits.
     LogImm(u8),
+    /// The bitmask immediate of the complement, as `bic`, `orn` and `eon`
+    /// write theirs.
+    NotLogImm(u8),
     /// A mask of whole bytes, one bit per byte: `movi d0, #0xff00ff00…`.
     ByteMask,
 }
@@ -203,9 +206,14 @@ pub struct Slot {
     pub b: Enc,
 }
 
-/// A form: its mnemonic and operand shape, as indices, and its opcode.
+/// A form: its mnemonic and operand shape, as indices, its opcode, and the
+/// element width its signed immediates wrap at, or 0.
+///
+/// Both references read a number of an SVE element's width as the element's
+/// bits, so `mov z0.h, #0xfff0` is `mov z0.h, #-16`; the generator sets the
+/// width for each form llvm-mc was seen to do that for.
 #[derive(Copy, Clone, Debug)]
-pub struct Form(pub u16, pub u16, pub u32);
+pub struct Form(pub u16, pub u16, pub u32, pub u8);
 
 // ---- operands -----------------------------------------------------------------
 
@@ -785,12 +793,25 @@ fn transform(xf: Xf, v: Val) -> Result<u64, String> {
             fp_imm8(f).ok_or_else(|| format!("{f} is not an 8-bit floating-point immediate"))
         }
         (Xf::FpImm, Val::Int(_)) => Err("expected a floating-point immediate".into()),
+        (Xf::NotLogImm(esize), Val::Int(v)) => {
+            let bits = esize as u32;
+            if bits < 64 && (v < -(1i64 << (bits - 1)) || v >= (1i64 << bits)) {
+                return Err(format!("{v:#x} does not fit a {bits}-bit element"));
+            }
+            let mask = if bits < 64 {
+                (1u64 << bits) - 1
+            } else {
+                u64::MAX
+            };
+            transform(Xf::LogImm(esize), Val::Int((!(v as u64) & mask) as i64))
+                .map_err(|_| format!("{v:#x} is not the complement of a valid logical immediate"))
+        }
         (Xf::LogImm(esize), Val::Int(v)) => {
             let bits = esize as u32;
-            // A negative number is taken as its low `esize` bits, as both
-            // references take `and z0.b, z0.b, #-2`.
+            // A negative number that fits the element signed is taken as its
+            // low `esize` bits, as both references take `and z0.b, z0.b, #-2`.
             let value = if bits < 64 {
-                if v <= -(1i64 << bits) || v >= (1i64 << bits) {
+                if v < -(1i64 << (bits - 1)) || v >= (1i64 << bits) {
                     return Err(format!("{v:#x} does not fit a {bits}-bit element"));
                 }
                 (v as u64) & ((1u64 << bits) - 1)
@@ -821,6 +842,27 @@ fn transform(xf: Xf, v: Val) -> Result<u64, String> {
             Ok(out)
         }
         (_, Val::Float(_)) => Err("expected an integer".into()),
+    }
+}
+
+/// A number of an element's width as a signed range reads it; see [`Form`].
+fn wrapped(enc: Enc, v: Option<Val>, wrap: u8) -> Option<Val> {
+    let (min, max) = match enc {
+        Enc::Field { min, max, .. }
+        | Enc::Scatter { min, max, .. }
+        | Enc::Affine { min, max, .. } => (min, max),
+        _ => return v,
+    };
+    match v {
+        Some(Val::Int(x))
+            if wrap != 0
+                && min < 0
+                && x > max
+                && (1i64 << (wrap - 1)..1i64 << wrap).contains(&x) =>
+        {
+            Some(Val::Int(x - (1i64 << wrap)))
+        }
+        _ => v,
     }
 }
 
@@ -939,6 +981,7 @@ fn encode(form: Form, shape: &[u16], atoms: &[(Atom, Span)]) -> Result<u32, (Spa
             if matches!(enc, Enc::None) {
                 continue;
             }
+            let v = wrapped(enc, v, form.3);
             word = apply(enc, v, &values, word)
                 .map_err(|why| (*span, format!("operand {}: {why}", k + 1)))?;
             values.push(v);

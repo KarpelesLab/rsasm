@@ -5,8 +5,8 @@
 //! for cases too large for the corpus (the branch-range boundaries). The
 //! relocation types were compared against llvm-mc's and GNU as's objects.
 //!
-//! Immediates are written without `#`; see the note in
-//! `src/arch/aarch64/mod.rs` for why.
+//! Immediates in the general-purpose tests are written without `#`, which
+//! both references accept; the SIMD and SVE tests write it.
 
 #![cfg(feature = "aarch64")]
 

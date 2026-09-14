@@ -13,6 +13,7 @@ use super::reg::{self, Reg, RegClass};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
 use crate::expr::{ExprKind, ExprRef};
+use crate::lexer::{Punct, TokKind};
 use crate::section::{LinkValue, Variant};
 use crate::source::Span;
 
@@ -190,12 +191,50 @@ fn one_fixup(w: u32, e: ExprRef, k: crate::section::FixupKind, span: Span) -> Op
     Some(vec![word_fixup(w, e, k, span)])
 }
 
+/// A PC-relative target. Written as a number rather than a label, it is the
+/// offset from the instruction, not an address: `b #16` branches 16 bytes
+/// ahead wherever it is, to GNU as and llvm-mc alike. So a number goes
+/// straight into the field, range-checked as the fixup would have been.
+fn pcrel(
+    cx: &mut AsmCtx<'_>,
+    w: u32,
+    e: ExprRef,
+    k: crate::section::FixupKind,
+    span: Span,
+) -> Option<Vec<Variant>> {
+    let Some(v) = cx.constant(e).filter(|_| !names_symbol(cx, e)) else {
+        return one_fixup(w, e, k, span);
+    };
+    let crate::section::FieldEncoding::Scatter(place) = k.encoding else {
+        return one_fixup(w, e, k, span);
+    };
+    let bits = u32::from(k.value_bits);
+    let (lo, hi) = (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1);
+    if !(lo..=hi).contains(&v) {
+        cx.error(span, format!("offset {v} is out of range {lo}..={hi}"));
+        return None;
+    }
+    if v % i64::from(k.value_align) != 0 {
+        cx.error(
+            span,
+            format!("offset {v} is not a multiple of {}", k.value_align),
+        );
+        return None;
+    }
+    one(place(u64::from(w), v) as u32)
+}
+
 /// True for a mnemonic the encoders here handle, whatever else the
 /// generated table has under the same name: `add` is handwritten for the
 /// general-purpose registers and a table form for vectors. Keep in step with
 /// the dispatch in [`assemble`].
 pub fn handwritten(mnemonic: &str) -> bool {
-    mnemonic.starts_with("b.")
+    mnemonic
+        .strip_prefix("b.")
+        .is_some_and(|c| reg::cond(c).is_some())
+        || mnemonic
+            .strip_prefix('b')
+            .is_some_and(|c| c.len() == 2 && reg::cond(c).is_some())
         || matches!(
             mnemonic,
             "add"
@@ -317,6 +356,9 @@ pub fn handwritten(mnemonic: &str) -> bool {
                 | "dcps3"
                 | "mrs"
                 | "msr"
+                | "smstart"
+                | "smstop"
+                | "zero"
         )
         || loads(mnemonic)
 }
@@ -439,6 +481,7 @@ pub fn assemble(
         "svc" | "hvc" | "smc" | "brk" | "hlt" | "dcps1" | "dcps2" | "dcps3" => exception(cx, &i),
         "mrs" => mrs(cx, &i),
         "msr" => msr(cx, &i),
+        "smstart" | "smstop" => sme_mode(cx, &i),
 
         _ => {
             cx.error(
@@ -1464,13 +1507,14 @@ fn branch(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         (0x1400_0000, encode::fixup_b())
     };
-    one_fixup(base, e, kind, i.ops[0].span)
+    pcrel(cx, base, e, kind, i.ops[0].span)
 }
 
 fn branch_cond(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, cond: u8) -> Option<Vec<Variant>> {
     i.arity(cx, &[1]).then_some(())?;
     let e = i.expr(cx, 0)?;
-    one_fixup(
+    pcrel(
+        cx,
         0x5400_0000 | field(cond as u32, 0, 4),
         e,
         encode::fixup_b19(),
@@ -1487,7 +1531,8 @@ fn cbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         0x3500_0000
     };
-    one_fixup(
+    pcrel(
+        cx,
         field(rt.sf(), 31, 1) | base | field(rt.num as u32, 0, 5),
         e,
         encode::fixup_b19(),
@@ -1507,7 +1552,8 @@ fn tbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         0x3700_0000
     };
     // The bit number is split: its top bit doubles as the register-width bit.
-    one_fixup(
+    pcrel(
+        cx,
         field(bit >> 5, 31, 1) | base | field(bit & 31, 19, 5) | field(rt.num as u32, 0, 5),
         e,
         encode::fixup_b14(),
@@ -1566,6 +1612,9 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         0x1000_0000
     };
+    if i.mnemonic == "adr" {
+        return pcrel(cx, base | field(rd.num as u32, 0, 5), e, kind, target.span);
+    }
     one_fixup(base | field(rd.num as u32, 0, 5), e, kind, target.span)
 }
 
@@ -1806,7 +1855,8 @@ fn ldst_literal(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         }
     };
     let e = i.expr(cx, 1)?;
-    one_fixup(
+    pcrel(
+        cx,
         field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt.num as u32, 0, 5),
         e,
         encode::fixup_ld_lit(),
@@ -2037,6 +2087,53 @@ fn mrs(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     }
     let enc = sysreg::operand(cx, i.op(1)?)?;
     one(0xd530_0000 | enc | field(rt.num as u32, 0, 5))
+}
+
+/// `smstart`/`smstop`: the `msr svcr…` writes that enter and leave SME's
+/// streaming mode (`sm`), enable its ZA storage (`za`), or with no operand,
+/// both. `CRm` holds which in its middle bits and start or stop in its low one.
+fn sme_mode(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[0, 1]).then_some(())?;
+    let which = match i.op(0) {
+        None => 0b11,
+        Some(op) => match op
+            .word()
+            .map(|n| cx.name(n).to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("sm") => 0b01,
+            Some("za") => 0b10,
+            _ => {
+                cx.error(
+                    op.span,
+                    format!("`{}` takes `sm`, `za` or nothing", i.mnemonic),
+                );
+                return None;
+            }
+        },
+    };
+    let start = u32::from(i.mnemonic == "smstart");
+    one(0xd503_407f | field(which << 1 | start, 8, 4))
+}
+
+/// `zero {za}`, which clears SME's ZA storage. The list is the whole
+/// operand: the older per-tile spellings and SME2's `zt0` are not taken.
+pub fn sme_zero(cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
+    let toks = req.operands;
+    let za = match toks {
+        [open, name, close] if open.is_punct(Punct::LBrace) && close.is_punct(Punct::RBrace) => {
+            matches!(name.kind, TokKind::Ident(n) if cx.name(n).eq_ignore_ascii_case("za"))
+        }
+        _ => false,
+    };
+    if !za {
+        let span = toks
+            .first()
+            .map_or(req.span, |t| t.span.to(toks[toks.len() - 1].span));
+        cx.error(span, "`zero` takes `{za}`");
+        return None;
+    }
+    one(0xc008_00ff)
 }
 
 fn msr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {

@@ -163,7 +163,7 @@ def run_mc_results(lines):
 # Cases
 # ---------------------------------------------------------------------------
 
-def interesting(text):
+def interesting(text, word=None):
     """A line worth fuzzing: SIMD, floating point or SVE, and not a branch."""
     try:
         mn, atoms = a64.parse_line(text)
@@ -179,7 +179,8 @@ def interesting(text):
     # something to assemble back.
     if mn in ("ldr", "ldrsw", "prfm") and "open" not in kinds:
         return False
-    return bool(kinds & {"v", "vidx", "vidxa", "s", "z", "zidx", "p", "pm", "pz", "vlist",
+    return (word is not None and (word >> 25) & 0xf == 0b0010) or \
+        bool(kinds & {"v", "vidx", "vidxa", "s", "z", "zidx", "p", "pm", "pz", "vlist",
                          "vlistidx", "zlist", "plist", "fimm"})
 
 
@@ -260,7 +261,7 @@ def gen_cases(seed, count, only, mutate):
     while len(out) < count:
         for w, text in a64.disassemble(random_words(rng, 4096)):
             text = text.split("//")[0].strip().replace("\t", " ")
-            if not interesting(text):
+            if not interesting(text, w):
                 continue
             if pat and not pat.search(text.split()[0]):
                 continue
