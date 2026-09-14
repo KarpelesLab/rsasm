@@ -1,3 +1,13 @@
+# PowerPC corpus for GNU as, the second reference for AltiVec, VSX and the
+# POWER8, POWER9 and POWER10 additions (llvm-mc, in tools/mc-diff, is the
+# first).
+#
+# GNU as runs with -mfuture, since a few VSX instructions both references know
+# (`xvadduhm`, `lxvrl` and their relatives) are POWER11 additions GNU as 2.47
+# only enables there. The instruction lines are those of tools/mc-diff's
+# vector section, plus the forms only GNU as accepts; the powerpc64le target
+# reads this file too.
+# ---- AltiVec loads and stores
 dss 1
 dss 3
 dssall
@@ -42,6 +52,8 @@ stvx 2, 4, 5
 stvx 30, 0, 31
 stvxl 2, 4, 5
 stvxl 30, 0, 31
+
+# ---- AltiVec arithmetic and logic
 bcdadd. 2, 3, 4, 0
 bcdadd. 30, 1, 31, 1
 bcdcfn. 2, 4, 0
@@ -180,54 +192,79 @@ vclzw 2, 4
 vclzw 30, 31
 vcmpbfp 2, 3, 4
 vcmpbfp 30, 1, 31
+vcmpbfp. 30, 1, 31
 vcmpeqfp 2, 3, 4
 vcmpeqfp 30, 1, 31
+vcmpeqfp. 30, 1, 31
 vcmpequb 2, 3, 4
 vcmpequb 30, 1, 31
+vcmpequb. 30, 1, 31
 vcmpequd 2, 3, 4
 vcmpequd 30, 1, 31
+vcmpequd. 30, 1, 31
 vcmpequh 2, 3, 4
 vcmpequh 30, 1, 31
+vcmpequh. 30, 1, 31
 vcmpequq 2, 3, 4
 vcmpequq 30, 1, 31
+vcmpequq. 30, 1, 31
 vcmpequw 2, 3, 4
 vcmpequw 30, 1, 31
+vcmpequw. 30, 1, 31
 vcmpgefp 2, 3, 4
 vcmpgefp 30, 1, 31
+vcmpgefp. 30, 1, 31
 vcmpgtfp 2, 3, 4
 vcmpgtfp 30, 1, 31
+vcmpgtfp. 30, 1, 31
 vcmpgtsb 2, 3, 4
 vcmpgtsb 30, 1, 31
+vcmpgtsb. 30, 1, 31
 vcmpgtsd 2, 3, 4
 vcmpgtsd 30, 1, 31
+vcmpgtsd. 30, 1, 31
 vcmpgtsh 2, 3, 4
 vcmpgtsh 30, 1, 31
+vcmpgtsh. 30, 1, 31
 vcmpgtsq 2, 3, 4
 vcmpgtsq 30, 1, 31
+vcmpgtsq. 30, 1, 31
 vcmpgtsw 2, 3, 4
 vcmpgtsw 30, 1, 31
+vcmpgtsw. 30, 1, 31
 vcmpgtub 2, 3, 4
 vcmpgtub 30, 1, 31
+vcmpgtub. 30, 1, 31
 vcmpgtud 2, 3, 4
 vcmpgtud 30, 1, 31
+vcmpgtud. 30, 1, 31
 vcmpgtuh 2, 3, 4
 vcmpgtuh 30, 1, 31
+vcmpgtuh. 30, 1, 31
 vcmpgtuq 2, 3, 4
 vcmpgtuq 30, 1, 31
+vcmpgtuq. 30, 1, 31
 vcmpgtuw 2, 3, 4
 vcmpgtuw 30, 1, 31
+vcmpgtuw. 30, 1, 31
 vcmpneb 2, 3, 4
 vcmpneb 30, 1, 31
+vcmpneb. 30, 1, 31
 vcmpneh 2, 3, 4
 vcmpneh 30, 1, 31
+vcmpneh. 30, 1, 31
 vcmpnew 2, 3, 4
 vcmpnew 30, 1, 31
+vcmpnew. 30, 1, 31
 vcmpnezb 2, 3, 4
 vcmpnezb 30, 1, 31
+vcmpnezb. 30, 1, 31
 vcmpnezh 2, 3, 4
 vcmpnezh 30, 1, 31
+vcmpnezh. 30, 1, 31
 vcmpnezw 2, 3, 4
 vcmpnezw 30, 1, 31
+vcmpnezw. 30, 1, 31
 vcmpsq 0, 3, 4
 vcmpsq 5, 1, 31
 vcmpuq 0, 3, 4
@@ -726,12 +763,16 @@ vsrw 2, 3, 4
 vsrw 30, 1, 31
 vstribl 2, 4
 vstribl 30, 31
+vstribl. 30, 31
 vstribr 2, 4
 vstribr 30, 31
+vstribr. 30, 31
 vstrihl 2, 4
 vstrihl 30, 31
+vstrihl. 30, 31
 vstrihr 2, 4
 vstrihr 30, 31
+vstrihr. 30, 31
 vsubcuq 2, 3, 4
 vsubcuq 30, 1, 31
 vsubcuw 2, 3, 4
@@ -792,6 +833,8 @@ vupklsw 2, 4
 vupklsw 30, 31
 vxor 2, 3, 4
 vxor 30, 1, 31
+
+# ---- VSX loads, stores and moves
 lxsd 2, 8(4)
 lxsd 30, -8(0)
 lxsdx 1, 4, 5
@@ -930,6 +973,8 @@ stxvw4x 1, 4, 5
 stxvw4x 63, 0, 31
 stxvx 1, 4, 5
 stxvx 63, 0, 31
+
+# ---- VSX computation
 lxvkq 1, 1
 lxvkq 63, 31
 lxvp 2, 16(4)
@@ -1196,16 +1241,22 @@ xvadduwm 1, 2, 3
 xvadduwm 63, 40, 52
 xvcmpeqdp 1, 2, 3
 xvcmpeqdp 63, 40, 52
+xvcmpeqdp. 63, 40, 52
 xvcmpeqsp 1, 2, 3
 xvcmpeqsp 63, 40, 52
+xvcmpeqsp. 63, 40, 52
 xvcmpgedp 1, 2, 3
 xvcmpgedp 63, 40, 52
+xvcmpgedp. 63, 40, 52
 xvcmpgesp 1, 2, 3
 xvcmpgesp 63, 40, 52
+xvcmpgesp. 63, 40, 52
 xvcmpgtdp 1, 2, 3
 xvcmpgtdp 63, 40, 52
+xvcmpgtdp. 63, 40, 52
 xvcmpgtsp 1, 2, 3
 xvcmpgtsp 63, 40, 52
+xvcmpgtsp. 63, 40, 52
 xvcpsgndp 1, 2, 3
 xvcpsgndp 63, 40, 52
 xvcpsgnsp 1, 2, 3
@@ -1460,6 +1511,8 @@ xxspltw 1, 3, 1
 xxspltw 63, 52, 3
 xxswapd 1, 5
 xxswapd 63, 45
+
+# ---- POWER9 and POWER10 scalar
 addex 3, 4, 5, 1
 addex 31, 0, 31, 3
 addpcis 3, 100
@@ -1480,16 +1533,19 @@ cntlzdm 4, 3, 5
 cntlzdm 0, 31, 31
 cnttzd 4, 3
 cnttzd 0, 31
+cnttzd. 0, 31
 cnttzdm 4, 3, 5
 cnttzdm 0, 31, 31
 cnttzw 4, 3
 cnttzw 0, 31
+cnttzw. 0, 31
 copy 4, 5
 copy 0, 31
 darn 3, 1
 darn 31, 3
 extswsli 4, 3, 5
 extswsli 0, 31, 63
+extswsli. 0, 31, 63
 lnia 3
 lnia 31
 mcrxrx 0
@@ -1534,6 +1590,8 @@ setnbcr 3, 5
 setnbcr 31, 31
 subpcis 3, 100
 subpcis 31, 32767
+
+# ---- prefixed (POWER10)
 paddi 3, 4, 100, 0
 paddi 31, 0, -8589934592
 pla 3, 100(4), 0
@@ -1606,3 +1664,87 @@ xxspltidp 3, 305419896
 xxspltidp 35, -1
 xxspltiw 3, 305419896
 xxspltiw 35, -1
+
+# ---- vector register spellings
+# llvm-mc takes a register name only with its `%`, and then in any slot; rsasm
+# takes `v` names in vector slots and `vs` names in VSX slots, with or without
+# the sign, as GNU as does under -mregnames.
+vaddubm %v2, %v3, %v4
+vcmpequb. %v0, %v31, %v15
+xxlor %vs1, %vs40, %vs63
+xsadddp %vs0, %vs33, %vs2
+lxv %vs33, 16(%r3)
+stxv %vs63, -16(%r31)
+mfvsrd %r3, %vs34
+mtvsrd %vs63, %r4
+xxspltib %vs35, 255
+vspltisb %v2, -16
+lxvp %vs34, 32(%r4)
+
+# ---- field limits
+xxspltib 3, 0
+vspltisw 31, 15
+vsldoi 2, 3, 4, 15
+xxpermdi 63, 63, 63, 3
+xxsldwi 1, 2, 3, 3
+xxspltd 1, 2, 1
+xxspltw 60, 61, 3
+vextractub 2, 3, 15
+vinsertd 2, 3, 15
+lxv 3, -32768(4)
+lxv 3, 32752(4)
+stxsd 3, 32764(4)
+lxssp 3, -32768(4)
+addpcis 3, 65535
+addpcis 3, -32768
+subpcis 3, -32767
+xststdcdp 7, 63, 127
+xvtstdcsp 63, 63, 127
+xvtstdcdp 0, 1, 64
+
+# ---- prefixed instructions: the R bit, the 34-bit range and the 32-bit splits
+paddi 3, 0, 100, 1
+pld 3, 100(0), 1
+pstd 31, -100(0), 1
+plxv 63, 8(0), 1
+pli 3, 8589934591
+pli 3, -8589934592
+paddi 3, 4, 8589934591, 0
+pld 3, -8589934592(4), 0
+psubi 3, 4, -8589934591
+xxspltiw 3, 4294967295
+xxspltiw 35, -2147483648
+xxspltidp 63, 0x7ff00000
+xxsplti32dx 34, 1, 0xdeadbeef
+xxeval 63, 62, 61, 60, 255
+xxpermx 1, 2, 3, 4, 7
+xxblendvd 32, 33, 34, 35
+
+# ---- where GNU as accepts more than llvm-mc
+# Mnemonics llvm-mc does not know, and operands outside llvm-mc's ranges but
+# inside GNU as's, which rsasm takes too.
+xxmr 1, 63
+xxlnot 40, 2
+vcfpsxws 2, 3, 31
+vcuxwfp 2, 3, 0
+pnop
+pla 3, 100(4), 0
+pla 3, -100(0), 1
+psubi 3, 4, 100, 0
+xxspltib 3, -128
+xxspltib 3, -1
+mtvsrbmi 2, -1
+mtvsrbmi 2, -32768
+subpcis 3, 32768
+subpcis 3, -65535
+xxgenpcvbm 63, 31, 31
+xxgenpcvdm 0, 0, 16
+
+# ---- vector register spellings, with the sign as GNU as needs without
+# -mregnames
+vaddubm %v2, %v3, %v4
+vcmpequb. %v0, %v31, %v15
+xxlor %vs1, %vs40, %vs63
+lxv %vs33, 16(%r3)
+mfvsrd %r3, %vs34
+lxvp %vs34, 32(%r4)

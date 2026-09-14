@@ -6,7 +6,10 @@
 # 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
 # compares the code bytes. ARM and Thumb, which llvm-mc does assemble, are here
 # too, as whole objects, for what GNU as decides and llvm-mc decides
-# differently: literal pools, interworking and mapping symbols.
+# differently: literal pools, interworking and mapping symbols. So is PowerPC,
+# for its AltiVec, VSX and POWER10 instructions: llvm-mc checks them too, and
+# the two references accept different mnemonics and ranges, and only GNU as
+# writes the absolute 34-bit relocation.
 #
 #   tools/xas-diff/run.sh              # every target with a corpus
 #   tools/xas-diff/run.sh m68k rx      # just these
@@ -79,7 +82,7 @@ i8080|i8080|8bit|asl -cpu 8080|p2bin
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
-powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mpower10|elf:.text
+powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }

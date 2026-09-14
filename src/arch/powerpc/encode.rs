@@ -100,6 +100,9 @@ impl<'c, 'a> Encoder<'c, 'a> {
         for (f, group) in groups {
             self.field(f, group);
         }
+        if r.def.ops.contains(&F::Pcrel) {
+            self.check_pcrel(span);
+        }
         if self.failed {
             return None;
         }
@@ -440,6 +443,29 @@ impl<'c, 'a> Encoder<'c, 'a> {
                 let r = rot2(kind, n, b);
                 self.rotate(op, r);
             }
+        }
+    }
+
+    /// The R bit and what it applies to have to agree. R says the
+    /// displacement is from the instruction, so it leaves no room for a base
+    /// register, which both references refuse; and a PC-relative relocation
+    /// in a field the instruction reads as `rA`-relative would resolve to
+    /// nonsense, which llvm-mc refuses (GNU as does not).
+    fn check_pcrel(&mut self, span: Span) {
+        let r = (self.word >> PFX_R) & 1 == 1;
+        let ra = (self.word >> RA) & 0x1f;
+        if r && ra != 0 {
+            self.cx.error(
+                span,
+                format!("the R operand can only be 1 when the base register is 0, not r{ra}"),
+            );
+            self.failed = true;
+        } else if !r && self.fixups.iter().any(|f| f.kind.pcrel) {
+            self.cx.error(
+                span,
+                "a PC-relative reference needs the R operand, the last, to be 1",
+            );
+            self.failed = true;
         }
     }
 
