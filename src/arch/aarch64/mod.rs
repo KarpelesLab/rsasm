@@ -29,6 +29,7 @@ pub mod reloc;
 pub mod sysreg;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::section::Variant;
 
 pub const NAMES: &[&str] = &["aarch64"];
@@ -107,6 +108,42 @@ impl Architecture for AArch64 {
         } else {
             reloc::abs(size)
         }
+    }
+
+    /// llvm-mc's conventions, as for every AArch64 encoding: code and
+    /// addresses counted in bytes, where GNU as counts instructions.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: -4,
+                ra_column: 30,
+                initial: vec![cfi::Insn::DefCfa(31, 0)],
+                fde_encoding: 0x1b,
+                eh_frame_align: 8,
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Llvm, 1)
+        }
+    }
+
+    /// The AAPCS64 DWARF numbering of the names llvm-mc accepts: `x`/`w`
+    /// registers 0-30, the stack pointer and zero register both 31, and a
+    /// vector register as 64 up by whichever width names it.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        match name {
+            "sp" | "wsp" | "xzr" | "wzr" => return Some(31),
+            "fp" => return Some(29),
+            "lr" => return Some(30),
+            _ => {}
+        }
+        numbered_register(name, "x", 31)
+            .or_else(|| numbered_register(name, "w", 30))
+            .or_else(|| {
+                ["b", "h", "s", "d", "q"]
+                    .iter()
+                    .find_map(|p| numbered_register(name, p, 31))
+                    .map(|n| 64 + n)
+            })
     }
 
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {

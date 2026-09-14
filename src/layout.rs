@@ -61,6 +61,26 @@ impl Assembler {
         self.check_cc_bare_labels();
         self.pad_section_tails();
 
+        if !self.settle_layout() {
+            return false;
+        }
+        // DWARF is written from the settled layout, into sections of its own
+        // that nothing in the code refers to, so the layout of the code
+        // cannot change when it runs again to place them.
+        if self.emit_dwarf() && !self.settle_layout() {
+            return false;
+        }
+
+        self.assign_addresses();
+        self.report_misaligned_data();
+        self.apply_fixups();
+        self.materialize();
+        !self.diags.has_errors()
+    }
+
+    /// Runs layout to a fixed point. Returns false, after reporting it, if it
+    /// does not settle.
+    fn settle_layout(&mut self) -> bool {
         let mut settled = false;
         let mut history = HashMap::new();
         let limit = if self.any_arch_shrinks() {
@@ -93,12 +113,7 @@ impl Assembler {
             );
             return false;
         }
-
-        self.assign_addresses();
-        self.report_misaligned_data();
-        self.apply_fixups();
-        self.materialize();
-        !self.diags.has_errors()
+        true
     }
 
     /// Refuses data that had to be padded to reach its boundary; see
@@ -133,6 +148,7 @@ impl Assembler {
             }
             let fill = if s.flags.exec { Vec::new() } else { vec![0] };
             let align = s.align;
+            self.tail_pads.push(SectionId(si as u32));
             self.sections[si].push(Fragment::new(
                 FragKind::Align {
                     align,

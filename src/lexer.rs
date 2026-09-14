@@ -408,6 +408,8 @@ pub fn explain_bad_number(text: &str) -> String {
         .find(|c| *c != '_' && c.to_digit(radix).is_none())
     {
         Some(c) => format!("invalid digit `{c}` for base-{radix} literal `{text}`"),
+        // Every digit is valid, so the number is too big.
+        None if !digits.is_empty() => "integer literal out of range for 64 bits".into(),
         None => format!("invalid integer literal `{text}`"),
     }
 }
@@ -905,13 +907,13 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        // Not reported here either: a 128-bit checksum such as `.file`'s
+        // `md5 0x...` is a number no expression can hold, but one directive
+        // reads it from the token's text. Anywhere else the consumer reports
+        // it, through `explain_bad_number`.
         if overflow {
-            let span = self.span_from(start);
-            diags.emit(Diagnostic::error(
-                span,
-                "integer literal out of range for 64 bits",
-            ));
-            return mk(TokKind::Int(0), self);
+            let text = interner.intern(&self.src[start..self.pos]);
+            return mk(TokKind::BadNumber(text), self);
         }
         mk(TokKind::Int(value), self)
     }

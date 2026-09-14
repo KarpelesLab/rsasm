@@ -1,0 +1,38 @@
+=== one row
+	.file 1 "a.c"
+	.text
+	.loc 1 1
+	nop
+=== rows, columns and advances
+	.file 1 "a.c"
+	.text
+f:
+	.loc 1 1 0
+	nop
+	.loc 1 2 0
+	nop
+	nop
+	.loc 1 3 4
+	nop
+=== line going backwards
+	.file 1 "a.c"
+	.text
+	.loc 1 40
+	nop
+	.loc 1 2
+	nop
+	.loc 1 2000
+	nop
+=== a frame
+	.text
+	.globl f
+f:
+	.cfi_startproc
+	nop
+	.cfi_def_cfa_offset 16
+	nop
+	.cfi_offset 3, -16
+	nop
+	.cfi_restore 3
+	nop
+	.cfi_endproc

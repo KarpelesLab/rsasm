@@ -61,7 +61,12 @@ impl Assembler {
             ".pushsection" => self.dir_section(&mut cur, span, true),
             ".popsection" => {
                 match self.pop_section() {
-                    Some(id) => self.cur = id,
+                    Some(id) => {
+                        if id != self.cur {
+                            self.dwarf_section_switch();
+                        }
+                        self.cur = id
+                    }
                     None => self
                         .diags
                         .error(span, "`.popsection` without a matching `.pushsection`"),
@@ -191,13 +196,23 @@ impl Assembler {
             // ---- files and configuration ----------------------------------
             ".include" => self.dir_include(&mut cur, span),
             ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
-            // Recognised and ignored: they carry no information this assembler
-            // acts on yet, and rejecting them would break real-world input.
-            ".file" | ".ident" | ".version" | ".loc" | ".line" => {
-                cur.set_pos(cur.all().len());
+            // ---- debugging information ------------------------------------
+            ".file" => {
+                self.dir_dwarf_file(&mut cur, span);
                 true
             }
-            _ if text.starts_with(".cfi_") => {
+            ".loc" => {
+                self.dir_loc(&mut cur, span);
+                true
+            }
+            ".loc_mark_labels" => {
+                self.dir_loc_mark_labels(&mut cur, span);
+                true
+            }
+            _ if text.starts_with(".cfi_") => self.dir_cfi(&text, &mut cur, span),
+            // Recognised and ignored: they carry no information this assembler
+            // acts on yet, and rejecting them would break real-world input.
+            ".ident" | ".version" | ".line" => {
                 cur.set_pos(cur.all().len());
                 true
             }
@@ -339,6 +354,9 @@ impl Assembler {
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            if self.dwarf.line.pending {
+                self.dwarf_data();
+            }
             self.emit_value(size, e, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
@@ -424,6 +442,9 @@ impl Assembler {
             if terminate {
                 bytes.push(0);
             }
+            if self.dwarf.line.pending {
+                self.dwarf_data();
+            }
             self.emit_bytes(&bytes, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
@@ -437,6 +458,10 @@ impl Assembler {
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            // llvm-mc writes a constant as bytes, which consume a `.loc`.
+            if self.dwarf.line.pending && self.eval_ref(e).is_ok_and(|v| v.is_absolute()) {
+                self.dwarf_data();
+            }
             if !self.check_nobits(span) {
                 self.push_frag(
                     FragKind::Leb128 {
@@ -535,7 +560,12 @@ impl Assembler {
             return true;
         };
         match std::fs::read(&path) {
-            Ok(data) => self.emit_bytes(&data, span),
+            Ok(data) => {
+                if self.dwarf.line.pending {
+                    self.dwarf_data();
+                }
+                self.emit_bytes(&data, span)
+            }
             Err(e) => self
                 .diags
                 .error(span, format!("cannot read `{}`: {e}", path.display())),

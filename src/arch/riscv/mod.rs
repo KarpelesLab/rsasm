@@ -29,6 +29,7 @@ pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Syntax};
 use crate::cursor::Cursor;
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::TokKind;
 use crate::section::Variant;
 use asm::Asm;
@@ -155,6 +156,53 @@ impl Architecture for Riscv {
         } else {
             FlatModifier::LinkerOnly
         }
+    }
+
+    /// llvm-mc's conventions, as for every RISC-V encoding.
+    ///
+    /// Without linker relaxation, which rsasm does not do, llvm-mc knows
+    /// every distance and writes plain address advances. With it (`-mattr=+relax`)
+    /// it writes each one as a `R_RISCV_ADD`/`R_RISCV_SUB` pair for the linker
+    /// to fix up, as GNU as does even with `-mno-relax`.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        let wide = self.xlen == 64;
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: if wide { -8 } else { -4 },
+                ra_column: 1,
+                initial: vec![cfi::Insn::DefCfa(2, 0)],
+                fde_encoding: 0x1b,
+                eh_frame_align: if wide { 8 } else { 4 },
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Llvm, 1)
+        }
+    }
+
+    /// The psABI DWARF numbering: integer registers 0-31 and floating-point
+    /// registers 32-63, under their numbers or ABI names.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        const ABI: [&str; 32] = [
+            "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3",
+            "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11",
+            "t3", "t4", "t5", "t6",
+        ];
+        const FABI: [&str; 32] = [
+            "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "fs0", "fs1", "fa0", "fa1",
+            "fa2", "fa3", "fa4", "fa5", "fa6", "fa7", "fs2", "fs3", "fs4", "fs5", "fs6", "fs7",
+            "fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11",
+        ];
+        if name == "fp" {
+            return Some(8);
+        }
+        if let Some(i) = ABI.iter().position(|r| *r == name) {
+            return Some(i as u32);
+        }
+        if let Some(i) = FABI.iter().position(|r| *r == name) {
+            return Some(32 + i as u32);
+        }
+        numbered_register(name, "x", 31)
+            .or_else(|| numbered_register(name, "f", 31).map(|n| 32 + n))
     }
 
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {

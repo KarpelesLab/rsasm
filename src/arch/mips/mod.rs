@@ -22,6 +22,7 @@ pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
 use crate::cursor::Cursor;
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::section::Variant;
 use encode::Args;
 use operand::{Operand, OperandParser};
@@ -108,6 +109,52 @@ impl Architecture for Mips {
             reloc::pcrel(size)
         } else {
             reloc::abs(size)
+        }
+    }
+
+    /// llvm-mc's conventions, as for every MIPS encoding. Its FDE addresses
+    /// are absolute, a pointer's width, where other targets measure them from
+    /// the field.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        let wide = self.bits == 64;
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: if wide { -8 } else { -4 },
+                ra_column: 31,
+                initial: vec![cfi::Insn::DefCfaRegister(29)],
+                // DW_EH_PE_sdata8 or DW_EH_PE_sdata4.
+                fde_encoding: if wide { 0x0c } else { 0x0b },
+                eh_frame_align: if wide { 8 } else { 4 },
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Llvm, 1)
+        }
+    }
+
+    /// DWARF numbers MIPS registers by their number, so this is the `$`
+    /// syntax's own lookup: `$31`, the O32 names, and for a 64-bit target
+    /// the N64 names llvm-mc also takes (`$a4`-`$a7`, and `$t4`-`$t7` for
+    /// 12-15 as well as `$t0`-`$t3`).
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        let name = name.strip_prefix('$')?;
+        if let Some(n) = numbered_register(name, "", 31) {
+            return Some(n);
+        }
+        if self.bits == 64 {
+            if let Some(n) = numbered_register(name, "a", 7).filter(|n| *n >= 4) {
+                return Some(4 + n);
+            }
+            if let Some(n) = numbered_register(name, "t", 3) {
+                return Some(12 + n);
+            }
+        }
+        match name {
+            "kt0" => Some(26),
+            "kt1" => Some(27),
+            _ => match reg::lookup(name) {
+                Some(r) if r.is_gpr() => Some(r.num as u32),
+                _ => None,
+            },
         }
     }
 

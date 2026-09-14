@@ -23,6 +23,7 @@ pub mod diag;
 pub mod dialect;
 pub mod dialect_cc;
 pub mod directives;
+pub mod dwarf;
 pub mod expr;
 pub mod intern;
 pub mod layout;

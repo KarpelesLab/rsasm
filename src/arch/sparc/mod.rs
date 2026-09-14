@@ -20,6 +20,7 @@ pub mod synth;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
 use crate::cursor::Cursor;
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi};
 use crate::lexer::{Punct, TokKind};
 use crate::section::Variant;
 use encode::BranchSuffix;
@@ -99,6 +100,34 @@ impl Architecture for Sparc {
             reloc::pcrel(size)
         } else {
             reloc::abs(size)
+        }
+    }
+
+    /// llvm-mc's conventions, as for every SPARC encoding. A V9 frame starts
+    /// with the CFA 2047 bytes above `%sp`, the stack bias.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        DwarfTarget {
+            cfi: Some(CfiTarget {
+                data_align: if self.v9 { -8 } else { -4 },
+                ra_column: 15,
+                initial: vec![cfi::Insn::DefCfa(14, if self.v9 { 2047 } else { 0 })],
+                fde_encoding: 0x1b,
+                eh_frame_align: if self.v9 { 8 } else { 4 },
+                cie_version: 1,
+            }),
+            ..DwarfTarget::lines_only(Flavor::Llvm, 1)
+        }
+    }
+
+    /// DWARF numbers the integer registers as the encoding does, and the
+    /// floating-point ones from 32.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        let r = reg::lookup(name.strip_prefix('%')?)?;
+        match r.class {
+            reg::RegClass::Int => Some(r.num as u32),
+            reg::RegClass::Float => Some(32 + r.num as u32),
+            reg::RegClass::Asr if r.num == 0 => Some(64),
+            _ => None,
         }
     }
 

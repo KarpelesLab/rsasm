@@ -31,6 +31,8 @@ const SHT_RELA: u32 = 4;
 const SHT_REL: u32 = 9;
 const SHT_NOBITS: u32 = 8;
 const SHT_NOTE: u32 = 7;
+const SHT_MIPS_DWARF: u32 = 0x7000_001e;
+const EM_MIPS: u16 = 8;
 
 const SHF_WRITE: u64 = 0x1;
 const SHF_ALLOC: u64 = 0x2;
@@ -282,6 +284,13 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             ty: match s.kind {
                 SectionKind::Nobits => SHT_NOBITS,
                 SectionKind::Note => SHT_NOTE,
+                // MIPS gives DWARF sections a type of their own, in both GNU
+                // as and llvm-mc.
+                SectionKind::Progbits
+                    if asm.target().elf_machine() == EM_MIPS && name.starts_with(".debug_") =>
+                {
+                    SHT_MIPS_DWARF
+                }
                 SectionKind::Progbits => SHT_PROGBITS,
             },
             flags: elf_flags(&s.flags),

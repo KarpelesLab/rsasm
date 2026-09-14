@@ -41,6 +41,10 @@ pub struct Options {
     pub include_paths: Vec<PathBuf>,
     pub dialect: Dialect,
     pub syntax: Option<Syntax>,
+    /// The DWARF version asked for on the command line, which the line table
+    /// and `.debug_frame` follow unless the source asks for version 5 with
+    /// `.file 0`.
+    pub dwarf_version: Option<u8>,
 }
 
 impl Default for Options {
@@ -51,6 +55,7 @@ impl Default for Options {
             include_paths: Vec::new(),
             dialect: Dialect::Gas,
             syntax: None,
+            dwarf_version: None,
         }
     }
 }
@@ -152,6 +157,11 @@ pub struct Assembler {
     pub(crate) ccrx_defines: Vec<(String, String)>,
     /// What CC-RX `.SECTION` and `.ORG` said about each section.
     pub(crate) ccrx_sections: HashMap<SectionId, crate::dialect_cc::RxSection>,
+    /// Line table rows and call frame information, written out after layout.
+    pub dwarf: crate::dwarf::DwarfState,
+    /// The sections whose end layout rounded up to their alignment; see
+    /// `Assembler::pad_section_tails`.
+    pub(crate) tail_pads: Vec<SectionId>,
 }
 
 impl Assembler {
@@ -198,6 +208,8 @@ impl Assembler {
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),
             ccrx_sections: HashMap::new(),
+            dwarf: crate::dwarf::DwarfState::default(),
+            tail_pads: Vec::new(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -249,12 +261,16 @@ impl Assembler {
     pub(crate) fn set_section(&mut self, id: SectionId) {
         if id != self.cur {
             self.previous = Some(self.cur);
+            self.dwarf_section_switch();
         }
         self.cur = id;
     }
 
     pub(crate) fn swap_previous(&mut self) {
         if let Some(prev) = self.previous {
+            if prev != self.cur {
+                self.dwarf_section_switch();
+            }
             self.previous = Some(self.cur);
             self.cur = prev;
         }
@@ -327,6 +343,9 @@ impl Assembler {
         sym.value = SymbolValue::Label { section, frag };
         sym.def_span = span;
         self.symbols.mark_defined(id);
+        if self.dwarf.line.mark_labels {
+            self.dwarf_label_defined();
+        }
     }
 
     /// The name to show for a symbol in diagnostics.
@@ -1564,6 +1583,10 @@ impl Assembler {
         }
         if self.check_nobits(stmt.span) {
             return;
+        }
+        if self.dwarf.line.pending {
+            let pos = (self.cur, self.cur_section().next_frag_index());
+            self.dwarf_instruction(pos);
         }
         let idx = self.cur_section().emit_variants(variants, stmt.span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;

@@ -8,6 +8,7 @@ pub mod reloc;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Syntax};
 use crate::cursor::Cursor;
+use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::TokKind;
 use crate::section::Variant;
 use crate::source::Span;
@@ -106,6 +107,105 @@ impl Architecture for X86 {
             FlatModifier::PcRelative
         } else {
             FlatModifier::LinkerOnly
+        }
+    }
+
+    /// GNU as's conventions, as for every x86 encoding. The object's class
+    /// decides, not a `.code32` in a 64-bit file.
+    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+        let cfi = match self.bits {
+            64 => CfiTarget {
+                data_align: -8,
+                ra_column: 16,
+                initial: vec![cfi::Insn::DefCfa(7, 8), cfi::Insn::Offset(16, -8)],
+                fde_encoding: 0x1b,
+                eh_frame_align: 8,
+                cie_version: 1,
+            },
+            _ => CfiTarget {
+                data_align: -4,
+                ra_column: 8,
+                initial: vec![cfi::Insn::DefCfa(4, 4), cfi::Insn::Offset(8, -4)],
+                fde_encoding: 0x1b,
+                eh_frame_align: 4,
+                cie_version: 1,
+            },
+        };
+        DwarfTarget {
+            cfi: Some(cfi),
+            ..DwarfTarget::lines_only(Flavor::Gnu, 1)
+        }
+    }
+
+    /// GNU as's `dw2_regnum` table, for the names it accepts in each class:
+    /// the psABI numbering, which differs between the two.
+    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+        let name = name.strip_prefix('%').unwrap_or(name);
+        // `%st(0)` and `%st` are the same register.
+        let name = match name.replace(' ', "").as_str() {
+            "st" => "st0".to_string(),
+            n if n.starts_with("st(") && n.ends_with(')') => format!("st{}", &n[3..n.len() - 1]),
+            n => n.to_string(),
+        };
+        let name = name.as_str();
+        // `ymm` and `zmm` registers unwind as the `xmm` register they extend.
+        let vector = |max| {
+            ["xmm", "ymm", "zmm"]
+                .iter()
+                .find_map(|p| numbered_register(name, p, max))
+        };
+        if self.bits == 64 {
+            const GPR: [&str; 17] = [
+                "rax", "rdx", "rcx", "rbx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11",
+                "r12", "r13", "r14", "r15", "rip",
+            ];
+            const SEG: [&str; 6] = ["es", "cs", "ss", "ds", "fs", "gs"];
+            if let Some(i) = GPR.iter().position(|r| *r == name) {
+                return Some(i as u32);
+            }
+            if let Some(i) = SEG.iter().position(|r| *r == name) {
+                return Some(50 + i as u32);
+            }
+            if let Some(v) = vector(31) {
+                return Some(if v < 16 { 17 + v } else { 67 + v - 16 });
+            }
+            return match name {
+                "rflags" | "eflags" => Some(49),
+                "fs.base" => Some(58),
+                "gs.base" => Some(59),
+                "tr" => Some(62),
+                "ldtr" => Some(63),
+                "mxcsr" => Some(64),
+                "fcw" => Some(65),
+                "fsw" => Some(66),
+                _ => numbered_register(name, "st", 7)
+                    .map(|n| 33 + n)
+                    .or_else(|| numbered_register(name, "mm", 7).map(|n| 41 + n))
+                    .or_else(|| numbered_register(name, "k", 7).map(|n| 118 + n))
+                    .or_else(|| numbered_register(name, "bnd", 3).map(|n| 126 + n)),
+            };
+        }
+        const GPR: [&str; 10] = [
+            "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip", "eflags",
+        ];
+        const SEG: [&str; 6] = ["es", "cs", "ss", "ds", "fs", "gs"];
+        if let Some(i) = GPR.iter().position(|r| *r == name) {
+            return Some(i as u32);
+        }
+        if let Some(i) = SEG.iter().position(|r| *r == name) {
+            return Some(40 + i as u32);
+        }
+        match name {
+            "fcw" => Some(37),
+            "fsw" => Some(38),
+            "mxcsr" => Some(39),
+            "tr" => Some(48),
+            "ldtr" => Some(49),
+            _ => numbered_register(name, "st", 7)
+                .map(|n| 11 + n)
+                .or_else(|| vector(7).map(|n| 21 + n))
+                .or_else(|| numbered_register(name, "mm", 7).map(|n| 29 + n))
+                .or_else(|| numbered_register(name, "k", 7).map(|n| 93 + n)),
         }
     }
 

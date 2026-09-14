@@ -479,6 +479,24 @@ pub trait Architecture {
         false
     }
 
+    /// What this target's DWARF sections look like: whose conventions they
+    /// follow, the line table's instruction unit and the CIE's constants.
+    ///
+    /// The default is a line table in GNU as's conventions counted in bytes,
+    /// with no call frame information, which is what GNU as has for the
+    /// targets where it has none (RX, RL78, V850) and what is safe for a
+    /// target no reference writes DWARF for.
+    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+        crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)
+    }
+
+    /// The DWARF register number of a register named in a `.cfi_*`
+    /// directive, lowercased and spelled as the source wrote it, with any
+    /// prefix such as `%` or `$` still on.
+    fn dwarf_register(&self, _state: &ArchState, _name: &str) -> Option<u32> {
+        None
+    }
+
     /// Handles an architecture-specific directive such as `.code64`. Returns
     /// false if the name is not one of this backend's directives.
     fn directive(&self, _cx: &mut AsmCtx<'_>, _name: &str, _cur: &mut Cursor<'_>) -> bool {
