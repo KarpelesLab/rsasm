@@ -569,6 +569,274 @@ entry:
     },
 ];
 
+#[cfg(feature = "arm")]
+#[test]
+fn arm_gas_images_match_a_linked_reference() {
+    check("arm", ARM_GAS);
+}
+
+/// Assembled with GNU as and GNU ld.
+#[cfg(feature = "arm")]
+const ARM_GAS: &[Case] = &[
+    Case {
+        name: "literals loaded from a pool at the end of the section",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+entry:  ldr     r0, =0x12345678
+        ldr     r1, =msg
+        ldr     r2, =msg + 3
+        ldr     r3, =entry
+        ldr     r4, =0x100
+        bx      lr
+        .data
+msg:    .ascii  "hello"
+
+"#,
+        image: Some((
+            45,
+            &[(
+                0,
+                "10 00 9f e5 10 10 9f e5 10 20 9f e5 10 30 9f e5 01 4c a0 e3 1e ff 2f e1 78 56 34 12 28 80 00 00 2b 80 00 00 00 80 00 00 68 65 6c 6c 6f",
+            )],
+        )),
+    },
+    Case {
+        name: "a pool placed by ltorg, and a second one after it",
+        base: 0x8000,
+        src: r#"        .syntax unified
+entry:  ldr     r0, =table
+        b       over
+        .ltorg
+over:   ldr     r1, =table + 4
+        ldr     r2, =0xdeadbeef
+        bx      lr
+        .section .rodata
+        .byte   1
+table:  .word   1, 2, 3
+
+"#,
+        image: Some((
+            45,
+            &[(
+                0,
+                "00 00 1f e5 00 00 00 ea 21 80 00 00 04 10 9f e5 04 20 9f e5 1e ff 2f e1 25 80 00 00 ef be ad de 01 01 00 00 00 02 00 00 00 03 00 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "adr and adrl within a section",
+        base: 0x10000,
+        src: r#"        .syntax unified
+back:   adr     r0, back
+        adr     r1, fwd
+        adrl    r2, far
+        adrl    r3, back
+fwd:    nop
+        .space  0x2000
+far:    bx      lr
+
+"#,
+        image: Some((
+            8224,
+            &[
+                (
+                    0,
+                    "08 00 4f e2 0c 10 8f e2 0c 20 8f e2 20 2c 82 e2 18 30 4f e2 00 00 a0 e1 00 f0 20 e3 00 00 00 00",
+                ),
+                (0x2010, "00 00 00 00 00 00 00 00 00 00 00 00 1e ff 2f e1"),
+            ],
+        )),
+    },
+    Case {
+        name: "pools in two code sections",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+start:  ldr     r0, =other
+        bx      lr
+        .section .text.other, "ax"
+other:  ldr     r0, =0x11223344
+        ldr     r1, =start
+        bx      lr
+
+"#,
+        image: Some((
+            32,
+            &[(
+                0,
+                "00 00 1f e5 1e ff 2f e1 0c 80 00 00 04 00 9f e5 04 10 9f e5 1e ff 2f e1 44 33 22 11 00 80 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "calls between ARM and Thumb functions in two sections",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+        .global start
+        .type   start, %function
+start:  bl      tfunc
+        blx     tfunc
+        bl      afunc
+        blx     afunc
+        bl      local
+        bx      lr
+        .type   local, %function
+local:  bx      lr
+        .section .text.thumb, "ax"
+        .thumb
+        .thumb_func
+tfunc:  bl      afunc
+        blx     afunc
+        bl      tfunc2
+        blx     tfunc2
+        bl      start
+        bx      lr
+        .thumb_func
+tfunc2: bx      lr
+        .section .text.arm, "ax"
+        .arm
+        .type   afunc, %function
+afunc:  bx      lr
+
+"#,
+        image: Some((
+            56,
+            &[(
+                0,
+                "05 00 00 fa 04 00 00 fa 09 00 00 eb 08 00 00 eb 00 00 00 eb 1e ff 2f e1 1e ff 2f e1 00 f0 0a e8 00 f0 08 e8 00 f0 05 f8 00 f0 03 f8 ff f7 e8 ef 70 47 70 47 1e ff 2f e1",
+            )],
+        )),
+    },
+    Case {
+        name: "addresses of Thumb functions in data and literal pools",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+        ldr     r0, =tfunc
+        ldr     r1, =afunc
+        bx      lr
+        .type   afunc, %function
+afunc:  bx      lr
+        .thumb
+        .thumb_func
+tfunc:  bx      lr
+        .data
+        .word   tfunc, afunc, tfunc + 4
+
+"#,
+        image: Some((
+            40,
+            &[(
+                0,
+                "0c 00 9f e5 0c 10 9f e5 1e ff 2f e1 1e ff 2f e1 70 47 00 00 11 80 00 00 0c 80 00 00 11 80 00 00 0c 80 00 00 15 80 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "global Thumb functions called from the same section",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .global g
+        .thumb
+        .thumb_func
+g:      bx      lr
+        .arm
+        bl      g
+        blx     g
+        .thumb
+        blx     g
+        bl      g
+        bx      lr
+"#,
+        image: Some((
+            24,
+            &[(
+                0,
+                "70 47 00 00 fd ff ff fa fc ff ff fa ff f7 f8 ff ff f7 f6 ff 70 47 00 bf",
+            )],
+        )),
+    },
+];
+
+#[cfg(feature = "arm")]
+#[test]
+fn thumb_gas_images_match_a_linked_reference() {
+    check("thumb", THUMB_GAS);
+}
+
+/// Assembled with GNU as and GNU ld.
+#[cfg(feature = "arm")]
+const THUMB_GAS: &[Case] = &[
+    Case {
+        name: "literals loaded from a pool at the end of the section",
+        base: 0x8000,
+        src: r#"        .syntax unified
+        .text
+entry:  ldr     r0, =0x12345678
+        ldr     r1, =msg
+        ldr     r8, =msg + 3
+        ldr     r3, =0xff
+        movs    r0, r0
+        bx      lr
+        .data
+msg:    .ascii  "hello"
+
+"#,
+        image: Some((
+            33,
+            &[(
+                0,
+                "03 48 04 49 df f8 10 80 4f f0 ff 03 00 00 70 47 78 56 34 12 1c 80 00 00 1f 80 00 00 68 65 6c 6c 6f",
+            )],
+        )),
+    },
+    Case {
+        name: "a load that needs 32 bits to reach its pool",
+        base: 0x8000,
+        src: r#"        .syntax unified
+entry:  ldr     r0, =data
+        ldr     r1, =data + 4
+        .space  1020
+        .ltorg
+        bx      lr
+        .data
+        .space  3
+data:   .word   0
+
+"#,
+        image: Some((
+            1047,
+            &[
+                (0, "df f8 00 04 df f8 00 14 00 00 00 00 00 00 00 00"),
+                (0x400, "00 00 00 00 13 84 00 00 17 84 00 00 70 47 00 bf"),
+            ],
+        )),
+    },
+    Case {
+        name: "adr within a section",
+        base: 0x9002,
+        src: r#"        .syntax unified
+back:   adr     r0, back
+        adr     r1, fwd
+        adr     r2, far
+        .p2align 2, 0
+fwd:    nop
+        .space  0x800
+        .p2align 2, 0
+far:    bx      lr
+"#,
+        image: Some((
+            2068,
+            &[
+                (0, "af f2 04 00 01 a1 0f f6 08 02 00 00 00 bf 00 00"),
+                (0x810, "70 47 00 bf"),
+            ],
+        )),
+    },
+];
+
 #[cfg(feature = "riscv")]
 #[test]
 fn riscv32_images_match_a_linked_reference() {

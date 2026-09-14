@@ -18,11 +18,15 @@ pub mod reg;
 pub mod reloc;
 pub mod thumb;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Request, Syntax};
+use crate::arch::{
+    ArchState, Architecture, AsmCtx, Endian, InsnRequest, Interwork, InterworkTarget, Request,
+    Syntax,
+};
 use crate::cursor::Cursor;
 use crate::lexer::TokKind;
-use crate::section::Variant;
+use crate::section::{FixupKind, LinkValue, Variant};
 use crate::source::Span;
+use crate::symbol::SymType;
 use insn::{Mnem, Width};
 use operand::Operand;
 
@@ -62,6 +66,47 @@ pub struct Arm {
 /// The state's `bits` value that means Thumb.
 const THUMB_BITS: u8 = 16;
 
+/// Label flag: defined in Thumb code.
+const LABEL_THUMB: u8 = 1;
+/// Label flag: named by `.thumb_func`.
+const LABEL_THUMB_FUNC: u8 = 2;
+
+/// `ArchState::private` bit: a `.thumb_func` is waiting for its label.
+const PENDING_THUMB_FUNC: u64 = 1;
+
+/// Whether a label is a Thumb function, the way GNU as's `THUMB_IS_FUNC`
+/// decides it for EABI objects: named by `.thumb_func`, or a function by
+/// `.type` and defined in Thumb code.
+pub fn thumb_is_func(flags: u8, ty: SymType) -> bool {
+    flags & LABEL_THUMB_FUNC != 0 || (flags & LABEL_THUMB != 0 && ty == SymType::Func)
+}
+
+/// Whether a label is an ARM function: a function by `.type`, defined in ARM
+/// code.
+pub fn arm_is_func(flags: u8, ty: SymType) -> bool {
+    flags & LABEL_THUMB == 0 && ty == SymType::Func
+}
+
+// The interwork classes of branch fixups; see `Arm::interwork`.
+/// ARM `bl label`.
+pub const IW_ARM_BL: u8 = 1;
+/// ARM `blx label`.
+pub const IW_ARM_BLX: u8 = 2;
+/// ARM `b`, `b<cond>` and `bl<cond>`.
+pub const IW_ARM_JUMP: u8 = 3;
+/// Thumb `bl label`.
+pub const IW_THUMB_BL: u8 = 4;
+/// Thumb `blx label`.
+pub const IW_THUMB_BLX: u8 = 5;
+/// Thumb 32-bit `b.w` and `b<cond>.w`.
+pub const IW_THUMB_JUMP: u8 = 6;
+/// Thumb 16-bit `b` and `b<cond>`, which have no relocation.
+pub const IW_THUMB_JUMP16: u8 = 7;
+/// The 16-bit form of a Thumb `adr` layout may widen.
+pub const IW_THUMB_ADR16: u8 = 8;
+/// The 32-bit form of a Thumb `adr` layout chose between the two.
+pub const IW_THUMB_ADR: u8 = 9;
+
 impl Architecture for Arm {
     fn name(&self) -> &'static str {
         if self.thumb { "thumb" } else { "arm" }
@@ -86,6 +131,7 @@ impl Architecture for Arm {
             features: 0,
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 
@@ -162,6 +208,129 @@ impl Architecture for Arm {
         })
     }
 
+    /// GNU as's `arm_frob_label`: a label remembers whether it was defined in
+    /// Thumb code, and the first after `.thumb_func` in a code section, other
+    /// than a `.L` local, is a Thumb function.
+    fn label_flags(&self, state: &mut ArchState, name: &str, in_code: bool) -> u8 {
+        let mut flags = 0;
+        if state.bits == THUMB_BITS {
+            flags |= LABEL_THUMB;
+        }
+        if state.private & PENDING_THUMB_FUNC != 0 && !name.starts_with(".L") && in_code {
+            flags |= LABEL_THUMB_FUNC;
+            state.private &= !PENDING_THUMB_FUNC;
+        }
+        flags
+    }
+
+    /// A Thumb function is `STT_FUNC`, and its address has the low bit set so
+    /// that a call through it lands in Thumb state.
+    /// Only a label defined in Thumb code, though: GNU as marks nothing else,
+    /// even a label `.thumb_func` names in ARM code.
+    fn elf_symbol(&self, flags: u8, ty: SymType, defined: bool, value: u64) -> (SymType, u64) {
+        if thumb_is_func(flags, ty) && flags & LABEL_THUMB != 0 {
+            (SymType::Func, if defined { value | 1 } else { value })
+        } else {
+            (ty, value)
+        }
+    }
+
+    /// GNU as's `arm_fix_adjustable`: a relocation against a function names
+    /// it, so the linker knows which instruction set it is in.
+    fn keeps_reloc_symbol(&self, flags: u8, ty: SymType) -> bool {
+        ty == SymType::Func || thumb_is_func(flags, ty)
+    }
+
+    /// A linker sets the low bit of a Thumb function's address in data.
+    fn link_bias(&self, reloc: u32, flags: u8, ty: SymType) -> i64 {
+        i64::from((reloc == reloc::ABS32 || reloc == reloc::REL32) && thumb_is_func(flags, ty))
+    }
+
+    /// The branches between ARM and Thumb code, as GNU as assembles them and,
+    /// for the references it leaves to a linker, as GNU ld links them.
+    ///
+    /// GNU as resolves a branch to a label in its own section that nothing
+    /// outside the object can replace, and turns a call into the other
+    /// instruction set into `blx`, or a `blx` that stays in its set into a
+    /// call; a jump into the other set it leaves to the linker, which builds
+    /// a veneer. A branch to a global symbol is always relocated. GNU ld then
+    /// makes the same choice of `bl` or `blx` for the calls it resolves.
+    fn interwork(&self, class: u8, t: &InterworkTarget) -> Interwork {
+        let thumb = thumb_is_func(t.flags, t.ty);
+        let arm = arm_is_func(t.flags, t.ty);
+        // What the assembler resolves itself.
+        let local = t.same_section && !t.global;
+        let arm_blx = Interwork::Becomes {
+            patch: encode::to_blx,
+            kind: encode::blx_kind(),
+        };
+        let arm_bl = Interwork::Becomes {
+            patch: encode::to_bl,
+            kind: encode::bl_kind(),
+        };
+        let thumb_blx = Interwork::Becomes {
+            patch: thumb::to_blx,
+            kind: thumb::blx_kind(),
+        };
+        let thumb_bl = Interwork::Becomes {
+            patch: thumb::to_bl,
+            kind: if t.relocatable || local {
+                thumb::blx_as_bl_kind()
+            } else {
+                thumb::bl_kind()
+            },
+        };
+        // GNU as sets the low bit of a Thumb function's address in an `adr`
+        // it relaxed once every symbol is known, which also makes it 32 bits.
+        match class {
+            IW_THUMB_ADR16 if thumb => return Interwork::Relocate,
+            IW_THUMB_ADR if thumb => {
+                return Interwork::Becomes {
+                    patch: |w| w,
+                    kind: FixupKind {
+                        link: LinkValue::Split(|v| v | 1),
+                        ..thumb::adr32_kind()
+                    },
+                };
+            }
+            IW_THUMB_ADR16 | IW_THUMB_ADR => return Interwork::AsWritten,
+            _ => {}
+        }
+        // A 16-bit branch has no relocation, so where the target is not
+        // certain to stay put, GNU as takes the 32-bit form.
+        if class == IW_THUMB_JUMP16 {
+            return if arm || t.preemptible {
+                Interwork::Relocate
+            } else {
+                Interwork::AsWritten
+            };
+        }
+        if t.relocatable || local {
+            return match class {
+                IW_ARM_BL if local && thumb => arm_blx,
+                IW_ARM_BLX if local && arm => arm_bl,
+                IW_THUMB_BL if local && arm => thumb_blx,
+                IW_THUMB_BLX if local && thumb => thumb_bl,
+                IW_ARM_JUMP if thumb => Interwork::Relocate,
+                IW_THUMB_JUMP if arm => Interwork::Relocate,
+                _ if t.global => Interwork::Relocate,
+                _ => Interwork::AsWritten,
+            };
+        }
+        // What GNU ld does with the relocation.
+        match class {
+            IW_ARM_BL if thumb => arm_blx,
+            // A `blx` against a label reaches the linker as its section
+            // symbol, which it takes to be ARM code.
+            IW_ARM_BLX if !thumb && (arm || !t.global) => arm_bl,
+            IW_THUMB_BL if arm => thumb_blx,
+            IW_THUMB_BLX if thumb => thumb_bl,
+            IW_ARM_JUMP if thumb => Interwork::LinkerOnly("an ARM-to-Thumb veneer"),
+            IW_THUMB_JUMP if arm => Interwork::LinkerOnly("a Thumb-to-ARM veneer"),
+            _ => Interwork::AsWritten,
+        }
+    }
+
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let text = cx.name(req.mnemonic).to_ascii_lowercase();
         let Some(r) = insn::resolve(&text) else {
@@ -232,10 +401,15 @@ impl Architecture for Arm {
                 cx.requests.push(Request::FlushLiterals);
                 true
             }
-            // Unified syntax is the only syntax this backend implements, and
-            // `.thumb_func` only matters to the ELF symbol table, which the
-            // core owns.
-            ".syntax" | ".thumb_func" | ".fpu" | ".eabi_attribute" | ".arch_extension" => {
+            // The label after `.thumb_func` is a Thumb function; see
+            // `label_flags`. The directive also switches to Thumb.
+            ".thumb_func" => {
+                set_mode(cx, true);
+                cx.state.private |= PENDING_THUMB_FUNC;
+                true
+            }
+            // Unified syntax is the only syntax this backend implements.
+            ".syntax" | ".fpu" | ".eabi_attribute" | ".arch_extension" => {
                 cur.set_pos(cur.all().len());
                 true
             }

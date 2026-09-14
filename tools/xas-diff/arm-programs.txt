@@ -181,3 +181,136 @@ far:    adrl    r3, back
         adr     r0, other
         .data
 other:  .word   0
+=== calls between ARM and Thumb functions
+        .syntax unified
+        .arm
+        .global armf
+        .type   armf, %function
+armf:   bl      thumbf
+        blx     thumbf
+        bl      armf2
+        blx     armf2
+        bl      ext
+        blx     ext
+        b       thumbf
+        bx      lr
+armf2:  bx      lr
+        .thumb
+        .thumb_func
+thumbf: bl      armf
+        blx     armf
+        bl      thumbf2
+        blx     thumbf2
+        bl      ext
+        blx     ext
+        b.w     armf
+        bx      lr
+        .type   thumbf2, %function
+thumbf2:
+        bx      lr
+plain:  bx      lr
+        .data
+        .word   thumbf, armf, thumbf2, plain
+=== conditional branches and calls to a Thumb function
+        .syntax unified
+        bleq    tf
+        beq     tf
+        b       tf
+        bl      tf
+        bx      lr
+        .thumb
+        .type   tf, %function
+tf:     bx      lr
+=== a local ARM function called from Thumb in the same section
+        .syntax unified
+        .type   af, %function
+af:     bx      lr
+        .thumb
+tstart: bl      af
+        blx     af
+        b.w     af
+        beq.w   af
+        b       af
+        bne     af
+        bx      lr
+=== branches to global and weak symbols in the same section
+        .syntax unified
+        .global g
+        .weak   w
+        .global h
+        .hidden h
+g:      b       g
+w:      bl      w
+h:      b       h
+        blx     g
+        .thumb
+        .global tg
+tg:     b       tg
+        bl      tg
+        beq     tg
+        .global th
+        .hidden th
+th:     b       th
+        bx      lr
+=== thumb_func names the next label that is not a local one
+        .syntax unified
+        .thumb_func
+.Lskip: nop
+real:   bx      lr
+        .thumb_func
+        .arm
+armcode:
+        bx      lr
+        .thumb
+        .data
+        .thumb_func
+datalabel:
+        .word   0
+        .text
+later:  bx      lr
+        .word   real, later, datalabel
+=== the type may come before the label or after it
+        .syntax unified
+        .thumb
+        .type   before, %function
+before: bx      lr
+after:  bx      lr
+        .type   after, %function
+        .global before, after
+        .arm
+        bl      before
+        bl      after
+        .word   before, after
+=== addresses of Thumb functions
+        .syntax unified
+        .thumb
+        .thumb_func
+tf:     bx      lr
+        .arm
+        adr     r0, tf
+        adr     r1, later
+        ldr     r2, =tf
+        ldr     r3, =later
+        .thumb
+        adr     r4, tf
+        .p2align 2, 0
+        .thumb_func
+later:  bx      lr
+=== calls into another section
+        .syntax unified
+        bl      other
+        blx     other
+        bl      tother
+        blx     tother
+        .thumb
+        bl      other
+        blx     other
+        bl      tother
+        blx     tother
+        .section .text.b, "ax"
+        .arm
+        .type   other, %function
+other:  bx      lr
+        .thumb
+        .thumb_func
+tother: bx      lr

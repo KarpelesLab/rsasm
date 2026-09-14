@@ -12,7 +12,7 @@ use super::reg::{self, Reg};
 use super::{Insn, reloc};
 use crate::arch::{AsmCtx, Literal};
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
 /// `nop` in A32: `mov r0, r0` would do, but the architectural hint is this.
@@ -744,6 +744,8 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         cx.error(ins.ops[1].span, "expected a label");
         return None;
     };
+    // GNU as sets the low bit for a Thumb function only when assembling for
+    // interworking (`-mthumb-interwork`), which rsasm has no option for.
     let long = ins.mnem == Mnem::Adrl;
     let (size, reaches, what): (u8, fn(i64) -> bool, _) = if long {
         (
@@ -803,11 +805,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 cx.error(op.span, "expected a label or register");
                 return None;
             };
-            let kind = FixupKind::pcrel(4, 8)
-                .with_field(26, 2)
-                .with_reloc(reloc::CALL)
-                .scatter(scatter_blx);
-            Some(branch_variant(0xfa00_0000, e, kind, ins.span))
+            Some(branch_variant(0xfa00_0000, e, blx_kind(), ins.span))
         }
         _ => {
             let Some(e) = op.imm() else {
@@ -815,17 +813,78 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 return None;
             };
             let link = ins.mnem == Mnem::Bl;
-            let reloc = if link { reloc::CALL } else { reloc::JUMP24 };
-            // The 24-bit field counts words, and the PC an instruction reads
-            // is two instructions ahead of itself: hence the +8 adjustment.
-            let kind = FixupKind::pcrel(4, 8)
-                .with_field(26, 4)
-                .with_reloc(reloc)
-                .scatter(scatter_branch);
+            // Only an unconditional `bl` is a call to the linker, which may
+            // make it a `blx`; a conditional one cannot change state, and is
+            // relocated as a jump.
+            let call = link && ins.cond == AL;
+            let kind = if call { bl_kind() } else { jump_kind() };
             let w = word(ins.cond, if link { 0x0b00_0000 } else { 0x0a00_0000 });
             Some(branch_variant(w, e, kind, ins.span))
         }
     }
+}
+
+/// `bl label`. The 24-bit field counts words, and the PC an instruction
+/// reads is two instructions ahead of itself: hence the +8 adjustment.
+pub fn bl_kind() -> FixupKind {
+    FixupKind::pcrel(4, 8)
+        .with_field(26, 4)
+        .with_reloc(reloc::CALL)
+        .link(LinkValue::Interwork(super::IW_ARM_BL))
+        .scatter(scatter_branch)
+}
+
+/// `blx label`, which swaps to Thumb state, so its target is a halfword
+/// boundary.
+pub fn blx_kind() -> FixupKind {
+    FixupKind::pcrel(4, 8)
+        .with_field(26, 2)
+        .with_reloc(reloc::CALL)
+        .link(LinkValue::Interwork(super::IW_ARM_BLX))
+        .scatter(scatter_blx)
+}
+
+/// `b label`, `b<cond> label` and `bl<cond> label`.
+fn jump_kind() -> FixupKind {
+    FixupKind::pcrel(4, 8)
+        .with_field(26, 4)
+        .with_reloc(reloc::JUMP24)
+        .link(LinkValue::Interwork(super::IW_ARM_JUMP))
+        .scatter(scatter_branch)
+}
+
+/// `bl` rewritten as `blx`, for a call into Thumb.
+pub fn to_blx(w: u64) -> u64 {
+    (w & 0x00ff_ffff) | 0xfa00_0000
+}
+
+/// `blx` rewritten as `bl`, for a call that stays in ARM.
+pub fn to_bl(w: u64) -> u64 {
+    (w & 0x00ff_ffff) | 0xeb00_0000
+}
+
+/// Thumb `adr` of a Thumb function sets the address's low bit, as GNU as
+/// does where it already knows the label is one when it reads the `adr`.
+pub fn thumb_function_address(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
+    let v = crate::expr::SymbolEnv::new(cx.exprs, cx.symbols).value(e);
+    let Some(crate::expr::Value {
+        plus: Some(p),
+        minus: None,
+        ..
+    }) = v
+    else {
+        return e;
+    };
+    let sym = cx.symbols.get(p);
+    if !sym.is_defined() || !super::thumb_is_func(sym.target_flags, sym.ty) {
+        return e;
+    }
+    let span = cx.exprs.span(e);
+    let one = cx.exprs.int(1, span);
+    cx.exprs.alloc(
+        crate::expr::ExprKind::Binary(crate::expr::BinOp::Add, e, one),
+        span,
+    )
 }
 
 // ---- multiply --------------------------------------------------------------

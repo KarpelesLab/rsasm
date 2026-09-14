@@ -83,6 +83,7 @@ impl Architecture for M68k {
             features: 0,
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 

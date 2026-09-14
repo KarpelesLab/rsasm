@@ -92,6 +92,7 @@ impl Architecture for SuperH {
             features: u64::from(self.cpus),
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 

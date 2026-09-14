@@ -213,3 +213,164 @@ fn data_before_code_is_marked_from_the_start() {
         text(&[(0, "$d"), (1, "$d"), (2, "$a")])
     );
 }
+
+// ---- interworking ----------------------------------------------------------------
+
+/// The ELF symbol table of an object, as `(name, value, st_info)`, without
+/// the null, section and mapping symbols.
+fn symbols(asm: &rsasm::assembler::Assembler) -> Vec<(String, u32, u8)> {
+    let b = rsasm::output::elf::build(asm).expect("ELF output");
+    let u16at = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]) as usize;
+    let u32at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
+    let (shoff, shnum) = (u32at(0x20), u16at(0x30));
+    let header = |i: usize| shoff + i * 40;
+    let symtab = (0..shnum).find(|&i| u32at(header(i) + 4) == 2).unwrap();
+    let strtab = u32at(header(u32at(header(symtab) + 24)) + 16);
+    let (off, size) = (u32at(header(symtab) + 16), u32at(header(symtab) + 20));
+    (16..size)
+        .step_by(16)
+        .filter_map(|e| {
+            let name_at = strtab + u32at(off + e);
+            let end = b[name_at..].iter().position(|&c| c == 0).unwrap() + name_at;
+            let name = String::from_utf8_lossy(&b[name_at..end]).into_owned();
+            let info = b[off + e + 12];
+            (!name.is_empty() && !name.starts_with('$'))
+                .then(|| (name, u32at(off + e + 4) as u32, info))
+        })
+        .collect()
+}
+
+const CALLS: &str = "        .arm
+        .global armf
+        .type   armf, %function
+armf:   bl      thumbf
+        blx     thumbf
+        bl      armf2
+        blx     armf2
+        bl      ext
+        blx     ext
+        b       thumbf
+        bx      lr
+armf2:  bx      lr
+        .thumb
+        .thumb_func
+thumbf: bl      armf
+        blx     armf
+        bl      thumbf2
+        blx     thumbf2
+        bl      ext
+        blx     ext
+        b.w     armf
+        bx      lr
+        .type   thumbf2, %function
+thumbf2:
+        bx      lr
+plain:  bx      lr
+        .data
+        .word   thumbf, armf, thumbf2, plain
+";
+
+/// A call into the other instruction set becomes `blx`, and a `blx` that
+/// stays in its set a call, where GNU as resolves the branch; a jump into
+/// the other set, and anything global, is left to the linker.
+#[test]
+fn calls_between_arm_and_thumb() {
+    assert_eq!(
+        hex(&text_for("arm", CALLS)),
+        "07 00 00 fa 06 00 00 fa 04 00 00 eb 03 00 00 fa fe ff ff eb fe ff ff fa \
+         fe ff ff ea 1e ff 2f e1 1e ff 2f e1 ff f7 fe ff ff f7 fe ef 00 f0 09 f8 \
+         00 f0 07 f8 ff f7 fe ff ff f7 fe ef ff f7 fe bf 70 47 70 47 70 47 00 bf"
+    );
+    let asm = assemble_for("arm", CALLS);
+    let relocs: Vec<(u64, u32, String)> = asm
+        .relocs
+        .iter()
+        .map(|r| {
+            let name = r.symbol.map(|s| asm.display_name(s)).unwrap_or_default();
+            (r.offset, r.kind, name)
+        })
+        .collect();
+    let want: Vec<(u64, u32, String)> = [
+        (0x10, 28, "ext"),
+        (0x14, 28, "ext"),
+        // A jump into Thumb needs a veneer, so it names the function.
+        (0x18, 29, "thumbf"),
+        (0x24, 10, "armf"),
+        (0x28, 10, "armf"),
+        (0x34, 10, "ext"),
+        (0x38, 10, "ext"),
+        (0x3c, 30, "armf"),
+        // Data naming a function names the function, not its section.
+        (0, 2, "thumbf"),
+        (4, 2, "armf"),
+        (8, 2, "thumbf2"),
+        (0xc, 2, ".text"),
+    ]
+    .iter()
+    .map(|&(o, k, n)| (o, k, n.to_string()))
+    .collect();
+    assert_eq!(relocs, want);
+    // A Thumb function's address has its low bit set and its type is
+    // `STT_FUNC`, whether `.thumb_func` or `.type` made it one.
+    let syms = symbols(&asm);
+    assert!(syms.contains(&("thumbf".into(), 0x25, 0x02)), "{syms:?}");
+    assert!(syms.contains(&("thumbf2".into(), 0x43, 0x02)), "{syms:?}");
+    assert!(syms.contains(&("armf".into(), 0, 0x12)), "{syms:?}");
+    assert!(syms.contains(&("plain".into(), 0x44, 0x00)), "{syms:?}");
+}
+
+/// Only an unconditional `bl` is a call; a conditional one is a jump, which
+/// into Thumb is the linker's to make reach.
+#[test]
+fn conditional_branches_into_thumb_are_relocated() {
+    let asm = assemble_for(
+        "arm",
+        "bleq tf\nbeq tf\nb tf\nbl tf\nbx lr\n.thumb\n.type tf, %function\ntf: bx lr\n",
+    );
+    assert_eq!(
+        hex(&asm.section_bytes(rsasm::section::SectionId(0))[..16]),
+        "fe ff ff 0b fe ff ff 0a fe ff ff ea 00 00 00 fa"
+    );
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, [29, 29, 29]);
+}
+
+/// A 16-bit branch has no relocation, so one to an ARM function or to a
+/// global symbol is 32 bits.
+#[test]
+fn thumb_branches_that_the_linker_must_resolve_are_32_bits() {
+    let asm = assemble_for(
+        "thumb",
+        "b armf\nbeq armf\nb near\nnear: bx lr\n.arm\n.type armf, %function\narmf: bx lr\n",
+    );
+    assert_eq!(
+        hex(&asm.section_bytes(rsasm::section::SectionId(0))[..12]),
+        "ff f7 fe bf 3f f4 fe af ff e7 70 47"
+    );
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, [30, 51]);
+}
+
+/// A flat binary makes the choice of `bl` or `blx` a linker would (see the
+/// `arm-gas` cases in `tests/flat.rs`), but a jump into the other instruction
+/// set takes a veneer only a linker builds.
+#[test]
+fn a_flat_binary_cannot_jump_into_thumb() {
+    let src = "b tfunc\n.section .text.thumb, \"ax\"\n.thumb\n.thumb_func\ntfunc: bx lr\n";
+    let asm = assemble_flat_for("arm", src, 0x8000);
+    let e = asm.diags.render(&asm.sm, false);
+    assert!(e.contains("ARM-to-Thumb veneer"), "{e}");
+}
+
+/// Thumb `adr` of a Thumb function sets the low bit, which takes the 32-bit
+/// form, whether the function is defined before the `adr` or after it.
+#[test]
+fn thumb_adr_of_a_thumb_function() {
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            ".thumb_func\nf: bx lr\nadr r0, f\nadr r1, g\n.p2align 2, 0\n.thumb_func\ng: bx lr\n"
+        )),
+        "70 47 af f2 03 00 0f f2 05 01 00 00 70 47 00 bf"
+    );
+}

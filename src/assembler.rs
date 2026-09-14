@@ -330,9 +330,13 @@ impl Assembler {
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
         let section = self.cur;
+        let in_code = self.section(section).flags.exec;
+        let name = self.interner.get(self.symbols.get(id).name);
+        let flags = self.arch.label_flags(&mut self.arch_state, name, in_code);
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Label { section, frag };
         sym.def_span = span;
+        sym.target_flags = flags;
         self.symbols.mark_defined(id);
     }
 

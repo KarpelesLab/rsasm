@@ -594,6 +594,15 @@ fn collect_symbols(
         if !sym.is_defined() && !sym.used {
             continue;
         }
+        // A `.L` label is local to the assembly, by the ELF convention GNU as
+        // and llvm-mc both follow, unless a relocation has to name it.
+        if raw.starts_with(".L")
+            && sym.binding == Binding::Local
+            && sym.is_defined()
+            && !named.contains(&id)
+        {
+            continue;
+        }
 
         let (shndx, value) = match &sym.value {
             SymbolValue::Label { section, .. } => {
@@ -623,7 +632,12 @@ fn collect_symbols(
             Binding::Global => STB_GLOBAL,
             Binding::Weak => STB_WEAK,
         };
-        let ty = match sym.ty {
+        // A Thumb function is marked by its type and low bit; the target
+        // decides that from what it recorded on the label.
+        let (sym_ty, value) =
+            asm.target()
+                .elf_symbol(sym.target_flags, sym.ty, sym.is_defined(), value);
+        let ty = match sym_ty {
             SymType::NoType => STT_NOTYPE,
             SymType::Object => STT_OBJECT,
             SymType::Func => STT_FUNC,

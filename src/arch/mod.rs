@@ -198,6 +198,46 @@ pub struct ArchState {
     /// options it was assembled with: GNU as for SuperH derives `e_flags` from
     /// the least capable CPU that has every instruction in the file.
     pub used: u64,
+    /// What one statement leaves for the next in the backend's own terms:
+    /// ARM's open `it` block, and a `.thumb_func` waiting for its label.
+    pub private: u64,
+}
+
+/// What a PC-relative reference's target is, for
+/// [`Architecture::interwork`].
+#[derive(Copy, Clone, Debug)]
+pub struct InterworkTarget {
+    /// The bits [`Architecture::label_flags`] gave the target's label.
+    pub flags: u8,
+    pub ty: crate::symbol::SymType,
+    /// Defined in the section the reference is in.
+    pub same_section: bool,
+    /// Global or weak, or not defined here at all: another definition may
+    /// take its place at link time.
+    pub global: bool,
+    /// Global with default visibility, weak, or undefined: another object's
+    /// definition can take its place even within one link.
+    pub preemptible: bool,
+    /// Whether the output is an object, with a linker still to come.
+    pub relocatable: bool,
+}
+
+/// What a branch becomes once its target is known; see
+/// [`Architecture::interwork`].
+#[derive(Copy, Clone, Debug)]
+pub enum Interwork {
+    /// Resolved, or relocated, as written.
+    AsWritten,
+    /// Left to the linker, however near the target is.
+    Relocate,
+    /// Something only a linker builds, described for the diagnostic.
+    LinkerOnly(&'static str),
+    /// Another instruction: the word, read in the target's byte order, put
+    /// through `patch`, and the field written as `kind` describes.
+    Becomes {
+        patch: fn(u64) -> u64,
+        kind: crate::section::FixupKind,
+    },
 }
 
 /// One instruction to assemble, as the generic parser saw it.
@@ -546,6 +586,49 @@ pub trait Architecture {
     /// [`Architecture::code_mapping`].
     fn data_mapping(&self) -> &'static str {
         "$d"
+    }
+
+    /// Bits to record on a label as it is defined, in the backend's own
+    /// terms, from the state it is defined in: ARM marks a label in Thumb
+    /// code, and the one a `.thumb_func` names. `name` is the label's, and
+    /// `in_code` whether its section is executable.
+    fn label_flags(&self, _state: &mut ArchState, _name: &str, _in_code: bool) -> u8 {
+        0
+    }
+
+    /// The type and value an ELF symbol table gives a symbol with these
+    /// label flags: an ARM Thumb function is `STT_FUNC` with its low bit set.
+    fn elf_symbol(
+        &self,
+        _flags: u8,
+        ty: crate::symbol::SymType,
+        _defined: bool,
+        value: u64,
+    ) -> (crate::symbol::SymType, u64) {
+        (ty, value)
+    }
+
+    /// Whether a relocation against this local label names the label rather
+    /// than its section: an ARM linker needs to see a function symbol, to
+    /// know which instruction set it is in.
+    fn keeps_reloc_symbol(&self, _flags: u8, _ty: crate::symbol::SymType) -> bool {
+        false
+    }
+
+    /// What an ARM linker adds to a symbol's value in a field of relocation
+    /// type `reloc`, which a flat binary has to add itself: the low bit of a
+    /// Thumb function's address.
+    fn link_bias(&self, _reloc: u32, _flags: u8, _ty: crate::symbol::SymType) -> i64 {
+        0
+    }
+
+    /// For a fixup whose [`LinkValue`](crate::section::LinkValue) is
+    /// `Interwork(class)`, what the instruction becomes given its target:
+    /// an ARM `bl` to a Thumb function is a `blx`, and a branch to a function
+    /// in the other instruction set, which only a linker can make reach,
+    /// keeps its relocation. `class` is the backend's own.
+    fn interwork(&self, _class: u8, _target: &InterworkTarget) -> Interwork {
+        Interwork::AsWritten
     }
 
     /// Padding for `.align` in an executable section: real no-ops where the

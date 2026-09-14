@@ -89,6 +89,7 @@ impl Architecture for V850 {
             features: if self.rh850 { FEATURE_RH850 } else { 0 },
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 

@@ -49,3 +49,60 @@ start:  ldr     r0, =other
 other:  ldr     r0, =0x11223344
         ldr     r1, =start
         bx      lr
+
+=== calls between ARM and Thumb functions in two sections
+        .syntax unified
+        .text
+        .global start
+        .type   start, %function
+start:  bl      tfunc
+        blx     tfunc
+        bl      afunc
+        blx     afunc
+        bl      local
+        bx      lr
+        .type   local, %function
+local:  bx      lr
+        .section .text.thumb, "ax"
+        .thumb
+        .thumb_func
+tfunc:  bl      afunc
+        blx     afunc
+        bl      tfunc2
+        blx     tfunc2
+        bl      start
+        bx      lr
+        .thumb_func
+tfunc2: bx      lr
+        .section .text.arm, "ax"
+        .arm
+        .type   afunc, %function
+afunc:  bx      lr
+
+=== addresses of Thumb functions in data and literal pools
+        .syntax unified
+        .text
+        ldr     r0, =tfunc
+        ldr     r1, =afunc
+        bx      lr
+        .type   afunc, %function
+afunc:  bx      lr
+        .thumb
+        .thumb_func
+tfunc:  bx      lr
+        .data
+        .word   tfunc, afunc, tfunc + 4
+
+=== global Thumb functions called from the same section
+        .syntax unified
+        .global g
+        .thumb
+        .thumb_func
+g:      bx      lr
+        .arm
+        bl      g
+        blx     g
+        .thumb
+        blx     g
+        bl      g
+        bx      lr

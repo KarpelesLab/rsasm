@@ -125,6 +125,14 @@ pub enum LinkValue {
     /// Something only a linker creates, described for the diagnostic: "a GOT
     /// entry". A flat binary refuses it.
     LinkerOnly(&'static str),
+    /// A branch whose instruction depends on its target: ARM's `bl` becomes
+    /// `blx` to a Thumb function, and a branch into the other instruction
+    /// set is left to the linker. The backend's
+    /// [`Architecture::interwork`](crate::arch::Architecture::interwork)
+    /// decides, from this class of its own and the target symbol, both for
+    /// what the assembler resolves and, in a flat binary, for what a linker
+    /// would have.
+    Interwork(u8),
 }
 
 /// How a fixup's value is written into the output.

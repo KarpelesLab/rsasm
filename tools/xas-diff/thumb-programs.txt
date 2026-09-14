@@ -115,3 +115,52 @@ far:    bx      lr
         adr     r0, far
         .space  4096
 far:    bx      lr
+=== a Thumb function calling ARM and Thumb code
+        .syntax unified
+        .global main
+        .thumb_func
+main:   push    {r4, lr}
+        bl      helper
+        blx     armhelper
+        bl      armhelper
+        blx     helper
+        bl      puts
+        pop     {r4, pc}
+        .thumb_func
+helper: bx      lr
+        .arm
+        .type   armhelper, %function
+armhelper:
+        blx     helper
+        bl      helper
+        b       helper
+        bx      lr
+=== a branch to an ARM function is always 32 bits and relocated
+        .syntax unified
+        b       armf
+        beq     armf
+        b       near
+near:   bx      lr
+        .arm
+        .type   armf, %function
+armf:   bx      lr
+=== literal loads of Thumb functions
+        .syntax unified
+        .thumb_func
+f:      ldr     r0, =f
+        ldr     r1, =g
+        adr     r2, f
+        bx      lr
+        .type   g, %function
+g:      bx      lr
+=== adr of Thumb functions defined before and after it
+        .syntax unified
+        .thumb_func
+f:      bx      lr
+        adr     r0, f
+        adr     r1, g
+        adr.w   r2, g
+        adr     r8, g
+        .p2align 2, 0
+        .thumb_func
+g:      bx      lr

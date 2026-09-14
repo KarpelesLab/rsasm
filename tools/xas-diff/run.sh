@@ -111,10 +111,10 @@ canon_obj() { # object
     xxd -g1 -c16 "$o.bin" | cut -c1-58 | sed "s/^/bytes $name /"
   done
   llvm-readobj --symbols "$o" > "$o.syms"
-  # Relocation sections come in section order, which is each assembler's
-  # own; within one, the order is the offsets'.
+  # Relocations are sorted too: GNU as writes those of a relaxed instruction
+  # after the others, and the order means nothing to a linker.
   llvm-readobj --relocs --expand-relocs "$o" |
-    ${AWK:-awk} -f "$root/tools/mc-diff/relocs.awk" "$o.syms" - | sort -s -k1,1
+    ${AWK:-awk} -f "$root/tools/mc-diff/relocs.awk" "$o.syms" - | LC_ALL=C sort
 }
 
 compare_obj() { # key arch cmd name source

@@ -10,14 +10,14 @@
 //! `.org` or `.space` whose size depends on a later symbol can be written to
 //! oscillate.
 
-use crate::arch::FlatModifier;
+use crate::arch::{FlatModifier, Interwork, InterworkTarget};
 use crate::assembler::{Assembler, Relocation};
 use crate::expr::{ExprKind, ExprRef, Value};
 use crate::section::{
     FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
 };
 use crate::source::Span;
-use crate::symbol::{Binding, SymbolId, SymbolValue};
+use crate::symbol::{Binding, SymbolId, SymbolValue, Visibility};
 use std::collections::HashMap;
 
 /// Enough passes for any realistic file; hitting the limit means the input is
@@ -744,6 +744,13 @@ impl Assembler {
             }
             LinkValue::PairedLow if flat => return self.paired_low_value(e),
             LinkValue::LinkerOnly(_) if flat => return None,
+            LinkValue::Interwork(class) => match self.interwork(e, class, section, fi) {
+                Interwork::AsWritten => {}
+                Interwork::Relocate | Interwork::LinkerOnly(_) => return None,
+                Interwork::Becomes { kind, .. } => {
+                    return self.fixup_value(e, &kind, section, fi, at);
+                }
+            },
             LinkValue::Page(_)
             | LinkValue::Region(_)
             | LinkValue::PairedLow
@@ -763,7 +770,59 @@ impl Assembler {
                 FlatModifier::LinkerOnly => return None,
             }
         }
-        self.plain_fixup_value(e, kind, section, fi, at)
+        let value = self.plain_fixup_value(e, kind, section, fi, at)?;
+        // What a linker adds to the target in a field of this relocation
+        // type, which in a flat image is the core's to add.
+        if flat
+            && kind.reloc != 0
+            && let Ok(Value {
+                plus: Some(p),
+                minus: None,
+                ..
+            }) = self.eval(e)
+        {
+            let sym = self.symbols.get(p);
+            let (flags, ty) = (sym.target_flags, sym.ty);
+            let arch = self.frag_arch(section.0 as usize, fi).0;
+            return Some(value + arch.link_bias(kind.reloc, flags, ty));
+        }
+        Some(value)
+    }
+
+    /// For a [`LinkValue::Interwork`] fixup, what its instruction becomes
+    /// given the symbol it refers to; see [`Architecture::interwork`].
+    ///
+    /// [`Architecture::interwork`]: crate::arch::Architecture::interwork
+    pub(crate) fn interwork(
+        &mut self,
+        e: ExprRef,
+        class: u8,
+        section: SectionId,
+        fi: usize,
+    ) -> Interwork {
+        let Ok(Value {
+            plus: Some(p),
+            minus: None,
+            ..
+        }) = self.eval(e)
+        else {
+            return Interwork::AsWritten;
+        };
+        let sym = self.symbols.get(p);
+        let defined = sym.is_defined();
+        let target = InterworkTarget {
+            flags: sym.target_flags,
+            ty: sym.ty,
+            same_section: self.symbol_section(p) == Some(section),
+            global: sym.binding != Binding::Local || !defined,
+            preemptible: sym.binding == Binding::Weak
+                || (sym.binding == Binding::Global && sym.visibility == Visibility::Default)
+                || !defined,
+            relocatable: self.options.relocatable,
+        };
+        self.frag_arch(section.0 as usize, fi)
+            .0
+            .interwork(class, &target)
     }
 
     /// For a [`LinkValue::Region`] fixup, the target and the address past the
@@ -859,6 +918,14 @@ impl Assembler {
                 ));
             }
             LinkValue::Split(_) => return None,
+            LinkValue::Interwork(class) => {
+                if let Interwork::LinkerOnly(what) = self.interwork(e, class, section, fi) {
+                    return Some(format!(
+                        "this branch needs {what}, which only a linker builds; a flat binary \
+                         has none"
+                    ));
+                }
+            }
             _ => {}
         }
         let m = self.find_modifier(e)?;
@@ -950,8 +1017,25 @@ impl Assembler {
                             .collect(),
                         _ => continue,
                     };
-                for (off, e, kind, span) in list {
+                for (off, e, mut kind, span) in list {
                     let at = frag_off + off as u64;
+                    // A branch that becomes another instruction is rewritten
+                    // before its field is filled in, and filled in as the new
+                    // instruction's.
+                    if let LinkValue::Interwork(class) = kind.link
+                        && let Interwork::Becomes { patch, kind: k } =
+                            self.interwork(e, class, id, fi)
+                    {
+                        let endian = self.frag_arch(si, fi).0.endian();
+                        if let FragKind::Bytes { variants, chosen } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            let dst = &mut variants[*chosen].bytes
+                                [off as usize..off as usize + kind.size as usize];
+                            endian.write(dst, patch(endian.read(dst)));
+                        }
+                        kind = k;
+                    }
                     match self.fixup_value(e, &kind, id, fi, at) {
                         Some(v) => {
                             if !kind.fits(v as i128) {
@@ -1145,9 +1229,14 @@ impl Assembler {
         // linkers expect and what keeps local labels out of the symbol table.
         let symbol = target.map(|target| {
             let sym = self.symbols.get(target);
+            let keep = self
+                .frag_arch(si, fi)
+                .0
+                .keeps_reloc_symbol(sym.target_flags, sym.ty);
             if sym.binding == Binding::Local
                 && matches!(sym.value, SymbolValue::Label { .. })
                 && kind.reloc_symbol == RelocSymbol::Section
+                && !keep
             {
                 let sec = self.symbol_section(target).expect("label has a section");
                 addend += self.symbol_addr(target).unwrap_or(0) - self.section(sec).addr as i64;
