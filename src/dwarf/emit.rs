@@ -717,10 +717,9 @@ impl Assembler {
             b.u8(DW_LNE_END_SEQUENCE);
             return;
         };
-        if line_delta != 0 {
-            b.u8(DW_LNS_ADVANCE_LINE);
-            b.sleb(line_delta);
-        }
+        // Even an advance of no lines, as `emit_fixed_inc_line_addr` does.
+        b.u8(DW_LNS_ADVANCE_LINE);
+        b.sleb(line_delta);
         if delta > 50000 {
             self.set_address(b, at, ptr);
         } else {
