@@ -1700,7 +1700,11 @@ impl Assembler {
             return;
         }
         self.map_code();
-        if self.dwarf.line.pending || self.dwarf.line.source.on {
+        // A statement that emits nothing, such as MSP430's `rpt`, which only
+        // sets up the next instruction, is no row of its own, and leaves a
+        // pending `.loc` to that instruction.
+        let emits = variants.iter().any(|v| !v.bytes.is_empty());
+        if emits && (self.dwarf.line.pending || self.dwarf.line.source.on) {
             let pos = (self.cur, self.cur_section().next_frag_index());
             self.dwarf_instruction(pos, &variants, span);
         }

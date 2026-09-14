@@ -534,7 +534,7 @@ independent assembler, and compare the bytes:
   against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
-  Clang. 1,083 of 1,083 match across twenty-three target variants.
+  Clang. 1,084 of 1,084 match across twenty-three target variants.
 
 The x86 and MSP430 backends are also fuzzed: `tools/fuzz/x86.py` generates random
 instructions from a table of forms written from the Intel manual, in all three

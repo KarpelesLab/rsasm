@@ -19,3 +19,10 @@ f:
 	adda r12, r13
 	calla r13
 	reta
+=== the repeat prefix with -g | -g
+	.text
+f:	rpt #4
+	rrax.a r12
+	rpt r5 { rlax r13
+	jmp f
+	reta
