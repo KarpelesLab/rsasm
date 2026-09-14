@@ -13,15 +13,19 @@
 //! unresolved external reference is therefore an error rather than a
 //! relocation, which is the right answer for a target with no linker.
 //!
-//! ## Syntax, and where the lexer forces a deviation
+//! ## Syntax
 //!
-//! The GAS lexer this crate shares treats `#` as a line comment and `$` as the
-//! start of an immediate, and it has no `$`-prefixed hexadecimal. The
-//! traditional 6502 spelling `lda #$12` is therefore unwritable here: `#`
-//! swallows the rest of the line. Until the core grows a per-architecture
-//! lexer hook, the 6502 backend accepts `$` *or* `#` as the immediate marker
-//! (`lda $12` in the GAS dialect, `lda #0x12` in the NASM dialect, where `#`
-//! is not a comment) and hexadecimal is written `0x12`. See
+//! Source is read in the 8-bit dialect unless another is asked for:
+//! `lda #$12` and `lda (ptr),y` as cc65's ca65 reads them, `ld a,(ix+5)` and
+//! `ex af,af'` as GNU as and vasm read Zilog source, `MVI A,12H` as the Macro
+//! Assembler AS reads Intel's. That dialect's directives and the rules where
+//! those assemblers disagree are described in [`crate::dialect`]; each
+//! backend was checked against its reference in `tools/xas-diff`.
+//!
+//! In the GNU dialect the Z80 is lexed as GNU as for the Z80 lexes it: `;`
+//! comments, `$12` and `12H` numbers. There is no GNU as for the other two,
+//! and there the GNU lexer's `#` comment makes `lda #$12` unwritable, so the
+//! 6502 backend accepts `$` as the immediate marker too (`lda $0x12`). See
 //! [`mos6502`] for the details.
 
 pub mod common;
@@ -29,7 +33,7 @@ pub mod i8080;
 pub mod mos6502;
 pub mod z80;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, Syntax};
 use crate::section::Variant;
 
 pub const NAMES: &[&str] = &["z80", "6502", "i8080"];
@@ -117,6 +121,43 @@ impl Architecture for Retro {
             Retro::Mos6502 => 0xea,
         };
         vec![nop; len as usize]
+    }
+
+    fn comments(&self) -> CommentSyntax {
+        match self {
+            // GNU as for the Z80 comments with `;`, and with `#` only in the
+            // first column, where it is also a C preprocessor line marker.
+            Retro::Z80 => CommentSyntax {
+                anywhere: &[";"],
+                line_start: &["#"],
+            },
+            Retro::Mos6502 | Retro::I8080 => CommentSyntax::HASH,
+        }
+    }
+
+    fn tune_lexer(&self, cfg: &mut crate::lexer::LexConfig) {
+        // GNU as for the Z80 also reads `$12` and `%1010`, `12H`-style
+        // suffixes, and `AF'`; a lowercase `b` after digits stays a local
+        // label reference, as it does there.
+        if let Retro::Z80 = self {
+            cfg.radix_suffix = true;
+            cfg.number_prefixes = vec![('$', 16), ('%', 2)];
+            cfg.primed_af = true;
+        }
+    }
+
+    fn default_dialect(&self) -> crate::lexer::Dialect {
+        // Conventional 8-bit source is what people have for these machines;
+        // see the module comment.
+        crate::lexer::Dialect::EightBit
+    }
+
+    fn mnemonics(&self) -> Option<fn(&str) -> bool> {
+        Some(match self {
+            Retro::Z80 => z80::is_mnemonic,
+            Retro::Mos6502 => mos6502::is_mnemonic,
+            Retro::I8080 => i8080::is_mnemonic,
+        })
     }
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>) -> Option<Vec<Variant>> {

@@ -31,9 +31,10 @@
 //!   `IYL`) and the undocumented `DD CB d op,r` forms that write a register as
 //!   well as memory. The documented `DD CB d op` forms *are* implemented.
 //! * The undocumented `IN F,(C)` and `OUT (C),0` (`ED` page, `y = 6`).
-//! * `EX AF,AF'` is spelled `ex af,af`: the shared lexer reads `'` as the
-//!   start of a character literal, so the prime cannot appear in a source
-//!   file. `SLL` is accepted, and is marked undocumented in the table.
+//! * `SLL` is accepted, and is marked undocumented in the table.
+//!
+//! `EX AF,AF'` may also be written without the prime, which rsasm's lexer
+//! could once not read; GNU as accepts both too.
 
 use super::common::{self, Enc};
 use crate::arch::{AsmCtx, InsnRequest};
@@ -182,7 +183,7 @@ fn is_reserved(name: &str) -> bool {
         || RP.contains(&name)
         || RP2.contains(&name)
         || CC.contains(&name)
-        || matches!(name, "i" | "r" | "ix" | "iy")
+        || matches!(name, "i" | "r" | "ix" | "iy" | "af'")
 }
 
 /// The `alu[]` field of an ALU mnemonic. Only called with names the
@@ -362,7 +363,10 @@ fn indexed(cx: &mut AsmCtx<'_>, inner: &[Token], span: Span) -> Option<Option<Me
     let Some(second) = rest.first() else {
         return Some(None);
     };
-    let Some(prefix) = first.ident().and_then(|n| index_prefix(cx.name(n))) else {
+    let Some(prefix) = first
+        .ident()
+        .and_then(|n| index_prefix(&cx.name(n).to_ascii_lowercase()))
+    else {
         return Some(None);
     };
     if !second.is_punct(Punct::Plus) && !second.is_punct(Punct::Minus) {
@@ -426,8 +430,8 @@ fn encode(
             _ => common::bad_operands(cx, span, m),
         },
         "ex" => match args {
-            // `EX AF,AF'` — see the module comment on the missing prime.
-            [a, b] if a.is("af") && b.is("af") => Enc::op(&[0x08]).done(),
+            // `EX AF,AF'`, with or without the prime; see the module comment.
+            [a, b] if a.is("af") && (b.is("af'") || b.is("af")) => Enc::op(&[0x08]).done(),
             [a, b] if a.is("de") && b.is("hl") => Enc::op(&[0xeb]).done(),
             [a, b] if matches!(&a.mem, Some(Mem::Reg(r)) if r == "sp") => match b.wide(&RP) {
                 Some((prefix, 2)) => {

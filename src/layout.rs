@@ -621,7 +621,10 @@ impl Assembler {
         }
         let mut addr = self.options.base_addr;
         for s in &mut self.sections {
-            addr = addr.next_multiple_of(s.align.max(1));
+            addr = match s.origin {
+                Some(origin) => origin,
+                None => addr.next_multiple_of(s.align.max(1)),
+            };
             s.addr = addr;
             addr += s.size;
         }
@@ -867,7 +870,30 @@ impl Assembler {
         fi: usize,
         at: u64,
     ) -> Option<i64> {
-        let v = self.eval(e).ok()?;
+        let v = match self.eval(e) {
+            Ok(v) => v,
+            // In a flat image every label has its address by now, so an
+            // expression that only a number can go through — `label >> 8`,
+            // `label & 0xff`, the 8-bit dialect's `<label` — has a value
+            // too. A relocation could not have carried it, which is why
+            // evaluating symbolically refused it.
+            Err(_) if !self.options.relocatable => {
+                let mut env = AddressEnv {
+                    asm: self,
+                    depth: 0,
+                };
+                let v = crate::expr::eval(&self.exprs, e, &mut env).ok()?;
+                return v.as_abs().map(|target| {
+                    if kind.pcrel {
+                        let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
+                        target - (here & !(kind.pc_align.max(1) as i64 - 1))
+                    } else {
+                        target
+                    }
+                });
+            }
+            Err(_) => return None,
+        };
         // Within one section the two section bases cancel, so a PC-relative
         // reference resolves even in relocatable output. Across sections it
         // resolves only once the sections have real addresses.
@@ -1245,6 +1271,79 @@ impl Assembler {
             }
         }
         out
+    }
+}
+
+/// Evaluates with every label at its address, for flat output once layout has
+/// given the sections theirs; see `plain_fixup_value`.
+struct AddressEnv<'a> {
+    asm: &'a Assembler,
+    depth: u32,
+}
+
+impl crate::expr::EvalCtx for AddressEnv<'_> {
+    fn lookup_symbol(
+        &mut self,
+        name: crate::intern::Name,
+        span: Span,
+    ) -> Result<Value, crate::expr::EvalError> {
+        match self.asm.symbols.lookup(name) {
+            Some(id) => self.symbol_value(id, span),
+            None => Err(crate::expr::EvalError::new(span, "undefined symbol")),
+        }
+    }
+
+    fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, crate::expr::EvalError> {
+        match self.asm.symbols.get(id).value {
+            SymbolValue::Expr(e) => {
+                if self.depth > 64 {
+                    return Err(crate::expr::EvalError::new(
+                        span,
+                        "symbol definition is circular",
+                    ));
+                }
+                self.depth += 1;
+                let v = crate::expr::eval(&self.asm.exprs, e, self);
+                self.depth -= 1;
+                v
+            }
+            _ => match self.asm.symbol_addr(id) {
+                Some(addr) => Ok(Value::abs(addr)),
+                None => Ok(Value::sym(id, 0)),
+            },
+        }
+    }
+
+    fn here(&mut self, span: Span) -> Result<Value, crate::expr::EvalError> {
+        Err(crate::expr::EvalError::new(span, "`.` cannot be used here"))
+    }
+
+    fn section_start(&mut self, span: Span) -> Result<Value, crate::expr::EvalError> {
+        Err(crate::expr::EvalError::new(
+            span,
+            "`$$` is not supported yet",
+        ))
+    }
+
+    fn local_ref(
+        &mut self,
+        n: u32,
+        _: crate::lexer::LocalDir,
+        span: Span,
+    ) -> Result<Value, crate::expr::EvalError> {
+        Err(crate::expr::EvalError::new(
+            span,
+            format!("local label `{n}` was not resolved"),
+        ))
+    }
+
+    fn modifier(
+        &mut self,
+        _: crate::intern::Name,
+        inner: Value,
+        _: Span,
+    ) -> Result<Value, crate::expr::EvalError> {
+        Ok(inner)
     }
 }
 

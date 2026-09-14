@@ -11,6 +11,29 @@
 //!
 //! The CC-RL, CC-RH and CC-RX dialects dot their directives and have far
 //! more of them; their tables and handlers are in [`crate::dialect_cc`].
+//!
+//! ## The 8-bit dialect
+//!
+//! [`Dialect::EightBit`] is the union of what four references read, each for
+//! the source it is the usual assembler of: cc65's ca65 for the 6502, GNU as
+//! and vasm's `oldstyle` syntax for the Z80 (vasm for the 6502 too), and the
+//! Macro Assembler AS for the 8080 in Intel mnemonics. Their directive sets
+//! overlap without contradicting each other, so one table serves: `DB`,
+//! `DEFB`, `.byte`, `DW`, `DEFW`, `.word`, `DS`, `DEFS`, `.res`, `ORG`,
+//! `EQU`, `END`. Where they do disagree the choice is written down here:
+//!
+//! - **`ORG` says where the code is, and pads only between pieces.** The
+//!   first `ORG` in a section, before anything is emitted, is its load
+//!   address, so `ORG 100H` does not put 256 zero bytes in front of a CP/M
+//!   program; vasm, AS and ca65 all agree. A later `ORG` pads up to the
+//!   address, as vasm and AS do in a binary image; ca65 moves the location
+//!   counter without padding. GNU as pads from the section start for every
+//!   `.org`, which is what an ELF object needs, and is what the 8-bit
+//!   dialect does in relocatable output too.
+//! - **`.align` counts bytes,** as in ca65. vasm's `align` counts bits.
+//! - **Only dotted names switch segments.** ca65's `.code`, `.data`,
+//!   `.rodata`, `.bss`, `.zeropage` and `.segment "NAME"` do; the bare word
+//!   `data` is vasm's byte directive in other assemblers and is not one here.
 
 use crate::assembler::Assembler;
 use crate::cursor::Cursor;
@@ -48,6 +71,17 @@ pub(crate) enum Alias {
     Segment(SectionKind, SectionFlags, &'static str),
     /// A CC-RL, CC-RH or CC-RX directive with a handler of its own.
     Cc(CcDirective),
+    /// The 8-bit dialect's `ORG`; see the module comment.
+    Origin,
+    /// ca65's `.segment "NAME"`.
+    NamedSegment,
+    /// One byte per value, the value shifted right by this many bits first:
+    /// ca65's `.lobytes`, `.hibytes` and `.bankbytes`.
+    ByteOf(u8),
+    /// ca65's `.dbyt`: a 16-bit value, high byte first.
+    BigWord,
+    /// ca65's `.setcpu` and `.p02`, which choose the instruction set.
+    SetCpu,
 }
 
 /// Looks up `word` — already lowercased, with any leading dot removed — in a
@@ -56,6 +90,28 @@ pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
     use Alias::*;
     if dialect.renesas_cc() {
         return crate::dialect_cc::lookup(dialect, word);
+    }
+    if dialect == Dialect::EightBit {
+        return Some(match word {
+            // `DEFM` is Zilog's string form of `DEFB`, and takes values too.
+            "db" | "defb" | "defm" | "byte" | "byt" | "dfb" => Data(1),
+            "dw" | "defw" | "word" | "dfw" | "addr" => Data(2),
+            "ds" | "defs" | "dsb" | "blk" => Gas(".space"),
+            "org" => Origin,
+            "align" => Gas(".balign"),
+            "include" => Gas(".include"),
+            "incbin" => Gas(".incbin"),
+            "if" => Gas(".if"),
+            "ifdef" => Gas(".ifdef"),
+            "ifndef" => Gas(".ifndef"),
+            "else" => Gas(".else"),
+            "elseif" => Gas(".elseif"),
+            "endif" => Gas(".endif"),
+            "end" => End,
+            "public" | "global" | "xdef" => Gas(".globl"),
+            "extern" | "extrn" | "xref" => Extern,
+            _ => return None,
+        });
     }
     let common = match word {
         "org" => Some(Gas(".org")),
@@ -107,8 +163,42 @@ pub(crate) fn lookup(dialect: Dialect, word: &str) -> Option<Alias> {
             "bseg" => Segment(SectionKind::Nobits, SectionFlags::bss(), ".bss"),
             _ => return None,
         }),
-        Dialect::Gas | Dialect::Nasm | Dialect::CcRl | Dialect::CcRh | Dialect::CcRx => None,
+        Dialect::Gas
+        | Dialect::Nasm
+        | Dialect::CcRl
+        | Dialect::CcRh
+        | Dialect::CcRx
+        | Dialect::EightBit => None,
     }
+}
+
+/// The 8-bit dialect's directives that exist only with a leading dot, as ca65
+/// spells them. `word` has the dot removed and is lowercased.
+pub(crate) fn lookup_dotted(dialect: Dialect, word: &str) -> Option<Alias> {
+    use Alias::*;
+    if dialect != Dialect::EightBit {
+        return None;
+    }
+    Some(match word {
+        "code" => Gas(".text"),
+        "data" => Gas(".data"),
+        "rodata" => Gas(".rodata"),
+        "bss" => Gas(".bss"),
+        "zeropage" => Segment(SectionKind::Progbits, SectionFlags::data(), "ZEROPAGE"),
+        "segment" => NamedSegment,
+        "asciiz" => Gas(".asciz"),
+        "dbyt" => BigWord,
+        "dword" => Data(4),
+        // Only dotted: `RES` is a Z80 instruction.
+        "res" => Gas(".space"),
+        "lobytes" => ByteOf(0),
+        "hibytes" => ByteOf(8),
+        "bankbytes" => ByteOf(16),
+        "export" | "exportzp" | "globalzp" => Gas(".globl"),
+        "import" | "importzp" => Extern,
+        "setcpu" | "p02" => SetCpu,
+        _ => return lookup(dialect, word),
+    })
 }
 
 /// The block constructs, which the statement walker has to recognise before
@@ -139,11 +229,18 @@ pub(crate) fn block_keyword(dialect: Dialect, word: &str) -> Option<&'static str
             _ => return None,
         });
     }
-    if !matches!(dialect, Dialect::Motorola | Dialect::Renesas) {
+    if !matches!(
+        dialect,
+        Dialect::Motorola | Dialect::Renesas | Dialect::EightBit
+    ) {
         return None;
     }
     Some(match word {
         "macro" => ".macro",
+        // ca65's spellings.
+        "endmacro" | "endmac" if dialect == Dialect::EightBit => ".endm",
+        "repeat" if dialect == Dialect::EightBit => ".rept",
+        "endrep" | "endrepeat" if dialect == Dialect::EightBit => ".endr",
         "endm" => ".endm",
         "exitm" | "mexit" => ".exitm",
         "rept" => ".rept",
@@ -215,8 +312,155 @@ impl Assembler {
                 self.run_cc(stmt, d);
                 return;
             }
+            Alias::Origin => {
+                if let Some(e) = self.parse_expr(&mut cur) {
+                    self.origin(e, span);
+                }
+            }
+            Alias::NamedSegment => self.alias_named_segment(&mut cur),
+            Alias::ByteOf(shift) => self.alias_byte_of(&mut cur, shift, span),
+            Alias::BigWord => loop {
+                let Some(e) = self.parse_expr(&mut cur) else {
+                    return;
+                };
+                let espan = self.exprs.span(e);
+                let high = self.exprs.alloc(
+                    crate::expr::ExprKind::Unary(crate::expr::UnOp::High, e),
+                    espan,
+                );
+                let low = self.exprs.alloc(
+                    crate::expr::ExprKind::Unary(crate::expr::UnOp::Low, e),
+                    espan,
+                );
+                self.emit_value(1, high, span);
+                self.emit_value(1, low, span);
+                if cur.eat_punct(Punct::Comma).is_none() {
+                    break;
+                }
+            },
+            Alias::SetCpu => self.alias_setcpu(stmt, &mut cur),
         }
         self.expect_end(&mut cur);
+    }
+
+    /// The 8-bit dialect's `ORG`: the load address of a section that has
+    /// nothing in it yet, and padding up to the address after that. See the
+    /// module comment.
+    pub(crate) fn origin(&mut self, e: crate::expr::ExprRef, span: Span) {
+        if self.options.relocatable {
+            self.emit_org(e, 0, span);
+            return;
+        }
+        let Some(addr) = self.eval_absolute(e, "an `org` address") else {
+            return;
+        };
+        let Ok(addr) = u64::try_from(addr) else {
+            self.diags
+                .error(span, format!("`org` address {addr} is negative"));
+            return;
+        };
+        let cur = self.cur;
+        let first = cur.0 == 0;
+        let base = self.options.base_addr;
+        let section = self.section_mut(cur);
+        if section.frags.is_empty() && section.origin.is_none() {
+            section.origin = Some(addr);
+            return;
+        }
+        // Code before the first `ORG` starts where the image does.
+        let start = section.origin.unwrap_or(if first { base } else { 0 });
+        let Some(offset) = addr.checked_sub(start) else {
+            self.diags.error(
+                span,
+                format!("`org` {addr:#x} is before the start of the section, {start:#x}"),
+            );
+            return;
+        };
+        let target = self.exprs.int(offset, span);
+        self.emit_org(target, 0, span);
+    }
+
+    /// `.segment "NAME"`. ca65's standard segment names are the sections GNU
+    /// as would use for them.
+    fn alias_named_segment(&mut self, cur: &mut Cursor<'_>) {
+        let tok = cur.peek();
+        let TokKind::Str(i) = tok.kind else {
+            self.diags
+                .error(tok.span, "expected a segment name in double quotes");
+            cur.set_pos(cur.all().len());
+            return;
+        };
+        cur.advance();
+        let name = String::from_utf8_lossy(self.pool.get(i)).into_owned();
+        // An address size (`: zeropage`) may follow; placement is the
+        // linker's.
+        if cur.eat_punct(Punct::Colon).is_some() {
+            cur.set_pos(cur.all().len());
+        }
+        let id = match name.as_str() {
+            "CODE" => self.standard_section(".text"),
+            "DATA" => self.standard_section(".data"),
+            "RODATA" => self.standard_section(".rodata"),
+            "BSS" => self.standard_section(".bss"),
+            _ => {
+                let n = self.interner.intern(&name);
+                self.get_or_create_section(n, SectionKind::Progbits, SectionFlags::data(), 1)
+            }
+        };
+        self.set_section(id);
+    }
+
+    fn alias_byte_of(&mut self, cur: &mut Cursor<'_>, shift: u8, span: Span) {
+        use crate::expr::{ExprKind, UnOp};
+        loop {
+            let Some(e) = self.parse_expr(cur) else {
+                return;
+            };
+            let espan = self.exprs.span(e);
+            let op = match shift {
+                0 => UnOp::Low,
+                8 => UnOp::High,
+                _ => UnOp::Bank,
+            };
+            let byte = self.exprs.alloc(ExprKind::Unary(op, e), espan);
+            self.emit_value(1, byte, span);
+            if cur.eat_punct(Punct::Comma).is_none() {
+                break;
+            }
+        }
+    }
+
+    /// `.setcpu "6502"` and `.p02`. Only the NMOS 6502's documented
+    /// instructions are implemented, so any other choice is refused rather
+    /// than quietly assembling a different instruction set.
+    fn alias_setcpu(&mut self, stmt: &Statement, cur: &mut Cursor<'_>) {
+        let word = stmt
+            .toks
+            .get(stmt.args.wrapping_sub(1))
+            .and_then(|t| t.ident())
+            .map(|n| self.interner.get(n).to_ascii_lowercase())
+            .unwrap_or_default();
+        if word == ".p02" {
+            return;
+        }
+        let tok = cur.peek();
+        let TokKind::Str(i) = tok.kind else {
+            self.diags
+                .error(tok.span, "expected a CPU name in double quotes");
+            cur.set_pos(cur.all().len());
+            return;
+        };
+        cur.advance();
+        let name = String::from_utf8_lossy(self.pool.get(i)).into_owned();
+        if name != "6502" || self.arch.name() != "6502" {
+            self.diags.error(
+                tok.span,
+                format!(
+                    "`.setcpu \"{name}\"` is not supported; only the NMOS 6502's documented \
+                     instruction set is"
+                ),
+            );
+        }
     }
 
     /// Aligns the location counter to `unit` bytes.

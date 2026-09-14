@@ -18,8 +18,8 @@ options:
   -f, --format <fmt> output format: elf (default) or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
-                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH) or
-                     ccrx (Renesas CC-RX)
+                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
+                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)

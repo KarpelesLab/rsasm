@@ -232,6 +232,33 @@ impl AsmCtx<'_> {
         self.diags.error(span, msg);
     }
 
+    /// The address `e` has now, in a flat image: a constant, or a label whose
+    /// section starts at an address the source gave it (the 8-bit dialect's
+    /// `ORG`) with nothing between that start and the label that could change
+    /// size.
+    ///
+    /// ca65 reads a label after `.org` as the number it is, so it can choose
+    /// zero-page addressing for one defined earlier, just as it does for a
+    /// constant; this is what lets the 6502 backend do the same.
+    pub fn address_now(&self, e: crate::expr::ExprRef) -> Option<i64> {
+        let v = crate::expr::SymbolEnv::new(self.exprs, self.symbols).value(e)?;
+        let at = |id: SymbolId| -> Option<i64> {
+            let (section, frag) = self.label_position(id)?;
+            let origin = self.sections[section.0 as usize].origin?;
+            let d = self.fixed_distance((section, 0), (section, frag))?;
+            Some(origin as i64 + d)
+        };
+        let plus = match v.plus {
+            Some(p) => at(p)?,
+            None => 0,
+        };
+        let minus = match v.minus {
+            Some(m) => at(m)?,
+            None => 0,
+        };
+        Some(v.addend + plus - minus)
+    }
+
     /// Where a label was defined: its section, and the index of the fragment
     /// it starts.
     pub fn label_position(&self, id: SymbolId) -> Option<(SectionId, u32)> {
@@ -358,6 +385,14 @@ pub trait Architecture {
     /// targets defaulting to GNU as would reject the source people have.
     fn default_dialect(&self) -> crate::lexer::Dialect {
         crate::lexer::Dialect::Gas
+    }
+
+    /// Recognises this backend's mnemonics, lowercased, for the 8-bit dialect,
+    /// in which a word in the first column is a label unless it names an
+    /// instruction or a directive. `None`, the default, makes every such word
+    /// that is not a directive a label.
+    fn mnemonics(&self) -> Option<fn(&str) -> bool> {
+        None
     }
 
     /// Adjusts GNU-dialect lexing beyond comment characters, for targets whose
