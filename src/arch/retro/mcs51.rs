@@ -73,9 +73,9 @@ enum Arg {
     A,
     /// The carry flag, written `C`, which is bit D7H under another name.
     C,
-    /// `CY`, which AS takes for the carry flag wherever `C` could stand — the
-    /// first operand of `MOV`, `ANL` and `ORL`, either operand of `MOV`, and
-    /// `CLR`, `SETB` and `CPL` — and for the bit symbol D7H, which is the
+    /// `CY`, which AS takes for the carry flag wherever `C` could stand —
+    /// either operand of `MOV`, the first of `ANL` and `ORL`, and the operand
+    /// of `CLR`, `SETB` and `CPL` — and for the bit symbol D7H, which is the
     /// same bit, anywhere else. The two readings assemble differently: `CPL
     /// CY` is `B3`, not `B2 D7`.
     Cy(ExprRef),
@@ -109,13 +109,6 @@ struct Operand {
 }
 
 impl Operand {
-    fn at_reg(&self) -> Option<u8> {
-        match self.arg {
-            Arg::AtR(n) => Some(n),
-            _ => None,
-        }
-    }
-
     /// A direct address, a bit address or a branch target.
     fn value(&self) -> Option<ExprRef> {
         match self.arg {
@@ -229,11 +222,6 @@ fn paged11(word: u64, v: i64) -> u64 {
     (word & 0x1f) | ((v & 0x700) >> 3) | ((v & 0xff) << 8)
 }
 
-/// The range the 2 KiB block leaves for an `AJMP` target, said where a value
-/// does not fit.
-const PAGE_HINT: &str = "`AJMP` and `ACALL` reach only the 2 KB block the next instruction is \
-                         in; `LJMP`, `LCALL` or a plain `JMP` reaches anywhere";
-
 /// The whole address space, which a branch target has to be in. AS reads a
 /// relative target as an unsigned address, so a branch to below 0 is refused
 /// rather than let the PC wrap, and a displacement alone cannot tell.
@@ -277,22 +265,20 @@ impl Enc {
     /// Both references test the instruction's own address instead, for the
     /// explicit mnemonics — AS's generic `JMP` and `CALL`, and its 80C390
     /// `AJMP`, test the address after it — so they differ from rsasm for an
-    /// `AJMP` or `ACALL` in the last two bytes of a block, xFEH or x7FEH:
-    /// there they assemble a jump into the block being left, which the CPU
-    /// takes into the next, and refuse one into the next. rsasm assembles
-    /// what the CPU does, the same bytes AS gives a `JMP` in that place.
+    /// `AJMP` or `ACALL` that starts at one of the last two addresses of a
+    /// block (07FEH or 07FFH, 0FFEH or 0FFFH, and so on): there they
+    /// assemble a jump into the block being left, which the CPU takes into
+    /// the next, and refuse one into the next. rsasm assembles what the CPU
+    /// does, the same bytes AS gives a `JMP` in that place.
     fn addr11(&mut self, e: ExprRef, span: Span) {
         self.push_field(
             e,
             span,
             1,
-            FixupKind::data(2)
-                .scatter(paged11)
-                .link(LinkValue::Region {
-                    bits: 11,
-                    numbers: true,
-                })
-                .with_range_hint(PAGE_HINT),
+            FixupKind::data(2).scatter(paged11).link(LinkValue::Region {
+                bits: 11,
+                numbers: true,
+            }),
         );
     }
 
@@ -356,7 +342,6 @@ fn encode_plain(
         };
         let ok = match *word {
             "a" => arg.is_a(),
-            "c" => arg.is_c(),
             _ => matches!(arg.arg, Arg::Ab),
         };
         if !ok {
@@ -426,11 +411,7 @@ fn encode_plain(
                 Arg::AtR(i) => Enc::op(&[base | 0x06 | i]).done(),
                 // `INC DPTR` exists; `DEC DPTR` does not.
                 Arg::Dptr if m == "inc" => Enc::op(&[0xa3]).done(),
-                Arg::Value(e) => {
-                    let mut enc = Enc::op(&[base | 0x05]);
-                    enc.addr8(e, arg.span);
-                    enc.done()
-                }
+                Arg::Value(e) => addr_operand(base | 0x05, e, arg.span),
                 _ => common::bad_operands(cx, span, m),
             }
         }
@@ -441,27 +422,22 @@ fn encode_plain(
             let Some(e) = arg.value() else {
                 return common::bad_operands(cx, span, m);
             };
-            let mut enc = Enc::op(&[if m == "push" { 0xc0 } else { 0xd0 }]);
-            enc.addr8(e, arg.span);
-            enc.done()
+            addr_operand(if m == "push" { 0xc0 } else { 0xd0 }, e, arg.span)
         }
         "xch" => match args {
             [a, src] if a.is_a() => match src.arg {
                 Arg::R(n) => Enc::op(&[0xc8 | n]).done(),
                 Arg::AtR(i) => Enc::op(&[0xc6 | i]).done(),
-                Arg::Value(e) => {
-                    let mut enc = Enc::op(&[0xc5]);
-                    enc.addr8(e, src.span);
-                    enc.done()
-                }
+                Arg::Value(e) => addr_operand(0xc5, e, src.span),
                 _ => common::bad_operands(cx, span, m),
             },
             _ => common::bad_operands(cx, span, m),
         },
         "xchd" => match args {
-            [a, src] if a.is_a() && src.at_reg().is_some() => {
-                Enc::op(&[0xd6 | src.at_reg().expect("checked")]).done()
-            }
+            [a, src] if a.is_a() => match src.arg {
+                Arg::AtR(i) => Enc::op(&[0xd6 | i]).done(),
+                _ => common::bad_operands(cx, span, m),
+            },
             _ => common::bad_operands(cx, span, m),
         },
         "clr" | "setb" | "cpl" => bit_op(cx, insn, m, args),

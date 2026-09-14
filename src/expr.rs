@@ -555,7 +555,8 @@ pub fn eval_bit_address(base: i64, bit: i64, span: Span) -> Result<i64, EvalErro
         _ => Err(EvalError::new(
             span,
             format!(
-                "{base:#x} is not bit addressable: only 20H to 2FH and the special function                  registers at a multiple of 8 are"
+                "{base:#x} is not bit addressable: only 20H to 2FH and the special \
+                 function registers at a multiple of 8 are"
             ),
         )),
     }
