@@ -3,15 +3,16 @@
 #
 #   tools/macho-diff/canon.sh o.o
 #
-# Everything llvm-readobj reads out of the object, in five parts:
+# Everything llvm-readobj and llvm-objdump read out of the object:
 #
 #   header X86-64 CPU_SUBTYPE_X86_64_ALL Relocatable cmds=3 size=416 flags=0x2000
 #   segment vmsize=0x29 fileoff=448 filesize=41 nsects=3
 #   version LC_BUILD_VERSION macos 14.0 n/a
+#   dice 0x00000004 4 JUMP_TABLE32
 #   section __TEXT,__text addr=0x0 size=0x1a offset=448 align=0 reloff=0x1f0 nreloc=3 type=0x0 attrs=0x800004 r1=0x0 r2=0x0
 #     554889e5...
-#   symbol _main Section __text value=0x0 desc=0x0 Extern
-#   dysymtab local=2 extdef=1 undef=1
+#   dysymtab local=2@0 extdef=1@2 undef=1@3
+#   symbol _main Section __text value=0x0 ref=0x0 desc=0x0 Extern
 #   reloc __text 0x11 pcrel=1 len=2 X86_64_RELOC_BRANCH _local
 #
 # Sections and relocations keep the object's order, which is part of what
@@ -55,6 +56,11 @@ llvm-readobj --file-headers --macho-segment --macho-version-min "$obj" | ${AWK:-
   inv && $1 == "Version:" { ver = $2 }
   inv && $1 == "SDK:" { sdk = $2 }
   inv && $1 == "}" { printf "version %s %s %s %s\n", cmd, plat, ver, sdk; inv = 0 }
+'
+
+# The data-in-code entries, as `llvm-objdump` lists them.
+llvm-objdump --macho --data-in-code "$obj" | ${AWK:-awk} '
+  $1 ~ /^0x/ { printf "dice %s %s %s\n", $1, $2, $3 }
 '
 
 llvm-readobj --sections --section-data "$obj" | ${AWK:-awk} '

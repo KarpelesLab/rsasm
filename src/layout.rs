@@ -71,6 +71,13 @@ impl Assembler {
         // atoms start, which is settled once every label has been read.
         if self.macho_object() {
             self.macho.atoms = crate::output::macho::atoms(self);
+            if let Some(open) = self.macho.data_regions.iter().find(|r| r.end.is_none()) {
+                let span = open.span;
+                self.diags.error(
+                    span,
+                    "`.data_region` is never ended with `.end_data_region`",
+                );
+            }
         }
 
         if !self.settle_layout() {

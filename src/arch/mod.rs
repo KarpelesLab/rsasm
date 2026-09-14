@@ -458,19 +458,28 @@ impl AsmCtx<'_> {
     /// is constant. An alignment, a `.org`, a `.space` or LEB128 value that is
     /// not a constant, or an instruction relaxation may resize between the
     /// two breaks it, even where layout later finds nothing to change.
-    ///
-    /// In a Mach-O object the distance also has to stay within one atom,
-    /// since the linker may move atoms apart; a linker-visible label between
-    /// the two ends one. llvm-mc works such a difference out only once it has
-    /// cut the sections into atoms, and leaves one that spans two to the
-    /// linker.
     pub fn fixed_distance(&self, from: (SectionId, u32), to: (SectionId, u32)) -> Option<i64> {
+        fixed_distance(self.sections, self.exprs, self.symbols, from, to)
+    }
+
+    /// [`AsmCtx::fixed_distance`] between two labels, for a value the object
+    /// may still have to leave to the linker: in a Mach-O object the two also
+    /// have to be in one atom, since the linker may move atoms apart, and
+    /// llvm-mc leaves a difference that spans two to it. Positions carry the
+    /// order the label was defined in ([`crate::symbol::Symbol::def_order`]),
+    /// or `u32::MAX` for `.`, since of several labels at one place only those
+    /// after a linker-visible one are in its atom.
+    pub fn fixed_label_distance(
+        &self,
+        from: (SectionId, u32, u32),
+        to: (SectionId, u32, u32),
+    ) -> Option<i64> {
         if self.format == crate::output::Format::MachO
             && crate::output::macho::atom_starts_between(self.interner, self.symbols, from, to)
         {
             return None;
         }
-        fixed_distance(self.sections, self.exprs, self.symbols, from, to)
+        self.fixed_distance((from.0, from.1), (to.0, to.1))
     }
 }
 

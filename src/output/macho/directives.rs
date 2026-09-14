@@ -53,6 +53,9 @@ impl Assembler {
             SectionKind::Progbits
         };
         let id = self.get_or_create_section(name, kind, flags, 1);
+        self.macho
+            .section_marks
+            .insert(id, self.symbols.len() as u32);
         self.macho.sections.insert(
             id,
             SectionInfo {
@@ -142,6 +145,21 @@ impl Assembler {
                 true
             }
             ".build_version" => self.macho_dir_build_version(cur, span),
+            ".data_region" => self.macho_dir_data_region(cur, span),
+            ".end_data_region" => {
+                match self.macho.data_regions.last_mut() {
+                    Some(region) if region.end.is_none() => {
+                        let end = self.anon_label(span);
+                        if let Some(region) = self.macho.data_regions.last_mut() {
+                            region.end = Some(end);
+                        }
+                    }
+                    _ => self
+                        .diags
+                        .error(span, "`.end_data_region` without a `.data_region`"),
+                }
+                true
+            }
             ".set" | ".equ" | ".equiv" => {
                 if let Some(n) = cur.peek().ident() {
                     let id = self.symbols.intern(n, span);
@@ -383,6 +401,46 @@ impl Assembler {
         sym.def_span = nspan;
         sym.ty = SymType::Object;
         sym.binding = Binding::Global;
+        true
+    }
+
+    /// `.data_region [jt8|jt16|jt32]`: data, or a jump table, in code.
+    fn macho_dir_data_region(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        let kind = match cur.peek().ident().map(|n| self.interner.get(n).to_string()) {
+            None => 1,
+            Some(word) => {
+                cur.advance();
+                match word.as_str() {
+                    "jt8" => 2,
+                    "jt16" => 3,
+                    "jt32" => 4,
+                    _ => {
+                        self.diags
+                            .error(span, format!("unknown data region kind `{word}`"));
+                        return true;
+                    }
+                }
+            }
+        };
+        if self
+            .macho
+            .data_regions
+            .last()
+            .is_some_and(|r| r.end.is_none())
+        {
+            self.diags.error(
+                span,
+                "a `.data_region` is already open; end it with `.end_data_region` first",
+            );
+            return true;
+        }
+        let start = self.anon_label(span);
+        self.macho.data_regions.push(super::DataRegion {
+            kind,
+            start,
+            end: None,
+            span,
+        });
         true
     }
 

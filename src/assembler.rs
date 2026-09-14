@@ -505,6 +505,15 @@ impl Assembler {
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
             self.arch.tune_lexer(&mut config);
+            // Darwin's arm64 assembly comments with `;`, which everywhere
+            // else separates statements: `bl _f ; call it`.
+            if self.options.format == crate::output::Format::MachO
+                && crate::output::macho::Cpu::for_arch(self.arch.as_ref())
+                    == Some(crate::output::macho::Cpu::Arm64)
+            {
+                config.stmt_sep.retain(|&c| c != ';');
+                config.line_comment.push(";");
+            }
         }
         if self.options.dialect == Dialect::EightBit {
             config.mnemonic = self.arch.mnemonics();
@@ -1505,6 +1514,18 @@ impl Assembler {
     pub(crate) fn bind_positional(&mut self, mark: usize) {
         if self.exprs.len() == mark {
             return;
+        }
+        // A symbol exists from its first mention, not only from when an
+        // expression naming it is first evaluated. Only a Mach-O object can
+        // tell the difference: it lists its local symbols in the order they
+        // came to exist, as llvm-mc does.
+        if self.options.format == crate::output::Format::MachO {
+            for i in mark..self.exprs.len() {
+                if let ExprKind::Sym(name) = self.exprs.nodes[i].kind {
+                    let span = self.exprs.nodes[i].span;
+                    self.symbols.intern(name, span);
+                }
+            }
         }
         if self.options.dialect.is_cc() || self.options.dialect == Dialect::EightBit {
             self.bind_set_values(mark);

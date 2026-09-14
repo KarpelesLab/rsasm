@@ -15,6 +15,9 @@
 # name an undefined symbol and a label on a line of its own after it with
 # `;`, which starts a new statement in either assembler.
 #
+# Matching objects are also compared byte for byte, and the count printed;
+# set MACHO_DIFF_BYTES=1 to list the ones that only match canonically.
+#
 # A case both assemblers refuse counts as a match: Mach-O has no relocation
 # for a good many things ELF can express (`adr` to another atom, a 32-bit
 # absolute address on x86-64), and refusing those is part of what is checked.
@@ -28,7 +31,7 @@ x86-64|x86_64-apple-macos|x86_64-apple-macos
 arm64|arm64-apple-macos|arm64-apple-macos
 "
 
-for tool in llvm-mc llvm-readobj; do
+for tool in llvm-mc llvm-readobj llvm-objdump; do
   command -v "$tool" >/dev/null || { echo "$tool not found; skipping" >&2; exit 0; }
 done
 echo "oracle: $(llvm-mc --version | grep -m1 -oE 'LLVM version [0-9.]+')"
@@ -41,6 +44,7 @@ rsasm="$root/target/debug/rsasm"
 
 pass=0
 fail=0
+identical=0
 
 compare() { # arch, rsasm target, triple, name, source
   local arch=$1 target=$2 triple=$3 name=$4 src=$5 m r d
@@ -58,6 +62,11 @@ compare() { # arch, rsasm target, triple, name, source
   fi
   if [ "$m" = "$r" ]; then
     pass=$((pass + 1))
+    if [ "$m" != refused ] && cmp -s "$d/m.o" "$d/r.o"; then
+      identical=$((identical + 1))
+    elif [ "$m" != refused ] && [ -n "${MACHO_DIFF_BYTES:-}" ]; then
+      echo "### [$arch] $name (equal, but not byte for byte)"
+    fi
   else
     fail=$((fail + 1))
     echo "### [$arch] $name"
@@ -112,5 +121,5 @@ while IFS='|' read -r arch target triple; do
   run_arch "$arch" "$target" "$triple"
 done <<< "$ARCHES"
 
-echo "--- $pass matched, $fail differed"
+echo "--- $pass matched, $fail differed ($identical of the objects byte for byte)"
 [ "$fail" -eq 0 ]

@@ -54,6 +54,7 @@ const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
 const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xb;
 const LC_SEGMENT_64: u32 = 0x19;
+const LC_DATA_IN_CODE: u32 = 0x29;
 const LC_BUILD_VERSION: u32 = 0x32;
 
 const SEGMENT_COMMAND_64_SIZE: u32 = 72;
@@ -61,6 +62,8 @@ const SECTION_64_SIZE: u32 = 80;
 const SYMTAB_COMMAND_SIZE: u32 = 24;
 const DYSYMTAB_COMMAND_SIZE: u32 = 80;
 const BUILD_VERSION_COMMAND_SIZE: u32 = 24;
+const LINKEDIT_DATA_COMMAND_SIZE: u32 = 16;
+const DATA_IN_CODE_ENTRY_SIZE: u64 = 8;
 const HEADER_SIZE: u32 = 32;
 const NLIST_64_SIZE: u64 = 16;
 const RELOCATION_SIZE: u64 = 8;
@@ -202,6 +205,17 @@ pub struct SectionInfo {
     pub reserved2: u32,
 }
 
+/// A stretch of data in code, from `.data_region` to `.end_data_region`,
+/// which `LC_DATA_IN_CODE` tells a disassembler not to decode.
+#[derive(Clone, Debug)]
+pub struct DataRegion {
+    /// `DICE_KIND_*`: data, or a jump table of 8, 16 or 32-bit entries.
+    pub kind: u16,
+    pub start: SymbolId,
+    pub end: Option<SymbolId>,
+    pub span: crate::source::Span,
+}
+
 /// Everything the source told the assembler that only Mach-O output cares
 /// about.
 #[derive(Default)]
@@ -214,6 +228,11 @@ pub struct State {
     pub symbol_desc: HashMap<SymbolId, u16>,
     /// The symbols `.set` or `.equ` defined, as opposed to `=`.
     pub set_constants: HashSet<SymbolId>,
+    /// The data regions, in the order they were opened.
+    pub data_regions: Vec<DataRegion>,
+    /// How many symbols there were when each section was created, which is
+    /// where its arm64 section label goes among them.
+    pub section_marks: HashMap<SectionId, u32>,
     /// Where every atom starts, once the source has been read; see [`Atoms`].
     pub atoms: Atoms,
 }
@@ -231,21 +250,28 @@ impl State {
 /// An atom starts at every linker-visible label — one whose name does not
 /// start with `L` — and runs to the next. Positions are kept as fragment
 /// indices rather than addresses so that the table stays valid while layout is
-/// still moving things about.
+/// still moving things about, together with the order each label was defined
+/// in: of several labels at one position, one defined before the
+/// linker-visible label still ends the atom before it, as it does in llvm-mc,
+/// which starts a fragment at every linker-visible label.
 #[derive(Default)]
 pub struct Atoms {
-    /// Per section, `(fragment, symbol)` in fragment order.
-    starts: HashMap<SectionId, Vec<(u32, SymbolId)>>,
+    /// Per section, `(fragment, definition order, symbol)`, in that order.
+    starts: HashMap<SectionId, Vec<(u32, u32, SymbolId)>>,
 }
 
 impl Atoms {
     /// The symbol whose atom covers fragment `frag` of `section`, if any.
+    /// Every label at that fragment counts as before it.
     pub fn at(&self, section: SectionId, frag: u32) -> Option<SymbolId> {
+        self.before(section, frag, u32::MAX)
+    }
+
+    /// The last linker-visible label at or before `(frag, order)`.
+    fn before(&self, section: SectionId, frag: u32, order: u32) -> Option<SymbolId> {
         let list = self.starts.get(&section)?;
-        // The last label at or before the fragment; several labels may share
-        // a fragment, and the last of them owns what follows.
-        let i = list.partition_point(|&(f, _)| f <= frag);
-        (i > 0).then(|| list[i - 1].1)
+        let i = list.partition_point(|&(f, o, _)| (f, o) <= (frag, order));
+        (i > 0).then(|| list[i - 1].2)
     }
 
     /// The atom a symbol belongs to: itself when it is linker-visible.
@@ -259,14 +285,14 @@ impl Atoms {
         };
         // A literal section is cut into atoms by its contents, not by labels,
         // so a label in one names no atom.
-        atomizable(asm, section).then(|| self.at(section, frag))?
+        atomizable(asm, section).then(|| self.before(section, frag, sym.def_order))?
     }
 }
 
 /// Collects the atom starts of every section. Called once the source has been
 /// read, before layout resolves anything.
 pub fn atoms(asm: &Assembler) -> Atoms {
-    let mut starts: HashMap<SectionId, Vec<(u32, SymbolId)>> = HashMap::new();
+    let mut starts: HashMap<SectionId, Vec<(u32, u32, SymbolId)>> = HashMap::new();
     for (id, sym) in asm.symbols.iter() {
         let SymbolValue::Label { section, frag } = sym.value else {
             continue;
@@ -274,12 +300,13 @@ pub fn atoms(asm: &Assembler) -> Atoms {
         if is_temporary(asm.interner.get(sym.name)) {
             continue;
         }
-        starts.entry(section).or_default().push((frag, id));
+        starts
+            .entry(section)
+            .or_default()
+            .push((frag, sym.def_order, id));
     }
     for list in starts.values_mut() {
-        // Stable, so that labels sharing a fragment keep their source order
-        // and the last of them is the one `at` finds.
-        list.sort_by_key(|&(f, _)| f);
+        list.sort_by_key(|&(f, o, _)| (f, o));
     }
     Atoms { starts }
 }
@@ -605,17 +632,20 @@ pub fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
 
 /// Whether a linker-visible label starts an atom strictly after `from` and
 /// at or before `to` (in either order), so that the two positions are in
-/// different atoms. Positions are `(section, fragment)`.
+/// different atoms. Positions are `(section, fragment, definition order)`;
+/// see [`Atoms`].
 pub fn atom_starts_between(
     interner: &crate::intern::Interner,
     symbols: &crate::symbol::SymbolTable,
-    from: (SectionId, u32),
-    to: (SectionId, u32),
+    from: (SectionId, u32, u32),
+    to: (SectionId, u32, u32),
 ) -> bool {
-    let (lo, hi) = (from.1.min(to.1), from.1.max(to.1));
+    let (a, b) = ((from.1, from.2), (to.1, to.2));
+    let (lo, hi) = (a.min(b), a.max(b));
     symbols.iter().any(|(_, sym)| match sym.value {
         SymbolValue::Label { section, frag } => {
-            section == from.0 && frag > lo && frag <= hi && !is_temporary(interner.get(sym.name))
+            let at = (frag, sym.def_order);
+            section == from.0 && at > lo && at <= hi && !is_temporary(interner.get(sym.name))
         }
         _ => false,
     })
@@ -758,7 +788,8 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         })
         .collect();
 
-    let (syms, index, counts) = collect_symbols(asm, cpu, &secs, &places, &visible);
+    let table = collect_symbols(asm, cpu, &secs, &places, &visible);
+    let (syms, index, counts) = (&table.syms, &table.index, table.counts);
     let number = |n: Named| -> Result<(u32, bool), OutputError> {
         Ok(match n {
             Named::Symbol(id) => match index.get(&id) {
@@ -771,7 +802,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 }
             },
             Named::Section(s) => (places.index[&s] as u32 + 1, false),
-            Named::SectionLabel(s) => (places.index[&s] as u32, true),
+            Named::SectionLabel(s) => (table.labels[&s], true),
         })
     };
 
@@ -867,7 +898,12 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                         field = 0;
                     }
                     AddendPlace::Entry => {}
-                    AddendPlace::None if field != 0 && ty != arm64_reloc::POINTER_TO_GOT => {
+                    // llvm-mc keeps the constant of `sym@GOT`, less the offset
+                    // of `.` in its section for `sym@GOT - .`.
+                    AddendPlace::None if ty == arm64_reloc::POINTER_TO_GOT => {
+                        field = r.addend - if r.desc.pcrel { r.offset as i64 } else { 0 };
+                    }
+                    AddendPlace::None if field != 0 => {
                         return Err(OutputError::Unsupported(format!(
                             "a GOT reference to `{}` lies {field} bytes into the symbol a \
                              Mach-O relocation can name, and a GOT slot has no offset",
@@ -879,7 +915,9 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             }
         }
         let (off, size) = (r.offset as usize, r.desc.size as usize);
-        if addend_place(cpu, ty) == AddendPlace::Field && off + size <= secs[si].bytes.len() {
+        let in_field =
+            addend_place(cpu, ty) == AddendPlace::Field || ty == arm64_reloc::POINTER_TO_GOT;
+        if in_field && off + size <= secs[si].bytes.len() {
             crate::arch::Endian::Little.write(&mut secs[si].bytes[off..off + size], field as u64);
         }
         secs[si].relocs.append(&mut entries);
@@ -891,7 +929,19 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         s.relocs.reverse();
     }
 
-    Ok(write(asm, cpu, &secs, &syms, counts))
+    // Each region as its address and length.
+    let regions: Vec<(u32, u16, u16)> = asm
+        .macho
+        .data_regions
+        .iter()
+        .filter_map(|d| {
+            let start = places.symbol(asm, d.start);
+            let end = places.symbol(asm, d.end?);
+            Some((start as u32, (end - start) as u16, d.kind))
+        })
+        .collect();
+
+    Ok(write(asm, cpu, &secs, syms, counts, &regions))
 }
 
 /// Every section of the object, in the order the source created them. Unlike
@@ -901,10 +951,17 @@ fn collect_sections(asm: &Assembler) -> Result<Vec<Sec>, OutputError> {
     for s in &asm.sections {
         let name = asm.interner.get(s.name).to_string();
         let (segment, section) = split_name(&name).ok_or_else(|| {
-            OutputError::Unsupported(format!(
-                "`{name}` is not a Mach-O section; Mach-O sections are named \
-                 `SEGMENT,SECTION`"
-            ))
+            OutputError::Unsupported(if name.starts_with(".debug_") || name.ends_with("_frame") {
+                // What `-g`, `.loc` and `.cfi_*` make, all in ELF's terms.
+                "DWARF and call frame information are not written to Mach-O objects yet; \
+                 assemble without `-g`, `.loc` and `.cfi_*`"
+                    .to_string()
+            } else {
+                format!(
+                    "`{name}` is not a Mach-O section; Mach-O sections are named \
+                     `SEGMENT,SECTION`"
+                )
+            })
         })?;
         let info = asm.macho.sections.get(&s.id);
         let (ty, attrs) = match info {
@@ -1010,29 +1067,37 @@ fn collect_symbols(
     secs: &[Sec],
     places: &Places,
     visible: &HashSet<SymbolId>,
-) -> (Vec<OutSym>, HashMap<SymbolId, u32>, (u32, u32, u32)) {
-    let mut locals: Vec<(Option<SymbolId>, OutSym)> = Vec::new();
+) -> Symtab {
+    let mut locals: Vec<(Local, OutSym)> = Vec::new();
     let mut externals: Vec<(SymbolId, OutSym)> = Vec::new();
     let mut undefined: Vec<(SymbolId, OutSym)> = Vec::new();
 
-    // The labels arm64 objects carry at the start of every section come
-    // first, so that each has its section's own index.
-    if cpu.labels_sections() {
-        for (i, s) in secs.iter().enumerate() {
-            locals.push((
-                None,
-                OutSym {
-                    name: format!("ltmp{i}"),
-                    n_type: N_SECT,
-                    n_sect: i as u8 + 1,
-                    n_desc: 0,
-                    n_value: s.addr,
-                },
-            ));
-        }
-    }
+    // The label arm64 objects carry at the start of each section is a local
+    // symbol like any other, created when the section was: it goes among the
+    // others where that happened, as llvm-mc has it.
+    let mut labels = secs
+        .iter()
+        .enumerate()
+        .filter(|_| cpu.labels_sections())
+        .map(|(i, s)| {
+            let mark = asm.macho.section_marks.get(&s.id).copied().unwrap_or(0);
+            let label = OutSym {
+                name: format!("ltmp{i}"),
+                n_type: N_SECT,
+                n_sect: i as u8 + 1,
+                n_desc: 0,
+                n_value: s.addr,
+            };
+            (mark, s.id, label)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .peekable();
 
     for (id, sym) in asm.symbols.iter() {
+        while let Some((_, section, label)) = labels.next_if(|l| l.0 <= id.0) {
+            locals.push((Local::SectionLabel(section), label));
+        }
         let name = asm.interner.get(sym.name).to_string();
         if sym.ty == crate::symbol::SymType::Section {
             continue;
@@ -1109,35 +1174,58 @@ fn collect_symbols(
             },
         };
         if out.n_type & N_EXT == 0 {
-            locals.push((Some(id), out));
+            locals.push((Local::Symbol(id), out));
         } else if out.n_type & N_TYPE == N_UNDF {
             undefined.push((id, out));
         } else {
             externals.push((id, out));
         }
     }
+    for (_, section, label) in labels {
+        locals.push((Local::SectionLabel(section), label));
+    }
 
     externals.sort_by(|a, b| a.1.name.cmp(&b.1.name));
     undefined.sort_by(|a, b| a.1.name.cmp(&b.1.name));
 
-    let counts = (
-        locals.len() as u32,
-        externals.len() as u32,
-        undefined.len() as u32,
-    );
-    let mut index = HashMap::new();
-    let mut out = Vec::with_capacity(locals.len() + externals.len() + undefined.len());
-    for (id, s) in locals {
-        if let Some(id) = id {
-            index.insert(id, out.len() as u32);
-        }
-        out.push(s);
+    let mut table = Symtab {
+        counts: (
+            locals.len() as u32,
+            externals.len() as u32,
+            undefined.len() as u32,
+        ),
+        ..Symtab::default()
+    };
+    for (key, s) in locals {
+        let i = table.syms.len() as u32;
+        match key {
+            Local::Symbol(id) => table.index.insert(id, i),
+            Local::SectionLabel(section) => table.labels.insert(section, i),
+        };
+        table.syms.push(s);
     }
     for (id, s) in externals.into_iter().chain(undefined) {
-        index.insert(id, out.len() as u32);
-        out.push(s);
+        table.index.insert(id, table.syms.len() as u32);
+        table.syms.push(s);
     }
-    (out, index, counts)
+    table
+}
+
+/// A local symbol table entry: one of the assembler's symbols, or a section's
+/// `ltmpN` label.
+enum Local {
+    Symbol(SymbolId),
+    SectionLabel(SectionId),
+}
+
+/// The symbol table, and where in it each symbol and section label went.
+#[derive(Default)]
+struct Symtab {
+    syms: Vec<OutSym>,
+    index: HashMap<SymbolId, u32>,
+    labels: HashMap<SectionId, u32>,
+    /// How many locals, defined externals and undefined symbols, in order.
+    counts: (u32, u32, u32),
 }
 
 /// `N_EXT`, plus `N_PEXT` for a `.private_extern` symbol, which rsasm records
@@ -1208,6 +1296,7 @@ fn write(
     secs: &[Sec],
     syms: &[OutSym],
     counts: (u32, u32, u32),
+    regions: &[(u32, u16, u16)],
 ) -> Vec<u8> {
     let strings = string_table(syms);
 
@@ -1215,9 +1304,15 @@ fn write(
     // An object with no symbols has no symbol table, nor the commands that
     // would describe one.
     let has_symtab = !syms.is_empty();
-    let ncmds = 1 + build_version as u32 + 2 * has_symtab as u32;
+    let data_in_code = !regions.is_empty();
+    let ncmds = 1 + build_version as u32 + data_in_code as u32 + 2 * has_symtab as u32;
     let sizeofcmds = SEGMENT_COMMAND_64_SIZE
         + SECTION_64_SIZE * secs.len() as u32
+        + if data_in_code {
+            LINKEDIT_DATA_COMMAND_SIZE
+        } else {
+            0
+        }
         + if has_symtab {
             SYMTAB_COMMAND_SIZE + DYSYMTAB_COMMAND_SIZE
         } else {
@@ -1246,7 +1341,8 @@ fn write(
         reloc_off.push(off);
         off += s.relocs.len() as u64 * RELOCATION_SIZE;
     }
-    let symoff = off;
+    let dataoff = off;
+    let symoff = dataoff + regions.len() as u64 * DATA_IN_CODE_ENTRY_SIZE;
     let stroff = symoff + syms.len() as u64 * NLIST_64_SIZE;
 
     let mut b = Buf::default();
@@ -1308,6 +1404,13 @@ fn write(
         b.u32(0); // ntools
     }
 
+    if data_in_code {
+        b.u32(LC_DATA_IN_CODE);
+        b.u32(LINKEDIT_DATA_COMMAND_SIZE);
+        b.u32(dataoff as u32);
+        b.u32((regions.len() as u64 * DATA_IN_CODE_ENTRY_SIZE) as u32);
+    }
+
     if has_symtab {
         b.u32(LC_SYMTAB);
         b.u32(SYMTAB_COMMAND_SIZE);
@@ -1346,6 +1449,12 @@ fn write(
             b.u32(r.address);
             b.u32(r.word());
         }
+    }
+
+    for &(offset, length, kind) in regions {
+        b.u32(offset);
+        b.u16(length);
+        b.u16(kind);
     }
 
     for s in syms {
@@ -1405,7 +1514,8 @@ fn string_table(syms: &[OutSym]) -> Strings {
         offsets.insert(name.to_string(), at);
         previous = Some((name, at));
     }
-    while !bytes.len().is_multiple_of(4) {
+    // Padded to a word, as the table ends the file.
+    while !bytes.len().is_multiple_of(8) {
         bytes.push(0);
     }
     Strings { bytes, offsets }
