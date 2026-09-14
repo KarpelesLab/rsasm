@@ -497,9 +497,34 @@ fn alignment_padding_uses_real_no_ops() {
         hex(&text_for("arm", "mov r0, r0\n.balign 16\nmov r0, r0\n")),
         "00 00 a0 e1 00 f0 20 e3 00 f0 20 e3 00 f0 20 e3 00 00 a0 e1"
     );
+    // Ending on a word, since llvm-mc does not pad the end of the section
+    // and GNU as does; see the next test.
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            "movs r0, r0\n.balign 8\nmovs r0, r0\nmovs r0, r0\n"
+        )),
+        "00 00 00 bf 00 bf 00 bf 00 00 00 00"
+    );
+}
+
+/// GNU as pads the end of a code section to the section's alignment, but only
+/// up to a word, with the no-ops of the mode the file ends in; and it takes
+/// an odd remainder as zeros, ahead of the no-ops (checked with
+/// `arm-none-eabi-as -march=armv7-a`, whose Thumb padding otherwise uses
+/// 32-bit no-ops where this uses two 16-bit ones).
+#[test]
+fn code_sections_are_padded_to_a_word_at_the_end() {
     assert_eq!(
         hex(&text_for("thumb", "movs r0, r0\n.balign 8\nmovs r0, r0\n")),
-        "00 00 00 bf 00 bf 00 bf 00 00"
+        "00 00 00 bf 00 bf 00 bf 00 00 00 bf"
+    );
+    assert_eq!(
+        hex(&text_for(
+            "arm",
+            "mov r0, r0\n.byte 1\n.p2align 3\nmov r1, r1\n"
+        )),
+        "00 00 a0 e1 01 00 00 00 01 10 a0 e1"
     );
 }
 

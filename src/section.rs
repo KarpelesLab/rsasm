@@ -202,6 +202,15 @@ pub struct FixupKind {
     /// Anything it cannot evaluate gets the widest field. `range` still
     /// decides whether the value that is finally written is accepted.
     pub relax_difference: bool,
+    /// A further test the value has to pass, beyond range and alignment, for
+    /// fields that hold only some of the values in their range: an ARM `adr`
+    /// is an `add` or `sub` of a modified immediate, so it reaches `pc + 0x400`
+    /// but not `pc + 0x3fc`. Relaxation weighs it like the range.
+    pub accepts: Option<fn(i64) -> bool>,
+    /// Said after a value that does not fit, when the field's limit alone
+    /// does not tell the reader what to do about it: a literal load that
+    /// does not reach its pool needs the pool moved, not the load.
+    pub range_hint: Option<&'static str>,
 }
 
 /// The symbol a relocation is written against.
@@ -248,7 +257,23 @@ impl FixupKind {
             link: LinkValue::Plain,
             pc_align: 1,
             relax_difference: false,
+            accepts: None,
+            range_hint: None,
         }
+    }
+
+    /// Accepts only values `f` accepts, within the range; see
+    /// [`FixupKind::accepts`].
+    pub fn accepting(mut self, f: fn(i64) -> bool) -> FixupKind {
+        self.accepts = Some(f);
+        self
+    }
+
+    /// Adds advice to the out-of-range diagnostic; see
+    /// [`FixupKind::range_hint`].
+    pub fn with_range_hint(mut self, hint: &'static str) -> FixupKind {
+        self.range_hint = Some(hint);
+        self
     }
 
     pub fn pcrel(size: u8, adjust: i8) -> FixupKind {
@@ -366,6 +391,11 @@ impl FixupKind {
         if self.value_align > 1 && v % self.value_align as i128 != 0 {
             return false;
         }
+        if let Some(f) = self.accepts
+            && !i64::try_from(v).is_ok_and(f)
+        {
+            return false;
+        }
         if self.bits() >= 64 && self.limits.is_none() {
             return true;
         }
@@ -424,6 +454,11 @@ pub enum FragKind {
         fill: Vec<u8>,
         max_skip: Option<u64>,
         /* filled by layout */ pad: u64,
+        /// For no-op padding, the backend state the padding was written in,
+        /// where that is not simply the state at the end of the source: an
+        /// alignment in ARM code keeps ARM no-ops however the file goes on,
+        /// as one in x86 `.code32` keeps 32-bit ones.
+        nop_state: Option<crate::arch::ArchState>,
     },
     /// Advance the location counter to an absolute offset within the section.
     Org {
@@ -514,6 +549,11 @@ pub struct Section {
     /// `Assembler::switch_arch`. Empty while every fragment is the first
     /// backend's, which is the case in any file without `.arch`.
     pub arch_marks: Vec<(u32, u32)>,
+    /// The mapping symbol in force where the section ends so far, or `None`
+    /// before anything has been marked; see [`crate::mapping`].
+    pub map_state: Option<&'static str>,
+    /// The mapping symbols recorded so far, placed once the layout is known.
+    pub map_events: Vec<crate::mapping::MapEvent>,
 }
 
 impl Section {
@@ -532,6 +572,8 @@ impl Section {
             open_data: None,
             group: None,
             arch_marks: Vec::new(),
+            map_state: None,
+            map_events: Vec::new(),
         }
     }
 

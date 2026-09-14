@@ -232,6 +232,7 @@ impl Assembler {
                 fill,
                 max_skip: None,
                 pad: 0,
+                nop_state: None,
             },
             span,
         ));

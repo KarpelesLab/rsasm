@@ -10,7 +10,7 @@ use super::insn::{AL, Mnem};
 use super::operand::{Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
 use super::reg::{self, Reg};
 use super::{Insn, reloc};
-use crate::arch::AsmCtx;
+use crate::arch::{AsmCtx, Literal};
 use crate::expr::ExprRef;
 use crate::section::{Fixup, FixupKind, Variant};
 use crate::source::Span;
@@ -383,10 +383,100 @@ fn memory_operand<'a>(cx: &mut AsmCtx<'_>, op: &'a Operand) -> Option<&'a Mem> {
     }
 }
 
+/// The value of `ldr rt, =expr` when it is a number, which GNU as loads with
+/// a `mov` or `mvn` instead where one can hold it, and otherwise with a load
+/// from the literal pool; `None` for a value the pool holds as an expression.
+///
+/// Either way the number has to fit in the word the pool would hold.
+pub fn literal_constant(cx: &mut AsmCtx<'_>, op: &Operand, e: ExprRef) -> Option<Option<u32>> {
+    let Some(v) = cx.constant(e) else {
+        return Some(None);
+    };
+    if !(i32::MIN as i64..=u32::MAX as i64).contains(&v) {
+        cx.error(
+            op.span,
+            format!("{v} does not fit in the 32-bit word of a literal pool entry"),
+        );
+        return None;
+    }
+    Some(Some(v as u32))
+}
+
+/// The error for an `=expr` operand on anything but `ldr`.
+pub fn literal_only_for_ldr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, op: &Operand) -> Option<()> {
+    if ins.mnem == Mnem::Ldr {
+        return Some(());
+    }
+    cx.error(
+        op.span,
+        format!(
+            "`{}` cannot load from a literal pool; only `ldr` can",
+            ins.text
+        ),
+    );
+    None
+}
+
+/// A PC-relative load's 12-bit offset and its U bit. An offset of zero keeps
+/// the U bit it was assembled with, which for a literal load is clear: GNU as
+/// writes `ldr r0, [pc, #-0]`.
+fn scatter_literal(w: u64, v: i64) -> u64 {
+    if v == 0 {
+        return w & !0xfff;
+    }
+    let up = if v > 0 { 0x0080_0000 } else { 0 };
+    (w & !0x0080_0fff) | up | (v.unsigned_abs() & 0xfff)
+}
+
+/// `ldr rt, =expr` in A32.
+fn literal_load(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    rt: u32,
+    op: &Operand,
+    e: ExprRef,
+) -> Option<Vec<Variant>> {
+    literal_only_for_ldr(cx, ins, op)?;
+    let constant = literal_constant(cx, op, e)?;
+    if let Some(v) = constant {
+        if let Some(field) = imm::modified(v) {
+            return Some(one(word(ins.cond, 0x03a0_0000 | (rt << 12) | field)));
+        }
+        if let Some(field) = imm::modified(!v) {
+            return Some(one(word(ins.cond, 0x03e0_0000 | (rt << 12) | field)));
+        }
+    }
+    let value = match cx.constant(e) {
+        Some(v) if constant.is_some() => Literal::Const(v),
+        _ => Literal::Expr(e),
+    };
+    let entry = cx.literal(value, 4, op.span);
+    // The PC reads two instructions ahead, and the load reaches 4095 bytes
+    // either way from there.
+    let kind = FixupKind::pcrel(4, 8)
+        .with_limits(-4095, 4095)
+        .with_range_hint("the literal pool is too far away; put an `.ltorg` nearer")
+        .scatter(scatter_literal);
+    Some(vec![Variant {
+        bytes: word(ins.cond, 0x051f_0000 | (rt << 12))
+            .to_le_bytes()
+            .to_vec(),
+        fixups: vec![Fixup {
+            offset: 0,
+            expr: entry,
+            kind,
+            span: op.span,
+        }],
+    }])
+}
+
 fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     arity(cx, ins, &[2])?;
     let rt = reg_of(cx, &ins.ops[0])? as u32;
+    if let OperandKind::Literal(e) = ins.ops[1].kind {
+        return literal_load(cx, ins, rt, &ins.ops[1], e);
+    }
     let mem = *memory_operand(cx, &ins.ops[1])?;
     let (p, w) = index_bits(mem.index);
     let l = u32::from(matches!(ins.mnem, Mnem::Ldr | Mnem::Ldrb));

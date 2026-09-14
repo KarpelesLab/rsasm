@@ -227,7 +227,8 @@ struct Shdr {
 
 /// An assembler symbol that made it into the ELF symbol table.
 struct OutSym {
-    id: SymbolId,
+    /// `None` for a mapping symbol, which no relocation names.
+    id: Option<SymbolId>,
     name: u32,
     info: u8,
     other: u8,
@@ -301,7 +302,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         .iter()
         .enumerate()
         // +1 for the reserved null entry.
-        .map(|(i, s)| (s.id, i as u32 + 1))
+        .filter_map(|(i, s)| Some((s.id?, i as u32 + 1)))
         .collect();
 
     // Relocation sections, one per section that needs them.
@@ -615,6 +616,9 @@ fn collect_symbols(
         };
 
         let bind = match sym.binding {
+            // An undefined symbol is the linker's to find, so it is global
+            // even though nothing declared it so.
+            Binding::Local if !sym.is_defined() => STB_GLOBAL,
             Binding::Local => STB_LOCAL,
             Binding::Global => STB_GLOBAL,
             Binding::Weak => STB_WEAK,
@@ -646,7 +650,7 @@ fn collect_symbols(
         };
 
         let out = OutSym {
-            id,
+            id: Some(id),
             name,
             info: (bind << 4) | ty,
             other,
@@ -660,6 +664,23 @@ fn collect_symbols(
         } else {
             globals.push(out);
         }
+    }
+
+    // Mapping symbols are untyped locals, one per change between code and
+    // data; see `crate::mapping`.
+    for m in &asm.mapping_symbols {
+        let Some(&shndx) = sec_index.get(&m.section) else {
+            continue;
+        };
+        locals.push(OutSym {
+            id: None,
+            name: strtab.add(m.name),
+            info: (STB_LOCAL << 4) | STT_NOTYPE,
+            other: 0,
+            shndx,
+            value: m.offset,
+            size: 0,
+        });
     }
 
     // Section symbols sort first among locals, which is what linkers expect

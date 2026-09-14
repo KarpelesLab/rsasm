@@ -18,7 +18,7 @@ pub mod reg;
 pub mod reloc;
 pub mod thumb;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Request, Syntax};
 use crate::cursor::Cursor;
 use crate::lexer::TokKind;
 use crate::section::Variant;
@@ -128,19 +128,38 @@ impl Architecture for Arm {
     /// have different no-ops, so the current mode picks.
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8> {
         let len = len as usize;
-        let mut out = Vec::with_capacity(len);
-        if state.bits == THUMB_BITS {
-            while out.len() + 2 <= len {
-                out.extend_from_slice(&thumb::NOP.to_le_bytes());
-            }
+        let thumb_nop = thumb::NOP.to_le_bytes();
+        let arm_nop = encode::NOP.to_le_bytes();
+        let nop: &[u8] = if state.bits == THUMB_BITS {
+            &thumb_nop
         } else {
-            while out.len() + 4 <= len {
-                out.extend_from_slice(&encode::NOP.to_le_bytes());
-            }
+            &arm_nop
+        };
+        // A misaligned remainder cannot hold an instruction, so it is zeros,
+        // and comes first so that the no-ops after it are aligned: GNU as
+        // and llvm-mc both pad that way.
+        let mut out = vec![0; len % nop.len()];
+        while out.len() < len {
+            out.extend_from_slice(nop);
         }
-        // A misaligned remainder cannot hold an instruction; zero it.
-        out.resize(len, 0);
         out
+    }
+
+    /// GNU as pads the end of a code section to its alignment, up to a word.
+    fn pads_section_tail(&self, flags: &crate::section::SectionFlags) -> bool {
+        flags.exec
+    }
+
+    fn section_tail_align_limit(&self) -> u64 {
+        4
+    }
+
+    fn code_mapping(&self, state: &ArchState) -> Option<(&'static str, u64)> {
+        Some(if state.bits == THUMB_BITS {
+            ("$t", 2)
+        } else {
+            ("$a", 4)
+        })
     }
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
@@ -188,18 +207,18 @@ impl Architecture for Arm {
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
         match name {
             ".arm" | ".code32" => {
-                cx.state.bits = 32;
+                set_mode(cx, false);
                 true
             }
             ".thumb" | ".code16" => {
-                cx.state.bits = THUMB_BITS;
+                set_mode(cx, true);
                 true
             }
             ".code" => {
                 // `.code 16` / `.code 32`, the spelling ARM sources use.
                 match cur.peek().kind {
-                    TokKind::Int(16) => cx.state.bits = THUMB_BITS,
-                    TokKind::Int(32) => cx.state.bits = 32,
+                    TokKind::Int(16) => set_mode(cx, true),
+                    TokKind::Int(32) => set_mode(cx, false),
                     _ => {
                         let span = cur.peek().span;
                         cx.error(span, "`.code` expects 16 or 32");
@@ -207,6 +226,10 @@ impl Architecture for Arm {
                     }
                 }
                 cur.advance();
+                true
+            }
+            ".ltorg" | ".pool" => {
+                cx.requests.push(Request::FlushLiterals);
                 true
             }
             // Unified syntax is the only syntax this backend implements, and
@@ -219,6 +242,20 @@ impl Architecture for Arm {
             _ => false,
         }
     }
+}
+
+/// Switches between ARM and Thumb, as GNU as's `.arm` and `.thumb` do: the
+/// section's alignment is raised to two bytes, and ARM code after Thumb
+/// starts on a word boundary, padded with zeros rather than no-ops.
+fn set_mode(cx: &mut AsmCtx<'_>, thumb: bool) {
+    if (cx.state.bits == THUMB_BITS) == thumb {
+        return;
+    }
+    cx.state.bits = if thumb { THUMB_BITS } else { 32 };
+    if !thumb {
+        cx.requests.push(Request::AlignZero(4));
+    }
+    cx.requests.push(Request::RecordAlign(2));
 }
 
 /// True if `name` is an ARM register, for callers that need to avoid treating

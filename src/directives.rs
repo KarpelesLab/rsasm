@@ -264,8 +264,11 @@ impl Assembler {
             sections,
             section: *section,
             relaxable: false,
+            requests: Vec::new(),
         };
         if arch.directive(&mut cx, text, &mut cur) {
+            let requests = std::mem::take(&mut cx.requests);
+            self.run_requests(requests, stmt.span);
             self.expect_end(&mut cur);
             return true;
         }
@@ -332,6 +335,7 @@ impl Assembler {
         if cur.at_end() {
             return true;
         }
+        self.map_data();
         if aligned && self.arch.aligns_data() {
             self.align_data(size as u64, span);
         }
@@ -357,6 +361,7 @@ impl Assembler {
                 fill: vec![0],
                 max_skip: None,
                 pad: 0,
+                nop_state: None,
             },
             span,
         ));
@@ -417,6 +422,7 @@ impl Assembler {
         if cur.at_end() {
             return true;
         }
+        self.map_data();
         loop {
             let Some(mut bytes) = self.expect_string(cur, "literal") else {
                 return true;
@@ -433,6 +439,7 @@ impl Assembler {
     }
 
     fn dir_leb(&mut self, cur: &mut Cursor<'_>, signed: bool, span: Span) -> bool {
+        self.map_data();
         loop {
             let Some(e) = self.parse_expr(cur) else {
                 return true;
@@ -468,6 +475,17 @@ impl Assembler {
         } else {
             self.exprs.int(0, span)
         };
+        // A `.space` of a known size is a fill fragment to GNU as, which
+        // marks its own start; one it cannot size yet is not.
+        self.map_data();
+        if self
+            .eval_ref(size)
+            .ok()
+            .and_then(|v| v.as_abs())
+            .is_some_and(|n| n > 0)
+        {
+            self.map_data_frag();
+        }
         self.push_frag(
             FragKind::Space {
                 size,
@@ -516,6 +534,10 @@ impl Assembler {
                 .error(span, "`.fill` would emit more than 256 MiB");
             return true;
         }
+        self.map_data();
+        if total > 0 {
+            self.map_data_frag();
+        }
         let unit = self.arch.endian().bytes(value as u64, size as usize);
         let mut bytes = Vec::with_capacity(total as usize);
         for _ in 0..count {
@@ -535,7 +557,10 @@ impl Assembler {
             return true;
         };
         match std::fs::read(&path) {
-            Ok(data) => self.emit_bytes(&data, span),
+            Ok(data) => {
+                self.map_data();
+                self.emit_bytes(&data, span)
+            }
             Err(e) => self
                 .diags
                 .error(span, format!("cannot read `{}`: {e}", path.display())),
@@ -592,9 +617,19 @@ impl Assembler {
             None if self.section(self.cur).flags.exec => Vec::new(),
             None => vec![0],
         };
+        // GNU as makes no fragment for an alignment of one byte, and marks
+        // the start of any other: as code where no-ops pad it.
+        if align > 1 {
+            if fill.is_empty() {
+                self.map_code_align();
+            } else {
+                self.map_data_frag();
+            }
+        }
         self.push_frag(
             FragKind::Align {
                 align,
+                nop_state: fill.is_empty().then(|| self.arch_state.clone()),
                 fill,
                 max_skip,
                 pad: 0,

@@ -7,7 +7,7 @@
 
 use crate::cursor::Cursor;
 use crate::diag::DiagBag;
-use crate::expr::{ExprArena, ExprParser};
+use crate::expr::{ExprArena, ExprParser, ExprRef};
 use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
 use crate::section::{FragKind, SectionId, Variant};
@@ -141,6 +141,44 @@ pub enum FlatModifier {
     LinkerOnly,
 }
 
+/// Something a backend asks the core to do to the section, which it cannot do
+/// itself because sections belong to the core. Queued on
+/// [`AsmCtx::requests`] and carried out once the statement is assembled.
+#[derive(Clone, Debug)]
+pub enum Request {
+    /// Pads to a multiple of `align` bytes with zeros, even in code: GNU as's
+    /// `frag_align (n, 0, 0)`, which ARM's `.arm` and literal pools use.
+    AlignZero(u64),
+    /// Raises the section's alignment to at least this many bytes, without
+    /// padding anything: GNU as's `record_alignment`.
+    RecordAlign(u64),
+    /// A value the instruction loads from the section's literal pool; see
+    /// [`AsmCtx::literal`].
+    Literal(LiteralRequest),
+    /// Writes out the section's literal pool here: `.ltorg`.
+    FlushLiterals,
+}
+
+/// One use of a literal pool entry.
+#[derive(Clone, Debug)]
+pub struct LiteralRequest {
+    /// The label the instruction refers to, defined where the entry lands.
+    pub label: Name,
+    pub value: Literal,
+    /// Entry width in bytes.
+    pub size: u8,
+    pub span: Span,
+}
+
+/// A literal pool entry's value.
+#[derive(Copy, Clone, Debug)]
+pub enum Literal {
+    /// A number, as it was when the instruction was read.
+    Const(i64),
+    /// Anything else, which the entry relocates if it has to.
+    Expr(ExprRef),
+}
+
 /// Mutable, architecture-specific assembler state.
 ///
 /// Kept outside the [`Architecture`] object so backends stay `&self` and can be
@@ -201,9 +239,33 @@ pub struct AsmCtx<'a> {
     /// a fragment that relaxation revisits, though it has one encoding here;
     /// see [`crate::section::Fragment::relaxable`].
     pub relaxable: bool,
+    /// What the statement needs done to the section beyond its own bytes;
+    /// see [`Request`].
+    pub requests: Vec<Request>,
 }
 
 impl AsmCtx<'_> {
+    /// Places `value` in the current section's literal pool and returns an
+    /// expression for the address of its entry.
+    ///
+    /// The pool is written out at the next `.ltorg`, or at the end of the
+    /// section, and equal entries are shared the way GNU as shares them: the
+    /// same number, or the same symbol plus the same addend. Until then the
+    /// entry's address is a label with a name no source can spell.
+    pub fn literal(&mut self, value: Literal, size: u8, span: Span) -> ExprRef {
+        // The arena only grows, and grows below, so its length names each
+        // entry once.
+        let n = self.exprs.len();
+        let label = self.interner.intern(&format!(".L\u{0}lit.{n}"));
+        self.requests.push(Request::Literal(LiteralRequest {
+            label,
+            value,
+            size,
+            span,
+        }));
+        self.exprs.alloc(crate::expr::ExprKind::Sym(label), span)
+    }
+
     pub fn expr_parser(&mut self) -> ExprParser<'_> {
         ExprParser {
             arena: self.exprs,
@@ -460,6 +522,30 @@ pub trait Architecture {
     /// linker placing the next object's section sees it.
     fn pads_section_tail(&self, _flags: &crate::section::SectionFlags) -> bool {
         false
+    }
+
+    /// The most a section tail is padded to, where
+    /// [`Architecture::pads_section_tail`] pads it at all. ARM's GNU as pads
+    /// code to its alignment only up to a word.
+    fn section_tail_align_limit(&self) -> u64 {
+        u64::MAX
+    }
+
+    /// The mapping symbol that marks code this backend emits in `state`, and
+    /// the alignment in bytes such code gives its section, for a target whose
+    /// ELF objects mark code and data apart: ARM's `$a` and `$t`. `None`, the
+    /// default, for a target that does not.
+    ///
+    /// Where the marks go follows GNU as's ARM port; see
+    /// `Assembler::map_code`.
+    fn code_mapping(&self, _state: &ArchState) -> Option<(&'static str, u64)> {
+        None
+    }
+
+    /// The mapping symbol that marks data, for a target with
+    /// [`Architecture::code_mapping`].
+    fn data_mapping(&self) -> &'static str {
+        "$d"
     }
 
     /// Padding for `.align` in an executable section: real no-ops where the

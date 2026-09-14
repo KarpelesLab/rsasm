@@ -1,0 +1,86 @@
+=== a function
+        .syntax unified
+        .global f
+f:      adds    r0, r0, r1
+        bx      lr
+=== literal loads and the moves that replace them
+        .syntax unified
+f:      ldr     r0, =0x12345678
+        ldr     r1, =0xff
+        ldr     r2, =0x1234
+        ldr     r3, =0xffffff00
+        ldr     r4, =foo
+        ldr     r5, =0x00ab00ab
+        ldr     r6, =0xfffe0000
+        ldr     r8, =0x12345678
+        ldr     r0, =0x12345678
+        ldr     sp, =0x100
+        ldr     r7, =-1
+        bx      lr
+=== a pool after an odd halfword is padded with zeros
+        .syntax unified
+f:      ldr     r0, =0x12345678
+        movs    r0, r0
+        bx      lr
+        .ltorg
+        movs    r1, r1
+=== a narrow load reaches 1020 bytes
+        .syntax unified
+        ldr     r0, =0x12345678
+        .space  1018
+        .ltorg
+=== a load past 1020 bytes is 32 bits
+        .syntax unified
+        ldr     r0, =0x12345678
+        .space  1020
+        .ltorg
+=== a load grows when the code before its pool grows
+        .syntax unified
+        ldr     r0, =0x12345678
+        ldr     r1, =0x12345679
+        .space  1014
+        b       far
+        .ltorg
+        .space  2048
+far:    bx      lr
+=== loads either side of the 1020-byte limit as the code grows
+        .syntax unified
+        ldr     r0, =0x12345678
+        ldr     r1, =0x12345679
+        ldr     r2, =0x1234567a
+        .space  1008
+        b       far
+        b       far
+        .ltorg
+        .space  2048
+far:    bx      lr
+=== a load whose pool an alignment keeps in reach
+        .syntax unified
+        ldr     r0, =0x12345678
+        ldr     r1, =0x12345679
+        .space  1010
+        b       far
+        @ Zeros, since GNU as pads Thumb-2 code with 32-bit no-ops where
+        @ rsasm uses 16-bit ones.
+        .p2align 3, 0
+        .ltorg
+        .space  2048
+far:    bx      lr
+=== width suffixes
+        .syntax unified
+        ldr.w   r0, =0x12345678
+        ldr.n   r1, =0x12345678
+        ldr.w   r2, =0x11111111
+        ldr     r9, =0x11111111
+        .pool
+=== refused: a narrow load that does not reach its pool
+        .syntax unified
+        ldr.n   r0, =0x12345678
+        .space  1026
+        .ltorg
+=== a thumb pool at the end of the section
+        .syntax unified
+        .text
+        ldr     r0, =label
+        ldr     r1, =label + 1
+label:  bx      lr

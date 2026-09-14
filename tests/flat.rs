@@ -545,9 +545,12 @@ entry:
 helper:
         bl      entry
         bx      lr
-
+        nop
 "#,
-        image: Some((14, &[(0, "00 f0 02 f8 00 f0 00 b8 ff f7 fa ff 70 47")])),
+        image: Some((
+            16,
+            &[(0, "00 f0 02 f8 00 f0 00 b8 ff f7 fa ff 70 47 00 bf")],
+        )),
     },
     Case {
         name: "data across sections",
@@ -556,12 +559,13 @@ helper:
         .p2align 2
 entry:
         bx      lr
+        nop
         .data
         .p2align 2
         .word   entry
         .word   entry - .
 "#,
-        image: Some((12, &[(0, "70 47 00 00 00 80 00 00 f8 ff ff ff")])),
+        image: Some((12, &[(0, "70 47 00 bf 00 80 00 00 f8 ff ff ff")])),
     },
 ];
 

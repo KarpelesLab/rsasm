@@ -2,6 +2,8 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX and SuperH.
+And for ARM and Thumb where GNU as is the reference that matters and llvm-mc
+answers differently; see [ARM](#arm).
 
 ```console
 $ tools/oracles/build.sh          # once: builds the pinned references
@@ -29,6 +31,31 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `rl78-ccrl` | `rl78`, CC-RL syntax | `rl78-elf-as`, on the GNU half of each pair |
 | `rh850-ccrh` | `rh850`, CC-RH syntax | `v850-elf-as -mv850e3v5`, likewise |
 | `rx-ccrx` | `rx`, CC-RX syntax | `rx-elf-as`, likewise |
+| `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
+
+## ARM
+
+llvm-mc checks ARM and Thumb encodings in `tools/mc-diff`, but the source
+people write for ARM was written against GNU as, and for literal pools,
+mapping symbols and interworking the two disagree. So the `arm` and `thumb`
+corpora here compare whole objects against GNU as: `e_flags`; each allocated
+section's size, alignment and bytes; every relocation, printed by
+`tools/mc-diff/relocs.awk`; and the symbol table, mapping symbols included,
+printed by `object.awk`. Sections, symbols and relocation sections are
+sorted, since their order is each assembler's own. A snippet named
+`refused: ...` matches when both assemblers reject it.
+
+GNU as is run with `-march=armv7-a`: without it, it assumes a CPU with no
+Thumb-2 and no `blx`. Every snippet starts with `.syntax unified`, because
+GNU as reads Thumb in the older divided syntax unless told otherwise, and
+rsasm only knows the unified one.
+
+Where the two still differ, on purpose:
+
+- **Alignment padding in Thumb code.** GNU as for ARMv7 pads with 32-bit
+  `nop.w`, after one 16-bit `nop` if the count is odd; rsasm, like llvm-mc,
+  uses 16-bit ones throughout. Snippets pad Thumb code with zeros, or not at
+  all.
 
 ## Vendor syntax no reference reads
 

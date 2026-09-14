@@ -117,6 +117,8 @@ pub enum OperandKind {
     Mem(Mem),
     /// `{r0-r3, lr}`, as a bitmask of registers.
     List(u16),
+    /// `=expr`: a value for `ldr` to load from the literal pool.
+    Literal(ExprRef),
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +156,7 @@ impl Operand {
             OperandKind::Imm(_) => "an immediate".into(),
             OperandKind::Mem(_) => "a memory operand".into(),
             OperandKind::List(_) => "a register list".into(),
+            OperandKind::Literal(_) => "a literal pool value".into(),
         }
     }
 }
@@ -266,6 +269,16 @@ impl Parser<'_, '_> {
         let start = cur.peek().span;
         if cur.check_punct(Punct::LBrace) {
             return self.parse_reglist(cur);
+        }
+        if cur.eat_punct(Punct::Eq).is_some() {
+            cur.eat_punct(Punct::Hash);
+            let e = self.cx.expr_parser().parse(cur)?;
+            return Some(Operand {
+                kind: OperandKind::Literal(e),
+                span: start.to(cur.nth(0).span),
+                word: None,
+                writeback: false,
+            });
         }
         if cur.check_punct(Punct::LBracket) {
             return self.parse_mem(cur);

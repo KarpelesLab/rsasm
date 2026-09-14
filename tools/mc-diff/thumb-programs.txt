@@ -53,3 +53,7 @@ far:
         movs    r0, r0
         .balign 8
         movs    r0, r0
+        @ GNU as, and rsasm, pad the end of a code section to its alignment
+        @ up to a word; llvm-mc does not. Ending on a word keeps that out of
+        @ this case.
+        movs    r0, r0

@@ -152,6 +152,11 @@ pub struct Assembler {
     pub(crate) ccrx_defines: Vec<(String, String)>,
     /// What CC-RX `.SECTION` and `.ORG` said about each section.
     pub(crate) ccrx_sections: HashMap<SectionId, crate::dialect_cc::RxSection>,
+    /// The literals each section's next pool will hold; see
+    /// [`crate::literals`].
+    pub(crate) literal_pools: HashMap<SectionId, Vec<crate::arch::LiteralRequest>>,
+    /// The mapping symbols of the finished object; see [`crate::mapping`].
+    pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
 }
 
 impl Assembler {
@@ -198,6 +203,8 @@ impl Assembler {
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),
             ccrx_sections: HashMap::new(),
+            literal_pools: HashMap::new(),
+            mapping_symbols: Vec::new(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -1553,9 +1560,11 @@ impl Assembler {
             sections,
             section: *cur,
             relaxable: false,
+            requests: Vec::new(),
         };
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;
+        let requests = std::mem::take(&mut cx.requests);
         let Some(variants) = variants else { return };
         // Motorola syntax aligns code as well as data; see `motorola_align`.
         if self.options.dialect == Dialect::Motorola {
@@ -1565,8 +1574,10 @@ impl Assembler {
         if self.check_nobits(stmt.span) {
             return;
         }
+        self.map_code();
         let idx = self.cur_section().emit_variants(variants, stmt.span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
+        self.run_requests(requests, stmt.span);
     }
 }
 

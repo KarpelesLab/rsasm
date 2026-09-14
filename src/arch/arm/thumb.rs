@@ -684,6 +684,9 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
     let rt = encode::reg_of(cx, &ins.ops[0])?;
+    if let OperandKind::Literal(e) = ins.ops[1].kind {
+        return literal_load(cx, ins, rt, &ins.ops[1], e);
+    }
     let OperandKind::Mem(mem) = ins.ops[1].kind else {
         cx.error(
             ins.ops[1].span,
@@ -720,6 +723,91 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return None;
     }
     wide_load_store(cx, ins, rt, mem.base, off as u16)
+}
+
+/// 16-bit `ldr rt, [pc, #imm8 * 4]`.
+fn scatter_literal16(w: u64, v: i64) -> u64 {
+    (w & 0xff00) | (((v >> 2) as u64) & 0xff)
+}
+
+/// 32-bit `ldr.w rt, [pc, #±imm12]`: the U bit is bit 7 of the first
+/// halfword, and set for an offset of zero.
+fn scatter_literal32(w: u64, v: i64) -> u64 {
+    let up = if v >= 0 { 0x80 } else { 0 };
+    (w & !0x0fff_0080) | up | ((v.unsigned_abs() & 0xfff) << 16)
+}
+
+/// `ldr rt, =expr` in T32.
+///
+/// A number GNU as can move instead is moved, always with a 32-bit `mov.w`,
+/// `mvn.w` or `movw` (a 16-bit `movs` would change the flags); the stack
+/// pointer and the PC cannot take those, so they always load. Otherwise the
+/// load reaches the pool from the PC rounded down to a word, as a 16-bit
+/// instruction that reaches 1020 bytes forward if the register is a low one,
+/// and as a 32-bit one that reaches 4095 bytes either way; layout picks.
+fn literal_load(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    rt: Reg,
+    op: &crate::arch::arm::operand::Operand,
+    e: ExprRef,
+) -> Option<Vec<Variant>> {
+    encode::literal_only_for_ldr(cx, ins, op)?;
+    let constant = encode::literal_constant(cx, op, e)?;
+    if let Some(v) = constant
+        && rt != reg::SP
+        && rt != reg::PC
+    {
+        if let Some(imm12) = imm::thumb_expand(v) {
+            let (i, rest) = expand_parts(imm12);
+            return Some(wide(0xf04f | (i << 10), rest | ((rt as u16) << 8)));
+        }
+        if let Some(imm12) = imm::thumb_expand(!v) {
+            let (i, rest) = expand_parts(imm12);
+            return Some(wide(0xf06f | (i << 10), rest | ((rt as u16) << 8)));
+        }
+        if v <= 0xffff {
+            return Some(move_wide_bits(rt, v, false));
+        }
+    }
+    let value = match cx.constant(e) {
+        Some(v) if constant.is_some() => crate::arch::Literal::Const(v),
+        _ => crate::arch::Literal::Expr(e),
+    };
+    let entry = cx.literal(value, 4, op.span);
+    let hint = "the literal pool is too far away; put an `.ltorg` nearer";
+    let mut out = Vec::new();
+    if low(rt) && want_narrow(ins) {
+        let kind = FixupKind::pcrel(2, 4)
+            .with_pc_align(4)
+            .with_field(12, 4)
+            .with_limits(0, 1020)
+            .with_range_hint(hint)
+            .scatter(scatter_literal16);
+        out.push(fixed(
+            (0x4800u16 | ((rt as u16) << 8)).to_le_bytes().to_vec(),
+            entry,
+            kind,
+            op.span,
+        ));
+    }
+    if want_wide(ins) {
+        let kind = FixupKind::pcrel(4, 4)
+            .with_pc_align(4)
+            .with_limits(-4095, 4095)
+            .with_range_hint(hint)
+            .scatter(scatter_literal32);
+        out.push(fixed(
+            wide_bytes(0xf85f, (rt as u16) << 12),
+            entry,
+            kind,
+            op.span,
+        ));
+    }
+    if out.is_empty() {
+        return no_encoding(cx, ins);
+    }
+    Some(out)
 }
 
 fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {

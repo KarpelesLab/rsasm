@@ -57,6 +57,7 @@ impl Assembler {
     /// Resolves everything and prepares the sections for output. Returns false
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
+        self.flush_all_literals();
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
@@ -97,6 +98,7 @@ impl Assembler {
         self.assign_addresses();
         self.report_misaligned_data();
         self.apply_fixups();
+        self.place_mapping_symbols();
         self.materialize();
         !self.diags.has_errors()
     }
@@ -127,18 +129,27 @@ impl Assembler {
             let s = &self.sections[si];
             // A section that ends in another backend's code is padded as
             // that backend's GNU as would.
-            let (arch, _) = self.frag_arch(si, s.frags.len());
-            if s.align <= 1 || !arch.pads_section_tail(&s.flags) {
+            let (arch, state) = self.frag_arch(si, s.frags.len());
+            let align = s.align.min(arch.section_tail_align_limit());
+            if align <= 1 || !arch.pads_section_tail(&s.flags) {
                 continue;
             }
-            let fill = if s.flags.exec { Vec::new() } else { vec![0] };
-            let align = s.align;
+            let exec = s.flags.exec;
+            let fill = if exec { Vec::new() } else { vec![0] };
+            // No-op padding is code, and marked as such where the target
+            // marks code; see `crate::mapping`.
+            if let Some(names) = crate::mapping::mapping_names(arch, state)
+                && exec
+            {
+                self.map_align_with(SectionId(si as u32), names);
+            }
             self.sections[si].push(Fragment::new(
                 FragKind::Align {
                     align,
                     fill,
                     max_skip: None,
                     pad: 0,
+                    nop_state: None,
                 },
                 Span::DUMMY,
             ));
@@ -1204,10 +1215,12 @@ impl Assembler {
                 let size = self.sections[si].frags[fi].size() as usize;
                 let bytes = match &self.sections[si].frags[fi].kind {
                     FragKind::Bytes { .. } => continue,
-                    FragKind::Align { fill, .. } => {
+                    FragKind::Align {
+                        fill, nop_state, ..
+                    } => {
                         if fill.is_empty() && exec {
                             let (arch, state) = self.frag_arch(si, fi);
-                            arch.nop_fill(state, size as u64)
+                            arch.nop_fill(nop_state.as_ref().unwrap_or(state), size as u64)
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()
@@ -1255,6 +1268,15 @@ impl Assembler {
 /// "out of range for a 4-byte field" sends the reader to the wrong limit, and
 /// calling a misaligned target "out of range" sends them to the wrong problem.
 fn range_message(kind: &FixupKind, v: i64) -> String {
+    let message = plain_range_message(kind, v);
+    match kind.range_hint {
+        Some(hint) => format!("{message}: {hint}"),
+        None => message,
+    }
+}
+
+/// [`range_message`] without the field's hint.
+fn plain_range_message(kind: &FixupKind, v: i64) -> String {
     let what = if kind.pcrel { "offset" } else { "value" };
     let align = kind.value_align as i128;
     if align > 1 && (v as i128) % align != 0 {
