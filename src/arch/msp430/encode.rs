@@ -27,11 +27,6 @@ impl Enc {
         self.words.len() - 1
     }
 
-    /// Ors bits into an already-emitted word.
-    pub fn set(&mut self, at: usize, bits: u16) {
-        self.words[at] |= bits;
-    }
-
     /// Places a fixup over the field starting at word `at`. The words it
     /// covers must already be there, since the field is read back and
     /// rewritten by the fixup's own scatter function.
@@ -46,10 +41,6 @@ impl Enc {
             kind,
             span: x.span,
         });
-    }
-
-    pub fn len(&self) -> usize {
-        self.words.len()
     }
 
     /// The one candidate encoding: MSP430 instructions have a single size,

@@ -43,7 +43,7 @@ Prebuilt binaries for Linux, macOS and Windows are attached to each
 ## Status
 
 Early, but broad. The pipeline is complete end to end — lex, parse, encode,
-lay out, relax, relocate, write — with fourteen backends behind it.
+lay out, relax, relocate, write — with fifteen backends behind it.
 
 ### Architectures
 
@@ -64,6 +64,7 @@ assembler, not against rsasm's own idea of the manual. See
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
+| TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 3695 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
@@ -106,6 +107,11 @@ but 18 forms where both manuals show MAME to be wrong.
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
+- MSP430 objects as GNU as writes them for a linker that relaxes code: every
+  reference from code relocated, differences of code labels as
+  `R_MSP430_SYM_DIFF` pairs (in the line table too), the `.MSP430.attributes`
+  section and the `__crt0_*` references; and GNU as's polymorphic branches
+  (`beq`, `bgt`, `jump`, …) in their long form
 - diagnostics with source snippets that name the real limit, and assembly that
   continues past the first error
 
@@ -136,6 +142,9 @@ but 18 forms where both manuals show MAME to be wrong.
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - AArch64: most of NEON, SVE
 - PowerPC: AltiVec/VSX
+- MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
+  warnings and insertion, the silicon errata options, assembly-time
+  relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
 - RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
   as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
   `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
@@ -163,9 +172,10 @@ backend. Two such choices are worth knowing about:
   section, since the linker may bind the name elsewhere; a local one, or a
   local `.set` alias of a global one, is resolved. That is what both
   references do on nearly every target. The exceptions follow GNU as for
-  x86, m68k, SuperH and RL78 (a jump GNU as relaxes to a global symbol is
-  resolved on x86; only weak symbols are left to the linker on m68k; nothing
-  in the same section is on SuperH and RL78). On ARM GNU as is followed for
+  x86, m68k, SuperH, RL78 and MSP430 (a jump GNU as relaxes to a global
+  symbol is resolved on x86; only weak symbols are left to the linker on
+  m68k; nothing in the same section is on SuperH and RL78; everything is on
+  MSP430, whose linker relaxes code). On ARM GNU as is followed for
   whole objects: a `bl` to a local label is resolved, and made a `blx` where
   the label is a Thumb function, where llvm-mc relocates every `bl`.
 - **Default section alignment.** Sections start with the alignment the
@@ -203,7 +213,7 @@ rsasm [options] <input.s>...
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
 `riscv`, `powerpc`, `mips`, `sparc`, `retro`, `m68k`, `superh`, `rx`, `rl78`,
-`v850` and `k78`:
+`v850`, `k78` and `msp430`:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -460,14 +470,14 @@ line, and a unit naming the file.
 
 The two references agree on the formats and disagree on nearly everything
 inside them, so each target follows the one that checks its encodings: GNU as
-for x86, m68k, SuperH, RX, RL78 and V850, and llvm-mc for the rest. That
+for x86, m68k, SuperH, RX, RL78, V850 and MSP430, and llvm-mc for the rest. That
 decides, among other things, the default version (3 for GNU as, 4 for
 llvm-mc, 5 for either once a `.file 0` appears), how a path splits into a
 directory, whether a column carries over to the next `.loc`, which directives
 end a pending `.loc`, how CIEs are shared, and how padding and relocations are
 written. Each backend supplies its DWARF register numbers and names, return
 address column, alignment factors, initial instructions and FDE encoding; RX,
-RL78 and V850, whose GNU as has no CFI, refuse `.cfi_*` as it does. For `-g`,
+RL78, V850 and MSP430, whose GNU as has no CFI, refuse `.cfi_*` as it does. For `-g`,
 GNU as places an instruction from a macro on the line that called it, one
 from `.rept` or `.irp` on its line in the block, and one from an included file
 on its line there; llvm-mc puts every instruction in the main file at the
@@ -501,7 +511,7 @@ independent assembler, and compare the bytes:
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
-  V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
+  V850/RH850, MSP430 and the Z80, vasm for Motorola syntax and for the Z80 and the
   6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
@@ -526,13 +536,16 @@ independent assembler, and compare the bytes:
   relocations, from hand-written snippets, `-g` and whole files from GCC and
   Clang. 1,005 of 1,005 match across twenty-one target variants.
 
-The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
+The x86 and MSP430 backends are also fuzzed: `tools/fuzz/x86.py` generates random
 instructions from a table of forms written from the Intel manual, in all three
 modes and both syntaxes, some of them deliberately invalid, and compares
 rsasm's bytes, relocations and accept/reject decision with GNU as's and
 llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
 from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. See `tools/fuzz/README.md`.
+case where rsasm differs from both. `tools/fuzz/msp430.py` does the same
+against GNU as alone for the 430, 430X and 430Xv2, and 200,000 cases find no
+difference but the deviations the backend documents. See
+`tools/fuzz/README.md`.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment

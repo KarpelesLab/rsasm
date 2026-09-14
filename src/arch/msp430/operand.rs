@@ -106,12 +106,6 @@ impl Operand {
             span: x.span,
         }
     }
-
-    /// Whether the operand is a symbolic address, `sym` — mode 1 through the
-    /// PC — which is the only one measured from the instruction.
-    pub fn pc_relative(&self) -> bool {
-        self.reg == reg::PC && self.am == 1
-    }
 }
 
 /// What the caller of [`src`] needs to say about the instruction, since the
