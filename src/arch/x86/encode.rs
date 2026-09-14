@@ -2,8 +2,8 @@
 //! displacement and immediate.
 
 use super::insn::{
-    ADDR16, ADDR32, DEF64, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO64,
-    NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, Tuple, Vk, WAIT,
+    ADDR16, ADDR32, DEF64, DISTINCT_DEST, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK,
+    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, Tuple, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -414,6 +414,17 @@ pub fn encode(
 
     let rm_reg = roles.rm.and_then(rm_register);
     let plus_reg = def.flags & PLUSREG != 0;
+
+    if def.flags & DISTINCT_DEST != 0
+        && let Some(dst) = roles.reg
+        && [roles.nds, rm_reg].contains(&Some(dst))
+    {
+        cx.error(
+            span,
+            "the destination register must differ from both sources",
+        );
+        return None;
+    }
 
     // VEX and EVEX store their extension bits inverted so that outside 64-bit
     // mode an unextended prefix still decodes, there, as the `LES`/`LDS`/
@@ -949,6 +960,10 @@ fn check_decorators(
         let n = match def.tuple {
             // A half-vector source is half the register, in dword elements.
             Tuple::Hv => vbytes / 2 / 4,
+            // Half-precision elements are words.
+            Tuple::Fvw => vbytes / 2,
+            Tuple::Hvw => vbytes / 2 / 2,
+            Tuple::Qvw => vbytes / 4 / 2,
             _ => vbytes / if def.vex_w() { 8 } else { 4 },
         };
         if b.count != n {

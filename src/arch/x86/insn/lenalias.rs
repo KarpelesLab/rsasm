@@ -72,7 +72,18 @@ fn install_family(t: &mut Tbl, names: &[&str], att_only: bool, with_z: bool) {
     }
 }
 
+/// AVX-512FP16's narrowing conversions. A quadword source narrows to a
+/// quarter of the register, so every length ends in an `xmm` and the 512-bit
+/// form needs a `z` too.
+#[rustfmt::skip]
+const HALF_FROM_DWORD: &[&str] = &["vcvtdq2ph", "vcvtudq2ph", "vcvtps2phx"];
+const HALF_FROM_QWORD: &[&str] = &["vcvtqq2ph", "vcvtuqq2ph", "vcvtpd2ph"];
+
 pub fn install(t: &mut Tbl) {
     install_family(t, CONVERSIONS, true, false);
+    install_family(t, HALF_FROM_DWORD, true, false);
+    install_family(t, HALF_FROM_QWORD, true, true);
     install_family(t, CLASSIFY, false, true);
+    // Unlike `vfpclassps`, `vfpclassph`'s lengths are AT&T spellings only.
+    install_family(t, &["vfpclassph"], true, true);
 }

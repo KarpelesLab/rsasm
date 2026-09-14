@@ -15,6 +15,7 @@ pub mod avx512x;
 pub mod base;
 pub mod cmpalias;
 pub mod fma;
+pub mod fp16;
 pub mod lenalias;
 pub mod mmx;
 pub mod sse;
@@ -226,6 +227,11 @@ pub const INTEL_ONLY: u32 = 1 << 16;
 /// register in ModRM.reg, as in `movd %xmm0, %rax`, whose r/m operand is
 /// register-only in that form.
 pub const R_IN_RM: u32 = 1 << 17;
+/// The destination register must differ from both sources. AVX-512FP16's
+/// complex multiplications read their operands in pairs of elements and
+/// would overwrite one half before reading the other; GNU as refuses the
+/// overlap, where llvm-mc assembles it, and rsasm follows GNU as.
+pub const DISTINCT_DEST: u32 = 1 << 18;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -286,9 +292,12 @@ pub enum Tuple {
     /// `32x2`/`64x2` and `32x8` sub-vector broadcasts, inserts and extracts.
     T2,
     T8,
-    // The manual defines a few more (Tuple1 Fixed, Tuple2, Tuple8, Mem128)
-    // for instruction sets not in the table yet; they belong here when a row
-    // needs one.
+    /// Full, Half and Quarter Vector with word elements: AVX-512FP16's packed
+    /// forms, whose broadcast repeats a two-byte half-precision float, and
+    /// its conversions that widen half or a quarter of the register.
+    Fvw,
+    Hvw,
+    Qvw,
 }
 
 impl Tuple {
@@ -314,6 +323,10 @@ impl Tuple {
                     vbytes / 2
                 }
             }
+            Tuple::Fvw | Tuple::Hvw | Tuple::Qvw if broadcast => 2,
+            Tuple::Fvw => vbytes,
+            Tuple::Hvw => vbytes / 2,
+            Tuple::Qvw => vbytes / 4,
             Tuple::Fvm => vbytes,
             Tuple::Hvm => vbytes / 2,
             Tuple::Qvm => vbytes / 4,
@@ -338,7 +351,10 @@ impl Tuple {
 
     /// True if this tuple's memory operand may carry a `{1toN}` broadcast.
     pub fn broadcastable(self) -> bool {
-        matches!(self, Tuple::Fv | Tuple::Hv)
+        matches!(
+            self,
+            Tuple::Fv | Tuple::Hv | Tuple::Fvw | Tuple::Hvw | Tuple::Qvw
+        )
     }
 }
 
@@ -484,6 +500,7 @@ fn build() -> Tbl {
     avx512x::install(&mut t);
     vexext::install_late(&mut t);
     fma::install(&mut t);
+    fp16::install(&mut t);
     cmpalias::install(&mut t);
     lenalias::install(&mut t);
     t
@@ -577,7 +594,12 @@ mod tests {
                 );
                 continue;
             }
-            assert!((1..=3).contains(&d.map), "`{m}`: bad map in {d:?}");
+            // Maps 5 and 6 are EVEX-only, and hold AVX-512FP16.
+            let map_ok = match d.enc {
+                Enc::Evex => matches!(d.map, 1..=3 | 5 | 6),
+                _ => (1..=3).contains(&d.map),
+            };
+            assert!(map_ok, "`{m}`: bad map in {d:?}");
             assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
             assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
             // A VEX or EVEX suffix byte is an immediate folded into the name
