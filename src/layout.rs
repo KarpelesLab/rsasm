@@ -1848,7 +1848,15 @@ impl Assembler {
                     } => {
                         if fill.is_empty() && exec {
                             let (arch, state) = self.frag_arch(si, fi);
-                            arch.nop_fill(nop_state.as_ref().unwrap_or(state), size as u64)
+                            let state = nop_state.as_ref().unwrap_or(state);
+                            // A COFF object follows llvm-mc, whose no-ops are
+                            // not GNU as's; see `output::coff::nop_fill`.
+                            self.options
+                                .format
+                                .is_coff()
+                                .then(|| crate::output::coff::nop_fill(arch, state, size))
+                                .flatten()
+                                .unwrap_or_else(|| arch.nop_fill(state, size as u64))
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()

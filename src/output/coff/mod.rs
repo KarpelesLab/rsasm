@@ -83,6 +83,53 @@ pub fn machine(arch: &dyn crate::arch::Architecture) -> Option<u16> {
     }
 }
 
+/// Alignment padding in x86 code as llvm-mc writes it, which is the reference
+/// for COFF objects, where the backend's own no-ops follow GNU as for ELF.
+/// `None` where the two agree or llvm-mc has nothing different to say.
+///
+/// For x86-64, llvm-mc takes the longest no-op it can, up to fifteen bytes:
+/// the multi-byte `nopw` forms up to ten, and `0x66` prefixes on the ten-byte
+/// one beyond that. For i386 its default Windows CPU has no `nopl`, so the
+/// padding is all one-byte `nop`s. Sixteen-bit code keeps the backend's.
+pub fn nop_fill(
+    arch: &dyn crate::arch::Architecture,
+    state: &crate::arch::ArchState,
+    len: usize,
+) -> Option<Vec<u8>> {
+    #[rustfmt::skip]
+    const NOPS: [&[u8]; 10] = [
+        &[0x90],
+        &[0x66, 0x90],
+        &[0x0f, 0x1f, 0x00],
+        &[0x0f, 0x1f, 0x40, 0x00],
+        &[0x0f, 0x1f, 0x44, 0x00, 0x00],
+        &[0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00],
+        &[0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00],
+        &[0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+        &[0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+        &[0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+    ];
+    if state.bits < 32 {
+        return None;
+    }
+    match machine(arch)? {
+        MACHINE_I386 => Some(vec![0x90; len]),
+        MACHINE_AMD64 => {
+            let mut out = Vec::with_capacity(len);
+            let mut left = len;
+            while left > 0 {
+                let n = left.min(15);
+                let prefixes = n.saturating_sub(10);
+                out.resize(out.len() + prefixes, 0x66);
+                out.extend_from_slice(NOPS[n - prefixes - 1]);
+                left -= n;
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 /// The alignment a section starts with, which llvm-mc gives by name: the
 /// three it creates itself are four-byte aligned, and a section the source
 /// names gets no alignment of its own until something in it asks.
