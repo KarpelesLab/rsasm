@@ -172,3 +172,11 @@ msg:
     inc %eax
     dec %r8d
     inc %rax
+=== suffixed direct calls
+    .code32
+    calll 1f
+1:  call 1b
+    calll *%eax
+    .code64
+    callq 1b
+    callq *%rax

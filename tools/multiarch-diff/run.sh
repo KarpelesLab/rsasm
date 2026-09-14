@@ -22,7 +22,7 @@
 # another, and alignment in a part only means the same thing in both when the
 # parts before it end on that boundary.
 #
-# References: the host's GNU as for x86, llvm-mc 22 for the targets LLVM
+# References: GNU as 2.47 (x86_64-elf-as) for x86, llvm-mc 22 for the targets LLVM
 # supports, and the cross GNU as builds of tools/oracles/build.sh (found in
 # RSASM_ORACLES, as for tools/xas-diff) for the rest. A part whose reference
 # is missing fails the snippet rather than skipping it.
@@ -37,8 +37,8 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # <flags>` for llvm-mc, or `xas <tool> <flags>` for a cross assembler | code
 # section
 REFS="
-x86-64|gas --64|.text
-i386|gas --32|.text
+x86-64|xas x86_64-elf-as --64|.text
+i386|xas x86_64-elf-as --32|.text
 aarch64|mc aarch64|.text
 arm|mc armv7|.text
 riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c|.text

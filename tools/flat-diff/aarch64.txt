@@ -84,3 +84,11 @@ helper:
         .quad   entry
         .4byte  helper - .
         .8byte  entry - .
+
+=== executable sections start on an instruction boundary
+        .text
+        .byte   1
+        .section .text.b,"ax"
+        .byte   2
+        .data
+        .byte   3

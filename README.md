@@ -53,27 +53,30 @@ assembler, not against rsasm's own idea of the manual. See
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1584 |
-| AArch64 | `aarch64` | llvm-mc | 475 |
-| ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 361 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 518 |
-| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1047 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 654 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 185 |
-| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 804 |
-| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1272 |
-| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 604 |
-| Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 523 |
-| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 548 |
+| x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1594 |
+| AArch64 | `aarch64` | llvm-mc | 480 |
+| ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 371 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
+| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1062 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
+| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 809 |
+| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
+| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
+| Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
+| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
-| Z80, 6502, 8080 | `z80` `6502` `i8080` | opcode tables | — |
+| Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
+| MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
+| Intel 8080, in Intel mnemonics | `i8080` | AS | 278 |
 
-The 8-bit targets have no llvm-mc support to check against, so they are
-verified differently: tests walk the complete opcode space and assert that
-exactly the documented encodings exist, and the Z80 tables were additionally
-cross-checked against an independent disassembler (690 of 690 documented
-sequences). They are for flat binaries; ELF has no class for a 16-bit target.
-The 78K0 has no freely available assembler either: its table was extracted
+The 8-bit targets are checked against the assemblers their source is written
+for: cc65's ca65 for the 6502, GNU as and vasm for the Z80, and the Macro
+Assembler AS for the 8080 — GNU as has no Intel mnemonics, and vasm's `RST`
+takes a Zilog address. Tests also walk each complete opcode space and assert
+that exactly the documented encodings exist. They are for flat binaries; ELF
+has no class for a 16-bit target. See [the 8-bit dialect](#the-8-bit-dialect).
+The 78K0 has no freely available assembler: its table was extracted
 from NEC's instruction manual, checked against the byte counts in a second NEC
 manual, and cross-checked against MAME's disassembler, which agrees on all
 but 18 forms where both manuals show MAME to be wrong.
@@ -83,6 +86,10 @@ but 18 forms where both manuals show MAME to be wrong.
 **Working**
 
 - AT&T and Intel syntax on x86, switchable mid-file; `.code16`/`.code32`/`.code64`
+- NASM source (`-d nasm`): its preprocessor (`%macro`, `%rep`, `%if`, `%define`,
+  `%assign`, contexts, `%include`), `db`/`resb`/`times`/`equ`/`struc`, sections
+  with attributes, `default rel`, and NASM's operand syntax and `wrt`
+  relocations; see [Dialects](#dialects)
 - several targets in one file, switched with `.arch`; see
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
@@ -97,7 +104,13 @@ but 18 forms where both manuals show MAME to be wrong.
 
 **Not yet**
 
-- the NASM dialect (its lexing rules are in place; its directives are not)
+- in NASM source: the multi-pass immediate-size optimizer for a value known
+  only after layout, so `mov r64, len` where `len` is a label difference stays
+  the sign-extending form rather than NASM's shorter 32-bit load (a constant or
+  a symbol is optimized); x87, `enter`, far direct `jmp`/`call seg:off`, `[rip]`
+  addressing (NASM uses `[rel]`), the `..gotpc`/`..gotoff`/`..tlsie` `wrt`
+  targets and 16-bit object formats; `-f bin` follows NASM except that a
+  trailing `.bss` is written as zeros rather than trimmed
 - in CC-RL and CC-RH source: bit symbols, `$label`/`%label` gp- and
   ep-relative references, `STARTOF`/`SIZEOF`, and CC-RL's `HIGH`/`LOWW` of a
   relocatable label (all refused with the reason)
@@ -114,22 +127,41 @@ but 18 forms where both manuals show MAME to be wrong.
   as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
   `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
   `%tls_*` and `%got_pcrel_hi` modifiers
-- 6502: the conventional `lda #$12` spelling, which needs `$`-prefixed hex
+- 6502: the 65C02 and later instruction sets; in ca65 source, cheap local
+  (`@loop`) and unnamed (`:`, `:-`) labels, `.proc`/`.scope`, `.struct`, and
+  the `ZEROPAGE` segment's zero-page addressing for labels defined in it
+- 8080: Intel's word operators (`AND`, `SHR`, `HIGH`, `MOD`), which AS does
+  not read either
+- Z80: the `DD CB d op,r` forms that also write a register, which vasm
+  refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
+  `.byte`, `.word` and `.space`, or the 8-bit dialect)
 
 **Known wrong**
 
-These produce incorrect output rather than an error, which is why they are
-listed separately.
+Anything that produces incorrect output rather than an error is listed here,
+separately. Nothing is, at the moment.
 
-- A PC-relative reference to a weak symbol defined in the same section is
-  resolved at assembly time. GNU as and llvm-mc leave it to the linker, which
-  may choose another definition. (llvm-mc on RISC-V leaves references to
-  global symbols to the linker too; rsasm resolves those as well.)
-- Sections have no default alignment beyond what `.align` asks for, where GNU
-  as and llvm-mc give them one: 4 for MIPS `.data` in GNU as, 16 in llvm-mc,
-  and 4 for m68k. So in a flat binary a section that follows an odd-sized one
-  can start at an address a linker would have rounded up. Explicit `.p2align`
-  at the start of the section avoids it.
+Where the references themselves disagree, rsasm follows the one whose harness
+checks the target (see [Verification](#verification)) and says so in the
+backend. Two such choices are worth knowing about:
+
+- **Which references are left to the linker.** A PC-relative reference to a
+  global or weak symbol is relocated even when the symbol is in the same
+  section, since the linker may bind the name elsewhere; a local one, or a
+  local `.set` alias of a global one, is resolved. That is what both
+  references do on nearly every target. The exceptions follow GNU as for
+  x86, m68k, SuperH and RL78 (a jump GNU as relaxes to a global symbol is
+  resolved on x86; only weak symbols are left to the linker on m68k; nothing
+  in the same section is on SuperH and RL78), and llvm-mc for ARM, where
+  every `bl` is relocated so the linker can make it a `blx`.
+- **Default section alignment.** Sections start with the alignment the
+  reference gives them: 16 for MIPS `.text`, `.data` and `.bss` (llvm-mc; GNU
+  as aligns only `.text`, to 4), 4 for `.text` on ARM, PowerPC and SPARC and
+  for every executable section on AArch64 (llvm-mc; GNU as gives 1, or aligns
+  once an instruction is assembled), 2 or 4 for RISC-V `.text` depending on
+  compressed instructions, 4 for m68k `.text`, `.data` and `.bss`, and 1
+  otherwise, including on x86, where GNU as is followed and llvm-mc's `.text`
+  is 4.
 
 ## Usage
 
@@ -138,11 +170,11 @@ rsasm [options] <input.s>...
 
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default) or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
-                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH) or
-                     ccrx (Renesas CC-RX)
+                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
+                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
@@ -172,7 +204,8 @@ source is normally written in.
 | `ccrl` | `.DB "A",1`, `$IF`, `0x10` or `10H` (Renesas CC-RL) | — |
 | `ccrh` | `.dw #label`, `$IF`, `0x10` (Renesas CC-RH) | — |
 | `ccrx` | `.SECTION P,CODE`, `.LWORD 10H`, `#1:8` (Renesas CC-RX) | — |
-| `nasm` | lexing only, so far | — |
+| `8bit` | `lda #$12`, `ld a,(ix+5)`, `MVI A,12H`, `DB 1`, `; comment` | 6502, Z80, 8080 |
+| `nasm` | `db 1`, `; comment`, `mov eax, [rel x]`, `%macro`, `0FFh` | — |
 
 ```console
 $ cat intena.s
@@ -195,6 +228,49 @@ vasm and GNU as `--mri`. Three rules in it catch people out:
 - **Instructions are assembled as written.** vasm's default optimizer turns
   `move.l #1,d0` into `moveq #1,d0`; rsasm, like GNU as, only chooses the
   shortest encoding of the instruction you wrote.
+
+### The 8-bit dialect
+
+`8bit` reads the source people have for the 6502, the Z80 and the 8080:
+ca65's for the 6502, Zilog's as GNU as and vasm read it, and Intel's as AS
+reads it. Their spellings are one language — `$12`, `12H`, `%1010` and
+`0x12` numbers, `$` and `*` for the location counter, `<`, `>` and `^` for
+the bytes of an address, `DB`/`DEFB`/`.byte`, `DW`/`DEFW`/`.word`,
+`DS`/`DEFS`/`.res`, `EQU`, `=`, `DEFL`/`SET`, `IF`/`ENDIF`, `MACRO`/`ENDM` or
+`.macro`/`.endmacro`, ca65's `.segment` — and where the references disagree,
+rsasm picks one and says so:
+
+```console
+$ cat hello.asm
+bdos    equ 5
+        org 100h                ; a CP/M program
+start:  ld de,msg
+        ld c,9
+        call bdos
+        ret
+msg     db 'Hello$'
+$ rsasm -a z80 -f bin --hex hello.asm
+11 09 01 0e 09 cd 05 00 c9 48 65 6c 6c 6f 24
+```
+
+- **A word in the first column is a label, unless it is an instruction or a
+  directive.** vasm and AS take any first-column word as a label; ca65 and
+  GNU as want a colon and assemble `rts` written there. Both kinds of source
+  work, except a colonless label spelled like a mnemonic, or a macro called
+  from the first column.
+- **`ORG` says where code is loaded.** The first `ORG` in a section is its
+  address in the image, not padding: `ORG 100H` does not put 256 zeros in
+  front of a CP/M program. A later `ORG` pads up to its address, as vasm and
+  AS do; ca65 does not pad.
+- **Zero page is chosen as ca65 chooses it:** for a constant or `ORG`-placed
+  label known before its use, and for `<addr`; a forward reference is
+  absolute, and `z:`/`a:` override either way. vasm, a multi-pass assembler,
+  picks zero page for forward references too.
+- **The location counter in a data list is each item's address**: `.word
+  *, *` is two different values, as in ca65, vasm and GNU as. AS keeps the
+  statement's address.
+- A comparison is 1 when true, as in ca65 and AS; GNU as and vasm give -1.
+  The operators have C's precedence, where ca65 binds `&` as tightly as `*`.
 
 ### Renesas CC-RL, CC-RH and CC-RX
 
@@ -265,6 +341,54 @@ bytes for the first to equal GNU as's for the second. Placement is the
 linker's: an `AT` attribute or `.ORG` names the section (CC-RL, CC-RH) or pads
 it (CC-RX) as the manual says, but the start address is not recorded.
 
+### NASM
+
+`-d nasm` reads source written for NASM, the flat-binary and ELF assembler most
+x86 hand-written code targets. The whole language people reach for is there:
+
+- a preprocessor run a line at a time as NASM's is — `%define`/`%xdefine`/
+  `%assign`/`%undef`, `%macro` with parameter ranges, defaults, greedy `+`
+  params, `%0`, `%rotate`, `%%` labels and `%00` label capture, `%rep`/
+  `%exitrep`, the `%if`/`%elif`/`%else` family (`%ifdef`, `%ifmacro`, `%ifidn`,
+  `%ifnum`, `%ifstr`, `%ifctx` …), `%include`, `%strlen`/`%substr`/`%defstr`,
+  `%push`/`%pop` contexts with `%$` locals, and `%error`/`%warning`
+- `db`/`dw`/`dd`/`dq`/`dt` with single-, double- and backquoted strings, the
+  `resb` family, `times n <stmt>` (including `times 510-($-$$) db 0`), `incbin`,
+  `equ`, `struc`/`endstruc`/`istruc`/`at`/`iend`, `align`/`alignb`, and
+  `absolute`
+- `section`/`segment` with attributes (`progbits`, `nobits`, `alloc`, `exec`,
+  `write`, `align=`), `bits 16/32/64`, `org`, `global`/`extern`/`common`/
+  `static` with `:function`/`:data` and sizes, `default rel`/`abs`, `$`/`$$`
+  and `.local`/`..@` labels
+- NASM's operand syntax: the `byte`/`word`/`dword`/`qword` size keywords with
+  no `ptr`, `[rel x]` and `[abs x]`, segment overrides `[es:di]`, the moffs
+  accumulator forms, and 8086 16-bit addressing; and the `wrt ..plt`,
+  `wrt ..got`, `wrt ..sym` and `wrt ..gotoff` ELF relocations
+
+Much of what looks like NASM directive syntax — `section`, `global`, `struc`,
+`align` — is macros in NASM's standard macro set wrapping a bracketed
+primitive, `[section .data]`; rsasm defines the same macros, so `__SECT__` and
+the rest behave as they do there.
+
+```console
+$ cat boot.asm
+        org     0x7c00
+        bits    16
+start:  mov     ax, 0x1234
+        jmp     start
+        times   510-($-$$) db 0
+        dw      0xaa55
+$ rsasm -d nasm -f bin -o boot.bin boot.asm   # a 512-byte boot sector
+```
+
+`tools/nasm-diff/run.sh` assembles a corpus of whole programs with rsasm
+`-d nasm` and with NASM 2.16.03 (built by `tools/oracles/build.sh`), and
+compares the flat binaries byte for byte and the ELF objects section by
+section, relocations and global symbols included. 373 of 373 match. Local
+symbols are not compared: NASM writes every label into the symbol table, where
+rsasm, like GNU as, keeps them to itself, and a linker never sees the
+difference.
+
 ## Multi-architecture files
 
 `.arch <name>` switches the target for everything after it, so one file can
@@ -308,29 +432,44 @@ own target's reference, and rsasm has to produce the concatenation.
 
 ## Verification
 
-Four differential harnesses assemble the same source with rsasm and with an
+Five differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
-- `tools/gas-diff/run.sh` against the host's GNU as, for x86. 844 of 844 match.
+- `tools/gas-diff/run.sh` against the host's GNU as, for x86. 854 of 854 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
-  supports. 3,980 of 3,980 match across fourteen target variants. For RISC-V
+  supports. 4,042 of 4,042 match across fourteen target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
-- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78
-  and V850/RH850, and vasm for Motorola syntax, plus CC-RL, CC-RH and CC-RX
-  source paired with its GNU-syntax equivalent. `tools/oracles/build.sh` builds
-  the references from checksum-pinned sources. 3,785 of 3,785 match across
-  twelve variants.
+- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
+  V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
+  6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
+  CC-RX source paired with its GNU-syntax equivalent. `tools/oracles/build.sh`
+  builds the references from checksum-pinned sources. 7,219 of 7,219 match
+  across eighteen variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 103 of 103 match across twenty-two variants.
+  distances between sections. 108 of 108 match across twenty-two variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
+- `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
+  programs compared as flat binaries and as ELF objects, relocations and global
+  symbols included. 373 of 373 match. `tools/oracles/build.sh` builds NASM from
+  a checksum-pinned source.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.
 
-All five run in CI. The expected bytes in the hermetic tests under `tests/` were
+The first three also compare whole objects for every ELF target, from the
+`*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
+and bytes, the global, weak and undefined symbols, and every relocation, read
+the way a linker reads it (`tools/mc-diff/canon.sh`). Bytes alone cannot show
+a reference that should have been left to the linker, or one relocated
+against the wrong symbol: the field is zero either way. Those corpora walk
+each binding — local, global, weak, hidden and the other visibilities, `.set`
+aliases either way round, `.globl` after use, another section, undefined —
+through branches, calls, PC-relative loads and data.
+
+All six run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
@@ -409,8 +548,10 @@ AArch64 branch offset be range-checked as 26 bits rather than as the 4 bytes
 it lives in.
 
 A few conventions really are per target and have trait methods with defaults:
-`comments` (which characters start one) and `word_bytes` (how wide `.word` is —
-2 on x86 and PowerPC, 4 on the other RISC targets).
+`comments` (which characters start one), `word_bytes` (how wide `.word` is —
+2 on x86 and PowerPC, 4 on the other RISC targets), `section_align` (the
+alignment a section starts with) and `defers_to_linker` (which references to
+a symbol in their own section are still relocated).
 
 Add a corpus under `tools/mc-diff/` for the new target and take the hermetic
 tests' expected bytes from its runs.
@@ -424,6 +565,7 @@ $ tools/gas-diff/run.sh     # needs binutils
 $ tools/mc-diff/run.sh      # needs llvm-mc and llvm-objcopy
 $ tools/flat-diff/run.sh    # needs cross binutils with ld, and llvm-mc
 $ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
+$ tools/nasm-diff/run.sh    # needs NASM from tools/oracles/build.sh
 $ tools/multiarch-diff/run.sh  # needs all of the above
 ```
 

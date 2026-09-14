@@ -9,7 +9,7 @@ pub const THM_CALL: u32 = 10;
 pub const CALL: u32 = 28;
 pub const JUMP24: u32 = 29;
 pub const THM_JUMP24: u32 = 30;
-pub const THM_JUMP19: u32 = 31;
+pub const THM_JUMP19: u32 = 51;
 
 /// Relocation for a data reference of `size` bytes.
 pub fn data(size: u8, pcrel: bool) -> Option<u32> {

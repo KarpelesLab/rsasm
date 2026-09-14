@@ -14,7 +14,7 @@ pub enum Format {
 impl Format {
     pub fn from_name(s: &str) -> Option<Format> {
         Some(match s {
-            "elf" | "elf64" | "o" | "obj" => Format::Elf,
+            "elf" | "elf32" | "elf64" | "o" | "obj" => Format::Elf,
             "bin" | "binary" | "raw" => Format::Binary,
             _ => return None,
         })

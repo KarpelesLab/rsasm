@@ -339,3 +339,20 @@ fn range_errors_name_the_actual_limit() {
     let e = errors("a:\n.byte a - b\n.space 300\nb:\n");
     assert!(e.contains("out of range (-128 to 255)"), "{e}");
 }
+
+#[test]
+fn a_true_comparison_is_minus_one_as_in_gnu_as() {
+    // GNU as: comparisons give -1, while `!`, `&&` and `||` give 1.
+    assert_eq!(
+        hex(&text(
+            ".byte 1<2, 2<1, 1==1, 1!=1, 3>=2, 1<>2, !0, !5, 1&&2, 0||3\n"
+        )),
+        "ff 00 ff 00 ff ff 01 00 01 01"
+    );
+    assert_eq!(
+        hex(&text(
+            ".if 1<2\n.byte 7\n.endif\n.if (2<1)\n.byte 8\n.endif\n.byte (1<2)&3, -(1==1)\n"
+        )),
+        "07 03 01"
+    );
+}

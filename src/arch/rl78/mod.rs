@@ -122,6 +122,12 @@ impl Architecture for Rl78 {
         true
     }
 
+    /// `rl78-elf-as` resolves a branch to any symbol in the same section,
+    /// weak ones included.
+    fn defers_to_linker(&self, _r: &crate::arch::SameSectionRef<'_>) -> bool {
+        false
+    }
+
     fn align_is_log2(&self) -> bool {
         true
     }

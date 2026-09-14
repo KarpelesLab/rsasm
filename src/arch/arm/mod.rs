@@ -109,6 +109,18 @@ impl Architecture for Arm {
         true
     }
 
+    /// llvm-mc, the reference, aligns `.text` to 4 bytes, in Thumb as in ARM
+    /// code. GNU as instead aligns a section once an instruction is
+    /// assembled into it, to 4 bytes for ARM and 2 for Thumb.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        if name == ".text" { 4 } else { 1 }
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }

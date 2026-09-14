@@ -167,8 +167,28 @@ jobs:
       - name: Check binutils is present
         run: as --version | head -1
 
+      # The object corpora are read with llvm-readobj and llvm-objcopy, as in
+      # the other harnesses; without them that part would be skipped.
+      - name: Install LLVM 22
+        run: |
+          set -euo pipefail
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$codename/ llvm-toolchain-$codename-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
       - name: tools/gas-diff/run.sh
-        run: tools/gas-diff/run.sh
+        run: |
+          set -uo pipefail
+          tools/gas-diff/run.sh 2>&1 | tee gas-diff.log
+          status=${PIPESTATUS[0]}
+          grep -q "skipping" gas-diff.log \
+            && { echo "::error::gas-diff skipped its object corpora"; exit 1; }
+          exit $status
 
   mc_diff:
     name: Differential test against llvm-mc
@@ -217,12 +237,13 @@ jobs:
           llvm-mc --version | tee /dev/stderr | grep -q "LLVM version 22\." \
             || { echo "::error::llvm-mc is not LLVM 22"; exit 1; }
 
-      # The output goes to a file rather than `$(...)`: under `set -e` a
-      # failing command substitution exits before its output is printed,
-      # which hid exactly the diff needed to debug a failure.
+      # The output goes to a file and is printed before the status is acted
+      # on. Actions runs these scripts under `bash -e`, so each one turns
+      # that off first: otherwise a failing harness exits the step before
+      # its log is printed, hiding exactly the diff needed to debug it.
       - name: tools/mc-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/mc-diff/run.sh > mc-diff.log 2>&1
           status=$?
           cat mc-diff.log
@@ -281,7 +302,7 @@ jobs:
       # prints it, and a run that compared nothing is a failure, not a pass.
       - name: tools/xas-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/xas-diff/run.sh > xas-diff.log 2>&1
           status=$?
           cat xas-diff.log
@@ -291,12 +312,27 @@ jobs:
             && { echo "::error::a reference assembler is missing"; exit 1; }
           exit $status
 
+      # Whole NASM programs against NASM itself: flat binaries byte for byte,
+      # ELF objects section by section with relocations and global symbols.
+      # NASM is built by the same oracles script the step above cached.
+      - name: tools/nasm-diff/run.sh
+        run: |
+          set -uo pipefail
+          tools/nasm-diff/run.sh > nasm-diff.log 2>&1
+          status=$?
+          cat nasm-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" nasm-diff.log \
+            || { echo "::error::nasm-diff compared nothing"; exit 1; }
+          grep -q "REF-MISSING" nasm-diff.log \
+            && { echo "::error::NASM is missing"; exit 1; }
+          exit $status
+
       # Flat binaries against the reference assembler's object linked by GNU
       # ld at the same base: page, split and paired values are only right if
       # they match what a linker computes.
       - name: tools/flat-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/flat-diff/run.sh > flat-diff.log 2>&1
           status=$?
           cat flat-diff.log
@@ -308,7 +344,7 @@ jobs:
       # reference: the host's GNU as, llvm-mc or a cross GNU as.
       - name: tools/multiarch-diff/run.sh
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           tools/multiarch-diff/run.sh > multiarch-diff.log 2>&1
           status=$?
           cat multiarch-diff.log
