@@ -283,3 +283,12 @@ _end:
 	.byte	1
 	.p2align	3
 	.quad	_f
+=== names that share a tail in the string table
+	.globl	_a_b, _b, _xb
+_a_b:
+	ret
+_b:
+	ret
+_xb:
+	call	_zz_b
+	call	_b_zz_b

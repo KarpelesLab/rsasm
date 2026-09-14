@@ -544,11 +544,11 @@ relocation for something ELF can express — `adr` or a conditional branch to
 another atom, a 32-bit absolute address on x86-64, a page reference without
 `@PAGE` — the reference is refused, as llvm-mc refuses it.
 
-`tools/macho-diff/run.sh` compares 1,572 cases against llvm-mc 22: single
+`tools/macho-diff/run.sh` compares 1,573 cases against llvm-mc 22: single
 statements and whole programs in Clang's style of its own, and the
 `tools/mc-diff` corpora for both machines, every instruction of which has to
 come out the same in a Mach-O object. Every header and load command, section,
-symbol and relocation matches, and each of the 1,547 objects both assemblers
+symbol and relocation matches, and each of the 1,548 objects both assemblers
 write is identical byte for byte; the other 25 cases are refused by both.
 Three differences remain, and the corpora leave them out:
 
@@ -602,7 +602,7 @@ independent assembler, and compare the bytes:
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,572 of 1,572 match, and every object both write
+  those of `tools/mc-diff`. 1,573 of 1,573 match, and every object both write
   is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
