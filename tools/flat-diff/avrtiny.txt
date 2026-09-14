@@ -10,3 +10,8 @@ The reduced AVR-tiny core (-mmcu=avrtiny, -m avrtiny).
         lds     r31, 0xbf
         ret
 
+=== refused: rcall out of reach, which GNU ld does not wrap for this core
+        .text
+        rcall   far
+        .space  0x1000
+far:    ret

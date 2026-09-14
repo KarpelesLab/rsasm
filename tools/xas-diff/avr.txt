@@ -1460,3 +1460,9 @@ st -Z, r31
 st x, r31
 st y+, r31
 st -z, r31
+
+# ---- relative jumps to numbers beyond 2K words, which wrap at 8K ------------
+rjmp 0xe042
+rcall 0x865a
+rjmp -0x2000
+rcall 0x2002

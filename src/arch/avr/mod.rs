@@ -5,7 +5,9 @@
 //!
 //! GNU binutils 2.47's `avr-elf-as`, which `tools/xas-diff/run.sh` compares
 //! against for four cores (the default, `avr51`, `avrtiny` and an XMEGA with
-//! the read-modify-write instructions), whole objects included. The opcode
+//! the read-modify-write instructions), whole objects included, and whose
+//! objects `tools/flat-diff/run.sh` links with `avr-elf-ld` to check flat
+//! images. `tools/fuzz/avr.py` does both for random programs. The opcode
 //! table, the MCU table and the operand rules are transcribed from
 //! `include/opcode/avr.h` and `gas/config/tc-avr.c`; see [`insn`], [`isa`]
 //! and [`operand`].
@@ -38,14 +40,26 @@
 //!
 //! `;` starts a comment anywhere and `#` only in the first column, and `$`
 //! separates statements, so it is not part of a name. Mnemonics and register
-//! names are read in either case; the modifiers are lower-case only.
+//! names are read in either case, and so are the modifiers of data (`.word
+//! PM(main)`), but the modifiers of an `ldi` are lower-case only, as
+//! `avr_ldi_expression` looks them up.
+//!
+//! `.` in an operand is the address of the next instruction: GNU as reserves
+//! the instruction's bytes before it reads the operands, so `rjmp .` jumps
+//! past itself.
 //!
 //! # Deliberate differences from the reference
 //!
 //! * A value that does not fit its field is an error naming the limit, where
-//!   GNU as keeps the low bits of some of them with a warning (a `call`
-//!   target past 4 MiB, an AVR-tiny `lds` address outside 0x40-0xbf, an
-//!   `ldi` constant below -255).
+//!   GNU as keeps the low bits of some of them, with a warning or without (a
+//!   `call` target past 22 bits of word address, an AVR-tiny `lds`/`sts`
+//!   address outside 0x40-0xbf, an `ldi` constant below -255). A number
+//!   counted in words, `pm(3)`, has to be even, as GNU ld requires of a label.
+//! * `ldd` and `std` need their displacement. GNU as reads one character past
+//!   `Y` or `Z` looking for its `+`, which refuses `ldd r0, Y` except on the
+//!   last line of a file.
+//! * `lo8(gs(1))`, of a number, is `lo8(pm(1))`; GNU as stops with "unknown
+//!   relocation type".
 //! * Differences of two labels are written as numbers. Where GNU as writes a
 //!   difference that crosses sections as an `R_AVR_DIFF*` relocation — in
 //!   practice only in the DWARF it makes, since a difference within a section

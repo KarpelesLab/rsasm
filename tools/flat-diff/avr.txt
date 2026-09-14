@@ -176,7 +176,7 @@ odd:    .byte   2
 odd:    .byte   2
         .word   pm(odd)
 
-=== refused: rcall out of reach
+=== rcall out of reach wraps around, as GNU ld wraps it for avr2, avr25 and avr4
         .text
         rcall   far
         .space  0x1000

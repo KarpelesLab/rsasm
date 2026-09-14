@@ -43,7 +43,7 @@ Prebuilt binaries for Linux, macOS and Windows are attached to each
 ## Status
 
 Early, but broad. The pipeline is complete end to end — lex, parse, encode,
-lay out, relax, relocate, write — with fourteen backends behind it.
+lay out, relax, relocate, write — with fifteen backends behind it.
 
 ### Architectures
 
@@ -66,6 +66,7 @@ assembler, not against rsasm's own idea of the manual. See
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
+| Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | @AVRCASES@ |
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
 | MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
 | Intel 8080, in Intel mnemonics | `i8080` | AS | 278 |
@@ -106,6 +107,12 @@ but 18 forms where both manuals show MAME to be wrong.
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
+- AVR as `avr-elf-as` assembles it: each core's own instruction set, chosen
+  by family (`avr5`) or by device (`atmega328p`) with `-a` or `.arch`; the
+  `lo8()`/`hi8()`/`pm()`/`gs()` modifiers in instructions and data; and
+  objects prepared for linker relaxation, with every branch relocated, local
+  labels in the relocations, `EF_AVR_LINKRELAX_PREPARED` in `e_flags`, and
+  `.align` and `.org` in code recorded in `.avr.prop`
 - diagnostics with source snippets that name the real limit, and assembly that
   continues past the first error
 
@@ -149,10 +156,18 @@ but 18 forms where both manuals show MAME to be wrong.
   refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
   `.byte`, `.word` and `.space`, or the 8-bit dialect)
 
+- AVR: the `__gcc_isr` pseudo-instruction (`-mgcc-isr`), and Atmel's own
+  AVRASM2 syntax, for which there is no free assembler to check against;
+  `.arch` selects exactly the named core, where GNU as adds its instructions
+  to those of an earlier one of the same machine
+
 **Known wrong**
 
 Anything that produces incorrect output rather than an error is listed here,
-separately. Nothing is, at the moment.
+separately:
+
+- `.lcomm`, and `.comm` of a symbol declared `.local`, write a local common
+  symbol rather than allocating the space in `.bss` as both references do.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
@@ -163,9 +178,10 @@ backend. Two such choices are worth knowing about:
   section, since the linker may bind the name elsewhere; a local one, or a
   local `.set` alias of a global one, is resolved. That is what both
   references do on nearly every target. The exceptions follow GNU as for
-  x86, m68k, SuperH and RL78 (a jump GNU as relaxes to a global symbol is
-  resolved on x86; only weak symbols are left to the linker on m68k; nothing
-  in the same section is on SuperH and RL78). On ARM GNU as is followed for
+  x86, m68k, SuperH, RL78 and AVR (a jump GNU as relaxes to a global symbol
+  is resolved on x86; only weak symbols are left to the linker on m68k;
+  nothing in the same section is on SuperH and RL78; and everything is on
+  AVR, where the linker may delete code between a branch and its target). On ARM GNU as is followed for
   whole objects: a `bl` to a local label is resolved, and made a `blx` where
   the label is a Thumb function, where llvm-mc relocates every `bl`.
 - **Default section alignment.** Sections start with the alignment the
@@ -203,7 +219,7 @@ rsasm [options] <input.s>...
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
 `riscv`, `powerpc`, `mips`, `sparc`, `retro`, `m68k`, `superh`, `rx`, `rl78`,
-`v850` and `k78`:
+`v850`, `k78` and `avr`:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -460,7 +476,7 @@ line, and a unit naming the file.
 
 The two references agree on the formats and disagree on nearly everything
 inside them, so each target follows the one that checks its encodings: GNU as
-for x86, m68k, SuperH, RX, RL78 and V850, and llvm-mc for the rest. That
+for x86, m68k, SuperH, RX, RL78, V850 and AVR, and llvm-mc for the rest. That
 decides, among other things, the default version (3 for GNU as, 4 for
 llvm-mc, 5 for either once a `.file 0` appears), how a path splits into a
 directory, whether a column carries over to the next `.loc`, which directives
@@ -481,7 +497,9 @@ Three differences remain:
   before, which is when the view count needs it.
 - On RL78, GNU as leaves every distance in the line table to the linker as a
   stack of relocation operations; rsasm writes the distances, which are final
-  since it lays out the section itself.
+  since it lays out the section itself. On AVR GNU as writes the distances
+  too, and adds an `R_AVR_DIFF*` relocation to each, for linker relaxation;
+  rsasm writes the distances alone.
 - For `-g` on llvm-mc's targets, llvm-mc numbers the last statement of an
   included file against the file that included it, reading past that file's
   buffer; rsasm gives its line in the included file.
@@ -501,7 +519,7 @@ independent assembler, and compare the bytes:
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
-  V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
+  V850/RH850, AVR and the Z80, vasm for Motorola syntax and for the Z80 and the
   6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
@@ -532,7 +550,12 @@ modes and both syntaxes, some of them deliberately invalid, and compares
 rsasm's bytes, relocations and accept/reject decision with GNU as's and
 llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
 from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. See `tools/fuzz/README.md`.
+case where rsasm differs from both. `tools/fuzz/avr.py` does the same for AVR
+with whole random programs — every row of GNU as's opcode table, labels in
+several sections, branches near and out of reach, modifiers, data and
+alignment — on twenty-one cores, comparing whole objects with `avr-elf-as`'s
+and, for a program with nothing undefined, the image `avr-elf-ld` links from
+it with `rsasm -f bin`; @AVRFUZZ@. See `tools/fuzz/README.md`.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment

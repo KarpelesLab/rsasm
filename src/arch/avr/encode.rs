@@ -203,8 +203,12 @@ fn operand(
             Some(0)
         }
         b'L' => {
-            let mega = mcu.isa & ISA_MEGA != 0;
-            enc.field(0, operand::expr(cx, op)?, reloc::rel13(mega));
+            let x = operand::expr(cx, op)?;
+            let wraps = match cx.constant(x.e) {
+                Some(_) => mcu.isa & ISA_MEGA == 0,
+                None => matches!(mcu.mach, 2 | 25 | 4),
+            };
+            enc.field(0, x, reloc::rel13(wraps));
             Some(0)
         }
         b'l' => {

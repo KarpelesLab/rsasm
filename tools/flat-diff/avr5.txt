@@ -44,3 +44,8 @@ _exit:  cli
         .section .progmem.data, "a", @progbits
 msg:    .asciz  "hello"
 
+=== refused: rjmp out of reach on a device with more than 8K
+        .text
+        rjmp    far
+        .space  0x1000
+far:    ret

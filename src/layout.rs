@@ -896,9 +896,12 @@ impl Assembler {
         }
         let mut addr = self.options.base_addr;
         for s in &mut self.sections {
+            // An empty section is not aligned: a linker drops it from the
+            // image, alignment and all, rather than pad for nothing.
+            let align = if s.size == 0 { 1 } else { s.align.max(1) };
             addr = match s.origin {
                 Some(origin) => origin,
-                None => addr.next_multiple_of(s.align.max(1)),
+                None => addr.next_multiple_of(align),
             };
             s.addr = addr;
             addr += s.size;
@@ -1407,17 +1410,31 @@ impl Assembler {
             {
                 return None;
             }
-            let target = self.resolve_value(v)?;
+            let mut target = self.resolve_value(v)?;
             let base = self.section(section).addr as i64;
             let mask = !(kind.pc_align.max(1) as i64 - 1);
+            // A plain number, on a target where it is an offset into the
+            // section rather than an address, is resolved in an object with
+            // no relocation, so a linker placing the section keeps the
+            // distance: a flat image measures it from the section's start
+            // too.
+            let offset = v.plus.is_none()
+                && v.minus.is_none()
+                && !self
+                    .frag_arch(section.0 as usize, fi)
+                    .0
+                    .pcrel_number_is_address();
+            if offset {
+                target += base;
+            }
             // A reference within its own section is one the assembler
             // resolves before any linker places the section, so the PC is
             // rounded from the section's start, as GNU as rounds it; that
             // differs only for a section a linker puts at an address that is
             // not itself a multiple of the rounding.
-            let here = if v
-                .plus
-                .is_some_and(|p| self.symbol_section(p) == Some(section))
+            let here = if offset
+                || v.plus
+                    .is_some_and(|p| self.symbol_section(p) == Some(section))
             {
                 base + ((at as i64 + kind.adjust as i64) & mask)
             } else {

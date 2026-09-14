@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502 and 8080.
+AVR, and the 8-bit Z80, 6502 and 8080.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm).
 
@@ -39,6 +39,10 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `z80-gas` | `z80`, GNU syntax | `z80-elf-as`, on `z80.txt` |
 | `z80-vasm` | `z80`, 8-bit syntax | `vasmz80_oldstyle`, on `z80.txt` and its own programs |
 | `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
+| `avr` | `avr` | `avr-elf-as`, with no `-mmcu`: the AVR2 set |
+| `avr51` | `avr51` | `avr-elf-as -mmcu=avr51` |
+| `avrxmega` | `atxmega128a1u` | `avr-elf-as -mmcu=atxmega128a1u`, which has the read-modify-write instructions |
+| `avrtiny` | `avrtiny` | `avr-elf-as -mmcu=avrtiny` |
 
 ## Comparing objects
 
@@ -63,6 +67,12 @@ They leave out what rsasm deliberately writes differently:
 - A conditional branch on RX or V850 that is left to the linker: GNU as keeps
   it short, trusting the linker to reach; rsasm takes the longest form (see
   `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+
+AVR objects are compared with their `e_flags` too (`canon.sh --flags`), which
+name the core and carry `EF_AVR_LINKRELAX_PREPARED`, and with `.avr.prop`,
+which is not allocated but is what the linker relaxes the code by. Their
+local symbols are not compared: GNU as names each label a relocation needs,
+`.L1^B1` for a `1:`, and rsasm names the same labels in its own way.
 | `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
 
 ## ARM

@@ -1,5 +1,7 @@
 # Differential fuzzing
 
+## x86
+
 `x86.py` generates random x86 instructions in 16-, 32- and 64-bit mode, in
 AT&T and Intel syntax, assembles them with GNU as, llvm-mc and rsasm, and
 compares the bytes, the relocations and whether each assembler accepted the
@@ -25,7 +27,7 @@ batch of 200; a batch with errors is reassembled without the rejected cases.
 16-bit mode is `.code16` in 32-bit ELF for all three tools. Runs are seeded
 (`--seed`) and spread over the CPUs (`--jobs`).
 
-## Reading the report
+### Reading the report
 
 - **rsasm**: GNU as and llvm-mc agree and rsasm does not. These are the
   findings. The exit status is 1 when there are any.
@@ -48,10 +50,48 @@ llvm-mc on are forms only GNU as accepts and nothing is written in: Intel
 32-bit register, `fcoml %st(1)`, suffixed `loopel` and `cmpxchg8bq`, and
 64-bit-mode quirks such as Intel `sysret` being ambiguous without a size.
 
-## Environment
+### Environment
 
 | Variable | Default |
 |---|---|
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
+
+## AVR
+
+`avr.py` generates whole random AVR programs and compares what `avr-elf-as`
+and rsasm make of them: labels in several sections, instructions from every
+row of GNU binutils' opcode table (`include/opcode/avr.h`) with operands of
+every shape, branches forward and back across `.skip`s that put some of them
+out of reach, the `lo8()` family of modifiers on numbers, labels and
+undefined symbols, data, alignment and `.org`, for one of twenty-one cores.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/avr.py fuzz --count 3000 --seed 1
+$ tools/fuzz/avr.py fuzz --core avrtiny --count 500 --mutations 0.5
+$ tools/fuzz/avr.py check --core avr5 prog.s
+```
+
+Both objects are read the way `tools/mc-diff/canon.sh` reads them, with
+`e_flags` and `.avr.prop` too; symbols are declared at the top of each
+program, so they come in the same order. A program with nothing undefined is
+also linked by `avr-elf-ld` at address 0 with its sections end to end (and
+`--no-stubs` for the cores with a 22-bit program counter) and compared with
+`rsasm -f bin`, which checks every displacement and every relocated value.
+`--mutations` (default 0.25) is the fraction of programs given one statement
+meant to be refused.
+
+A program is **agree** (the same object and image, or both refused),
+**rsasm** (a finding, shown after removing every statement it does not need),
+or **known**, where rsasm differs on purpose: it refuses an `ldi` constant
+below -255, an AVR-tiny `lds`/`sts` address outside 0x40-0xbf, a `call` past
+22 bits and `pm()` of an odd number, which GNU as keeps the low bits of with
+at most a warning, and assembles `lo8(gs())` of a number, on which GNU as
+stops with "unknown relocation type".
+
+| Variable | Default |
+|---|---|
+| `RSASM` | `target/debug/rsasm` under the repository root |
+| `RSASM_ORACLES` | `target/oracles`, with `avr-elf-as`, `avr-elf-ld` and `avr-elf-objcopy` in `bin` |

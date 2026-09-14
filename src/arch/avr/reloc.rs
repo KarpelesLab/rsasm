@@ -230,21 +230,19 @@ pub fn rel7() -> FixupKind {
 /// `rjmp` and `rcall`: `R_AVR_13_PCREL`, ±2048 words. See [`rel7`] for why
 /// the relocation is always written and unbiased.
 ///
-/// `mega` says whether the device has more than 8K of program memory, where
-/// GNU as refuses a displacement that does not fit. Below that the address
-/// space wraps at 8K and the displacement is simply truncated, so no bound
-/// is imposed beyond the field's own 16 bits.
-pub fn rel13(mega: bool) -> FixupKind {
-    let k = FixupKind::pcrel(2, 2)
+/// `wraps` is for a device small enough that its address space wraps around,
+/// where a displacement is kept to its low 12 bits whatever its size. Which
+/// devices those are depends on who works the displacement out: GNU as, for a
+/// target that is a number, wraps on any device with no more than 8K of
+/// program memory (`md_apply_fix`); GNU ld, for a label, only in an object
+/// for the avr2, avr25 and avr4 machines (`elf32_avr_relocate_section`).
+pub fn rel13(wraps: bool) -> FixupKind {
+    FixupKind::pcrel(2, 2)
         .with_reloc(R_AVR_13_PCREL)
         .unbiased_reloc()
         .relocated_in_objects()
-        .scatter(|word, v| word | (((v >> 1) as u64) & 0xfff));
-    if mega {
-        k.with_field(13, 2)
-    } else {
-        k.with_field(16, 2)
-    }
+        .with_field(if wraps { 64 } else { 13 }, 2)
+        .scatter(|word, v| word | (((v >> 1) as u64) & 0xfff))
 }
 
 /// `call` and `jmp`: `R_AVR_CALL`, a 22-bit word address in the two words of
