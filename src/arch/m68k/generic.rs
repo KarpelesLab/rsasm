@@ -474,7 +474,7 @@ impl Encoder<'_, '_> {
     fn operand(&mut self, k: u8, p: u8, op: &Operand) -> Option<()> {
         match k {
             b'*' | b'~' | b'%' | b';' | b'@' | b'!' | b'&' | b'$' | b'?' | b'/' | b'<' | b'>'
-            | b'b' | b'p' | b'q' | b'v' | b'w' | b'y' | b'z' | b'|' => self.general(k, p, op),
+            | b'b' | b'p' | b'q' | b'v' | b'w' | b'y' | b'z' | b'|' => self.general(p, op),
             b'#' | b'^' => self.immediate(p, op),
             b'+' | b'-' | b'A' | b'a' => {
                 let n = match op.mode {
@@ -662,7 +662,7 @@ impl Encoder<'_, '_> {
     /// A general effective address, placed in the low six bits of the first
     /// word (or `MOVE`'s destination bits for place `d`), its extension words
     /// after the opcode's.
-    fn general(&mut self, k: u8, p: u8, op: &Operand) -> Option<()> {
+    fn general(&mut self, p: u8, op: &Operand) -> Option<()> {
         let (size, float) = match p {
             b'b' => (Sz::B, None),
             b'w' => (Sz::W, None),
@@ -678,13 +678,14 @@ impl Encoder<'_, '_> {
                 (Sz::L, None)
             }
         };
+        // An address stays absolute, as it does for the integer instructions:
+        // GNU as would reach a label in the same section PC-relatively where
+        // the operand is only read, which changes what the instruction does
+        // once the code is moved.
         let ecx = EaCtx {
             cpu: self.cpu,
             size,
             float,
-            // An unsized address GNU as would reach PC-relatively where it
-            // can, except where the operand is written to.
-            pc_abs: !matches!(k, b'~' | b'%' | b'&' | b'$' | b'?'),
         };
         let alts = encode::ea(self.cx, op, ecx)?;
         let place = if p == b'd' {

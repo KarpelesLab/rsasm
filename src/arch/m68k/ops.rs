@@ -102,7 +102,6 @@ impl Asm<'_, '_> {
             cpu: self.cpu,
             size,
             float: None,
-            pc_abs: false,
         };
         encode::ea(self.cx, op, ecx)
     }

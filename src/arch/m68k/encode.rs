@@ -217,10 +217,6 @@ pub struct EaCtx {
     /// Or, for an FPU operand, its floating-point size, which an immediate
     /// takes instead.
     pub float: Option<Float>,
-    /// Whether an address written without a size, and not known yet, may be
-    /// reached PC-relatively when it turns out to be close: GNU as does that
-    /// for every operand the instruction does not write to.
-    pub pc_abs: bool,
 }
 
 fn fixup(offset: u32, e: ExprRef, kind: FixupKind, span: Span) -> Fixup {
@@ -451,22 +447,6 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
                 bytes: kind.bytes(*v),
                 fixups: vec![],
             }]
-        }
-        Mode::Abs(v) if ecx.pc_abs && v.width.is_none() && cx.constant(v.e).is_none() => {
-            // GNU as's `ABSTOPCREL`: a PC-relative word if the address is in
-            // this section and within reach, else the absolute long. Another
-            // section is never in reach, even in a flat image, where GNU as
-            // could not have known how far it would be.
-            let mut near = pc_kind(2, 0);
-            near.link = crate::section::LinkValue::Interwork(super::IW_SAME_SECTION);
-            vec![
-                Alt {
-                    field: 0o72,
-                    bytes: vec![0, 0],
-                    fixups: vec![fixup(0, v.e, near, v.span)],
-                },
-                absolute(cx, v)?,
-            ]
         }
         Mode::Abs(v) => vec![absolute(cx, v)?],
         Mode::Indexed { base, disp, index } => indexed(cx, *base, disp, index, ecx, span)?,

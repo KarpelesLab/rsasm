@@ -42,10 +42,6 @@ use table::feature as f;
 
 pub const NAMES: &[&str] = &["m68k"];
 
-/// The [`Architecture::interwork`] class of a field that only resolves to a
-/// label in its own section.
-pub const IW_SAME_SECTION: u8 = 1;
-
 /// Every 68k CPU, as against ColdFire.
 pub const M68000UP: u32 = f::M68000 | M68010UP;
 /// The 68020 and the CPUs after it.
@@ -405,19 +401,6 @@ impl Architecture for M68k {
             _ => numbered_register(name, "d", 7)
                 .or_else(|| numbered_register(name, "a", 6).map(|n| 8 + n))
                 .or_else(|| numbered_register(name, "fp", 7).map(|n| 16 + n)),
-        }
-    }
-
-    /// A PC-relative word standing in for an absolute address reaches only
-    /// its own section.
-    fn interwork(
-        &self,
-        class: u8,
-        target: &crate::arch::InterworkTarget,
-    ) -> crate::arch::Interwork {
-        match class {
-            IW_SAME_SECTION if !target.same_section => crate::arch::Interwork::Relocate,
-            _ => crate::arch::Interwork::AsWritten,
         }
     }
 

@@ -133,14 +133,6 @@ far: rts
  jbsr 0x12345678
  jbne 0x8000
  jbgt 0xfffffffe
-=== an FPU operand that reads a label reaches it PC-relatively
-top: fmovex top,%fp0
- faddd near,%fp1
- fcmps far,%fp2
- fmovex %fp0,top
- ftstx near
-near: .space 40000
-far: rts
 === memory-indirect displacements of zero are left out
  movel ([0,%a0],%d1.l,0),%d0
  movel ([0,%a0]),%d1

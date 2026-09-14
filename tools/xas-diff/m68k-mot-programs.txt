@@ -239,13 +239,6 @@ far rts
  bra $1000
  bsr $12345678
  bne $8000
-=== an FPU operand that reads a label reaches it PC-relatively
-top fmove.x top,fp0
- fadd.d near,fp1
- fcmp.s far,fp2
- fmove.x fp0,top
-near ds.b 40000
-far rts
 === an FPU exception handler's register frame
  fmovem.x fp0-fp7,-(sp)
  fmovem.l fpcr/fpsr/fpiar,-(sp)

@@ -22,6 +22,7 @@ ColdFire MAC and EMAC units are left out; rsasm does not implement them.
 
 import os
 import re
+import subprocess
 import sys
 
 DEFAULT_SRC = os.environ.get(
@@ -300,7 +301,8 @@ def main():
         (n, r) for n, r in names.items() if r in MOVEC_CODES and r in reachable
     )
 
-    out = sys.stdout.write
+    chunks = []
+    out = chunks.append
     out("//! The 680x0 instruction table, generated from GNU binutils 2.47.\n")
     out("//!\n")
     out("//! Do not edit: `tools/m68k-opc/gen.py` writes this file from\n")
@@ -419,6 +421,17 @@ def main():
                 % (rust_string(name), arch, regset.upper() if regset else "&[]")
             )
         out("];\n\n")
+
+    # rustfmt's layout, so that `cargo fmt` leaves the file as written.
+    text = "".join(chunks)
+    try:
+        text = subprocess.run(
+            ["rustfmt", "--edition", "2024", "--emit", "stdout"],
+            input=text, capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        sys.stderr.write("rustfmt failed (%s); the output is unformatted\n" % e)
+    sys.stdout.write(text)
 
 
 if __name__ == "__main__":
