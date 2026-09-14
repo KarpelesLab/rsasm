@@ -14,6 +14,7 @@ pub mod avx512;
 pub mod base;
 pub mod mmx;
 pub mod sse;
+pub mod x87;
 
 use super::reg::{Reg, RegClass};
 use std::collections::HashMap;
@@ -78,6 +79,8 @@ pub enum Op {
     Fixed(&'static str),
     /// The literal constant 1, as in `shl $1, %eax`.
     One,
+    /// The literal constant 3, which makes `int $3` the one-byte `int3`.
+    Three,
     /// Register or memory operand used indirectly (`jmp *%rax`).
     IndirectRm(u8),
     /// A vector or mask register, encoded in ModRM.reg.
@@ -94,12 +97,39 @@ pub enum Op {
     /// A gather/scatter memory operand, whose SIB index is a vector register
     /// of this class rather than a GPR.
     Vsib(Vk),
-    /// A segment register, in ModRM.reg (`mov ds, ax`).
-    SReg,
-    /// A control register, in ModRM.reg (`mov cr0, eax`).
-    CReg,
-    /// A debug register, in ModRM.reg (`mov dr0, eax`).
-    DReg,
+    /// A segment register, encoded in ModRM.reg.
+    Seg,
+    /// A control register, encoded in ModRM.reg.
+    Cr,
+    /// A debug register, encoded in ModRM.reg.
+    Dr,
+    /// An x87 stack register `st(i)`, added to the last opcode byte.
+    St,
+    /// An absolute address with no base or index, carried as an
+    /// address-sized field in place of ModRM (`mov 0x1000, %eax` as `A1`).
+    /// The width is that of the data moved.
+    Moffs(u8),
+    /// A direct far pointer: an offset of the operand size, then a 16-bit
+    /// segment selector.
+    Far,
+    /// The memory operand of a far indirect branch (`ljmp *(%eax)`), in AT&T
+    /// syntax with or without `*`, and unsized or `fword` in Intel syntax.
+    FarM,
+    /// The same, but only when written `fword ptr`, which is how Intel syntax
+    /// tells `jmp fword ptr [eax]` from a near `jmp [eax]`.
+    Fword,
+    /// A far pointer with a 16-bit offset, which GNU as's Intel syntax reads
+    /// `jmp dword ptr [bx]` as outside 32-bit mode: four bytes are a near
+    /// 32-bit target only where that is the operand size.
+    FarDword,
+    /// The port register of `in` and `out`: `%dx`, which AT&T also writes as
+    /// `(%dx)`.
+    Dx,
+    /// The source or destination a string instruction was written with, as in
+    /// `movsb (%esi), %es:(%edi)`, of this width. Neither is encoded: they only
+    /// name the address size, and a segment for the source.
+    StrSrc(u8),
+    StrDst(u8),
 }
 
 impl Op {
@@ -108,12 +138,21 @@ impl Op {
             Op::Rm(w) | Op::R(w) | Op::M(w) | Op::Imm(w) | Op::IndirectRm(w) => w,
             Op::Imm8s => 1,
             Op::Rel(w) => w,
-            Op::One => 0,
+            Op::One | Op::Three => 0,
             Op::Fixed(_) => 0,
             Op::V(k) | Op::Nds(k) | Op::Is4(k) | Op::Vsib(k) => k.width(),
             Op::Vm(k, 0) => k.width(),
             Op::Vm(_, w) => w,
-            Op::SReg | Op::CReg | Op::DReg => 0,
+            Op::Moffs(w) | Op::StrSrc(w) | Op::StrDst(w) => w,
+            Op::Seg
+            | Op::Cr
+            | Op::Dr
+            | Op::St
+            | Op::Far
+            | Op::FarM
+            | Op::Fword
+            | Op::FarDword
+            | Op::Dx => 0,
         }
     }
 }
@@ -160,6 +199,28 @@ pub const EVEX_SAE: u32 = 1 << 9;
 /// The writemask is mandatory. Gathers and scatters use it as the per-element
 /// "still to do" set, so there is no unmasked form to fall back to.
 pub const NEEDS_MASK: u32 = 1 << 10;
+/// The operand size is only for matching an AT&T suffix or an Intel size
+/// keyword; no `66` prefix follows from it. Moves to and from segment
+/// registers are always 16 bits wide, whatever the mode, and so is `arpl`.
+pub const NO66: u32 = 1 << 11;
+/// The instruction starts with the `9B` (`fwait`) prefix, which goes before
+/// any other: `fstcw` is `fwait` then `fnstcw`.
+pub const WAIT: u32 = 1 << 12;
+/// The instruction's implicit address size is 16 or 32 bits, as the counter
+/// register of `jcxz` and `jecxz` is, so another mode needs a `67` prefix.
+pub const ADDR16: u32 = 1 << 13;
+pub const ADDR32: u32 = 1 << 14;
+/// The form exists only in AT&T syntax, or only in Intel syntax. The x87
+/// `fsub`/`fsubr` family needs these: GNU as's AT&T syntax swaps the two
+/// register forms with `st(i)` as destination, a historical mistake that
+/// every AT&T assembler has had to keep, while its Intel syntax encodes them
+/// as the manual does.
+pub const ATT_ONLY: u32 = 1 << 15;
+pub const INTEL_ONLY: u32 = 1 << 16;
+/// A general register operand goes in ModRM.rm even beside a vector
+/// register in ModRM.reg, as in `movd %xmm0, %rax`, whose r/m operand is
+/// register-only in that form.
+pub const R_IN_RM: u32 = 1 << 17;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -394,6 +455,7 @@ pub fn add(t: &mut Tbl, mnem: &'static str, defs: Vec<Def>) {
 fn build() -> Tbl {
     let mut t: Tbl = HashMap::new();
     base::install(&mut t);
+    x87::install(&mut t);
     mmx::install(&mut t);
     sse::install(&mut t);
     avx::install(&mut t);

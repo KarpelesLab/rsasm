@@ -13,7 +13,11 @@
 //!   those `.section` named as code afterwards, always in the main file: an
 //!   instruction in any expansion is on the line of the outermost directive
 //!   or call that expanded it. It also describes each label in the
-//!   compilation unit.
+//!   compilation unit. (An instruction on the last line of an included file
+//!   is the exception: llvm-mc has returned to the including file by the time
+//!   it looks the line up, and reads it from that file's buffer with a pointer
+//!   into the other, so the number depends on where the two were allocated.
+//!   rsasm gives the line in the included file.)
 
 use super::{Flavor, Pos};
 use crate::assembler::Assembler;

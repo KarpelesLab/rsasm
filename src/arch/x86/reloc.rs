@@ -46,10 +46,20 @@ mod i386 {
     pub const PLT32: u32 = 4;
     pub const GOTOFF: u32 = 9;
     pub const GOTPC: u32 = 10;
+    pub const TLS_IE: u32 = 15;
+    pub const TLS_GOTIE: u32 = 16;
+    pub const TLS_LE: u32 = 17;
+    pub const TLS_GD: u32 = 18;
+    pub const TLS_LDM: u32 = 19;
     pub const ABS16: u32 = 20;
     pub const PC16: u32 = 21;
     pub const ABS8: u32 = 22;
     pub const PC8: u32 = 23;
+    pub const TLS_LDO_32: u32 = 32;
+    pub const TLS_IE_32: u32 = 33;
+    pub const TLS_LE_32: u32 = 34;
+    pub const SIZE32: u32 = 38;
+    pub const GOT32X: u32 = 43;
 }
 
 impl Abi {
@@ -122,6 +132,35 @@ impl Abi {
             Abi::I386 => i386::GOT32,
         }
     }
+
+    /// The relocation an i386 `@` modifier names for a 32-bit field, where
+    /// every one of them is: `@GOTOFF`, the TLS models, `@SIZE`. `@PLT` and
+    /// `@GOT` are shared with x86-64 and handled by their own methods.
+    pub fn i386_modifier(name: &str) -> Option<u32> {
+        Some(match name {
+            "plt" => i386::PLT32,
+            "got" => i386::GOT32,
+            "gotoff" => i386::GOTOFF,
+            "tlsgd" => i386::TLS_GD,
+            "tlsldm" => i386::TLS_LDM,
+            "dtpoff" => i386::TLS_LDO_32,
+            "ntpoff" => i386::TLS_LE,
+            "tpoff" => i386::TLS_LE_32,
+            "gotntpoff" => i386::TLS_GOTIE,
+            "indntpoff" => i386::TLS_IE,
+            "gottpoff" => i386::TLS_IE_32,
+            "size" => i386::SIZE32,
+            _ => return None,
+        })
+    }
+
+    /// `R_386_GOT32X`: a `@GOT` load the linker may turn into a direct one
+    /// when the symbol resolves locally.
+    pub const I386_GOT32X: u32 = i386::GOT32X;
+
+    /// `R_386_GOTPC`: the distance from here to the GOT, which is what a
+    /// reference to `_GLOBAL_OFFSET_TABLE_` means in i386 code.
+    pub const I386_GOTPC: u32 = i386::GOTPC;
 
     /// `@GOTPCREL` is RIP-relative, so it only exists on x86-64.
     pub fn gotpcrel(self) -> Option<u32> {

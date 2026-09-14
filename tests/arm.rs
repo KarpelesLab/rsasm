@@ -497,9 +497,34 @@ fn alignment_padding_uses_real_no_ops() {
         hex(&text_for("arm", "mov r0, r0\n.balign 16\nmov r0, r0\n")),
         "00 00 a0 e1 00 f0 20 e3 00 f0 20 e3 00 f0 20 e3 00 00 a0 e1"
     );
+    // Ending on a word, since llvm-mc does not pad the end of the section
+    // and GNU as does; see the next test.
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            "movs r0, r0\n.balign 8\nmovs r0, r0\nmovs r0, r0\n"
+        )),
+        "00 00 00 bf 00 bf 00 bf 00 00 00 00"
+    );
+}
+
+/// GNU as pads the end of a code section to the section's alignment, but only
+/// up to a word, with the no-ops of the mode the file ends in; and it takes
+/// an odd remainder as zeros, ahead of the no-ops (checked with
+/// `arm-none-eabi-as -march=armv7-a`, whose Thumb padding otherwise uses
+/// 32-bit no-ops where this uses two 16-bit ones).
+#[test]
+fn code_sections_are_padded_to_a_word_at_the_end() {
     assert_eq!(
         hex(&text_for("thumb", "movs r0, r0\n.balign 8\nmovs r0, r0\n")),
-        "00 00 00 bf 00 bf 00 bf 00 00"
+        "00 00 00 bf 00 bf 00 bf 00 00 00 bf"
+    );
+    assert_eq!(
+        hex(&text_for(
+            "arm",
+            "mov r0, r0\n.byte 1\n.p2align 3\nmov r1, r1\n"
+        )),
+        "00 00 a0 e1 01 00 00 00 01 10 a0 e1"
     );
 }
 
@@ -560,7 +585,6 @@ fn thumb_restrictions_are_diagnosed() {
     assert!(errors_for("thumb", "lsls r0, r1, 32").contains("0 to 31"));
     assert!(errors_for("thumb", "mov r0, 0x100000000").contains("does not fit in 32 bits"));
     assert!(errors_for("thumb", "cmp r0, 0x101").contains("neither is its negation"));
-    assert!(errors_for("thumb", "blx somewhere").contains("not supported"));
     // An offset past 32 bits must not wrap around into a small one.
     assert!(errors_for("thumb", "ldr r0, [r1, 0x100000004]").contains("0 to 4095"));
     assert!(errors_for("thumb", "ldr r0, [r1, 124].n").contains("unexpected token"));
@@ -597,6 +621,21 @@ fn malformed_input_never_panics() {
         "ldr r0, [r1], [r2]",
         "ldr r0, [r1, -]",
         "ldr r0, [r1, +]",
+        "ldr r0, =",
+        "ldr =1",
+        "ldr r0, =1, 2",
+        "ldr r0, [=1]",
+        "str r0, =1",
+        "adr r0",
+        "adr r0, [r1]",
+        "adrl r0, =1",
+        "it",
+        "it foo",
+        "it eq, ne",
+        "itt eq\nmoveq r0, r1\n.ltorg\nit ne",
+        "ite al\naddal r0, r1\naddal r0, r1",
+        "blx",
+        "blx [r0]",
         "ldr r0, [sp, undefined_symbol]",
         "push",
         "push {",

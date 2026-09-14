@@ -1,7 +1,7 @@
 #!/bin/bash
 # Prints an ELF object in a form two assemblers can agree on.
 #
-#   tools/mc-diff/canon.sh o.o
+#   tools/mc-diff/canon.sh [--full] o.o
 #
 # Three parts, each in the object's own order:
 #
@@ -22,9 +22,17 @@
 # relocs.awk, which names a local target by its section and offset for the
 # same reason.
 #
+# With `--full`, for a comparison against the one reference a target follows
+# for its whole objects, `e_flags` is
+# printed first, and the symbol list takes in every named local symbol but
+# section and file symbols, sorted: ARM's mapping symbols and Thumb function
+# bits are local, and are what that comparison is for.
+#
 # Plain POSIX awk: no strtonum, so hex is converted by hand.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
+full=0
+[ "$1" = --full ] && { full=1; shift; }
 obj=$1
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -60,8 +68,11 @@ sort -k2,2 "$tmp/sections" | while read -r idx name type flags size align; do
   printf '  %s\n' "$(xxd -p "$tmp/bytes" | tr -d '\n')"
 done
 
+[ "$full" = 1 ] && llvm-readobj --file-headers "$obj" |
+  ${AWK:-awk} '$1 == "Flags" { f = $3; gsub(/[()]/, "", f); print "flags " f; exit }'
+
 llvm-readobj --symbols "$obj" > "$tmp/syms"
-${AWK:-awk} '
+${AWK:-awk} -v full="$full" '
   function field(line,    s) { s = line; sub(/^[^:]*: ?/, "", s); sub(/ ?\([0-9a-fA-Fx]+\)$/, "", s); return s }
   $1 == "Symbol" && $2 == "{" { n++; other = "STV_DEFAULT"; inother = 0 }
   $1 == "Name:" { name = field($0) }
@@ -76,8 +87,10 @@ ${AWK:-awk} '
     # GNU as for RL78 declares `__rl78_abs__` in every object, used or not.
     if (n > 1 && (bind != "Local" || sect == "Undefined") && name != "__rl78_abs__")
       printf "symbol %s %s %s %s %s+%s\n", name, bind, type, other, sect, value
+    else if (full && n > 1 && name != "" && type != "Section" && type != "File")
+      printf "symbol %s %s %s %s %s+%s\n", name, bind, type, other, sect, value
   }
-' "$tmp/syms"
+' "$tmp/syms" | { if [ "$full" = 1 ]; then LC_ALL=C sort; else cat; fi; }
 
 # By section and offset, keeping the order of entries at one offset (a
 # RISC-V ADD/SUB pair): GNU as writes the fixups of instructions it relaxed

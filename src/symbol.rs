@@ -69,6 +69,9 @@ pub struct Symbol {
     /// they were read; 0 while it is undefined. See
     /// [`SymbolTable::mark_defined`].
     pub def_order: u32,
+    /// Bits the backend recorded on the label as it was defined; see
+    /// [`crate::arch::Architecture::label_flags`].
+    pub target_flags: u8,
 }
 
 impl Symbol {
@@ -146,6 +149,7 @@ impl SymbolTable {
             redefinable: false,
             used: false,
             def_order: 0,
+            target_flags: 0,
         });
         self.by_name.insert(name, id);
         id
@@ -169,6 +173,7 @@ impl SymbolTable {
             redefinable: false,
             used: true,
             def_order: 0,
+            target_flags: 0,
         })
     }
 
@@ -190,7 +195,7 @@ impl SymbolTable {
     }
 
     /// Resolves a backward reference `Nb` to the most recent `N:`.
-    pub fn local_backward(&mut self, n: u32, _span: Span) -> Option<SymbolId> {
+    pub fn local_backward(&self, n: u32, _span: Span) -> Option<SymbolId> {
         let slots = self.locals.get(&n)?;
         if slots.defined == 0 {
             return None;
@@ -234,6 +239,7 @@ impl SymbolTable {
             redefinable: false,
             used: false,
             def_order: 0,
+            target_flags: 0,
         });
         let slots = self.locals.entry(n).or_default();
         debug_assert_eq!(

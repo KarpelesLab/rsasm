@@ -27,6 +27,9 @@ pub struct Mem {
     pub rip_relative: bool,
     /// Address-size of the base/index registers, in bytes.
     pub addr_size: u8,
+    /// Written in parentheses or brackets, rather than as a bare address. A
+    /// bare address can also be a direct branch target.
+    pub bracketed: bool,
     pub span: Span,
 }
 
@@ -40,6 +43,7 @@ impl Mem {
             disp: None,
             rip_relative: false,
             addr_size: 8,
+            bracketed: false,
             span,
         }
     }
@@ -136,6 +140,13 @@ pub enum OperandKind {
     /// `{rn-sae}` and friends, which the source writes in the operand list but
     /// which encode as bits rather than as an operand.
     Rounding(RoundCtl),
+    /// A direct far pointer, `seg:offset` in Intel syntax. AT&T writes the
+    /// two halves as separate immediates, `ljmp $seg, $offset`, and the
+    /// matcher pairs them up.
+    FarPtr {
+        seg: ExprRef,
+        off: ExprRef,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -174,6 +185,7 @@ impl Operand {
             OperandKind::Rel(_) => "a branch target".into(),
             OperandKind::Indirect(_) => "an indirect branch target".into(),
             OperandKind::Rounding(_) => "a rounding-control decorator".into(),
+            OperandKind::FarPtr { .. } => "a far pointer".into(),
         }
     }
 }
@@ -185,6 +197,7 @@ pub fn size_keyword(name: &str) -> Option<u8> {
         "word" => 2,
         "dword" => 4,
         "qword" => 8,
+        "fword" => 6,
         "tbyte" | "tword" => 10,
         "xmmword" | "oword" => 16,
         "ymmword" => 32,
@@ -453,6 +466,14 @@ impl OperandParser<'_, '_> {
         cur.advance();
         let text = self.cx.interner.get(n).to_ascii_lowercase();
         match reg::lookup(&text) {
+            Some(r) if r.class == RegClass::St => self.st_index(cur, r),
+            Some(r) if self.cx.state.bits != 64 && r.only_64() => {
+                self.cx.error(
+                    pct.span.to(tok.span),
+                    format!("`%{text}` is only available in 64-bit mode"),
+                );
+                None
+            }
             Some(r) => Some(r),
             None => {
                 self.cx
@@ -460,6 +481,33 @@ impl OperandParser<'_, '_> {
                 None
             }
         }
+    }
+
+    /// The `(n)` of `st(n)`, if one follows `st`.
+    fn st_index(&mut self, cur: &mut Cursor<'_>, top: Reg) -> Option<Reg> {
+        if !cur.check_punct(Punct::LParen) {
+            return Some(top);
+        }
+        let open = cur.advance();
+        let tok = cur.advance();
+        let close = cur.peek();
+        let n = match tok.kind {
+            TokKind::Int(v) => reg::st(u8::try_from(v).unwrap_or(u8::MAX)),
+            _ => None,
+        };
+        let Some(r) = n else {
+            self.cx.error(
+                open.span.to(tok.span),
+                "an x87 stack register is `st(0)` to `st(7)`",
+            );
+            return None;
+        };
+        if cur.eat_punct(Punct::RParen).is_none() {
+            self.cx
+                .error(close.span, "expected `)` after the x87 stack index");
+            return None;
+        }
+        Some(r)
     }
 
     /// `disp(base, index, scale)`, any part of which may be absent.
@@ -475,6 +523,7 @@ impl OperandParser<'_, '_> {
             m.span = start.to(cur.peek().span.shrink_to_lo());
             return Some(m);
         }
+        m.bracketed = true;
 
         // base
         if cur.check_punct(Punct::Percent) {
@@ -567,8 +616,13 @@ impl OperandParser<'_, '_> {
         // A bare register.
         if let TokKind::Ident(n) = cur.peek().kind {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
-            if let Some(r) = reg::lookup(&text) {
+            if let Some(r) = reg::lookup_in_mode(&text, self.cx.state.bits) {
                 cur.advance();
+                let r = if r.class == RegClass::St {
+                    self.st_index(cur, r)?
+                } else {
+                    r
+                };
                 // `seg:[...]`
                 if r.class == RegClass::Segment && cur.check_punct(Punct::Colon) {
                     cur.advance();
@@ -605,8 +659,47 @@ impl OperandParser<'_, '_> {
             });
         }
 
+        // `offset sym` is the address as an immediate.
+        let offset = matches!(cur.peek().kind, TokKind::Ident(n)
+            if self.cx.interner.get(n).eq_ignore_ascii_case("offset"))
+            && !cur.nth(1).is_punct(Punct::Comma)
+            && !cur.nth(1).is_eol();
+        if offset {
+            cur.advance();
+        }
+
         // Otherwise an immediate or branch target; the matcher decides which.
         let e = self.expr(cur)?;
+        // `seg:offset`, a direct far branch target.
+        if !offset && cur.eat_punct(Punct::Colon).is_some() {
+            let off = self.expr(cur)?;
+            return Some(Operand {
+                kind: OperandKind::FarPtr { seg: e, off },
+                size_hint,
+                decor: Decor::default(),
+                span: start.to(self.cx.exprs.span(off)),
+            });
+        }
+        // A value that is not a known constant names an address, and without
+        // `offset` an address in GNU Intel syntax means the memory there:
+        // `mov eax, sym` is a load. A branch reads the same operand as its
+        // target. NASM writes memory in brackets only, so there it is the
+        // address.
+        if !offset
+            && self.cx.dialect != crate::lexer::Dialect::Nasm
+            && self.cx.constant(e).is_none()
+        {
+            let span = start.to(self.cx.exprs.span(e));
+            let mut m = Mem::empty(span);
+            m.addr_size = self.addr_size;
+            m.disp = Some(e);
+            return Some(Operand {
+                kind: OperandKind::Mem(m),
+                size_hint,
+                decor: Decor::default(),
+                span,
+            });
+        }
         Some(Operand {
             kind: OperandKind::Imm(e),
             size_hint,
@@ -625,6 +718,7 @@ impl OperandParser<'_, '_> {
         }
         let mut m = Mem::empty(start);
         m.addr_size = self.addr_size;
+        m.bracketed = true;
 
         // `[rel x]` forces a RIP-relative reference, `[abs x]` an absolute one,
         // overriding `default rel`.
@@ -720,6 +814,18 @@ impl OperandParser<'_, '_> {
         }
         m.disp = disp;
         m.span = start.to(close.span);
+        // 16-bit addressing pairs `bx` or `bp` with `si` or `di`, and ModRM
+        // encodes the pair rather than an order, so `[si+bx]` is `[bx+si]`.
+        if let (Some(b), Some(i)) = (m.base, m.index)
+            && b.size == 2
+            && i.size == 2
+            && m.scale == 1
+            && matches!(b.num, 6 | 7)
+            && matches!(i.num, 3 | 5)
+        {
+            m.base = Some(i);
+            m.index = Some(b);
+        }
         // `default rel` makes a reference to a symbol RIP-relative when it has
         // no register of its own and was not written `[abs …]`. A pure number
         // stays absolute, as NASM leaves it.
@@ -759,7 +865,7 @@ impl OperandParser<'_, '_> {
         // `reg` or `reg*scale`
         if let TokKind::Ident(n) = cur.peek().kind {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
-            if let Some(r) = reg::lookup(&text) {
+            if let Some(r) = reg::lookup_in_mode(&text, self.cx.state.bits) {
                 let tok = cur.advance();
                 if negated {
                     self.cx.error(
@@ -874,7 +980,7 @@ impl OperandParser<'_, '_> {
             && let TokKind::Ident(n) = cur.nth(2).kind
         {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
-            if let Some(r) = reg::lookup(&text) {
+            if let Some(r) = reg::lookup_in_mode(&text, self.cx.state.bits) {
                 let tok = cur.peek();
                 if !matches!(v, 1 | 2 | 4 | 8) {
                     self.cx.error(tok.span, "scale must be 1, 2, 4 or 8");

@@ -145,51 +145,6 @@ jobs:
       - name: cargo check --all-features --all-targets
         run: cargo check --all-features --all-targets
 
-  gas_diff:
-    name: Differential test against GNU as
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: gas-diff
-
-      # The encodings asserted in tests/x86_encoding.rs were taken from GNU as,
-      # but a hermetic test can only ever confirm rsasm still agrees with what
-      # rsasm said last time. This job assembles a corpus with both assemblers
-      # and compares the bytes, so a wrong expectation cannot become the
-      # baseline. binutils is preinstalled on the runner.
-      - name: Check binutils is present
-        run: as --version | head -1
-
-      # The object corpora are read with llvm-readobj and llvm-objcopy, as in
-      # the other harnesses; without them that part would be skipped.
-      - name: Install LLVM 22
-        run: |
-          set -euo pipefail
-          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/$codename/ llvm-toolchain-$codename-22 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-22.list > /dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-22
-          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
-
-      - name: tools/gas-diff/run.sh
-        run: |
-          set -uo pipefail
-          tools/gas-diff/run.sh 2>&1 | tee gas-diff.log
-          status=${PIPESTATUS[0]}
-          grep -q "skipping" gas-diff.log \
-            && { echo "::error::gas-diff skipped its object corpora"; exit 1; }
-          exit $status
-
   mc_diff:
     name: Differential test against llvm-mc
     runs-on: ubuntu-latest
@@ -300,6 +255,21 @@ jobs:
 
       # Same guards as mc-diff: the log goes to a file so a failure still
       # prints it, and a run that compared nothing is a failure, not a pass.
+      # x86 against the pinned GNU as 2.47 rather than the runner's own, which
+      # is older and assembles some of the corpus differently. The encodings
+      # in tests/x86_encoding.rs were taken from these runs.
+      - name: tools/gas-diff/run.sh
+        run: |
+          set +e -uo pipefail
+          tools/gas-diff/run.sh > gas-diff.log 2>&1
+          status=$?
+          cat gas-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" gas-diff.log \
+            || { echo "::error::gas-diff compared nothing"; exit 1; }
+          grep -q "skipping\|no pinned" gas-diff.log \
+            && { echo "::error::gas-diff did not use the pinned GNU as, or skipped its object corpora"; exit 1; }
+          exit $status
+
       - name: tools/xas-diff/run.sh
         run: |
           set +e -uo pipefail

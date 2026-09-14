@@ -547,7 +547,7 @@ impl Assembler {
             .interner
             .intern(&self.interner.get(mnemonic).to_ascii_lowercase());
         self.assemble_instruction(&toks[1..], lowered, toks[0].span, span)
-            .map(|(v, _)| v)
+            .map(|(v, ..)| v)
     }
 
     // ---- data ------------------------------------------------------------

@@ -203,9 +203,10 @@ weak:   rts
 
 #[cfg(feature = "arm")]
 #[test]
-fn arm_leaves_every_bl_to_the_linker_as_llvm_mc_does() {
-    // Even to a local label, against the label: the linker may make it a
-    // `blx`. A conditional `bl` is `R_ARM_JUMP24`; a `b` is resolved.
+fn arm_resolves_branches_to_local_labels_as_gnu_as_does() {
+    // GNU as, the reference for ARM objects, resolves a `bl` or `blx` to a
+    // local label beside it, and relocates any branch to a global symbol.
+    // (llvm-mc relocates every `bl`; see tools/mc-diff/arm-relocs.txt.)
     let asm = assemble_for(
         "arm",
         "        .globl  glob
@@ -218,19 +219,11 @@ loc:    nop
 glob:   nop
 ",
     );
-    // ARM objects are REL: the -8 is in the field, where llvm-mc puts it.
-    assert_eq!(
-        relocs(&asm),
-        vec![
-            reloc(8, 28, "loc", -8),
-            reloc(12, 29, "loc", -8),
-            reloc(16, 28, "loc", -8),
-            reloc(20, 29, "glob", -8),
-        ]
-    );
+    // ARM objects are REL: the -8 is in the field, where GNU as puts it.
+    assert_eq!(relocs(&asm), vec![reloc(20, 29, "glob", -8)]);
     assert_eq!(
         hex(&section(&asm, ".text")),
-        "00 f0 20 e3 fd ff ff ea fe ff ff eb fe ff ff 0b fe ff ff fa fe ff ff ea 00 f0 20 e3"
+        "00 f0 20 e3 fd ff ff ea fc ff ff eb fb ff ff 0b fa ff ff fa fe ff ff ea 00 f0 20 e3"
     );
 }
 
@@ -317,7 +310,8 @@ fn sections_start_with_the_references_alignment() {
     #[cfg(feature = "aarch64")]
     cases.push(("aarch64", [4, 1, 1, 1, 4]));
     #[cfg(feature = "arm")]
-    cases.push(("arm", [4, 1, 1, 1, 1]));
+    // GNU as: only an instruction aligns an ARM section.
+    cases.push(("arm", [1, 1, 1, 1, 1]));
     #[cfg(feature = "riscv")]
     cases.push(("riscv64", [2, 1, 1, 1, 1]));
     #[cfg(feature = "powerpc")]

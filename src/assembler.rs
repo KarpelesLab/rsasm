@@ -173,6 +173,11 @@ pub struct Assembler {
     ///
     /// [`Arch::reloc_at`]: crate::arch::Arch::reloc_at
     pub(crate) relocs_by_fragment: Vec<SectionId>,
+    /// The literals each section's next pool will hold; see
+    /// [`crate::literals`].
+    pub(crate) literal_pools: HashMap<SectionId, Vec<crate::arch::LiteralRequest>>,
+    /// The mapping symbols of the finished object; see [`crate::mapping`].
+    pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
 }
@@ -224,6 +229,8 @@ impl Assembler {
             dwarf: crate::dwarf::DwarfState::default(),
             tail_pads: Vec::new(),
             relocs_by_fragment: Vec::new(),
+            literal_pools: HashMap::new(),
+            mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
         };
         if asm.options.dialect == Dialect::CcRx {
@@ -370,9 +377,13 @@ impl Assembler {
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
         let section = self.cur;
+        let in_code = self.section(section).flags.exec;
+        let name = self.interner.get(self.symbols.get(id).name);
+        let flags = self.arch.label_flags(&mut self.arch_state, name, in_code);
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Label { section, frag };
         sym.def_span = span;
+        sym.target_flags = flags;
         self.symbols.mark_defined(id);
         if self.dwarf.line.mark_labels {
             self.dwarf_label_defined();
@@ -1157,6 +1168,10 @@ impl Assembler {
     /// fragments it emitted: layout resolves their fixups in its byte order
     /// and pads their alignment with its no-ops, whatever is active by then.
     pub(crate) fn switch_arch(&mut self, arch: Box<dyn Architecture>) {
+        // A literal pool belongs to the backend whose instructions load from
+        // it, and its entries are that backend's data, so a pool still open
+        // is written out before another backend takes over.
+        self.flush_all_literals();
         let syntax = self.arch_state.syntax;
         let mut state = arch.initial_state();
         // A syntax choice is the user's, not the architecture's, so it carries
@@ -1204,16 +1219,13 @@ impl Assembler {
         self.slot_arch(self.sections[si].arch_slot(fi) as usize)
     }
 
-    /// Whether any backend the source used may shrink an instruction during
-    /// relaxation; see [`Architecture::relaxation_may_shrink`].
-    pub(crate) fn any_arch_shrinks(&self) -> bool {
-        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxation_may_shrink())
-    }
-
-    /// Whether any backend the source used sizes branches in one walk
-    /// through each section; see [`Architecture::relaxes_in_order`].
-    pub(crate) fn any_arch_relaxes_in_order(&self) -> bool {
-        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxes_in_order())
+    /// How the file's instruction sizes are picked: the most refined
+    /// [`Relaxation`](crate::arch::Relaxation) of any backend the source used.
+    pub(crate) fn relaxation(&self) -> crate::arch::Relaxation {
+        (0..self.arch_slots.len())
+            .map(|s| self.slot_arch(s).0.relaxation())
+            .max()
+            .unwrap_or(crate::arch::Relaxation::FromLastPass)
     }
 
     /// The backend the output is for: the one the assembler was created
@@ -1674,7 +1686,7 @@ impl Assembler {
         mnemonic_span: Span,
         span: Span,
     ) {
-        let Some((variants, relaxable)) =
+        let Some((variants, relaxable, requests)) =
             self.assemble_instruction(operands, mnemonic, mnemonic_span, span)
         else {
             return;
@@ -1687,12 +1699,21 @@ impl Assembler {
         if self.check_nobits(span) {
             return;
         }
+        self.map_code();
         if self.dwarf.line.pending || self.dwarf.line.source.on {
             let pos = (self.cur, self.cur_section().next_frag_index());
             self.dwarf_instruction(pos, &variants, span);
         }
+        // A relaxable instruction ends GNU as's fragment, and with it the
+        // record of which instruction set later padding is for.
+        let settled = variants.len() == 1;
         let idx = self.cur_section().emit_variants(variants, span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
+        if settled && self.arch.pads_as_last_instruction() {
+            let state = self.arch_state.clone();
+            self.cur_section().nop_state = Some(state);
+        }
+        self.run_requests(requests, span);
     }
 
     /// The candidate encodings of an instruction, and whether its fragment
@@ -1703,7 +1724,11 @@ impl Assembler {
         mnemonic: Name,
         mnemonic_span: Span,
         span: Span,
-    ) -> Option<(Vec<crate::section::Variant>, bool)> {
+    ) -> Option<(
+        Vec<crate::section::Variant>,
+        bool,
+        Vec<crate::arch::Request>,
+    )> {
         let req = InsnRequest {
             mnemonic,
             mnemonic_span,
@@ -1737,10 +1762,30 @@ impl Assembler {
             sections,
             section: *cur,
             relaxable: false,
+            requests: Vec::new(),
         };
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;
-        variants.map(|v| (v, relaxable))
+        let requests = std::mem::take(&mut cx.requests);
+        // A symbol a relocation modifier implies exists from where the
+        // modifier is read, so it takes its place in the symbol table ahead
+        // of the targets that layout interns later.
+        // NASM declares every external symbol, and makes nothing of the kind.
+        let nasm = self.options.dialect == crate::lexer::Dialect::Nasm;
+        for f in variants.iter().flatten().flat_map(|v| &v.fixups) {
+            if nasm {
+                break;
+            }
+            if let Some(m) = self.find_modifier(f.expr) {
+                let name = self.interner.get(m).to_string();
+                if let Some(needs) = self.arch.modifier_symbols(&name).needs {
+                    let name = self.interner.intern(needs);
+                    let id = self.symbols.intern(name, span);
+                    self.symbols.get_mut(id).used = true;
+                }
+            }
+        }
+        variants.map(|v| (v, relaxable, requests))
     }
 }
 

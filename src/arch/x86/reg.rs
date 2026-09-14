@@ -161,8 +161,12 @@ static REGS: &[Entry] = &{
         e("k2", Mask, 2, 8, false), e("k3", Mask, 3, 8, false),
         e("k4", Mask, 4, 8, false), e("k5", Mask, 5, 8, false),
         e("k6", Mask, 6, 8, false), e("k7", Mask, 7, 8, false),
-        // xmm0-31, ymm0-31 and zmm0-31 are added by `tables()`: 96 rows of
-        // one shape each, which reads better generated than tabulated.
+        // The top of the x87 stack. `st(1)`-`st(7)` are spelled with an index
+        // in parentheses, which the operand parsers read as one register.
+        e("st", St, 0, 10, false),
+        // xmm0-31, ymm0-31 and zmm0-31, and the control and debug registers,
+        // are added by `tables()`: rows of one shape each, which read better
+        // generated than tabulated.
     ]
 };
 
@@ -199,6 +203,30 @@ fn tables() -> &'static Tables {
                 },
             );
         }
+        // `cr0`-`cr15` and `db0`-`db15`, which GNU as also spells `dr0`-`dr15`.
+        // Only some exist on any CPU, but the encoding has room for all of
+        // them and both reference assemblers accept every one; `cr8` and above
+        // need REX, which limits them to 64-bit mode. Their width is the
+        // mode's, so it is left for the instruction table to decide.
+        for (stems, class) in [
+            (&["cr"][..], RegClass::Control),
+            (&["dr", "db"][..], RegClass::Debug),
+        ] {
+            for stem in stems {
+                for num in 0..16u8 {
+                    let name: &'static str = Box::leak(format!("{stem}{num}").into_boxed_str());
+                    add(
+                        name,
+                        Reg {
+                            class,
+                            num,
+                            size: 0,
+                            rex_required: false,
+                        },
+                    );
+                }
+            }
+        }
         for (stem, class, size) in VECTOR_FAMILIES {
             for num in 0..32u8 {
                 // Leaked so the rest of the backend can pass `&'static str`
@@ -225,8 +253,46 @@ pub fn lookup(name: &str) -> Option<Reg> {
     tables().by_name.get(name).copied()
 }
 
+/// Looks up a register that exists in `bits`-bit mode. Outside 64-bit mode
+/// the registers only REX, EVEX or long mode can reach are not registers at
+/// all to GNU as: an unknown name in AT&T syntax, and an ordinary symbol in
+/// Intel syntax.
+pub fn lookup_in_mode(name: &str, bits: u8) -> Option<Reg> {
+    lookup(name).filter(|r| bits == 64 || !r.only_64())
+}
+
+impl Reg {
+    /// True for a register that only exists in 64-bit mode.
+    pub fn only_64(&self) -> bool {
+        match self.class {
+            RegClass::Gpr => self.size == 8 || self.num >= 8 || self.rex_required,
+            RegClass::Rip => self.size == 8,
+            RegClass::Xmm | RegClass::Ymm | RegClass::Zmm | RegClass::Control | RegClass::Debug => {
+                self.num >= 8
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `st(n)`: the x87 stack register `n` places from the top.
+pub fn st(n: u8) -> Option<Reg> {
+    (n < 8).then_some(Reg {
+        class: RegClass::St,
+        num: n,
+        size: 10,
+        rex_required: false,
+    })
+}
+
 /// The canonical name of a register, for diagnostics.
 pub fn name_of(r: Reg) -> &'static str {
+    if r.class == RegClass::St && r.num > 0 {
+        const ST: [&str; 8] = [
+            "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)",
+        ];
+        return ST[r.num as usize & 7];
+    }
     tables()
         .by_reg
         .get(&(r.class, r.num, r.size))

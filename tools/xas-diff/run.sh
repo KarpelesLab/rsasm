@@ -4,7 +4,9 @@
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
 # GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, and the 8-bit Z80,
 # 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
-# compares the code bytes.
+# compares the code bytes. ARM and Thumb, which llvm-mc does assemble, are here
+# too, as whole objects, for what GNU as decides and llvm-mc decides
+# differently: literal pools, interworking and mapping symbols.
 #
 #   tools/xas-diff/run.sh              # every target with a corpus
 #   tools/xas-diff/run.sh m68k rx      # just these
@@ -16,7 +18,15 @@
 # Snippets in <key>-relocs.txt, in the programs format, are compared as whole
 # objects instead: every allocated section's header and bytes, the global,
 # weak and undefined symbols, and the relocations, as tools/mc-diff/canon.sh
-# prints them.
+# prints them; for ARM and Thumb also `e_flags` and every local symbol, with
+# `canon.sh --full`. A snippet there named `refused: ...` matches when both
+# assemblers reject it.
+#
+# ARM is checked against GNU as for ARMv7-A, whose Thumb-2 no-ops and
+# interworking rules are what `-march=armv7-a` gives; without it GNU as
+# assumes an ARMv4T-era CPU. Its snippets start with `.syntax unified`, GNU
+# as's default being the older divided Thumb syntax, and rsasm knowing only
+# the unified one.
 #
 # A vendor syntax no reference assembler reads (CC-RL, CC-RH, CC-RX) is checked in
 # pairs instead: <key>-pairs.txt holds snippets separated by `=== <name>`, each
@@ -66,6 +76,8 @@ z80|z80|8bit|z80-elf-as|linked:z80-elf-ld
 z80-gas|z80|gas|z80-elf-as|linked:z80-elf-ld|z80
 z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
+arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
+thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
@@ -148,35 +160,45 @@ compare() { # key arch dialect cmd extract name source [reference-source]
 }
 
 compare_object() { # key arch dialect cmd name source
-  local d m r tool=${4%% *} flags=""
+  local d m r tool=${4%% *} flags="" full=""
   # GNU as for RX renames `.text`, `.data` and `.bss` to Renesas's `P`, `D_1`
   # and `B_1`, which rsasm does not; asked to keep the usual names, it does.
   case "$1" in rx*) flags=-muse-conventional-section-names ;; esac
+  # ARM objects are compared whole, local symbols and `e_flags` included.
+  case "$1" in arm | thumb) full=--full ;; esac
   d=$(mktemp -d)
   printf '%s\n' "$6" > "$d/in.s"
   if [ ! -x "$bin/$tool" ]; then
     m="REF-MISSING: $tool"
   elif (cd "$d" && "$bin/$tool" ${4#"$tool"} $flags -o ref.o in.s > log 2>&1); then
-    m=$("$root/tools/mc-diff/canon.sh" "$d/ref.o")
+    m=$("$root/tools/mc-diff/canon.sh" $full "$d/ref.o")
   else
     m="REF-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"
   fi
   if "$rsasm" -a "$2" -d "$3" -o "$d/rs.o" "$d/in.s" > "$d/log" 2>&1; then
-    r=$("$root/tools/mc-diff/canon.sh" "$d/rs.o")
+    r=$("$root/tools/mc-diff/canon.sh" $full "$d/rs.o")
   else
     r="RSASM-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"
   fi
   rm -rf "$d"
-  if [ "$m" = "$r" ] && [ "${m#REF-}" = "$m" ]; then
+  if [ "${5#refused: }" != "$5" ]; then
+    # Both have to refuse it; matching output would mean neither did.
+    if [ "${m#REF-ERROR}" != "$m" ] && [ "${r#RSASM-ERROR}" != "$r" ]; then
+      pass=$((pass + 1))
+      return
+    fi
+  elif [ "$m" = "$r" ] && [ "${m#REF-}" = "$m" ]; then
     pass=$((pass + 1))
+    return
+  fi
+  fail=$((fail + 1))
+  echo "### [$1] $5 (object)"
+  printf '%s\n' "$6" | sed 's/^/    |/'
+  if [ "${m#REF-}" != "$m" ] || [ "${r#RSASM-}" != "$r" ] || [ "$m" = "$r" ]; then
+    echo "  reference: ${m:0:300}"
+    echo "  rsasm:     ${r:0:300}"
   else
-    fail=$((fail + 1))
-    echo "### [$1] $5 (object)"
-    printf '%s\n' "$6" | sed 's/^/    |/'
-    echo "  reference:"
-    printf '%s\n' "$m" | sed 's/^/    /'
-    echo "  rsasm:"
-    printf '%s\n' "$r" | sed 's/^/    /'
+    diff <(printf '%s\n' "$m") <(printf '%s\n' "$r") | sed -n 's/^< /  reference: /p; s/^> /  rsasm:     /p'
   fi
 }
 

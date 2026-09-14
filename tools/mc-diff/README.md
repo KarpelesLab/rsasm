@@ -17,7 +17,14 @@ $ tools/mc-diff/run.sh aarch64    # just one
 lines, for anything that needs labels, branch relaxation or directives.
 
 The `<arch>` key and its llvm triple are listed in the `ARCHES` table at the
-top of `run.sh`.
+top of `run.sh`, with any extra llvm-mc flags and a source header put before
+every case. The header is how the x86 variants ask for their mode and syntax:
+`i8086` and `i8086-intel` are 16-bit code in an i386 object (`.code16`), since
+llvm-mc 22 cannot write an object for an `i8086` triple, and the `-intel`
+variants start with `.intel_syntax noprefix`. Where llvm-mc and GNU as
+disagree on x86, rsasm follows GNU as, and the case is commented out in the
+llvm-mc corpus with llvm-mc's answer beside it; the header of each x86 corpus
+lists the kinds of difference.
 
 ## Comparing objects
 
@@ -58,8 +65,19 @@ objects:
 - A conditional branch that is left to the linker, to a symbol outside the
   file or a global one in it: llvm-mc inverts it around a `jal` with
   `R_RISCV_JAL`; rsasm keeps the branch with `R_RISCV_BRANCH`.
-- A Thumb function symbol: llvm-mc sets its low bit, rsasm does not yet mark
-  Thumb code.
+
+And where the ARM and Thumb corpora follow GNU as instead, which is the
+reference for ARM objects (see `tools/xas-diff/README.md`), and llvm-mc
+answers differently, so the snippets there leave the case out and say so:
+
+- A `bl` to a local label in the same section: llvm-mc relocates it, so the
+  linker can make it a `blx`; GNU as and rsasm resolve it, making it a `blx`
+  themselves where the label is a Thumb function.
+- Section alignment: llvm-mc aligns `.text` to 4 bytes from the start; GNU as
+  and rsasm align a section when an instruction is assembled into it, to 4
+  bytes for ARM and 2 for Thumb. The snippets align their code sections.
+- The end of a code section: GNU as and rsasm pad it to its alignment, up to
+  a word; llvm-mc does not. The Thumb snippets end their sections on a word.
 
 The MIPS snippets start with `.set noreorder`, so that llvm-mc does not add a
 `nop` after each branch.

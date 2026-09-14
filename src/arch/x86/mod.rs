@@ -9,13 +9,15 @@ pub mod reloc;
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Syntax};
 use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
-use crate::lexer::TokKind;
+use crate::expr::{BinOp, ExprKind, ExprRef};
+use crate::lexer::{LocalDir, TokKind};
 use crate::section::Variant;
 use crate::source::Span;
 use crate::symbol::Binding;
 use encode::Prefixes;
-use insn::{DEF64, Def, Enc, NO64, NOTACC, ONLY64, Op};
+use insn::{ATT_ONLY, DEF64, Def, Enc, INTEL_ONLY, NO64, NOTACC, ONLY64, Op};
 use operand::{Operand, OperandKind, OperandParser, RoundCtl};
+use reg::RegClass;
 
 pub const NAMES: &[&str] = &["x86-64", "i386", "i8086"];
 
@@ -62,6 +64,7 @@ impl Architecture for X86 {
             features: 0,
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 
@@ -112,13 +115,6 @@ impl Architecture for X86 {
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
         let abi = reloc::Abi::for_object_bits(self.bits);
         match name {
-            "plt" => Some(abi.plt32()),
-            // NASM spells the RIP-relative GOT load `wrt ..got`; `..gotpcrel`
-            // is accepted too, as the GNU `@GOTPCREL` name.
-            "gotpcrel" => abi.gotpcrel(),
-            "got" => abi.got(size, pcrel),
-            "gotoff" => abi.gotoff(size),
-            "gotpc" => abi.gotpc(size),
             // `wrt ..sym` relocates against the symbol itself, with the plain
             // absolute or PC-relative type for the field.
             "sym" => {
@@ -128,8 +124,64 @@ impl Architecture for X86 {
                     abi.abs(size)
                 }
             }
+            // Every other i386 modifier names a 32-bit relocation.
+            _ if abi == reloc::Abi::I386 => match name {
+                "gotpc" => abi.gotpc(size),
+                _ if size == 4 => reloc::Abi::i386_modifier(name),
+                _ => None,
+            },
+            "plt" => Some(abi.plt32()),
+            // NASM spells the RIP-relative GOT load `wrt ..got`; `..gotpcrel`
+            // is accepted too, as the GNU `@GOTPCREL` name.
+            "gotpcrel" => abi.gotpcrel(),
+            "got" => abi.got(size, pcrel),
+            "gotoff" => abi.gotoff(size),
+            "gotpc" => abi.gotpc(size),
             _ => None,
         }
+    }
+
+    /// GNU as creates `_GLOBAL_OFFSET_TABLE_` for every modifier but `@PLT`,
+    /// `@PLTOFF` and `@SIZE`, and marks the target of a TLS one thread-local.
+    fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
+        let tls = matches!(
+            name,
+            "tlsgd"
+                | "tlsldm"
+                | "tlsld"
+                | "gottpoff"
+                | "tpoff"
+                | "ntpoff"
+                | "dtpoff"
+                | "gotntpoff"
+                | "indntpoff"
+                | "tlsdesc"
+                | "tlscall"
+        );
+        let got = tls
+            || matches!(name, "got" | "gotoff" | "gotpcrel" | "gotplt")
+            || name == "gotpc" && reloc::Abi::for_object_bits(self.bits) == reloc::Abi::I386;
+        crate::arch::ModifierSymbols {
+            needs: got.then_some("_GLOBAL_OFFSET_TABLE_"),
+            tls,
+        }
+    }
+
+    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+        let abi = reloc::Abi::for_object_bits(self.bits);
+        if abi == reloc::Abi::I386 {
+            // The encoder marks the `@GOT` loads the linker may relax.
+            if name == "got" && kind.reloc == reloc::Abi::I386_GOT32X {
+                return Some(kind.reloc);
+            }
+            // A modifier with no relocation at this width is an error, not a
+            // plain reference to the symbol.
+            return Some(
+                self.modifier_reloc(name, kind.size, kind.pcrel)
+                    .unwrap_or(0),
+            );
+        }
+        self.modifier_reloc(name, kind.size, kind.pcrel)
     }
 
     /// `@PLT` is `L + A - P`, and in a static image the PLT entry `L` is the
@@ -260,6 +312,12 @@ impl Architecture for X86 {
             ".code16" | ".code32" | ".code64" => {
                 let bits: u8 = name[5..].parse().expect("literal is numeric");
                 cx.state.bits = bits;
+                cx.state.features &= !CODE16GCC;
+                true
+            }
+            ".code16gcc" => {
+                cx.state.bits = 16;
+                cx.state.features |= CODE16GCC;
                 true
             }
             ".intel_syntax" => {
@@ -285,11 +343,20 @@ impl Architecture for X86 {
     }
 }
 
+/// Set in `ArchState::features` by `.code16gcc`: 16-bit code in which the
+/// stack instructions and calls default to 32 bits, as GCC's 32-bit output
+/// assumes when it is assembled to run in real mode.
+pub const CODE16GCC: u64 = 1 << 0;
+
 /// A prefix mnemonic, which attaches to the instruction written after it.
 enum PrefixKind {
     Lock,
     Rep(u8),
     Segment(u8),
+    /// `data16`/`data32`: the operand size override, with its size.
+    Data(u8),
+    /// `addr16`/`addr32`: the address size override, with its size.
+    Addr(u8),
 }
 
 fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
@@ -301,6 +368,10 @@ fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
             let r = reg::lookup(mnemonic).expect("segment names are in the register table");
             PrefixKind::Segment(encode::segment_prefix(r).expect("segment has a prefix byte"))
         }
+        "data16" => PrefixKind::Data(16),
+        "data32" => PrefixKind::Data(32),
+        "addr16" => PrefixKind::Addr(16),
+        "addr32" => PrefixKind::Addr(32),
         _ => return None,
     })
 }
@@ -320,23 +391,57 @@ fn assemble_inner(
 
     // `lock`, `rep`, `fs` and friends prefix the instruction that follows.
     if let Some(kind) = prefix_kind(mnemonic) {
+        let bits = cx.state.bits;
         match kind {
             PrefixKind::Lock => prefixes.lock = true,
             PrefixKind::Rep(r) => prefixes.rep = Some(r),
             PrefixKind::Segment(s) => prefixes.seg = Some(s),
+            // A size prefix names the size it switches to, so the mode's own
+            // size is refused as redundant, and long mode has no 32-bit
+            // operand or 16-bit address prefix to write.
+            PrefixKind::Data(size) | PrefixKind::Addr(size) => {
+                let data = matches!(kind, PrefixKind::Data(_));
+                let (native, missing) = if data { (32, 32) } else { (64, 16) };
+                let native = if bits == 64 { native } else { bits };
+                if bits == 64 && size == missing {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` is not available in 64-bit mode"),
+                    );
+                    return None;
+                }
+                if size == native {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` is redundant in {bits}-bit mode"),
+                    );
+                    return None;
+                }
+                if data {
+                    prefixes.data = true;
+                } else {
+                    prefixes.addr = true;
+                }
+            }
         }
         let mut cur = req.cursor();
         if cur.at_end() {
             // A bare prefix on its own line emits just the prefix byte.
             let mut bytes = Vec::new();
-            if prefixes.lock {
-                bytes.push(0xf0);
+            if let Some(s) = prefixes.seg {
+                bytes.push(s);
+            }
+            if prefixes.addr {
+                bytes.push(0x67);
+            }
+            if prefixes.data {
+                bytes.push(0x66);
             }
             if let Some(r) = prefixes.rep {
                 bytes.push(r);
             }
-            if let Some(s) = prefixes.seg {
-                bytes.push(s);
+            if prefixes.lock {
+                bytes.push(0xf0);
             }
             return Some(vec![Variant::new(bytes)]);
         }
@@ -365,6 +470,15 @@ fn assemble_inner(
         );
         return None;
     };
+    // A `q` suffix names a size only long mode has. (`movq` in 32-bit code
+    // is still the MMX and SSE move.)
+    if bits != 64 && resolved.opsize == Some(64) && resolved.fallback.is_empty() {
+        cx.error(
+            req.mnemonic_span,
+            format!("`{mnemonic}` is only available in 64-bit mode"),
+        );
+        return None;
+    }
 
     // Parse the operand list.
     let cur = req.cursor();
@@ -388,10 +502,46 @@ fn assemble_inner(
         }
         ops.push(o);
     }
+    for o in &mut ops {
+        fold_operand(cx, o);
+    }
 
-    // The table is written in Intel order, so AT&T operands are reversed.
-    if syntax == Syntax::Att {
+    // The table is written in Intel order, so AT&T operands are reversed —
+    // except for `enter` and `bound`, whose AT&T operands GNU as has always
+    // taken in Intel order, and llvm-mc with it.
+    let named = |name: &str| {
+        mnemonic
+            .strip_prefix(name)
+            .is_some_and(|s| matches!(s, "" | "b" | "w" | "l" | "q"))
+    };
+    if syntax == Syntax::Att && !named("enter") && !named("bound") {
         ops.reverse();
+    }
+    // `imul $imm, %reg` multiplies the register in place: it is the
+    // three-operand form with the register as both source and destination.
+    if named("imul")
+        && ops.len() == 2
+        && ops[0].reg().is_some()
+        && matches!(ops[1].kind, OperandKind::Imm(_))
+    {
+        ops.insert(1, ops[0].clone());
+    }
+    // AT&T writes a direct far pointer as two immediates, segment first.
+    if syntax == Syntax::Att
+        && ops.len() == 2
+        && resolved.defs.iter().any(|d| d.ops == [Op::Far])
+        && let (OperandKind::Imm(off), OperandKind::Imm(seg)) = (&ops[0].kind, &ops[1].kind)
+    {
+        let span = ops[1].span.to(ops[0].span);
+        ops = vec![Operand {
+            kind: OperandKind::FarPtr {
+                seg: *seg,
+                off: *off,
+            },
+            size_hint: None,
+            decor: Default::default(),
+            span,
+        }];
     }
 
     // NASM moves the accumulator to or from a bare address with the one-byte
@@ -455,7 +605,7 @@ fn assemble_inner(
 
     let mut matches = select(cx, bits, resolved.defs, &resolved, &ops);
     if matches.is_empty() {
-        report_no_match(cx, req, mnemonic, resolved.defs, &ops);
+        report_no_match(cx, req, mnemonic, &resolved, &ops);
         return None;
     }
 
@@ -476,7 +626,62 @@ fn assemble_inner(
         matches.swap(0, pos);
     }
 
-    let matches = prefer_default_size(bits, matches, &ops);
+    // Stack and branch instructions have a default operand size in every
+    // mode, which the rest do not; the rows long mode widened say which.
+    let stack = resolved.defs.iter().any(|d| d.flags & DEF64 != 0);
+    // The extending moves always need the source's size, even where the
+    // destination leaves only one.
+    let extends = matches!(mnemonic, "movzx" | "movsx")
+        && ops.iter().any(|o| o.is_mem() && o.size_hint.is_none());
+    if syntax == Syntax::Intel && !stack && (extends || ambiguous_memory_size(bits, &matches, &ops))
+    {
+        cx.error(
+            req.span,
+            format!("`{mnemonic}` needs the size of its memory operand, as in `dword ptr [...]`"),
+        );
+        return None;
+    }
+    // `.code16gcc` widens what GCC's 32-bit code expects of the stack: the
+    // pushes and pops, calls and returns, and the frame instructions. Jumps
+    // and `iret` stay 16-bit.
+    let gcc16 = cx.state.features & CODE16GCC != 0
+        && matches!(
+            mnemonic,
+            "push"
+                | "pop"
+                | "pushf"
+                | "popf"
+                | "pusha"
+                | "popa"
+                | "call"
+                | "ret"
+                | "lret"
+                | "retf"
+                | "enter"
+                | "leave"
+        );
+    let matches = prefer_default_size(bits, gcc16, stack, matches, &resolved);
+    // An instruction with only immediates is the mode's size when it has a
+    // form of that size, and an immediate that does not fit that is not a
+    // reason to pick another one: `push $0xffffffff` in 64-bit code is an
+    // error, not a `pushw`, and so is `lret $0x10000` in 32-bit code.
+    let default_size = default_operand_size(bits, gcc16, stack);
+    if resolved.opsize.is_none()
+        && !ops.is_empty()
+        && ops.iter().all(|o| matches!(o.kind, OperandKind::Imm(_)))
+        && matches[0].opsize != default_size
+        && matches[0].opsize != 0
+        && resolved
+            .defs
+            .iter()
+            .any(|d| d.opsize == default_size && d.ops.len() == ops.len() && available(cx, bits, d))
+    {
+        cx.error(
+            req.span,
+            format!("the immediate does not fit `{mnemonic}` at the {bits}-bit mode's size"),
+        );
+        return None;
+    }
     let matches = prefer_evex_when_required(matches, &ops, rounding.is_some());
 
     // A relative branch gets one variant per displacement width, smallest
@@ -489,7 +694,10 @@ fn assemble_inner(
         let mut v: Vec<&Def> = matches
             .iter()
             .copied()
-            .filter(|d| d.ops.first().is_some_and(|o| matches!(o, Op::Rel(_))))
+            .filter(|d| {
+                d.opsize == matches[0].opsize
+                    && d.ops.first().is_some_and(|o| matches!(o, Op::Rel(_)))
+            })
             .collect();
         v.sort_by_key(|d| d.ops[0].width());
         v.dedup_by_key(|d| d.ops[0].width());
@@ -621,6 +829,8 @@ struct Resolved {
     /// Rows to try, unconstrained, when nothing in `defs` matched. See the
     /// note on `movq` in `resolve_mnemonic`.
     fallback: &'static [Def],
+    /// The suffix is on `call`, where it can name the mode's size.
+    branch: bool,
 }
 
 fn suffix_width(c: u8) -> Option<u8> {
@@ -648,6 +858,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
             opsize: Some(64),
             rm_width: None,
             fallback: vector,
+            branch: false,
         });
     }
 
@@ -659,6 +870,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
             opsize: None,
             rm_width: None,
             fallback: &[],
+            branch: false,
         });
     }
     if syntax != Syntax::Att {
@@ -686,6 +898,7 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
                 opsize: Some(dst * 8),
                 rm_width: Some(src),
                 fallback: &[],
+                branch: false,
             });
         }
     }
@@ -697,13 +910,52 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
         return None;
     }
     let w = suffix_width(last)?;
-    let defs = insn::lookup(&mnemonic[..mnemonic.len() - 1])?;
+    let stem = &mnemonic[..mnemonic.len() - 1];
+    let defs = insn::lookup(stem)?;
+    // `crc32b` and its siblings are already suffixed, and so is `movq`.
+    if stem.starts_with("crc32") || stem == "movq" {
+        return None;
+    }
+    // On the Intel-style names of the extending moves, GNU as reads the
+    // suffix as the width of the source: `movsxb %al, %ecx`.
+    if matches!(stem, "movzx" | "movsx") {
+        return Some(Resolved {
+            defs,
+            opsize: None,
+            rm_width: Some(w),
+            fallback: &[],
+            branch: false,
+        });
+    }
+    // Only an instruction that comes in more than one size takes a suffix:
+    // `cwtl` and `lodsl` already name theirs, so `cwtll` is no instruction.
+    // An AVX-512 row's size is its `EVEX.W`, which no suffix selects.
+    if defs.iter().all(|d| d.opsize == defs[0].opsize)
+        || !defs.iter().any(|d| d.enc != Enc::Evex && d.opsize == w * 8)
+    {
+        return None;
+    }
     Some(Resolved {
         defs,
         opsize: Some(w * 8),
         rm_width: None,
         fallback: &[],
+        branch: stem == "call",
     })
+}
+
+/// True if `def` exists in the current mode and syntax.
+fn available(cx: &AsmCtx<'_>, bits: u8, def: &Def) -> bool {
+    let mode_ok = if bits == 64 {
+        def.flags & NO64 == 0
+    } else {
+        def.flags & ONLY64 == 0
+    };
+    let syntax_ok = match cx.state.syntax {
+        Syntax::Att => def.flags & INTEL_ONLY == 0,
+        Syntax::Intel => def.flags & ATT_ONLY == 0,
+    };
+    mode_ok && syntax_ok
 }
 
 /// Every definition that accepts `ops`, in table (preference) order.
@@ -716,21 +968,11 @@ fn select<'d>(
 ) -> Vec<&'d Def> {
     let mut out = Vec::new();
     for def in defs {
-        if def.ops.len() != ops.len() {
+        if def.ops.len() != ops.len() || !available(cx, bits, def) {
             continue;
         }
-        // A form the mode cannot encode is not a candidate, so it never
-        // shadows the one that can: the 32-bit `jmp r/m` is `NO64`, and the
-        // 64-bit form `DEF64`, and only one applies in a given mode.
-        if (bits == 64 && def.flags & NO64 != 0) || (bits != 64 && def.flags & ONLY64 != 0) {
-            continue;
-        }
-        // A suffix of the mode's own width, as in 32-bit `calll foo`, still
-        // names the relative branch, which has no operand size of its own.
-        let relative = def.ops.first().is_some_and(|o| matches!(o, Op::Rel(_)));
         if let Some(want) = resolved.opsize
             && def.opsize != want
-            && !(relative && want == bits)
         {
             continue;
         }
@@ -755,12 +997,16 @@ fn select<'d>(
             out.push(def);
         }
     }
-    // A suffix that matched nothing may still be part of a symbol-like
-    // mnemonic; without one, fall back to the unconstrained set.
-    if out.is_empty() && resolved.opsize.is_some() && resolved.rm_width.is_none() {
+    // A relative `call` has no operand size of its own to match, but takes
+    // the suffix of the mode's: `callq` in 64-bit code. Any other suffix on
+    // an instruction without sizes is refused, as GNU as refuses it, and so
+    // is any suffix on a direct `jmp`.
+    let branch_suffix = matches!((resolved.opsize, bits), (Some(32), 32) | (Some(64), 64));
+    if out.is_empty() && resolved.branch && branch_suffix {
         for def in defs {
             if def.ops.len() == ops.len()
-                && def.opsize == 0
+                && available(cx, bits, def)
+                && matches!(def.ops.first(), Some(Op::Rel(_)))
                 && def
                     .ops
                     .iter()
@@ -774,6 +1020,7 @@ fn select<'d>(
     if out.is_empty() {
         for def in resolved.fallback {
             if def.ops.len() == ops.len()
+                && available(cx, bits, def)
                 && def
                     .ops
                     .iter()
@@ -821,29 +1068,50 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             };
             match cx.constant(*e) {
                 Some(v) => {
-                    // A 32-bit immediate in a 64-bit operation is sign-extended
-                    // to 64 bits, so it must fit as signed.
                     if w == 4 && def.opsize == 64 {
+                        // A 32-bit immediate in a 64-bit operation is
+                        // sign-extended to 64 bits, so it must fit as signed.
                         (-(1i64 << 31)..(1i64 << 31)).contains(&v)
+                    } else if w * 8 == def.opsize {
+                        // An immediate as wide as the operation is truncated
+                        // to it: GNU as warns and llvm-mc agrees on the
+                        // bytes, so `movb $0x100, %al` stores zero. A narrower
+                        // field, like a shift count or the frame size of a
+                        // 32-bit `enter`, has to hold the value.
+                        true
                     } else {
                         fits_unsigned_or_signed(v, w)
                     }
                 }
-                // A symbolic value needs a field wide enough to relocate.
-                None => w >= 2,
+                // A symbolic value is relocated at whatever width the field
+                // has.
+                None => true,
             }
         }
         Op::Imm8s => {
             let OperandKind::Imm(e) = &o.kind else {
                 return false;
             };
-            cx.constant(*e).is_some_and(|v| (-128..=127).contains(&v))
+            // A value that fits the operation's size is taken at that size
+            // first, so a 16-bit `0xffff` is the -1 that fits a sign-extended
+            // byte. GNU as also reads anything that fits 32 bits as a 32-bit
+            // value, so `0xffffffff` is -1 to a 16-bit operation too.
+            cx.constant(*e).is_some_and(|v| {
+                let v = match def.opsize {
+                    16 if (0..=0xffff).contains(&v) => v as i16 as i64,
+                    16 | 32 if (0..=0xffff_ffff).contains(&v) => v as i32 as i64,
+                    _ => v,
+                };
+                (-128..=127).contains(&v)
+            })
         }
-        Op::One => {
+        Op::One | Op::Three => {
             let OperandKind::Imm(e) = &o.kind else {
                 return false;
             };
-            cx.constant(*e) == Some(1)
+            // NASM writes `int 3` as the two bytes it asks for.
+            let nasm_int3 = *pat == Op::Three && cx.dialect == crate::lexer::Dialect::Nasm;
+            !nasm_int3 && cx.constant(*e) == Some(if *pat == Op::One { 1 } else { 3 })
         }
         Op::V(k) | Op::Nds(k) | Op::Is4(k) => o.reg().is_some_and(|r| k.accepts(r)),
         Op::Vm(k, msz) => match &o.kind {
@@ -875,14 +1143,61 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             _ => false,
         },
         Op::Fixed(name) => o.reg() == reg::lookup(name),
-        Op::SReg => o.reg().is_some_and(|r| r.class == reg::RegClass::Segment),
-        Op::CReg => o.reg().is_some_and(|r| r.class == reg::RegClass::Control),
-        Op::DReg => o.reg().is_some_and(|r| r.class == reg::RegClass::Debug),
+        Op::Seg => o.reg().is_some_and(|r| r.class == RegClass::Segment),
+        Op::Cr => o.reg().is_some_and(|r| r.class == RegClass::Control),
+        Op::Dr => o.reg().is_some_and(|r| r.class == RegClass::Debug),
+        Op::St => o.reg().is_some_and(|r| r.class == RegClass::St),
+        Op::Moffs(w) => match &o.kind {
+            OperandKind::Mem(m) => {
+                // GNU as keeps a `@GOT` load in ModRM form, which is the
+                // one a linker knows how to relax.
+                m.base.is_none()
+                    && m.index.is_none()
+                    && !m.rip_relative
+                    && m.disp
+                        .is_some_and(|e| encode::modifier(cx, e).as_deref() != Some("got"))
+                    && o.size_hint.is_none_or(|h| h == w)
+            }
+            _ => false,
+        },
+        Op::Far => matches!(o.kind, OperandKind::FarPtr { .. }),
+        // Neither reference checks that a string operand names `si` or `di`:
+        // the registers only give the address size.
+        Op::StrSrc(w) | Op::StrDst(w) => o.is_mem() && o.size_hint.is_none_or(|h| h == w),
+        Op::FarM | Op::Fword | Op::FarDword => {
+            let is_mem = match &o.kind {
+                OperandKind::Mem(_) => true,
+                OperandKind::Indirect(inner) => matches!(**inner, OperandKind::Mem(_)),
+                _ => false,
+            };
+            is_mem
+                && match *pat {
+                    Op::Fword => o.size_hint == Some(6),
+                    Op::FarDword => {
+                        o.size_hint == Some(4) && bits != 32 && cx.state.syntax == Syntax::Intel
+                    }
+                    _ => o.size_hint.is_none_or(|h| h == 6),
+                }
+        }
+        Op::Dx => match &o.kind {
+            OperandKind::Reg(r) => *r == reg::lookup("dx").expect("dx is a register"),
+            // AT&T also spells the port `(%dx)`.
+            OperandKind::Mem(m) => {
+                m.base == reg::lookup("dx")
+                    && m.index.is_none()
+                    && m.disp.is_none()
+                    && m.seg.is_none()
+            }
+            _ => false,
+        },
         Op::Rel(_) => encode::rel_expr(o).is_some(),
         Op::IndirectRm(w) => {
             // AT&T marks indirect branches with `*`; Intel does not.
+            // Without it GNU as still reads an address in parentheses as
+            // one, with a warning, but a bare address is a direct target.
             let explicit = matches!(o.kind, OperandKind::Indirect(_));
-            if !explicit && cx.state.syntax == Syntax::Att && !o.is_mem() {
+            let bracketed = matches!(&o.kind, OperandKind::Mem(m) if m.bracketed);
+            if !explicit && cx.state.syntax == Syntax::Att && !bracketed {
                 return false;
             }
             match encode::indirect_inner(o) {
@@ -902,50 +1217,180 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
 
 /// Resolves an operand size the source never pinned down.
 ///
-/// `mov $1, (%rax)` could store one, two, four or eight bytes. GNU as picks
-/// the mode's default operand size — four bytes in 32- and 64-bit mode — and
+/// `mov $1, (%rax)` could store one, two, four or eight bytes, and `push $1`
+/// or `pushf` could push two, four or eight. GNU as picks the mode's default
+/// operand size — 16 bits in 16-bit mode, 32 in 32- and 64-bit mode, except
+/// for the stack and branch instructions long mode widened to 64 — and
 /// existing sources rely on that, so rsasm does the same rather than
 /// rejecting the line. NASM-dialect input should insist on an explicit size
 /// instead; that belongs with the NASM front end, not here.
-fn prefer_default_size<'d>(bits: u8, matches: Vec<&'d Def>, ops: &[Operand]) -> Vec<&'d Def> {
-    let unsized_mem = ops.iter().any(|o| o.is_mem() && o.size_hint.is_none());
-    if !unsized_mem || matches.len() < 2 {
-        return matches;
-    }
-    // A branch whose direct form matched wins over any indirect one, so a bare
-    // `call sym` stays `e8 rel32` and does not become an indirect call through
-    // `[sym]` just because the memory operand has no size.
-    if matches[0]
-        .ops
-        .first()
-        .is_some_and(|o| matches!(o, Op::Rel(_)))
+///
+/// `.code16gcc` makes the stack instructions default to 32 bits as well.
+fn prefer_default_size<'d>(
+    bits: u8,
+    gcc16: bool,
+    stack: bool,
+    matches: Vec<&'d Def>,
+    resolved: &Resolved,
+) -> Vec<&'d Def> {
+    let first = matches[0];
+    // A row with no operand size, such as a relative branch that also reads
+    // as an indirect one through memory, is preferred as it stands, except
+    // where `.code16gcc` asks for a 32-bit call.
+    if resolved.opsize.is_some()
+        || first.opsize == 0 && !(gcc16 && bits == 16)
+        || matches.iter().all(|d| d.opsize == first.opsize)
     {
         return matches;
     }
-    let first = matches[0];
-    // Instructions whose operand size already defaults to 64 bits in long
-    // mode are not ambiguous there.
-    if bits == 64 && first.flags & DEF64 != 0 {
-        return matches;
-    }
-    if matches.iter().all(|d| d.opsize == first.opsize) {
-        return matches;
-    }
-    let default_size: u8 = if bits == 16 { 16 } else { 32 };
+    let default_size = default_operand_size(bits, gcc16, stack);
     let mut matches = matches;
     if let Some(pos) = matches.iter().position(|d| d.opsize == default_size) {
-        matches.swap(0, pos);
+        let chosen = matches.remove(pos);
+        matches.insert(0, chosen);
     }
     matches
+}
+
+/// The operand size an instruction has when nothing in the source names one.
+fn default_operand_size(bits: u8, gcc16: bool, stack: bool) -> u8 {
+    match bits {
+        64 if stack => 64,
+        16 if !gcc16 => 16,
+        _ => 32,
+    }
+}
+
+/// Folds the label differences in an operand's expressions; see
+/// [`fold_differences`].
+fn fold_operand(cx: &mut AsmCtx<'_>, o: &mut Operand) {
+    let fold = |cx: &mut AsmCtx<'_>, e: &mut ExprRef| {
+        if cx.constant(*e).is_none() {
+            *e = fold_differences(cx, *e);
+        }
+    };
+    match &mut o.kind {
+        OperandKind::Imm(e) | OperandKind::Rel(e) => fold(cx, e),
+        OperandKind::Mem(m) => {
+            if let Some(e) = &mut m.disp {
+                fold(cx, e);
+            }
+        }
+        OperandKind::FarPtr { seg, off } => {
+            fold(cx, seg);
+            fold(cx, off);
+        }
+        _ => {}
+    }
+}
+
+/// Replaces each difference of two labels in `e` with the distance between
+/// them, where nothing emitted in between can change size.
+///
+/// GNU as folds such a difference as it reads the expression, so
+/// `addl $_GLOBAL_OFFSET_TABLE_+(.-1b), %ebx` is a relocation against the
+/// GOT with a constant addend, and `movl $(2f-1f), %eax` a constant that can
+/// choose a short immediate. The expression evaluator has room for only one
+/// symbol on either side of a sum, so without this the first would be an
+/// error.
+fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
+    let node = cx.exprs.get(e).clone();
+    match node.kind {
+        ExprKind::Binary(op, l, r) => {
+            if op == BinOp::Sub
+                && let (Some(to), Some(from)) = (label_position(cx, l), label_position(cx, r))
+                && let Some(d) = cx.fixed_distance(from, to)
+            {
+                return cx.exprs.int(d as u64, node.span);
+            }
+            let (fl, fr) = (fold_differences(cx, l), fold_differences(cx, r));
+            if (fl, fr) == (l, r) {
+                e
+            } else {
+                cx.exprs.alloc(ExprKind::Binary(op, fl, fr), node.span)
+            }
+        }
+        ExprKind::Unary(op, x) => match fold_differences(cx, x) {
+            fx if fx == x => e,
+            fx => cx.exprs.alloc(ExprKind::Unary(op, fx), node.span),
+        },
+        ExprKind::Modifier(name, x) => match fold_differences(cx, x) {
+            fx if fx == x => e,
+            fx => cx.exprs.alloc(ExprKind::Modifier(name, fx), node.span),
+        },
+        _ => e,
+    }
+}
+
+/// Where a label an expression names was defined, or where `.` is.
+fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::SectionId, u32)> {
+    let node = cx.exprs.get(e);
+    let id = match node.kind {
+        ExprKind::Here => return Some(cx.here()),
+        ExprKind::SymId(id) => id,
+        ExprKind::Sym(name) => cx.symbols.lookup(name)?,
+        ExprKind::LocalRef(n, LocalDir::Backward) => cx.symbols.local_backward(n, node.span)?,
+        _ => return None,
+    };
+    cx.label_position(id)
+}
+
+/// True when an unsized memory operand leaves more than one width possible.
+///
+/// GNU as's Intel syntax refuses `add [eax], 1` and `fld [eax]` for want of a
+/// `dword ptr`, where its AT&T syntax only warns and takes a default.
+fn ambiguous_memory_size(bits: u8, matches: &[&Def], ops: &[Operand]) -> bool {
+    let Some(slot) = ops.iter().position(|o| o.is_mem() && o.size_hint.is_none()) else {
+        return false;
+    };
+    let width = |d: &Def| match d.ops[slot] {
+        Op::Rm(w) | Op::M(w) | Op::Moffs(w) | Op::IndirectRm(w) | Op::StrSrc(w) | Op::StrDst(w) => {
+            w
+        }
+        _ => 0,
+    };
+    // A 64-bit operation outside long mode is no rival.
+    let mut usable = matches
+        .iter()
+        .filter(|d| bits == 64 || d.opsize != 64 || d.flags & DEF64 != 0);
+    let Some(first) = usable.next().map(|d| width(d)) else {
+        return false;
+    };
+    usable.any(|d| width(d) != first)
 }
 
 fn report_no_match(
     cx: &mut AsmCtx<'_>,
     req: &InsnRequest<'_>,
     mnemonic: &str,
-    defs: &[Def],
+    resolved: &Resolved,
     ops: &[Operand],
 ) {
+    let defs = resolved.defs;
+    let bits = cx.state.bits;
+    // Something that would have matched in another mode or syntax is worth
+    // saying so about.
+    let elsewhere = defs.iter().find(|def| {
+        def.ops.len() == ops.len()
+            && !available(cx, bits, def)
+            && resolved.opsize.is_none_or(|w| def.opsize == w)
+            && def
+                .ops
+                .iter()
+                .zip(ops)
+                .all(|(p, o)| op_matches(cx, bits, def, p, o))
+    });
+    if let Some(def) = elsewhere {
+        let msg = if def.flags & NO64 != 0 && bits == 64 {
+            format!("`{mnemonic}` with these operands is not available in 64-bit mode")
+        } else if def.flags & ONLY64 != 0 && bits != 64 {
+            format!("`{mnemonic}` with these operands is only available in 64-bit mode")
+        } else {
+            format!("`{mnemonic}` with these operands is not available in this syntax")
+        };
+        cx.error(req.span, msg);
+        return;
+    }
     let arities: Vec<usize> = {
         let mut v: Vec<usize> = defs.iter().map(|d| d.ops.len()).collect();
         v.sort_unstable();

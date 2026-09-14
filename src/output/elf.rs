@@ -229,7 +229,8 @@ struct Shdr {
 
 /// An assembler symbol that made it into the ELF symbol table.
 struct OutSym {
-    id: SymbolId,
+    /// `None` for a mapping symbol, which no relocation names.
+    id: Option<SymbolId>,
     name: u32,
     info: u8,
     other: u8,
@@ -315,7 +316,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         .iter()
         .enumerate()
         // +1 for the reserved null entry.
-        .map(|(i, s)| (s.id, i as u32 + 1))
+        .filter_map(|(i, s)| Some((s.id?, i as u32 + 1)))
         .collect();
 
     // Relocation sections, one per section that needs them.
@@ -607,6 +608,15 @@ fn collect_symbols(
         if !sym.is_defined() && !sym.used {
             continue;
         }
+        // A `.L` label is local to the assembly, by the ELF convention GNU as
+        // and llvm-mc both follow, unless a relocation has to name it.
+        if raw.starts_with(".L")
+            && sym.binding == Binding::Local
+            && sym.is_defined()
+            && !named.contains(&id)
+        {
+            continue;
+        }
 
         let (shndx, value) = match &sym.value {
             SymbolValue::Label { section, .. } => {
@@ -637,7 +647,12 @@ fn collect_symbols(
             Binding::Global => STB_GLOBAL,
             Binding::Weak => STB_WEAK,
         };
-        let ty = match sym.ty {
+        // A Thumb function is marked by its type and low bit; the target
+        // decides that from what it recorded on the label.
+        let (sym_ty, value) =
+            asm.target()
+                .elf_symbol(sym.target_flags, sym.ty, sym.is_defined(), value);
+        let ty = match sym_ty {
             SymType::NoType => STT_NOTYPE,
             SymType::Object => STT_OBJECT,
             SymType::Func => STT_FUNC,
@@ -664,7 +679,7 @@ fn collect_symbols(
         };
 
         let out = OutSym {
-            id,
+            id: Some(id),
             name,
             info: (bind << 4) | ty,
             other,
@@ -677,6 +692,23 @@ fn collect_symbols(
         } else {
             globals.push(out);
         }
+    }
+
+    // Mapping symbols are untyped locals, one per change between code and
+    // data; see `crate::mapping`.
+    for m in &asm.mapping_symbols {
+        let Some(&shndx) = sec_index.get(&m.section) else {
+            continue;
+        };
+        locals.push(OutSym {
+            id: None,
+            name: strtab.add(m.name),
+            info: (STB_LOCAL << 4) | STT_NOTYPE,
+            other: 0,
+            shndx,
+            value: m.offset,
+            size: 0,
+        });
     }
 
     // Section symbols sort first among locals, which is what linkers expect

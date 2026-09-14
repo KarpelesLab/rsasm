@@ -1,5 +1,8 @@
 === references to symbols in their own section, by binding
         .text
+        @ llvm-mc relocates a `bl` to a local label; GNU as, which rsasm
+        @ follows for ARM, resolves it (tools/xas-diff/arm-relocs.txt).
+        .p2align 2
         .globl  glob, hid, prot, intl, galias, func
         .hidden hid
         .protected prot
@@ -9,19 +12,15 @@
         .type   func, %function
         .hidden lhid
 start:
-        bl loc
         bl glob
         bl weak1
         bl hid
         bl prot
         bl intl
         bl whid
-        bl lhid
         bl func
         bl late
         bl lweak
-        bl lalias
-        bl lwalias
         bl galias
         bl walias
         b loc
@@ -34,10 +33,8 @@ start:
         beq weak1
         beq lalias
         beq walias
-        bleq loc
         bleq glob
         bleq weak1
-        bleq lalias
         bleq walias
         nop
 loc:    nop
@@ -57,31 +54,30 @@ lweak:  nop
         .set    lwalias, weak1
         .set    galias, loc
         .set    walias, loc
-
 === references back to symbols in their own section
         .text
+        @ llvm-mc relocates a `bl` to a local label; GNU as, which rsasm
+        @ follows for ARM, resolves it (tools/xas-diff/arm-relocs.txt).
+        .p2align 2
         .globl  glob
         .weak   weak1
 loc:    nop
 glob:   nop
 weak1:  nop
         .set    lalias, glob
-        bl loc
         bl glob
         bl weak1
-        bl lalias
         b loc
         b glob
         b weak1
         beq loc
         beq glob
         beq weak1
-        bleq loc
         bleq glob
         bleq weak1
-
 === references out of their section, by binding
         .text
+        .p2align 2
         .globl  oglob
         .weak   oweak, uweak
         .set    oalias, oloc
@@ -93,10 +89,10 @@ weak1:  nop
         bl uweak
         nop
         .section .text.other,"ax"
+        .p2align 2
 oloc:   nop
 oglob:  nop
 oweak:  nop
-
 === data referring to symbols, by binding
         .data
         .globl  glob, galias, hid
@@ -115,10 +111,10 @@ loc:    .long   0
 glob:   .long   0
 weak1:  .long   0
 hid:    .long   0
-
 === default section alignment
-        .text
-        .byte   1
+        @ llvm-mc aligns `.text` to 4 bytes from the start; GNU as, which
+        @ rsasm follows for ARM, aligns a section only once an instruction
+        @ is assembled into it (tools/xas-diff/arm-relocs.txt).
         .data
         .byte   2
         .section .rodata
@@ -133,4 +129,3 @@ hid:    .long   0
         .byte   6
         .section custom,"a"
         .byte   7
-

@@ -103,6 +103,7 @@ impl Architecture for Rl78 {
             features: 0,
             intel_register_prefix: false,
             used: 0,
+            private: 0,
         }
     }
 
