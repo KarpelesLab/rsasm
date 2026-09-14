@@ -78,6 +78,10 @@ impl Default for Loc {
 pub struct Row {
     pub pos: Pos,
     pub loc: Loc,
+    /// Where the row is when it is not at `pos`: this many bytes before the
+    /// end of the fragment there. See
+    /// [`Architecture::dwarf_row_back`](crate::arch::Architecture::dwarf_row_back).
+    pub back: Option<u32>,
 }
 
 /// A file table entry.
@@ -736,13 +740,14 @@ impl Assembler {
     /// `.loc` does.
     fn dwarf_loc_row(&mut self) {
         let pos = self.dwarf_pos();
-        self.dwarf_consume_loc(pos);
+        self.dwarf_consume_loc(pos, None);
     }
 
-    /// Makes the row of the pending `.loc`, if there is one, at `pos`: called
-    /// where an instruction is emitted, and on llvm-mc's targets where data
-    /// is. The row is dropped where the reference drops it.
-    pub(crate) fn dwarf_consume_loc(&mut self, pos: Pos) {
+    /// Makes the row of the pending `.loc`, if there is one, at `pos`, or
+    /// `back` bytes before the end of the fragment there: called where an
+    /// instruction is emitted, and on llvm-mc's targets where data is. The
+    /// row is dropped where the reference drops it.
+    fn dwarf_consume_loc(&mut self, pos: Pos, back: Option<u32>) {
         if !self.dwarf.line.pending {
             return;
         }
@@ -770,12 +775,17 @@ impl Assembler {
                 return;
             }
         }
-        self.dwarf.line.push_row(Row { pos, loc });
+        self.dwarf.line.push_row(Row { pos, loc, back });
     }
 
-    /// Called where an instruction is emitted, at its position.
-    pub(crate) fn dwarf_instruction(&mut self, pos: Pos) {
-        self.dwarf_consume_loc(pos);
+    /// Called where an instruction is about to be emitted as fragment `pos`,
+    /// with its candidate encodings.
+    pub(crate) fn dwarf_instruction(&mut self, pos: Pos, variants: &[crate::section::Variant]) {
+        let back = match variants.first() {
+            Some(v) => self.arch.dwarf_row_back(v),
+            None => None,
+        };
+        self.dwarf_consume_loc(pos, back);
     }
 
     /// Called where `.byte`-style data is emitted: llvm-mc gives it the
@@ -807,7 +817,11 @@ impl Assembler {
         let pos = self.dwarf_pos();
         let mut loc = self.dwarf.line.current.clone();
         loc.basic_block = true;
-        self.dwarf.line.push_row(Row { pos, loc });
+        self.dwarf.line.push_row(Row {
+            pos,
+            loc,
+            back: None,
+        });
         self.dwarf.line.pending = false;
         let c = &mut self.dwarf.line.current;
         c.basic_block = false;

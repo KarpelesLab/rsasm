@@ -160,6 +160,16 @@ impl Architecture for Rx {
         4
     }
 
+    /// GNU as's `md_assemble` makes the row after writing the instruction,
+    /// at the end less `idx`, which by then holds the byte offset of the
+    /// last relocated field, or the length of an instruction without one.
+    /// So a row is at the start of an instruction with constant operands,
+    /// and near the end of any other, a relaxed branch's grown end included.
+    /// The offsets come from the smallest encoding, the form GNU as parses.
+    fn dwarf_row_back(&self, smallest: &Variant) -> Option<u32> {
+        smallest.fixups.last().map(|f| f.offset)
+    }
+
     /// GNU as leaves a local label's value in every relocated field, a
     /// PC-relative one included (checked: `.long lab+4`, `bsr lab` across
     /// sections).

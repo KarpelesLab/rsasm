@@ -520,6 +520,18 @@ pub trait Architecture {
         crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)
     }
 
+    /// Where the line table row of an instruction goes, as a distance back
+    /// from the instruction's end, given its smallest encoding; `None`, the
+    /// default, puts it at the start.
+    ///
+    /// GNU as's RX port records the row after it has written the
+    /// instruction, measuring back from the end by the offset of the
+    /// instruction's last relocated field rather than by its length, and a
+    /// relaxed branch is longer by then; see `Rx::dwarf_row_back`.
+    fn dwarf_row_back(&self, _smallest: &Variant) -> Option<u32> {
+        None
+    }
+
     /// The DWARF register number of a register named in a `.cfi_*`
     /// directive, lowercased and spelled as the source wrote it, with any
     /// prefix such as `%` or `$` still on.

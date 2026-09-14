@@ -106,6 +106,22 @@ impl Assembler {
         (self.cur, self.cur_section().next_frag_index())
     }
 
+    /// The offset of a line table row within its section, once layout has
+    /// run.
+    pub(crate) fn row_addr(&self, row: &line::Row) -> u64 {
+        match row.back {
+            None => self.pos_offset(row.pos),
+            Some(back) => {
+                let s = self.section(row.pos.0);
+                let (off, size) = s
+                    .frags
+                    .get(row.pos.1 as usize)
+                    .map_or((s.size, 0), |f| (f.offset, f.size()));
+                (off + size).saturating_sub(back as u64)
+            }
+        }
+    }
+
     /// The offset of a position within its section, once layout has run.
     pub(crate) fn pos_offset(&self, pos: Pos) -> u64 {
         let s = self.section(pos.0);

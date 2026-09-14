@@ -685,25 +685,20 @@ impl Assembler {
                 (None, DW_EH_PE_OMIT)
             };
             let per_key = self.pointer_key(per);
-            // The leading instructions a CIE can take: up to the first
-            // advance, `remember_state` or escape.
+            // The leading instructions a CIE can take (`initial_cie_insn`).
             let lead = insns
                 .iter()
-                .position(|i| matches!(i, Insn::Advance(_) | Insn::RememberState | Insn::Escape(_)))
+                .position(|i| !gnu_cie_insn(i))
                 .unwrap_or(insns.len());
-            let found = cies.iter().position(|c| {
+            // Any CIE whose instructions start the FDE's will do, the most
+            // recently written first.
+            let found = cies.iter().rposition(|c| {
                 c.ra == ra
                     && c.signal == fde.signal
                     && c.lsda == lsda
                     && c.per_key == per_key
                     && c.insns.len() <= insns.len()
                     && c.insns[..] == insns[..c.insns.len()]
-                    && c.insns.iter().all(gnu_cie_comparable)
-                    && (c.insns.len() == insns.len()
-                        || matches!(
-                            insns[c.insns.len()],
-                            Insn::Advance(_) | Insn::RememberState | Insn::Escape(_)
-                        ))
             });
             let (cie, first) = match found {
                 Some(c) => (c, cies[c].insns.len()),
@@ -1047,15 +1042,16 @@ impl Assembler {
     }
 }
 
-/// Whether GNU as can compare an instruction when matching an FDE to a CIE;
-/// it gives up on a CIE that holds any other kind.
-fn gnu_cie_comparable(insn: &Insn) -> bool {
+/// Whether GNU as lets an instruction into a CIE (`initial_cie_insn`): the
+/// ones that set a rule, not an advance, an escape or a state change.
+fn gnu_cie_insn(insn: &Insn) -> bool {
     matches!(
         insn,
         Insn::DefCfa(..)
             | Insn::DefCfaRegister(_)
             | Insn::DefCfaOffset(_)
             | Insn::Offset(..)
+            | Insn::ValOffset(..)
             | Insn::Register(..)
             | Insn::Restore(_)
             | Insn::Undefined(_)

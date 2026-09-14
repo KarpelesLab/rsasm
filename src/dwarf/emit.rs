@@ -233,7 +233,7 @@ impl Assembler {
         for (_, rows) in &self.dwarf.line.sequences {
             let mut prev: Option<(u64, u64)> = None;
             for row in rows {
-                let addr = self.pos_offset(row.pos);
+                let addr = self.row_addr(row);
                 let view = match prev {
                     Some((paddr, pview)) if addr <= paddr && row.loc.view != Some(View::Reset) => {
                         pview + 1
@@ -570,14 +570,14 @@ impl Assembler {
                 b.u8(DW_LNS_SET_EPILOGUE_BEGIN);
             }
             let line_delta = loc.line as i64 - line;
-            let addr = self.pos_offset(row.pos);
+            let addr = self.row_addr(row);
             match last {
                 // A `view -0` row at the address of the one before it gets an
                 // address of its own, so that consumers restart the count.
                 Some(prev) if !(loc.view == Some(View::Reset) && prev == addr) => {
                     let delta = addr.saturating_sub(prev);
                     if fixed {
-                        self.fixed_advance(b, Some(line_delta), delta, row.pos, ptr);
+                        self.fixed_advance(b, Some(line_delta), delta, (row.pos, addr - self.pos_offset(row.pos)), ptr);
                     } else {
                         // GNU as says so once, however many rows are off.
                         if delta % min != 0 && flavor == Flavor::Gnu && !cx.unaligned {
@@ -591,7 +591,7 @@ impl Assembler {
                     }
                 }
                 _ => {
-                    self.set_address(b, row.pos, ptr);
+                    self.set_address(b, (row.pos, addr - self.pos_offset(row.pos)), ptr);
                     special_advance(b, Some(line_delta), 0);
                 }
             }
@@ -603,7 +603,7 @@ impl Assembler {
         let delta = end.saturating_sub(prev);
         if fixed {
             let end_pos = (section, self.section(section).frags.len() as u32);
-            self.fixed_advance(b, None, delta, end_pos, ptr);
+            self.fixed_advance(b, None, delta, (end_pos, 0), ptr);
         } else {
             special_advance(b, None, delta / min);
         }
@@ -619,11 +619,11 @@ impl Assembler {
         }
     }
 
-    fn set_address(&mut self, b: &mut Blob, pos: Pos, ptr: u8) {
+    fn set_address(&mut self, b: &mut Blob, at: (Pos, u64), ptr: u8) {
         b.u8(0);
         b.uleb(ptr as u64 + 1);
         b.u8(DW_LNE_SET_ADDRESS);
-        let e = self.pos_expr(pos, 0);
+        let e = self.pos_expr(at.0, at.1);
         let kind = self.abs_kind(ptr);
         b.fixup(ptr, e, kind);
     }
@@ -636,7 +636,7 @@ impl Assembler {
         b: &mut Blob,
         line_delta: Option<i64>,
         delta: u64,
-        pos: Pos,
+        at: (Pos, u64),
         ptr: u8,
     ) {
         let Some(line_delta) = line_delta else {
@@ -652,7 +652,7 @@ impl Assembler {
             b.sleb(line_delta);
         }
         if delta > 50000 {
-            self.set_address(b, pos, ptr);
+            self.set_address(b, at, ptr);
         } else {
             b.u8(DW_LNS_FIXED_ADVANCE_PC);
             b.int(delta, 2);

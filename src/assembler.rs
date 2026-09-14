@@ -1586,7 +1586,7 @@ impl Assembler {
         }
         if self.dwarf.line.pending {
             let pos = (self.cur, self.cur_section().next_frag_index());
-            self.dwarf_instruction(pos);
+            self.dwarf_instruction(pos, &variants);
         }
         let idx = self.cur_section().emit_variants(variants, stmt.span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
