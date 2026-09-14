@@ -62,6 +62,7 @@ impl Assembler {
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
         self.flush_all_literals();
+        self.bind_section_names();
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
@@ -89,6 +90,41 @@ impl Assembler {
         }
         self.materialize();
         !self.diags.has_errors()
+    }
+
+    /// Makes a name that no symbol is defined by, but a section is, stand for
+    /// that section: `.long .debug_abbrev` is a reference to the section
+    /// symbol, in GNU as and llvm-mc alike, however far ahead of the section
+    /// it is written. Clang's DWARF refers to its sections this way. A name
+    /// declared global or weak stays the linker's to find.
+    fn bind_section_names(&mut self) {
+        let sections: HashMap<Name, SectionId> =
+            self.sections.iter().map(|s| (s.name, s.id)).collect();
+        // A name only reaches the symbol table once something evaluates it,
+        // which for most references is after this; so the expressions are
+        // what say which section names are used.
+        let mut used: Vec<(Name, SectionId, Span)> = Vec::new();
+        for node in &self.exprs.nodes {
+            if let ExprKind::Sym(n) = node.kind
+                && let Some(&section) = sections.get(&n)
+                && !used.iter().any(|(m, ..)| *m == n)
+            {
+                used.push((n, section, node.span));
+            }
+        }
+        for (name, section, span) in used {
+            let id = self.symbols.intern(name, span);
+            let sym = self.symbols.get(id);
+            if sym.is_defined() || sym.binding != Binding::Local {
+                continue;
+            }
+            let sym = self.symbols.get_mut(id);
+            sym.value = SymbolValue::Label { section, frag: 0 };
+            sym.ty = crate::symbol::SymType::Section;
+            if self.section(section).sym.is_none() {
+                self.section_mut(section).sym = Some(id);
+            }
+        }
     }
 
     /// Runs layout to a fixed point. Returns false, after reporting it, if it
