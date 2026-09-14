@@ -384,6 +384,7 @@ fn install_memory(t: &mut Tbl) {
         ("prefetchwt1", 0x00, &[0x0f, 0x0d], 2),
         ("prefetchit0", 0x00, &[0x0f, 0x18], 7),
         ("prefetchit1", 0x00, &[0x0f, 0x18], 6),
+        ("prefetchrst2", 0x00, &[0x0f, 0x18], 4),
     ] {
         add(
             t,
@@ -391,6 +392,32 @@ fn install_memory(t: &mut Tbl) {
             vec![pre(vec![Op::M(0)], pfx, opcode, ModRm::Ext(ext), 0)],
         );
     }
+    // MOVRS: a load that reads its memory at most once, at any width.
+    add(
+        t,
+        "movrs",
+        vec![
+            d(vec![Op::R(1), Op::M(1)], &[0x0f, 0x38, 0x8a], ModRm::Reg, 8),
+            d(
+                vec![Op::R(2), Op::M(2)],
+                &[0x0f, 0x38, 0x8b],
+                ModRm::Reg,
+                16,
+            ),
+            d(
+                vec![Op::R(4), Op::M(4)],
+                &[0x0f, 0x38, 0x8b],
+                ModRm::Reg,
+                32,
+            ),
+            d(
+                vec![Op::R(8), Op::M(8)],
+                &[0x0f, 0x38, 0x8b],
+                ModRm::Reg,
+                64,
+            ),
+        ],
+    );
     // The 64-bit state saves under their own names.
     for (mnem, opcode, ext) in [
         ("fxsave64", &[0x0fu8, 0xae] as &[u8], 0u8),

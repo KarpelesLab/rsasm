@@ -1457,7 +1457,7 @@ def mc_length_suffix(g, m, ctx):
     word = ctx["lines"][0].split()[0]
     return bool(ok_parts(g) and m[0] == "err"
                 and re.fullmatch(r"v(cvt\w+|fpclass\w+)[xyz]", word)
-                and re.search(r"(ph|bf16|phx)[xyz]$", word))
+                and re.search(r"(ph|bf16|phx|[bh]f8s?|u?dqs)[xyz]$", word))
 
 
 def mc_intel_refused(g, m, ctx):
@@ -1466,6 +1466,14 @@ def mc_intel_refused(g, m, ctx):
     word = ctx["lines"][0].split()[0]
     return bool(ctx["syntax"] == "intel" and ok_parts(g) and m[0] == "err"
                 and (re.match(r"v(gather|scatter)pf", word) or word in ("rstorssp", "clrssbsy")))
+
+
+def mc_ymm_rounding(g, m, ctx):
+    """llvm-mc still takes `{sae}` on some 256-bit AVX10.2 conversions, from the draft
+    of AVX10.2 that had rounding at every length; GNU as refuses it."""
+    line = ctx["lines"][0]
+    return bool(g[0] == "err" and ok_parts(m) and re.search(r"\{(r[nduz]-)?sae\}", line)
+                and "ymm" in line and "zmm" not in line)
 
 
 def distinct_dest(g, m, ctx):
@@ -1509,6 +1517,7 @@ KNOWN_SPLITS = [
     ("mc-length-suffix", mc_length_suffix, "gas"),
     ("mc-intel-refused", mc_intel_refused, "gas"),
     ("distinct-dest", distinct_dest, "gas"),
+    ("mc-ymm-rounding", mc_ymm_rounding, "gas"),
     ("evex-vmovq", evex_vmovq_load, None),
 ]
 

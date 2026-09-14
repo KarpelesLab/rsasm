@@ -20,9 +20,9 @@ import re
 
 import gnutbl
 
-# CPU flags (without GNU's `Cpu` prefix) whose rows are fuzzed. APX and
-# AVX10.2 are not in rsasm; the Xeon Phi's 4FMAPS/4VNNIW register groups and
-# the families llvm-mc 22 does not have are left out as well.
+# CPU flags (without GNU's `Cpu` prefix) whose rows are fuzzed. APX is not in
+# rsasm; the Xeon Phi's 4FMAPS/4VNNIW register groups and the families
+# llvm-mc 22 does not have are left out as well.
 IN_SCOPE = {
     "AVX", "AVX2", "AES", "PCLMULQDQ", "F16C", "FMA", "FMA4", "XOP", "GFNI",
     "VAES", "VPCLMULQDQ", "SHA", "SHA512", "SM3", "SM4", "AVX_VNNI", "AVX_IFMA",
@@ -36,7 +36,8 @@ IN_SCOPE = {
     "ClflushOpt", "CLWB", "CLDEMOTE", "Xsave", "XSAVES", "XSAVEC", "Xsaveopt",
     "RdRnd", "RDSEED", "KL", "WideKL", "OSPKE", "RDPRU", "CLZERO", "MWAITX",
     "FSGSBase", "INVPCID", "TSXLDTRK", "RTM", "PREFETCHI", "PREFETCHWT1",
-    "WBNOINVD", "PCONFIG", "CMPCCXADD", "RAO_INT", "MSRLIST", "WRMSRNS",
+    "WBNOINVD", "PCONFIG", "CMPCCXADD", "RAO_INT", "MSRLIST", "WRMSRNS", "AVX10_2",
+    "MOVRS",
 }
 NEUTRAL = {"64", "no64", "AVX", "AVX512F", "AVX512VL"}
 
@@ -95,7 +96,7 @@ class SimdForm:
     def __init__(self, row):
         m = row.mod
         cpus = row.cpus()
-        if not cpus & IN_SCOPE or "APX_F" in row.cpu or "AVX10_2" in row.cpu:
+        if not cpus & IN_SCOPE or "APX_F" in row.cpu or "AMX_MOVRS" in row.cpu:
             raise Unusable("cpu")
         if m["sse2avx"] or m["isprefix"] or m["jump"] or m["isstring"]:
             raise Unusable("kind")

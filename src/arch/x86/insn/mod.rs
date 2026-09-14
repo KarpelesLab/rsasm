@@ -10,6 +10,7 @@
 //! integer instruction set several times over.
 
 pub mod avx;
+pub mod avx10;
 pub mod avx512;
 pub mod avx512x;
 pub mod base;
@@ -545,6 +546,7 @@ fn build() -> Tbl {
     vexext::install_late(&mut t);
     fma::install(&mut t);
     fp16::install(&mut t);
+    avx10::install(&mut t);
     cmpalias::install(&mut t);
     lenalias::install(&mut t);
     t

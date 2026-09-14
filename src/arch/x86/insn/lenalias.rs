@@ -85,5 +85,14 @@ pub fn install(t: &mut Tbl) {
     install_family(t, HALF_FROM_QWORD, true, true);
     install_family(t, CLASSIFY, false, true);
     // Unlike `vfpclassps`, `vfpclassph`'s lengths are AT&T spellings only.
-    install_family(t, &["vfpclassph"], true, true);
+    install_family(t, &["vfpclassph", "vfpclassbf16"], true, true);
+    install_family(t, AVX10_NARROWING, true, false);
 }
+
+/// AVX10.2's conversions that narrow to half the register: the 8-bit floats
+/// and the saturating double-to-dword truncations.
+#[rustfmt::skip]
+const AVX10_NARROWING: &[&str] = &[
+    "vcvtph2bf8", "vcvtph2bf8s", "vcvtph2hf8", "vcvtph2hf8s",
+    "vcvttpd2dqs", "vcvttpd2udqs",
+];

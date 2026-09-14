@@ -1163,3 +1163,52 @@ fn extension_operands_both_references_refuse() {
     );
     rejects("vpdpbusd %zmm1, %zmm2, %zmm17{z}", "requires a writemask");
 }
+
+#[test]
+fn avx10_2_rows_share_the_avx512_shapes() {
+    // The VEX-only integer additions keep VEX for plain operands and take
+    // EVEX for a writemask; `vmpsadbw`'s EVEX form moved to `F3`.
+    enc("vpdpbuud %zmm1, %zmm2, %zmm3", "62 f2 6c 48 50 d9");
+    enc("vpdpbuud %xmm1, %xmm2, %xmm3", "c4 e2 68 50 d9");
+    enc("vpdpbuud %xmm1, %xmm2, %xmm3{%k1}", "62 f2 6c 09 50 d9");
+    enc(
+        "vmpsadbw $1, %xmm1, %xmm2, %xmm3{%k1}",
+        "62 f3 6e 09 42 d9 01",
+    );
+    enc(
+        "vminmaxps $1, (%rax){1to16}, %zmm1, %zmm2",
+        "62 f3 75 58 52 10 01",
+    );
+    enc(
+        "vminmaxsh $1, 0x2(%rax), %xmm1, %xmm2",
+        "62 f3 74 08 53 50 01 01",
+    );
+    enc("vcomxsd 0x8(%rax), %xmm1", "62 f1 ff 08 2f 48 01");
+    enc("vucomxsh {sae}, %xmm1, %xmm2", "62 f5 7e 18 2e d1");
+    enc("vcvttps2dqs (%rax){1to16}, %zmm1", "62 f5 7c 58 6d 08");
+    enc("vcvttps2qqs 0x20(%rax), %zmm1", "62 f5 7d 48 6d 48 01");
+    enc("vcvttpd2dqsy 0x20(%rax), %xmm1", "62 f5 fc 28 6d 48 01");
+    enc("vcvttsd2sis 0x8(%rax), %eax", "62 f5 7f 08 6d 40 01");
+    enc("vcvtph2ibs {rn-sae}, %zmm1, %zmm2", "62 f5 7c 18 69 d1");
+    enc("vaddbf16 0x40(%rax), %zmm1, %zmm2", "62 f5 75 48 58 50 01");
+    enc(
+        "vfmadd132bf16 (%rax){1to32}, %zmm1, %zmm2",
+        "62 f6 74 58 98 10",
+    );
+    enc(
+        "vfpclassbf16z $1, 0x40(%rax), %k1",
+        "62 f3 7f 48 66 48 01 01",
+    );
+    enc("vcvtph2bf8 %zmm1, %ymm2", "62 f2 7e 48 74 d1");
+    enc("vcvtph2hf8x 0x10(%rax), %xmm1", "62 f5 7e 08 18 48 01");
+    enc("vcvt2ph2bf8 %zmm1, %zmm2, %zmm3", "62 f2 6f 48 74 d9");
+    enc("vcvtbiasph2hf8 %zmm1, %zmm2, %ymm3", "62 f5 6c 48 18 d9");
+    enc("vcvthf82ph 0x20(%rax), %zmm1", "62 f5 7f 48 1e 48 01");
+    enc("vmovd %xmm1, %xmm2", "62 f1 7e 08 7e d1");
+    enc("vmovw %xmm1, %xmm2", "62 f5 7e 08 6e d1");
+    enc("vmovrsq 0x40(%rax), %zmm1", "62 f5 fe 48 6f 48 01");
+    enc("movrs (%rax), %rbx", "48 0f 38 8b 18");
+    enc("prefetchrst2 (%rax)", "0f 18 20");
+    // After the immediate, not before it.
+    rejects("vminmaxpd {sae}, $3, %zmm1, %zmm2, %zmm3", "misplaced");
+}
