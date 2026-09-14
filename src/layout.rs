@@ -986,9 +986,9 @@ impl Assembler {
                 let page = !((1i64 << bits) - 1);
                 return Some((target & page) - (here & page));
             }
-            LinkValue::Region(bits) if flat => {
+            LinkValue::Region { bits, numbers } if flat => {
                 if self
-                    .outside_region(e, kind, section, fi, at, bits)
+                    .outside_region(e, kind, section, fi, at, bits, numbers)
                     .is_some()
                 {
                     return None;
@@ -1004,7 +1004,7 @@ impl Assembler {
                 }
             },
             LinkValue::Page(_)
-            | LinkValue::Region(_)
+            | LinkValue::Region { .. }
             | LinkValue::PairedLow
             | LinkValue::LinkerOnly(_) => {}
         }
@@ -1078,9 +1078,10 @@ impl Assembler {
     }
 
     /// For a [`LinkValue::Region`] fixup, the target and the address past the
-    /// field, if the target is a label outside that address's region. A
-    /// plain number is never outside: the CPU takes the region from the PC,
-    /// and GNU ld lets the number's low bits through the same way.
+    /// field, if the target is outside that address's region. Whether a
+    /// target written as a plain number counts is the fixup's own choice;
+    /// see [`LinkValue::Region`].
+    #[allow(clippy::too_many_arguments)]
     fn outside_region(
         &mut self,
         e: ExprRef,
@@ -1089,11 +1090,24 @@ impl Assembler {
         fi: usize,
         at: u64,
         bits: u8,
+        numbers: bool,
     ) -> Option<(i64, u64)> {
-        let label = self.eval(e).ok()?.plus?;
-        self.symbol_section(label)?;
-        let v = self.plain_fixup_value(e, kind, section, fi, at)?;
-        let next = self.section(section).addr + at + kind.size as u64;
+        match self.eval(e).ok()?.plus {
+            Some(label) => {
+                self.symbol_section(label)?;
+            }
+            None if !numbers => return None,
+            None => {}
+        }
+        let mut v = self.plain_fixup_value(e, kind, section, fi, at)?;
+        let here = self.section(section).addr + at;
+        // A PC-relative field holds a distance, and the region is the
+        // target's: an MCS-51 branch cannot leave the 64 KiB address space
+        // however short it is.
+        if kind.pcrel {
+            v += (here as i64 + kind.adjust as i64) & !(kind.pc_align.max(1) as i64 - 1);
+        }
+        let next = here + kind.size as u64;
         (v >> bits != next as i64 >> bits).then_some((v, next))
     }
 
@@ -1162,11 +1176,16 @@ impl Assembler {
                         .into(),
                 );
             }
-            LinkValue::Region(bits) => {
-                let (v, next) = self.outside_region(e, kind, section, fi, at, bits)?;
+            LinkValue::Region { bits, numbers } => {
+                let (v, next) = self.outside_region(e, kind, section, fi, at, bits, numbers)?;
+                let target = if v < 0 {
+                    format!("-{:#x}", v.unsigned_abs())
+                } else {
+                    format!("{v:#x}")
+                };
                 return Some(format!(
-                    "target {v:#x} is outside the {} MB region this field reaches from {next:#x}",
-                    (1u64 << bits) >> 20
+                    "target {target} is outside the {} region this field reaches from {next:#x}",
+                    byte_size(1u64 << bits)
                 ));
             }
             LinkValue::Split(_) => return None,
@@ -1988,6 +2007,16 @@ fn show(n: i128) -> String {
     } else {
         format!("{n:#x}")
     }
+}
+
+/// A power-of-two byte count as a diagnostic writes it: `2 KB`, `256 MB`.
+fn byte_size(n: u64) -> String {
+    for (unit, name) in [(1u64 << 30, "GB"), (1 << 20, "MB"), (1 << 10, "KB")] {
+        if n >= unit {
+            return format!("{} {name}", n / unit);
+        }
+    }
+    format!("{n} bytes")
 }
 
 pub fn uleb128(mut v: u64) -> Vec<u8> {

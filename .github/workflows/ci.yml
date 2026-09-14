@@ -240,11 +240,14 @@ jobs:
       # references are cross builds of binutils plus vasm. Building them takes
       # minutes, so the install is cached, keyed on the build script: that is
       # where the versions and checksums live, so bumping a reference rebuilds.
+      # share/ holds the headers AS's 8051 corpus includes.
       - name: Cache the reference assemblers
         id: oracles
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/../oracles/bin
+          path: |
+            ${{ github.workspace }}/../oracles/bin
+            ${{ github.workspace }}/../oracles/share
           key: oracles-${{ runner.os }}-${{ hashFiles('tools/oracles/build.sh') }}
 
       - name: Build the reference assemblers

@@ -2,6 +2,7 @@
 
 pub mod elf;
 pub mod macho;
+pub mod ihex;
 pub mod raw;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -12,14 +13,23 @@ pub enum Format {
     MachO,
     /// A flat image of the allocatable sections, with no metadata.
     Binary,
+    /// The flat image as Intel HEX records; see [`ihex`].
+    IntelHex,
 }
 
 impl Format {
+    /// Whether the output is an image the assembler lays out itself, with
+    /// every address final and nothing left to a linker.
+    pub fn is_flat(self) -> bool {
+        matches!(self, Format::Binary | Format::IntelHex)
+    }
+
     pub fn from_name(s: &str) -> Option<Format> {
         Some(match s {
             "elf" | "elf32" | "elf64" | "o" | "obj" => Format::Elf,
             "macho" | "macho64" | "mach-o" => Format::MachO,
             "bin" | "binary" | "raw" => Format::Binary,
+            "ihex" | "hex" | "intel-hex" => Format::IntelHex,
             _ => return None,
         })
     }

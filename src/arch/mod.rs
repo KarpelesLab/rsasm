@@ -327,6 +327,9 @@ pub struct AsmCtx<'a> {
     pub dialect: crate::lexer::Dialect,
     /// The object format being written, for [`AsmCtx::fixed_distance`].
     pub format: crate::output::Format,
+    /// [`Architecture::bit_addressing`] for the active backend, which decides
+    /// whether `P1.3` in an expression is a bit address.
+    pub bit_dot: bool,
     /// Read-only: what has been emitted so far, for
     /// [`AsmCtx::fixed_distance`].
     pub sections: &'a [crate::section::Section],
@@ -372,6 +375,7 @@ impl AsmCtx<'_> {
             dollar_is_here: self.dialect.dollar_is_here(),
             star_is_here: self.dialect.star_is_here(),
             dialect: self.dialect,
+            bit_dot: self.bit_dot,
             strings: Some(self.pool),
         }
     }
@@ -963,6 +967,30 @@ pub trait Architecture {
     /// Handles an architecture-specific directive such as `.code64`. Returns
     /// false if the name is not one of this backend's directives.
     fn directive(&self, _cx: &mut AsmCtx<'_>, _name: &str, _cur: &mut Cursor<'_>) -> bool {
+        false
+    }
+
+    /// Words that define a symbol where a label would go, beyond the `EQU`
+    /// family every vendor dialect has: the MCS-51's `BIT`, `DATA`, `CODE`,
+    /// `IDATA` and `XDATA`, which give a name a value and, on a real MCS-51
+    /// toolchain, an address space with it. Consulted only in the 8-bit
+    /// dialect, and only for a word that is not one of this backend's
+    /// instructions.
+    fn equates(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Source assembled ahead of the input the first time this backend is
+    /// active, in `dialect`: names its reference assemblers predefine, such
+    /// as the MCS-51's register names. Empty for most backends.
+    fn prelude(&self, _dialect: crate::lexer::Dialect) -> String {
+        String::new()
+    }
+
+    /// Whether `A.B` in an expression selects a bit of the byte at `A`, as it
+    /// does on the MCS-51; see [`crate::expr::BinOp::BitAddr`]. Off
+    /// everywhere else, so `.` keeps its usual meaning.
+    fn bit_addressing(&self) -> bool {
         false
     }
 }
