@@ -148,14 +148,24 @@ fn ident_lower(cx: &AsmCtx<'_>, t: &Token) -> Option<String> {
     t.ident().map(|n| cx.name(n).to_ascii_lowercase())
 }
 
-/// The register a single token names, as `check_reg` reads the text.
-fn token_reg(cx: &AsmCtx<'_>, toks: &[Token]) -> Option<u8> {
-    match toks {
-        [t] => match t.kind {
-            TokKind::Ident(n) => reg::check_reg(cx.name(n)),
-            TokKind::Int(v) => reg::number_reg(v as i64),
-            _ => None,
-        },
+/// The register an operand's text starts with, as `check_reg` reads it.
+///
+/// The reference hands `check_reg` the whole operand, spaces removed, and
+/// that stops at the first character that is not a letter or a digit, so
+/// `r4+1` and `5(r6)` name `r4` and `r5` where that is all it looks for. In
+/// tokens: the first one names a register, and the next, if any, is
+/// punctuation.
+pub fn leading_reg(cx: &AsmCtx<'_>, toks: &[Token]) -> Option<u8> {
+    let first = toks.first()?;
+    if toks
+        .get(1)
+        .is_some_and(|t| !matches!(t.kind, TokKind::Punct(_)))
+    {
+        return None;
+    }
+    match first.kind {
+        TokKind::Ident(n) => reg::check_reg(cx.name(n)),
+        TokKind::Int(v) => reg::number_reg(v as i64),
         _ => None,
     }
 }
@@ -196,12 +206,7 @@ pub fn src(
     if first.is_punct(Punct::At) {
         // `@rN` and `@rN+`.
         let plus = toks.iter().any(|t| t.is_punct(Punct::Plus));
-        let body: Vec<Token> = toks[1..]
-            .iter()
-            .copied()
-            .filter(|t| !t.is_punct(Punct::Plus))
-            .collect();
-        let Some(r) = token_reg(cx, &body) else {
+        let Some(r) = leading_reg(cx, &toks[1..]) else {
             cx.error(span, "expected a register after `@`");
             return None;
         };
@@ -222,7 +227,7 @@ pub fn src(
     if let Some(open) = last_open_paren(toks)
         && toks.last().is_some_and(|t| t.is_punct(Punct::RParen))
     {
-        let Some(r) = token_reg(cx, &toks[open + 1..toks.len() - 1]) else {
+        let Some(r) = leading_reg(cx, &toks[open + 1..toks.len() - 1]) else {
             cx.error(
                 span,
                 "expected a register in `x(rN)`; write `#x` for an immediate",
@@ -248,7 +253,7 @@ pub fn src(
         return Some(Operand::exp_mode(r, 1, x, value));
     }
 
-    if let Some(r) = token_reg(cx, toks) {
+    if let Some(r) = leading_reg(cx, toks) {
         return Some(Operand::reg_mode(r, 0, span));
     }
 

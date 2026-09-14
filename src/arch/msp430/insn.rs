@@ -732,7 +732,10 @@ fn calla(c: &mut Ctx<'_, '_>, mut bin: u16, ops: &[&[Token]]) -> Option<Vec<Vari
                 wide = Some(Bfd::Pcr20Call);
             }
             1 => bin |= 0x50 | op1.reg as u16,
-            _ => bin |= 0x40 | op1.reg as u16,
+            0 => bin |= 0x40 | op1.reg as u16,
+            // `0(rN)`, which the operand parser has made `@rN`, reaches none
+            // of the reference's cases and keeps the bare opcode.
+            _ => {}
         }
     } else {
         match op1.am {
@@ -747,9 +750,21 @@ fn calla(c: &mut Ctx<'_, '_>, mut bin: u16, ops: &[&[Token]]) -> Option<Vec<Vari
 
     let mut e = Enc::new();
     e.word(bin);
-    let Some(x) = op1.x else { return e.done() };
+    let Some(mut x) = op1.x else {
+        return e.done();
+    };
     // Unlike every other instruction, `calla` relocates its operand even
-    // when it is a number, against no symbol; the linker fills it in.
+    // when it is a number, against no symbol; the linker fills it in. The
+    // number is the one `#hi()` or `#lo()` has already extracted.
+    if let Some(v) = op1.value {
+        let n = c.cx.exprs.alloc(ExprKind::Int(v.unsigned_abs()), x.span);
+        x.e = if v < 0 {
+            c.cx.exprs
+                .alloc(ExprKind::Unary(crate::expr::UnOp::Neg, n), x.span)
+        } else {
+            n
+        };
+    }
     e.word(0);
     match wide {
         Some(bfd @ Bfd::Pcr20Call) => {
@@ -1419,16 +1434,10 @@ fn hash_constant(c: &mut Ctx<'_, '_>, toks: &[Token], what: &str, lo: i64, hi: i
     Some(v)
 }
 
-/// The register a whole operand names, for the forms that take nothing else.
+/// The register an operand names, for the forms that take nothing else; see
+/// [`operand::leading_reg`].
 fn single_reg(c: &Ctx<'_, '_>, toks: &[Token]) -> Option<u8> {
-    match toks {
-        [t] => match t.kind {
-            crate::lexer::TokKind::Ident(n) => reg::check_reg(c.cx.name(n)),
-            crate::lexer::TokKind::Int(v) => reg::number_reg(v as i64),
-            _ => None,
-        },
-        _ => None,
-    }
+    operand::leading_reg(c.cx, toks)
 }
 
 /// Parses a whole operand as one expression.
