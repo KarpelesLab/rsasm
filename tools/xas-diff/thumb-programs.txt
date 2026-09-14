@@ -297,3 +297,24 @@ x:      bx      lr
         .syntax unified
         it      al
         add     r0, r1, r2
+=== an adr that stays short once an earlier one has grown
+        .syntax unified
+        adr     r3, l2
+        adr     r0, l0
+        b       l5
+        ldr     r12, =l1
+l0:     bx      lr
+l1:     nop
+l2:     nop
+l3:     nop
+l4:     bx      lr
+l5:     bx      lr
+=== growth that an alignment absorbs does not move a later target
+        .syntax unified
+        adr     r3, odd
+        adr     r0, after
+        .p2align 2, 0
+        .space  1014
+after:  bx      lr
+odd:    nop
+        bx      lr

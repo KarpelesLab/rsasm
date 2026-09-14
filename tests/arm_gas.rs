@@ -116,6 +116,23 @@ fn thumb_literal_loads_grow_out_of_reach() {
     assert_eq!(hex(&grown[..6]), "ff 48 df f8 00 14");
 }
 
+/// Sizes are picked walking the section, each against the growth so far, as
+/// GNU as's ARM relaxation picks them: once the first `adr` has grown, the
+/// label the second one needs is on a word boundary again, so it stays 16
+/// bits. (llvm-mc, deciding from where things were, widens both.)
+#[test]
+fn thumb_relaxation_follows_the_growth_so_far() {
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            "adr r3, l2\nadr r0, l0\nb l5\nldr r12, =l1\nl0: bx lr\nl1: nop\nl2: nop\n\
+             l3: nop\nl4: bx lr\nl5: bx lr\n"
+        )),
+        "0f f2 0c 03 01 a0 06 e0 df f8 0c c0 70 47 00 bf 00 bf 00 bf 70 47 70 47 \
+         0e 00 00 00"
+    );
+}
+
 #[test]
 fn a_pool_out_of_reach_is_refused() {
     let e = errors_for("arm", "ldr r0, =0x12345678\n.space 4096\nbx lr\n");

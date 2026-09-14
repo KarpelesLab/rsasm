@@ -67,9 +67,11 @@ Where the two still differ, on purpose:
 Where GNU as and llvm-mc disagree and GNU as is followed, as seen in these
 corpora: mapping symbols (llvm-mc marks neither alignment padding nor the
 zeros that align a literal pool), padding the end of a code section to a
-word (llvm-mc does not), and which branches are left to the linker (llvm-mc
+word (llvm-mc does not), which branches are left to the linker (llvm-mc
 relocates an ARM `bl` even to a label in the same section, and converts no
-`bl` to `blx` itself).
+`bl` to `blx` itself), and the size of a relaxable Thumb instruction (GNU as
+picks each afresh on every pass against the growth so far, and llvm-mc can
+widen one that GNU as keeps at 16 bits).
 
 ## Vendor syntax no reference reads
 

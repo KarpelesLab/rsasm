@@ -517,6 +517,22 @@ pub trait Architecture {
         false
     }
 
+    /// Whether sizes are picked afresh on every pass, walking each section in
+    /// order, the way GNU as's ARM port picks them (`arm_relax_frag`).
+    ///
+    /// Each relaxable fragment takes the smallest candidate that reaches from
+    /// where it now is. A target in a fragment the walk has yet to reach is
+    /// taken to have moved by the growth so far, less what each alignment in
+    /// between would absorb of it; that is GNU's `relaxed_symbol_addr`, and
+    /// it can let a fragment shrink back. A fragment that takes a larger
+    /// candidate on a pass where nothing before it grew keeps that size for
+    /// good, which is how GNU as stops such a walk from cycling. Takes
+    /// precedence over [`Architecture::relaxes_in_order`], and
+    /// [`Architecture::relaxation_may_shrink`] over it.
+    fn relaxes_each_pass(&self) -> bool {
+        false
+    }
+
     /// Whether a plain number as a PC-relative target (`call 0x1000`) is an
     /// absolute address, which relocatable output must relocate against no
     /// symbol, rather than an offset into the current section.

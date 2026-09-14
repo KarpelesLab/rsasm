@@ -1130,6 +1130,12 @@ impl Assembler {
         (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxation_may_shrink())
     }
 
+    /// Whether any backend the source used picks sizes afresh on each pass;
+    /// see [`Architecture::relaxes_each_pass`].
+    pub(crate) fn any_arch_relaxes_each_pass(&self) -> bool {
+        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxes_each_pass())
+    }
+
     /// Whether any backend the source used sizes branches in one walk
     /// through each section; see [`Architecture::relaxes_in_order`].
     pub(crate) fn any_arch_relaxes_in_order(&self) -> bool {

@@ -64,7 +64,7 @@ impl Assembler {
 
         let mut settled = false;
         let mut history = HashMap::new();
-        let limit = if self.any_arch_shrinks() {
+        let limit = if self.any_arch_shrinks() || self.any_arch_relaxes_each_pass() {
             MAX_PASSES_SHRINKING
         } else {
             MAX_PASSES
@@ -291,10 +291,14 @@ impl Assembler {
 
     /// Moves fragments to a larger candidate where the current one no longer
     /// reaches. `history` is only used by [`Self::repick`], for targets whose
-    /// sizes may also shrink.
+    /// sizes may also shrink, and by [`Self::repick_each_pass`], where it
+    /// holds the fragments whose size is settled.
     fn relax(&mut self, history: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
         if self.any_arch_shrinks() {
             return self.repick(history);
+        }
+        if self.any_arch_relaxes_each_pass() {
+            return self.repick_each_pass(history);
         }
         if self.any_arch_relaxes_in_order() {
             return self.grow_in_order();
@@ -401,6 +405,121 @@ impl Assembler {
             }
         }
         changed
+    }
+
+    /// Picks every relaxable fragment's size afresh, walking each section in
+    /// order; see [`Architecture::relaxes_each_pass`]. `settled` holds the
+    /// fragments that took a larger size on a pass where nothing before them
+    /// had grown, which keep it.
+    ///
+    /// [`Architecture::relaxes_each_pass`]: crate::arch::Architecture::relaxes_each_pass
+    fn repick_each_pass(&mut self, settled: &mut HashMap<(usize, usize), (u32, u32)>) -> bool {
+        let mut changed = false;
+        for si in 0..self.sections.len() {
+            let mut off: u64 = 0;
+            for fi in 0..self.sections[si].frags.len() {
+                let old_off = self.sections[si].frags[fi].offset;
+                self.sections[si].frags[fi].offset = off;
+                let stretch = off as i64 - old_off as i64;
+                let size = match &self.sections[si].frags[fi].kind {
+                    FragKind::Bytes { variants, chosen }
+                        if variants.len() > 1 && !settled.contains_key(&(si, fi)) =>
+                    {
+                        let (n, chosen) = (variants.len(), *chosen);
+                        let pick = (0..n)
+                            .find(|&k| self.fits_stretched(si, fi, k, stretch))
+                            .unwrap_or(n - 1);
+                        if pick != chosen {
+                            changed = true;
+                        }
+                        if pick > 0 && stretch <= 0 {
+                            settled.insert((si, fi), (0, 0));
+                        }
+                        if let FragKind::Bytes { variants, chosen } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *chosen = pick;
+                            variants[pick].bytes.len() as u64
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    FragKind::Align { .. } => {
+                        let task = self.task_for(si, fi);
+                        let (pad, _) = self.compute_size(si, off, task);
+                        if let FragKind::Align { pad: slot, .. } =
+                            &mut self.sections[si].frags[fi].kind
+                        {
+                            *slot = pad;
+                        }
+                        pad
+                    }
+                    _ => self.sections[si].frags[fi].size(),
+                };
+                off = off.saturating_add(size);
+            }
+            if self.sections[si].size != off {
+                self.sections[si].size = off;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Whether every fixup of candidate `k` of a fragment is in range for
+    /// [`Self::repick_each_pass`], which has moved everything up to the
+    /// fragment by `stretch` bytes this pass. A target in a later fragment
+    /// moves by that much too, rounded down to each alignment it is behind,
+    /// since the alignment would absorb the rest: GNU as's
+    /// `relaxed_symbol_addr`.
+    fn fits_stretched(&mut self, si: usize, fi: usize, k: usize, stretch: i64) -> bool {
+        let id = SectionId(si as u32);
+        let frag_off = self.sections[si].frags[fi].offset;
+        let fixups: Vec<(u32, ExprRef, FixupKind)> = match &self.sections[si].frags[fi].kind {
+            FragKind::Bytes { variants, .. } => variants[k]
+                .fixups
+                .iter()
+                .map(|f| (f.offset, f.expr, f.kind))
+                .collect(),
+            _ => return true,
+        };
+        for (off, e, kind) in fixups {
+            let Some(mut value) = self.fixup_value(e, &kind, id, fi, frag_off + off as u64) else {
+                return false;
+            };
+            let target = match self.eval(e) {
+                Ok(Value {
+                    plus: Some(p),
+                    minus: None,
+                    ..
+                }) if kind.pcrel && stretch != 0 => match self.symbols.get(p).value {
+                    SymbolValue::Label { section, frag } if section == id && frag as usize > fi => {
+                        Some(frag as usize)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(frag) = target {
+                let mut moved = stretch;
+                for f in &self.sections[si].frags[fi + 1..frag.min(self.sections[si].frags.len())] {
+                    if let FragKind::Align { align, .. } = f.kind
+                        && align > 1
+                    {
+                        let mask = align as i64 - 1;
+                        moved = moved.signum() * (moved.abs() & !mask);
+                        if moved == 0 {
+                            break;
+                        }
+                    }
+                }
+                value += moved;
+            }
+            if !kind.fits(value as i128) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Grows fragments walking each section in order, the way GNU as's
