@@ -191,6 +191,20 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Mrs => status_read(cx, ins),
         Msr => status_write(cx, ins),
         Dmb | Dsb | Isb => barrier(cx, ins),
+        // ARM instructions carry their own conditions, so GNU as takes an
+        // `it` in ARM code for source shared with Thumb, and emits nothing.
+        It(_) => {
+            arity(cx, ins, &[1])?;
+            if ops[0]
+                .word
+                .as_deref()
+                .and_then(super::insn::condition)
+                .is_none()
+            {
+                cx.error(ops[0].span, "expected a condition code");
+            }
+            None
+        }
     }
 }
 

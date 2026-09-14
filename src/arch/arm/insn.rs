@@ -29,6 +29,14 @@ pub fn condition(name: &str) -> Option<u8> {
     CONDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
 }
 
+/// The usual spelling of a condition code, for diagnostics.
+pub fn condition_name(cond: u8) -> &'static str {
+    CONDS
+        .iter()
+        .find(|(n, c)| *c == cond && !matches!(*n, "hs" | "lo"))
+        .map_or("nv", |(n, _)| n)
+}
+
 /// Direction and index-before/after mode of a block transfer.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct BlockMode {
@@ -117,6 +125,9 @@ pub enum Mnem {
     Dmb,
     Dsb,
     Isb,
+    /// `it`, `itt`, `ite` and so on: the letters after the first `t`, as the
+    /// mask field for an even condition; see `thumb::it_block`.
+    It(u8),
 }
 
 impl Mnem {
@@ -235,6 +246,17 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("bkpt", Bkpt);
         add("mrs", Mrs); add("msr", Msr);
         add("dmb", Dmb); add("dsb", Dsb); add("isb", Isb);
+        // Every `it` spelling: up to three more instructions, each `t` (the
+        // condition, a clear bit) or `e` (its inverse, a set one), from the
+        // top bit down, then a set bit that ends them.
+        add("it", It(0x8));
+        add("itt", It(0x4)); add("ite", It(0xc));
+        add("ittt", It(0x2)); add("itte", It(0x6));
+        add("itet", It(0xa)); add("itee", It(0xe));
+        add("itttt", It(0x1)); add("ittte", It(0x3));
+        add("ittet", It(0x5)); add("ittee", It(0x7));
+        add("itett", It(0x9)); add("itete", It(0xb));
+        add("iteet", It(0xd)); add("iteee", It(0xf));
         m
     })
 }

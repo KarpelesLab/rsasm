@@ -164,3 +164,136 @@ f:      bx      lr
         .p2align 2, 0
         .thumb_func
 g:      bx      lr
+=== it blocks and the instructions in them
+        .syntax unified
+f:      it      eq
+        addeq   r0, r1, r2
+        itt     ne
+        addne   r0, r1, r2
+        addsne  r0, r1, r2
+        ite     cs
+        movcs   r0, #1
+        movcc   r0, #2
+        itete   gt
+        addgt   r0, #1
+        suble   r0, #1
+        mulgt   r0, r1, r0
+        lslle   r0, r1, #2
+        adds    r0, r1, r2
+        add     r0, r1, r2
+        it      mi
+        bmi     f
+        it      lt
+        bxlt    lr
+        itt     eq
+        moveq   r0, r1
+        bleq    f
+        bx      lr
+=== every it pattern and condition
+        .syntax unified
+        itttt   eq
+        addeq   r0, r1
+        addeq   r0, r1
+        addeq   r0, r1
+        addeq   r0, r1
+        iteee   ne
+        addne   r0, r1
+        addeq   r0, r1
+        addeq   r0, r1
+        addeq   r0, r1
+        ittet   cs
+        addcs   r0, r1
+        addcs   r0, r1
+        addcc   r0, r1
+        addcs   r0, r1
+        itett   vc
+        addvc   r0, r1
+        addvs   r0, r1
+        addvc   r0, r1
+        addvc   r0, r1
+        iteet   hi
+        addhi   r0, r1
+        addls   r0, r1
+        addls   r0, r1
+        addhi   r0, r1
+        itte    le
+        addle   r0, r1
+        addle   r0, r1
+        addgt   r0, r1
+        itet    pl
+        addpl   r0, r1
+        addmi   r0, r1
+        addpl   r0, r1
+=== flags in and out of it blocks
+        .syntax unified
+        ittt    eq
+        andeq   r0, r1
+        orreq   r0, r1
+        lsleq   r0, r1
+        ittt    eq
+        mvneq   r0, r1
+        muleq   r0, r1, r0
+        asreq   r0, r1, #3
+        itt     eq
+        addseq  r0, r1, r2
+        subseq  r0, r0, #300
+        ite     ne
+        movne   r0, #1
+        moveq   r0, #0
+        itee    ge
+        addge   r0, r1, r2
+        sublt   r0, r1, r2
+        rsblt   r0, r0, #0
+        itt     eq
+        cmpeq   r0, #1
+        moveq   r0, #300
+        ands    r0, r1
+        muls    r0, r1, r0
+=== a literal pool load and a long branch in it blocks
+        .syntax unified
+        itt     eq
+        ldreq   r0, =0x12345678
+        ldreq   r1, =0x12345678
+        it      eq
+        beq     far
+        it      ne
+        bne.w   near
+near:   .space  4000
+far:    bx      lr
+=== it in ARM code emits nothing
+        .syntax unified
+        .arm
+        it      eq
+        addeq   r0, r1, r2
+        add     r0, r1, r2
+=== refused: an instruction without the block's condition
+        .syntax unified
+        it      eq
+        add     r0, r1, r2
+=== refused: the wrong condition
+        .syntax unified
+        it      eq
+        addne   r0, r1, r2
+=== refused: a conditional instruction outside a block
+        .syntax unified
+        addeq   r0, r1, r2
+=== refused: a branch that is not last
+        .syntax unified
+        itt     eq
+        beq     x
+        addeq   r0, r1
+x:      bx      lr
+=== refused: a PC change that is not last
+        .syntax unified
+        itt     eq
+        moveq   pc, lr
+        addeq   r0, r1
+=== refused: it within an it block
+        .syntax unified
+        itt     eq
+        it      eq
+        addeq   r0, r1
+=== refused: instructions in an al block
+        .syntax unified
+        it      al
+        add     r0, r1, r2

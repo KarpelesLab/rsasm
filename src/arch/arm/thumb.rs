@@ -42,21 +42,84 @@ fn wide(hw1: u16, hw2: u16) -> Vec<Variant> {
     vec![Variant::new(wide_bytes(hw1, hw2))]
 }
 
-/// Rejects a condition suffix on anything but a branch: predication in Thumb
-/// comes from an enclosing `it` block, which this backend does not implement.
+/// Rejects a condition suffix on anything but a branch outside an `it` block:
+/// predication in Thumb comes from the block. (Inside one, the condition has
+/// already been checked against the block's and taken off.)
 fn unconditional(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<()> {
     if ins.cond_written && ins.cond != AL {
         cx.error(
             ins.span,
             format!(
-                "`{}` is conditional, which in Thumb needs an `it` block; \
-                 `it` is not supported by this backend",
+                "`{}` is conditional, which in Thumb takes an `it` block",
                 ins.text
             ),
         );
         return None;
     }
     Some(())
+}
+
+/// Whether a 16-bit data-processing form that sets the flags outside an `it`
+/// block, and does not inside one, fits: `adds r0, r1, r2` outside a block
+/// and `addeq r0, r1, r2` inside one are both 16 bits, while `add` outside
+/// and `addseq` inside need 32.
+fn sets_flags16(ins: &Insn<'_>) -> bool {
+    ins.set_flags != ins.in_it
+}
+
+/// Where an `it` block's state lives in `ArchState::private`: the ITSTATE
+/// byte, the condition of the next instruction in the top nibble and the
+/// mask of the ones after it below.
+const IT_SHIFT: u32 = 8;
+
+fn itstate(cx: &AsmCtx<'_>) -> u8 {
+    (cx.state.private >> IT_SHIFT) as u8
+}
+
+fn set_itstate(cx: &mut AsmCtx<'_>, it: u8) {
+    cx.state.private = (cx.state.private & !(0xff << IT_SHIFT)) | ((it as u64) << IT_SHIFT);
+}
+
+/// Whether an instruction leaves its `it` block by changing the PC, which
+/// only the last instruction of a block may do.
+fn is_branch(ins: &Insn<'_>) -> bool {
+    matches!(ins.mnem, Mnem::B | Mnem::Bl | Mnem::Bx | Mnem::Blx)
+        || (matches!(ins.mnem, Mnem::Mov | Mnem::Add | Mnem::Ldr)
+            && ins.ops.first().and_then(|op| op.reg()) == Some(reg::PC))
+}
+
+/// `it`, `itt`, `ite` and the rest. `pattern` holds the letters after the
+/// first `t` as bits, `e` set, from the high bit down, followed by a set
+/// bit that ends them: the mask field for a condition whose low bit is
+/// clear.
+fn it_block(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, pattern: u8) -> Option<Vec<Variant>> {
+    encode::arity(cx, ins, &[1])?;
+    let op = &ins.ops[0];
+    let Some(cond) = op.word.as_deref().and_then(super::insn::condition) else {
+        cx.error(op.span, "expected a condition code");
+        return None;
+    };
+    // The letters are relative to the condition: a `t` repeats it, so with
+    // an odd condition every letter bit flips, and the end bit does not.
+    let end = pattern & pattern.wrapping_neg();
+    let letters = pattern & !end & 0xf;
+    let mask = if cond & 1 != 0 {
+        letters ^ (0xf & !(end | (end - 1)))
+    } else {
+        letters
+    } | end;
+    set_itstate(cx, (cond << 4) | mask);
+    Some(narrow(0xbf00 | ((cond as u16) << 4) | mask as u16))
+}
+
+/// The ITSTATE after one instruction of a block: the mask shifts into the
+/// condition's low bit, and the block ends with its end bit.
+fn it_advance(it: u8) -> u8 {
+    if it & 0x7 == 0 {
+        0
+    } else {
+        (it & 0xe0) | ((it << 1) & 0x1f)
+    }
 }
 
 fn want_narrow(ins: &Insn<'_>) -> bool {
@@ -85,9 +148,76 @@ fn no_encoding(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     None
 }
 
+/// Assembles one Thumb instruction, keeping track of the `it` block it is in.
+///
+/// The checks are GNU as's: an instruction in a block must carry the block's
+/// condition, or its inverse where the block says `e`; one that changes the
+/// PC must be the block's last; and an `al` block allows no instruction at
+/// all. Outside a block only a branch may carry a condition, as GNU as's
+/// default `-mimplicit-it=arm` has it: no block is made up for Thumb code.
+/// The instruction is then encoded without its condition, which the block
+/// supplies.
 pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    let it = itstate(cx);
+    if let Mnem::It(pattern) = ins.mnem {
+        if it & 0xf != 0 {
+            cx.error(
+                ins.span,
+                "`it` falls within the range of a previous `it` block",
+            );
+            return None;
+        }
+        return it_block(cx, ins, pattern);
+    }
+    if it & 0xf == 0 {
+        return encode_insn(cx, ins);
+    }
+    set_itstate(cx, it_advance(it));
+    let expected = it >> 4;
+    if !ins.cond_written || expected == AL {
+        cx.error(
+            ins.span,
+            format!(
+                "`{}` is not allowed in an `it` block without its condition",
+                ins.text
+            ),
+        );
+        return None;
+    }
+    if ins.cond != expected {
+        let want = super::insn::condition_name(expected);
+        cx.error(
+            ins.span,
+            format!(
+                "`{}` has the wrong condition for this `it` block, which expects `{want}` here",
+                ins.text
+            ),
+        );
+        return None;
+    }
+    if is_branch(ins) && it & 0xf != 0x8 {
+        cx.error(
+            ins.span,
+            format!(
+                "`{}` is a branch, which must be the last instruction in its `it` block",
+                ins.text
+            ),
+        );
+        return None;
+    }
+    let inner = Insn {
+        cond: AL,
+        cond_written: false,
+        in_it: true,
+        ..*ins
+    };
+    encode_insn(cx, &inner)
+}
+
+fn encode_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     use Mnem::*;
     match ins.mnem {
+        It(_) => None,
         B | Bl | Bx | Blx => branch(cx, ins),
         Mov | Mvn => mov(cx, ins),
         Add | Sub => add_sub(cx, ins),
@@ -205,7 +335,7 @@ pub fn blx_kind() -> FixupKind {
 
 /// A `blx` GNU as turns into `bl`, for a call that stays in Thumb. It keeps
 /// the `blx`'s base, the PC rounded down to a word, so a call from an
-/// instruction that is not on a word boundary lands two bytes short of its
+/// instruction that is not on a word boundary lands two bytes past its
 /// target; GNU as does that, and warns.
 pub fn blx_as_bl_kind() -> FixupKind {
     FixupKind {
@@ -374,7 +504,7 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if ins.mnem == Mnem::Mvn {
         // Only the flag-setting low-register form is 16 bits.
         if let Some(rm) = src.reg()
-            && ins.set_flags
+            && sets_flags16(ins)
             && low(rd)
             && low(rm)
             && want_narrow(ins)
@@ -385,8 +515,9 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     }
 
     if let Some(rm) = src.reg() {
-        if ins.set_flags && low(rd) && low(rm) && want_narrow(ins) {
-            // `movs rd, rm` is `lsls rd, rm, #0`.
+        if ins.set_flags && !ins.in_it && low(rd) && low(rm) && want_narrow(ins) {
+            // `movs rd, rm` is `lsls rd, rm, #0`, which in an `it` block
+            // would not set the flags.
             return Some(narrow(((rm as u16) << 3) | rd as u16));
         }
         if !ins.set_flags && want_narrow(ins) {
@@ -399,7 +530,7 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     }
 
     let v = encode::imm32(cx, src)?;
-    if ins.set_flags && low(rd) && v <= 0xff && want_narrow(ins) {
+    if sets_flags16(ins) && low(rd) && v <= 0xff && want_narrow(ins) {
         return Some(narrow(0x2000 | ((rd as u16) << 8) | v as u16));
     }
     if !want_wide(ins) {
@@ -473,7 +604,7 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let s = u16::from(ins.set_flags);
 
     if let Some(rm) = src.reg() {
-        if ins.set_flags && low(rd) && low(rn) && low(rm) && want_narrow(ins) {
+        if sets_flags16(ins) && low(rd) && low(rn) && low(rm) && want_narrow(ins) {
             let base = if sub { 0x1a00 } else { 0x1800 };
             return Some(narrow(
                 base | ((rm as u16) << 6) | ((rn as u16) << 3) | rd as u16,
@@ -524,7 +655,7 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         {
             return Some(narrow(0xa800 | ((rd as u16) << 8) | (v / 4) as u16));
         }
-        if ins.set_flags && low(rd) && low(rn) {
+        if sets_flags16(ins) && low(rd) && low(rn) {
             // Which 16-bit form wins depends on how the source spelled it:
             // `adds r0, #1` is the 8-bit form and `adds r0, r0, #1` the 3-bit
             // one, even though they mean the same thing. Both GNU as and LLVM
@@ -658,7 +789,7 @@ fn alu_reg(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         let rd = encode::reg_of(cx, &ins.ops[0])?;
         let rn = encode::reg_of(cx, &ins.ops[1])?;
         let v = encode::imm_of(cx, &ins.ops[2])?;
-        if v != 0 || !ins.set_flags || !low(rd) || !low(rn) || !want_narrow(ins) {
+        if v != 0 || !sets_flags16(ins) || !low(rd) || !low(rn) || !want_narrow(ins) {
             return no_encoding(cx, ins);
         }
         return Some(narrow(0x4000 | (op << 6) | ((rn as u16) << 3) | rd as u16));
@@ -673,7 +804,7 @@ fn alu_reg(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let Some(rm) = src.reg() else {
         return no_encoding(cx, ins);
     };
-    if !ins.set_flags || rd != rn || !low(rd) || !low(rm) || !want_narrow(ins) {
+    if !sets_flags16(ins) || rd != rn || !low(rd) || !low(rm) || !want_narrow(ins) {
         return no_encoding(cx, ins);
     }
     Some(narrow(0x4000 | (op << 6) | ((rm as u16) << 3) | rd as u16))
@@ -688,7 +819,7 @@ fn shift_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     } else {
         (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
     };
-    if !ins.set_flags || !low(rd) || !low(rm) || !want_narrow(ins) {
+    if !sets_flags16(ins) || !low(rd) || !low(rm) || !want_narrow(ins) {
         return no_encoding(cx, ins);
     }
     // A register shift amount is the flag-setting two-operand form, so the
@@ -1102,12 +1233,10 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             let rd = encode::reg_of(cx, &ops[0])?;
             let rn = encode::reg_of(cx, &ops[1])?;
             let rm = encode::reg_of(cx, &ops[2])?;
-            // `muls rdm, rn, rdm` is the 16-bit form.
-            if ins.set_flags && want_narrow(ins) {
-                if low(rd) && low(rn) && rd == rm {
-                    return Some(narrow(0x4340 | ((rn as u16) << 3) | rd as u16));
-                }
-                return no_encoding(cx, ins);
+            // `muls rdm, rn, rdm` is the 16-bit form, and `mul` in an `it`
+            // block, where it does not set the flags.
+            if sets_flags16(ins) && want_narrow(ins) && low(rd) && low(rn) && rd == rm {
+                return Some(narrow(0x4340 | ((rn as u16) << 3) | rd as u16));
             }
             if ins.set_flags || !want_wide(ins) {
                 return no_encoding(cx, ins);

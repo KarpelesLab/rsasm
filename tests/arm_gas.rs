@@ -374,3 +374,68 @@ fn thumb_adr_of_a_thumb_function() {
         "70 47 af f2 03 00 0f f2 05 01 00 00 70 47 00 bf"
     );
 }
+
+// ---- it blocks -----------------------------------------------------------------
+
+/// Instructions in an `it` block take its condition, and the 16-bit
+/// data-processing forms that set the flags outside a block leave them
+/// alone inside one, so `addeq r0, r1, r2` is 16 bits and `addseq` 32.
+#[test]
+fn it_blocks() {
+    let src = "f:      it      eq
+        addeq   r0, r1, r2
+        itt     ne
+        addne   r0, r1, r2
+        addsne  r0, r1, r2
+        ite     cs
+        movcs   r0, #1
+        movcc   r0, #2
+        itete   gt
+        addgt   r0, #1
+        suble   r0, #1
+        mulgt   r0, r1, r0
+        lslle   r0, r1, #2
+        adds    r0, r1, r2
+        add     r0, r1, r2
+        it      mi
+        bmi     f
+        it      lt
+        bxlt    lr
+        itt     eq
+        moveq   r0, r1
+        bleq    f
+        bx      lr
+";
+    assert_eq!(
+        hex(&text_for("thumb", src)),
+        "08 bf 88 18 1c bf 88 18 11 eb 02 00 2c bf 01 20 02 20 cb bf 01 30 01 38 \
+         48 43 88 00 88 18 01 eb 02 00 48 bf ec e7 b8 bf 70 47 04 bf 08 46 ff f7 \
+         e7 ff 70 47"
+    );
+    // In ARM code `it` is accepted and emits nothing.
+    assert_eq!(
+        hex(&text_for("arm", "it eq\naddeq r0, r1, r2\n")),
+        "02 00 81 00"
+    );
+}
+
+/// GNU as's rules for what an `it` block may hold, each with its reason.
+#[test]
+fn it_block_mistakes_are_refused() {
+    let e = errors_for("thumb", "it eq\nadd r0, r1, r2\n");
+    assert!(e.contains("not allowed in an `it` block"), "{e}");
+    let e = errors_for("thumb", "it eq\naddne r0, r1, r2\n");
+    assert!(e.contains("expects `eq` here"), "{e}");
+    let e = errors_for("thumb", "ite eq\naddeq r0, r1\naddeq r0, r1\n");
+    assert!(e.contains("expects `ne` here"), "{e}");
+    let e = errors_for("thumb", "addeq r0, r1, r2\n");
+    assert!(e.contains("takes an `it` block"), "{e}");
+    let e = errors_for("thumb", "itt eq\nbeq x\naddeq r0, r1\nx: bx lr\n");
+    assert!(e.contains("must be the last instruction"), "{e}");
+    let e = errors_for("thumb", "itt eq\nmoveq pc, lr\naddeq r0, r1\n");
+    assert!(e.contains("must be the last instruction"), "{e}");
+    let e = errors_for("thumb", "itt eq\nit eq\naddeq r0, r1\n");
+    assert!(e.contains("previous `it` block"), "{e}");
+    let e = errors_for("thumb", "it al\nadd r0, r1, r2\n");
+    assert!(e.contains("not allowed in an `it` block"), "{e}");
+}

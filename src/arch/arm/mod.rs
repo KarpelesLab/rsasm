@@ -43,7 +43,11 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
 
 /// One instruction, after the mnemonic has been taken apart and the operands
 /// parsed. Both encoders work from this.
+#[derive(Copy, Clone)]
 pub struct Insn<'o> {
+    /// In a Thumb `it` block, whose condition the instruction takes: the
+    /// 16-bit data-processing forms then leave the flags alone.
+    pub in_it: bool,
     pub mnem: Mnem,
     pub cond: u8,
     /// Whether the source wrote a condition, as opposed to defaulting to `al`.
@@ -224,9 +228,9 @@ impl Architecture for Arm {
     }
 
     /// A Thumb function is `STT_FUNC`, and its address has the low bit set so
-    /// that a call through it lands in Thumb state.
-    /// Only a label defined in Thumb code, though: GNU as marks nothing else,
-    /// even a label `.thumb_func` names in ARM code.
+    /// that a call through it lands in Thumb state. Only a label defined in
+    /// Thumb code is marked, though: GNU as marks nothing else, even a label
+    /// `.thumb_func` names in ARM code.
     fn elf_symbol(&self, flags: u8, ty: SymType, defined: bool, value: u64) -> (SymType, u64) {
         if thumb_is_func(flags, ty) && flags & LABEL_THUMB != 0 {
             (SymType::Func, if defined { value | 1 } else { value })
@@ -357,6 +361,7 @@ impl Architecture for Arm {
             return None;
         }
         let ins = Insn {
+            in_it: false,
             mnem: r.mnem,
             cond: r.cond,
             cond_written: r.cond_written,
