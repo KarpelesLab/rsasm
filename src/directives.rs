@@ -692,7 +692,12 @@ impl Assembler {
                 if cur.eat_punct(Punct::At).is_none() {
                     cur.eat_punct(Punct::Percent);
                 }
-                if let Some((tn, _)) = self.expect_name(cur) {
+                // A type may also be written as its number, as llvm-mc writes
+                // `@0x7000001e` for MIPS's DWARF sections; any such section
+                // holds bits.
+                if let TokKind::Int(_) = cur.peek().kind {
+                    cur.advance();
+                } else if let Some((tn, _)) = self.expect_name(cur) {
                     let t = self.interner.get(tn).to_ascii_lowercase();
                     kind = match t.as_str() {
                         "nobits" => SectionKind::Nobits,

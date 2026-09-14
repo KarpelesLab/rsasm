@@ -22,9 +22,11 @@
 #
 # Corpora hold snippets separated by `=== <name>` lines: common.txt, whose
 # snippets use only `nop` and register numbers and are run for every target,
-# and <key>.txt for each target's own. A snippet using `.cfi_*` is skipped
-# for a target whose reference has no CFI. Both assemblers run in the same
-# scratch directory, which a DWARF 5 table without `.file 0` names.
+# <key>.txt for each target's own, and <key>-compiler.txt with whole files
+# from GCC (x86) and Clang (every target whose code it assembles), see
+# compiler.sh. A snippet using `.cfi_*` is skipped for a target whose
+# reference has no CFI. Both assemblers run in the same scratch directory,
+# which a DWARF 5 table without `.file 0` names.
 set -u
 verbose=
 [ "${1-}" = -v ] && { verbose=1; shift; }
@@ -173,7 +175,9 @@ while IFS='|' read -r key rs ref quirks; do
   fi
   before=$((pass + fail))
   run_file "$here/common.txt" "$key" "$rs" "$ref" "$quirks"
-  run_file "$here/$key.txt" "$key" "$rs" "$ref" "$quirks"
+  for f in "$here/$key.txt" "$here/$key"-*.txt; do
+    run_file "$f" "$key" "$rs" "$ref" "$quirks"
+  done
   echo "[$key] $((pass + fail - before)) cases"
 done <<< "$TARGETS"
 
