@@ -58,7 +58,6 @@ const AMD64_SECTION: u16 = 0x000a;
 const AMD64_SECREL: u16 = 0x000b;
 
 // ---- IMAGE_REL_I386_* -------------------------------------------------------
-const I386_DIR16: u16 = 0x0001;
 const I386_DIR32: u16 = 0x0006;
 const I386_DIR32NB: u16 = 0x0007;
 const I386_SECTION: u16 = 0x000a;
@@ -103,10 +102,9 @@ pub fn map(machine: u16, elf: u32) -> Option<u16> {
             pseudo::IMGREL => I386_DIR32NB,
             pseudo::SECREL => I386_SECREL,
             pseudo::SECIDX => I386_SECTION,
-            // R_386_32
+            // R_386_32; COFF's `DIR16` exists, but llvm-mc refuses a 16-bit
+            // field, and so does this.
             1 => I386_DIR32,
-            // R_386_16
-            20 => I386_DIR16,
             // R_386_PC32 and _PLT32
             2 | 4 => I386_REL32,
             _ => return None,
@@ -196,7 +194,6 @@ pub fn name(machine: u16, coff: u16) -> String {
             _ => "",
         },
         MACHINE_I386 => match coff {
-            I386_DIR16 => "DIR16",
             I386_DIR32 => "DIR32",
             I386_DIR32NB => "DIR32NB",
             I386_SECTION => "SECTION",

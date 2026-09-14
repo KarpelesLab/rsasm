@@ -228,6 +228,19 @@ impl Assembler {
                 self.dir_dwarf_file(&mut cur, span);
                 true
             }
+            // DWARF in a COFF object needs section-relative relocations and
+            // conventions of its own, which rsasm does not write yet; a table
+            // a linker would misread is worse than none.
+            ".loc" | ".loc_mark_labels" if self.options.format.is_coff() => {
+                self.coff_refuse_dwarf(&text, span);
+                cur.set_pos(cur.all().len());
+                true
+            }
+            _ if text.starts_with(".cfi_") && self.options.format.is_coff() => {
+                self.coff_refuse_dwarf(&text, span);
+                cur.set_pos(cur.all().len());
+                true
+            }
             ".loc" => {
                 self.dir_loc(&mut cur, span);
                 true

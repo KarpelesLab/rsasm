@@ -61,6 +61,10 @@ const SYM_UNDEFINED: i16 = 0;
 const SYM_ABSOLUTE: i16 = -1;
 const SYM_DEBUG: i16 = -2;
 
+/// `IMAGE_COMDAT_SELECT_ASSOCIATIVE`: the section is kept exactly when the
+/// one its auxiliary record names is.
+const SELECT_ASSOCIATIVE: u8 = 5;
+
 /// `IMAGE_WEAK_EXTERN_SEARCH_ALIAS`: the linker uses the aliased symbol if
 /// nothing else defines the name.
 const WEAK_SEARCH_ALIAS: u32 = 3;
@@ -679,12 +683,19 @@ fn collect_symbols(
                     } else {
                         jam_crc(&s.data)
                     },
-                    number: s.number,
+                    number: associated(asm, s, sec_number).unwrap_or(s.number),
                     selection: s.comdat.map_or(0, |c| c.selection),
                 }],
             },
         );
-        if let Some(id) = s.comdat.and_then(|c| c.symbol) {
+        // An associative section's symbol belongs to the section it goes
+        // with, and is placed there.
+        if let Some(id) = s
+            .comdat
+            .filter(|c| c.selection != SELECT_ASSOCIATIVE)
+            .and_then(|c| c.symbol)
+            && !placed.contains(&id)
+        {
             let Some(sym) = out_symbol(asm, id, sec_number) else {
                 continue;
             };
@@ -801,6 +812,15 @@ fn collect_symbols(
         );
     }
     (out, index)
+}
+
+/// For an associative COMDAT, the number of the section it goes with: the one
+/// its symbol is defined in, which is what the auxiliary record's section
+/// number holds instead of the section's own.
+fn associated(asm: &Assembler, s: &OutSec, sec_number: &HashMap<SectionId, i16>) -> Option<u16> {
+    let c = s.comdat.filter(|c| c.selection == SELECT_ASSOCIATIVE)?;
+    let section = asm.symbol_section(c.symbol?)?;
+    sec_number.get(&section).map(|n| *n as u16)
 }
 
 /// One ordinary symbol, or `None` if it belongs to a section that was not

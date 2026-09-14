@@ -171,3 +171,11 @@ isr:    .seh_pushframe @code
         .seh_endprologue
         iretq
         .seh_endproc
+=== associative comdat
+        .section .text$f,"xr",discard,f
+        .globl  f
+f:      ret
+        .section .xdata$f,"dr",associative,f
+        .long   1
+        .section .data$d,"dw",associative,f
+        .long   f

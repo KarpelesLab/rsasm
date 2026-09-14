@@ -253,14 +253,25 @@ impl Assembler {
             ".rva" => self.coff_reloc_data(cur, span, pseudo::IMGREL, 4),
             ".secrel32" => self.coff_reloc_data(cur, span, pseudo::SECREL, 4),
             ".secidx" => self.coff_reloc_data(cur, span, pseudo::SECIDX, 2),
-            // `.safeseh` marks an i386 handler for the linker's SEH table;
-            // there is nothing to record without one.
+            // `.safeseh` lists an i386 handler in `.sxdata` by its symbol
+            // table index, a field no relocation describes.
             ".safeseh" => {
-                let _ = self.expect_name(cur);
+                self.diags
+                    .error(span, "`.safeseh` is not supported yet in COFF output");
+                cur.set_pos(cur.all().len());
             }
             _ => self.seh_directive(name, cur, span),
         }
         true
+    }
+
+    /// Refuses DWARF line and frame information in a COFF object; see the
+    /// README's "Not yet".
+    pub(crate) fn coff_refuse_dwarf(&mut self, name: &str, span: Span) {
+        self.diags.error(
+            span,
+            format!("`{name}` writes DWARF, which rsasm does not write into COFF objects yet"),
+        );
     }
 
     fn coff_def(&mut self, cur: &mut Cursor<'_>, span: Span) {
@@ -539,6 +550,17 @@ impl Assembler {
         if self.coff.open.is_some() {
             self.diags
                 .error(span, "`.seh_proc` inside another `.seh_proc` block");
+            return;
+        }
+        // llvm-mc gives a function in a COMDAT section unwind data in
+        // `.xdata` and `.pdata` sections of their own, associated with it, so
+        // they are discarded together; one object would need two sections of
+        // each name for that, which rsasm cannot have yet.
+        if self.coff.sections.get(&self.cur).is_some_and(|i| i.comdat.is_some()) {
+            self.diags.error(
+                span,
+                "unwind data for a function in a COMDAT section is not supported yet",
+            );
             return;
         }
         let begin = self.anon_label(span);

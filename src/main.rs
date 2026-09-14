@@ -171,6 +171,9 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
     if a.inputs.is_empty() {
         return Err("no input files".into());
     }
+    if a.format == Format::Coff && a.options.debug_source {
+        return Err("`-g` writes DWARF, which rsasm does not write into COFF objects yet".into());
+    }
     // Flat binary output has no relocations to defer to a linker.
     if a.format == Format::Binary {
         a.options.relocatable = false;

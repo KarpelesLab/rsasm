@@ -54,6 +54,7 @@ ${AWK:-awk} '
   $1 == "RelocationCount:" { aux = aux " relocs=" $2 }
   $1 == "Checksum:" { aux = aux " sum=" $2 }
   $1 == "Selection:" { aux = aux " select=" $2 }
+  $1 == "AssocSection:" { aux = aux " assoc=" $2 }
   $1 == "Linked:" { aux = aux " linked=" field($0) }
   $1 == "FileName:" { aux = aux " file=" field($0) }
   $1 == "}" && name != "" {
