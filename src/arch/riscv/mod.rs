@@ -135,12 +135,32 @@ impl Architecture for Riscv {
         true
     }
 
+    /// llvm-mc, the reference, aligns `.text` to the size of the shortest
+    /// instruction in effect when the file starts: 2 bytes with compressed
+    /// instructions, 4 without. GNU as does the same.
+    fn section_align(
+        &self,
+        state: &ArchState,
+        name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        match name {
+            ".text" if rvc_enabled(state) => 2,
+            ".text" => 4,
+            _ => 1,
+        }
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
+    }
+
+    fn difference_relocs(&self, size: u8) -> Option<(u32, u32)> {
+        reloc::difference(size)
     }
 
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {

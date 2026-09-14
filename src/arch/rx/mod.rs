@@ -31,7 +31,7 @@
 //!   bytes back gets a 16-bit field that silently wraps and branches forward.
 //!   rsasm takes the 6-byte `bra.a` pair there, which reaches. (Its other
 //!   relaxation rules, shrinking included, are followed; see
-//!   [`Architecture::relaxation_may_shrink`].)
+//!   [`Relaxation::Shrinking`](crate::arch::Relaxation::Shrinking).)
 //! - A displacement must be a constant or a difference of labels, as in GNU
 //!   as, but its `%gp()` exception is not supported.
 //! - What needs one of GNU as's relocation expressions, a stack of `R_RX_SYM`
@@ -125,8 +125,8 @@ impl Architecture for Rx {
     /// `rx_relax_frag` in GNU as re-picks each branch and immediate size on
     /// every pass, so a `bne` that was too close for `.s` at first takes `.s`
     /// once the code it jumps over has grown.
-    fn relaxation_may_shrink(&self) -> bool {
-        true
+    fn relaxation(&self) -> crate::arch::Relaxation {
+        crate::arch::Relaxation::Shrinking
     }
 
     fn pcrel_number_is_address(&self) -> bool {

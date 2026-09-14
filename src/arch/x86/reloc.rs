@@ -33,6 +33,9 @@ mod x86_64 {
     pub const PC16: u32 = 13;
     pub const ABS8: u32 = 14;
     pub const PC8: u32 = 15;
+    pub const GOTOFF64: u32 = 25;
+    pub const GOTPC32: u32 = 26;
+    pub const GOT64: u32 = 27;
     pub const PC64: u32 = 24;
 }
 
@@ -41,6 +44,8 @@ mod i386 {
     pub const PC32: u32 = 2;
     pub const GOT32: u32 = 3;
     pub const PLT32: u32 = 4;
+    pub const GOTOFF: u32 = 9;
+    pub const GOTPC: u32 = 10;
     pub const ABS16: u32 = 20;
     pub const PC16: u32 = 21;
     pub const ABS8: u32 = 22;
@@ -101,6 +106,16 @@ impl Abi {
         }
     }
 
+    /// `reloc`, with `PLT32` turned into `PC32`: what GNU as writes for a
+    /// PC-relative reference to a local label, which has no PLT entry.
+    pub fn plt_as_pc32(self, reloc: u32) -> u32 {
+        if reloc == self.plt32() {
+            self.pcrel(4).expect("both ABIs have PC32")
+        } else {
+            reloc
+        }
+    }
+
     pub fn got32(self) -> u32 {
         match self {
             Abi::X86_64 => x86_64::GOT32,
@@ -113,6 +128,38 @@ impl Abi {
         match self {
             Abi::X86_64 => Some(x86_64::GOTPCREL),
             Abi::I386 => None,
+        }
+    }
+
+    /// The relocation NASM's `wrt ..got` selects: the address of the symbol's
+    /// GOT slot as a 64-bit value (`GOT64`), its 32-bit form on i386
+    /// (`GOT32`), or, on a RIP-relative field, the PC-relative `GOTPCREL`.
+    pub fn got(self, size: u8, pcrel: bool) -> Option<u32> {
+        match (self, pcrel, size) {
+            (Abi::X86_64, true, _) => Some(x86_64::GOTPCREL),
+            (Abi::X86_64, false, 8) => Some(x86_64::GOT64),
+            (Abi::X86_64, false, 4) => Some(x86_64::GOT32),
+            (Abi::I386, false, 4) => Some(i386::GOT32),
+            _ => None,
+        }
+    }
+
+    /// `wrt ..gotoff`, the offset of the symbol from the GOT base: 64-bit on
+    /// x86-64, 32-bit on i386.
+    pub fn gotoff(self, size: u8) -> Option<u32> {
+        match (self, size) {
+            (Abi::X86_64, 8) => Some(x86_64::GOTOFF64),
+            (Abi::I386, 4) => Some(i386::GOTOFF),
+            _ => None,
+        }
+    }
+
+    /// `wrt ..gotpc`, the distance from the field to the GOT base.
+    pub fn gotpc(self, size: u8) -> Option<u32> {
+        match (self, size) {
+            (Abi::X86_64, 4) => Some(x86_64::GOTPC32),
+            (Abi::I386, 4) => Some(i386::GOTPC),
+            _ => None,
         }
     }
 }

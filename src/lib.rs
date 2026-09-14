@@ -30,6 +30,7 @@ pub mod lexer;
 pub mod literals;
 pub mod macros;
 pub mod mapping;
+pub(crate) mod nasm;
 pub mod output;
 pub mod parser;
 pub mod section;

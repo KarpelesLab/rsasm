@@ -108,6 +108,14 @@ impl Architecture for V850 {
         36
     }
 
+    /// GNU as measures a branch it leaves to the linker from the start of
+    /// the section when the target is a global symbol in the branch's own
+    /// section, and writes that into the displacement anyway. To a weak one
+    /// it leaves zero, as to a symbol elsewhere.
+    fn relocated_pcrel_field(&self, binding: crate::symbol::Binding, pc: u64) -> Option<i64> {
+        (binding != crate::symbol::Binding::Weak).then_some(-(pc as i64))
+    }
+
     /// `EF_V850_RH850_ABI` (the top nibble GNU as writes for both CPU
     /// names), plus `EF_RH850_V3` (0x0010_0000) when the file ends in RH850
     /// mode, whether that came from the target name or `.v850e3v5`.

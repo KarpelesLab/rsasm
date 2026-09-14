@@ -158,6 +158,28 @@ impl Architecture for Arm {
         true
     }
 
+    /// GNU as, the reference for ARM objects, gives a section no alignment
+    /// of its own: the first instruction assembled into it raises it, to 4
+    /// bytes for ARM and 2 for Thumb (see `code_mapping`), where llvm-mc
+    /// aligns `.text` to 4 bytes from the start. `tools/mc-diff` records
+    /// the difference.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        _name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        1
+    }
+
+    /// GNU as relocates a branch to a global or weak symbol in the same
+    /// section, but resolves a field that has no relocation even then: a
+    /// literal load, an `adr`, and a 16-bit branch to a symbol no other
+    /// object can replace (`interwork` widens the others).
+    fn defers_to_linker(&self, r: &crate::arch::SameSectionRef<'_>) -> bool {
+        r.reloc != 0 && r.binding != crate::symbol::Binding::Local
+    }
+
     fn word_bytes(&self) -> u8 {
         4
     }
@@ -210,8 +232,8 @@ impl Architecture for Arm {
 
     /// Thumb branches, literal loads and `adr` are sized as GNU as's
     /// `arm_relax_frag` sizes them.
-    fn relaxes_each_pass(&self) -> bool {
-        true
+    fn relaxation(&self) -> crate::arch::Relaxation {
+        crate::arch::Relaxation::EachPass
     }
 
     fn code_mapping(&self, state: &ArchState) -> Option<(&'static str, u64)> {
@@ -327,7 +349,8 @@ impl Architecture for Arm {
                 IW_THUMB_BLX if local && thumb => thumb_bl,
                 IW_ARM_JUMP if thumb => Interwork::Relocate,
                 IW_THUMB_JUMP if arm => Interwork::Relocate,
-                _ if t.global => Interwork::Relocate,
+                // A branch to a global symbol is the core's to leave to the
+                // linker; see `defers_to_linker`.
                 _ => Interwork::AsWritten,
             };
         }

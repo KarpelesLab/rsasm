@@ -270,8 +270,13 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     let mut sec_index: HashMap<SectionId, u16> = HashMap::new();
     let mut emitted: Vec<SectionId> = Vec::new();
 
+    // NASM always emits the default `.text`, even with nothing in it, since
+    // its standard macros make it the initial section; a data-only NASM
+    // program still has an (empty) `.text` in its object.
+    let nasm_text = asm.options.dialect == crate::lexer::Dialect::Nasm;
     for s in &asm.sections {
-        if s.size == 0 && s.frags.is_empty() {
+        let keep_empty = nasm_text && s.id == SectionId(0) && asm.interner.get(s.name) == ".text";
+        if s.size == 0 && s.frags.is_empty() && !keep_empty {
             continue;
         }
         let idx = shdrs.len() as u16;
@@ -626,7 +631,8 @@ fn collect_symbols(
 
         let bind = match sym.binding {
             // An undefined symbol is the linker's to find, so it is global
-            // even though nothing declared it so.
+            // whether or not the source said `.globl`, as in both references;
+            // a linker refuses a local one.
             Binding::Local if !sym.is_defined() => STB_GLOBAL,
             Binding::Local => STB_LOCAL,
             Binding::Global => STB_GLOBAL,
@@ -672,8 +678,7 @@ fn collect_symbols(
             value,
             size,
         };
-        // An undefined symbol is always global: the linker has to find it.
-        if bind == STB_LOCAL && sym.is_defined() {
+        if bind == STB_LOCAL {
             locals.push(out);
         } else {
             globals.push(out);

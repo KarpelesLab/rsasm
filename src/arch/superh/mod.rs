@@ -151,8 +151,14 @@ impl Architecture for SuperH {
     }
 
     /// `sh-elf-as` sizes branches with GNU as's generic relaxation.
-    fn relaxes_in_order(&self) -> bool {
-        true
+    fn relaxation(&self) -> crate::arch::Relaxation {
+        crate::arch::Relaxation::InOrder
+    }
+
+    /// `sh-elf-as` resolves a branch or PC-relative load to any symbol in the
+    /// same section, weak ones included.
+    fn defers_to_linker(&self, _r: &crate::arch::SameSectionRef<'_>) -> bool {
+        false
     }
 
     /// `sh-elf-as` refuses a `.word` or `.long` off its own boundary

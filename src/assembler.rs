@@ -74,8 +74,8 @@ enum RepeatKind {
 }
 
 /// A file being assembled, read a statement at a time.
-struct Reader {
-    parser: Parser,
+pub(crate) struct Reader {
+    pub(crate) parser: Parser,
     /// The [`Assembler::lex_epoch`] the parser's lexing rules were taken at.
     epoch: u64,
 }
@@ -120,7 +120,7 @@ pub struct Assembler {
     /// without comparing configurations on every statement.
     lex_epoch: u64,
     /// The anonymous label standing in for `.` in the current statement.
-    here_sym: Option<SymbolId>,
+    pub(crate) here_sym: Option<SymbolId>,
     cond: Vec<Cond>,
     /// Guards against runaway `.include` recursion.
     include_depth: u32,
@@ -157,6 +157,8 @@ pub struct Assembler {
     pub(crate) literal_pools: HashMap<SectionId, Vec<crate::arch::LiteralRequest>>,
     /// The mapping symbols of the finished object; see [`crate::mapping`].
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
+    /// The NASM dialect's preprocessor and assembler state.
+    pub(crate) nasm: crate::nasm::State,
 }
 
 impl Assembler {
@@ -205,6 +207,7 @@ impl Assembler {
             ccrx_sections: HashMap::new(),
             literal_pools: HashMap::new(),
             mapping_symbols: Vec::new(),
+            nasm: crate::nasm::State::default(),
         };
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
@@ -215,6 +218,17 @@ impl Assembler {
             }
         }
         asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
+        if asm.options.dialect == Dialect::Nasm {
+            // NASM operands are Intel's, and its ELF writer aligns `.text` to
+            // 16; its standard macros are defined before any source is read.
+            if asm.options.syntax.is_none() {
+                asm.arch_state.syntax = Syntax::Intel;
+            }
+            if asm.options.relocatable {
+                asm.sections[0].align = 16;
+            }
+            asm.nasm_prelude();
+        }
         asm
     }
 
@@ -245,7 +259,12 @@ impl Assembler {
         }
         let id = SectionId(self.sections.len() as u32);
         let mut s = Section::new(id, name, kind, flags);
-        s.align = align.max(1);
+        // The backend active where a section is first named decides its
+        // starting alignment, as the reference for that backend would.
+        let default = self
+            .arch
+            .section_align(&self.arch_state, self.interner.get(name), &flags);
+        s.align = align.max(default).max(1);
         s.mark_arch(self.arch_slot);
         self.sections.push(s);
         self.section_ids.insert(name, id);
@@ -293,7 +312,7 @@ impl Assembler {
     // ---- symbols ----------------------------------------------------------
 
     /// Creates an unnamed label pinned to the current position.
-    fn anon_label(&mut self, span: Span) -> SymbolId {
+    pub(crate) fn anon_label(&mut self, span: Span) -> SymbolId {
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
         let section = self.cur;
@@ -307,7 +326,7 @@ impl Assembler {
         id
     }
 
-    fn define_label(&mut self, label: &LabelDef) {
+    pub(crate) fn define_label(&mut self, label: &LabelDef) {
         let (id, span) = match *label {
             LabelDef::Named(name, span) => {
                 let id = self.symbols.intern(name, span);
@@ -397,13 +416,18 @@ impl Assembler {
 
     /// The lexing rules for source read from now on: the dialect's, and in
     /// the GNU dialect the active backend's comment characters and tuning.
-    fn lex_config(&self) -> LexConfig {
+    /// The 8-bit dialect needs the backend's mnemonics to tell a label in the
+    /// first column from an instruction.
+    pub(crate) fn lex_config(&self) -> LexConfig {
         let mut config = LexConfig::for_dialect(self.options.dialect);
         if self.options.dialect == Dialect::Gas {
             let c = self.arch.comments();
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
             self.arch.tune_lexer(&mut config);
+        }
+        if self.options.dialect == Dialect::EightBit {
+            config.mnemonic = self.arch.mnemonics();
         }
         config
     }
@@ -412,7 +436,7 @@ impl Assembler {
     /// now. A statement is read only once the one before it has been carried
     /// out, so an `.arch` switch, in the file itself or in anything it
     /// includes or expands, applies from the next statement on.
-    fn next_statement(&mut self, reader: &mut Reader) -> Option<Statement> {
+    pub(crate) fn next_statement(&mut self, reader: &mut Reader) -> Option<Statement> {
         if self.diags.saturated() {
             return None;
         }
@@ -433,6 +457,11 @@ impl Assembler {
     /// `.macro` and the repeat directives consume statements that follow
     /// them, so the handlers read from `reader` too.
     fn run(&mut self, reader: &mut Reader) {
+        // NASM source goes through its preprocessor a line at a time.
+        if self.options.dialect == Dialect::Nasm {
+            self.run_nasm(reader);
+            return;
+        }
         while let Some(stmt) = self.next_statement(reader) {
             let more = self.run_statement(&stmt, reader);
             // Reusing the token buffer keeps an allocation and a free per
@@ -624,13 +653,19 @@ impl Assembler {
         // CC-RL, CC-RH and CC-RX write `NAME .MACRO params`, with the name in
         // the symbol field, and CC-RH allows the parameters in parentheses
         // (CC-RL page 527, CC-RH page 460, CC-RX R20UT3248EJ0115 page 486).
+        // vasm and AS write it that way in the 8-bit dialect too, and AS puts
+        // the parameters after the keyword: `LOAD MACRO VAL,ADDR`.
+        let eight_bit = self.options.dialect == Dialect::EightBit;
         let label_name = match (cc, stmt.symbol, stmt.labels.as_slice()) {
             (true, Some((n, _)), _) => Some(self.interner.get(n).to_string()),
-            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() => {
+            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() || eight_bit => {
                 Some(self.interner.get(*n).to_string())
             }
             _ => None,
         };
+        if eight_bit && label_name.is_some() {
+            params_text = header.trim();
+        }
         if cc {
             name_text = "";
             params_text = header.trim();
@@ -854,6 +889,10 @@ impl Assembler {
         let text = if self.options.dialect.renesas_cc() {
             let bindings = self.cc_local_bindings(&def.body, &bindings);
             self.cc_substitute(&def.body, &bindings)
+        } else if self.options.dialect == Dialect::EightBit && !def.params.is_empty() {
+            // ca65 names its parameters in the body as plain words. With no
+            // parameters declared, vasm's `\1` is what the body uses.
+            macros::substitute_words(&def.body, &bindings, '\0', false)
         } else {
             macros::substitute_with(&def.body, &bindings, counter, positional)
         };
@@ -1124,22 +1163,13 @@ impl Assembler {
         self.slot_arch(self.sections[si].arch_slot(fi) as usize)
     }
 
-    /// Whether any backend the source used may shrink an instruction during
-    /// relaxation; see [`Architecture::relaxation_may_shrink`].
-    pub(crate) fn any_arch_shrinks(&self) -> bool {
-        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxation_may_shrink())
-    }
-
-    /// Whether any backend the source used picks sizes afresh on each pass;
-    /// see [`Architecture::relaxes_each_pass`].
-    pub(crate) fn any_arch_relaxes_each_pass(&self) -> bool {
-        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxes_each_pass())
-    }
-
-    /// Whether any backend the source used sizes branches in one walk
-    /// through each section; see [`Architecture::relaxes_in_order`].
-    pub(crate) fn any_arch_relaxes_in_order(&self) -> bool {
-        (0..self.arch_slots.len()).any(|s| self.slot_arch(s).0.relaxes_in_order())
+    /// How the file's instruction sizes are picked: the most refined
+    /// [`Relaxation`](crate::arch::Relaxation) of any backend the source used.
+    pub(crate) fn relaxation(&self) -> crate::arch::Relaxation {
+        (0..self.arch_slots.len())
+            .map(|s| self.slot_arch(s).0.relaxation())
+            .max()
+            .unwrap_or(crate::arch::Relaxation::FromLastPass)
     }
 
     /// The backend the output is for: the one the assembler was created
@@ -1259,9 +1289,23 @@ impl Assembler {
                         && stmt.toks[stmt.args - 1]
                             .ident()
                             .is_some_and(|w| self.interner.get(w).eq_ignore_ascii_case(".set"));
+                    // The 8-bit dialect's redefinable `DEFL`, `SET` and
+                    // `.set` count the same way, where the value is a number
+                    // already; one that refers to a label keeps it.
+                    let counts = self.options.dialect == Dialect::EightBit
+                        && stmt.args >= 1
+                        && stmt.toks[stmt.args - 1].ident().is_some_and(|w| {
+                            let w = self.interner.get(w);
+                            [".set", "set", "defl"]
+                                .iter()
+                                .any(|k| w.eq_ignore_ascii_case(k))
+                        });
                     let value = if is_set {
                         self.eval_absolute(e, "a `.SET` value")
                             .map(|v| self.exprs.int(v as u64, self.exprs.span(e)))
+                    } else if counts && let Some(v) = self.eval_ref(e).ok().and_then(|v| v.as_abs())
+                    {
+                        Some(self.exprs.int(v as u64, self.exprs.span(e)))
                     } else {
                         Some(e)
                     };
@@ -1285,7 +1329,12 @@ impl Assembler {
             Some(Body::SetLocation { span }) => {
                 let mut cur = stmt.arg_cursor();
                 if let Some(e) = self.parse_expr(&mut cur) {
-                    self.emit_org(e, 0, *span);
+                    // `* = $1000` is `ORG $1000` to the 8-bit references.
+                    if self.options.dialect == Dialect::EightBit {
+                        self.origin(e, *span);
+                    } else {
+                        self.emit_org(e, 0, *span);
+                    }
                 }
                 self.expect_end(&mut cur);
             }
@@ -1299,7 +1348,8 @@ impl Assembler {
     /// has a constant value with that value.
     ///
     /// A CC-RL/CC-RH `.SET` symbol may be redefined, and every use means the
-    /// value it had there (CC-RL page 504; CC-RH page 435). Instruction
+    /// value it had there (CC-RL page 504; CC-RH page 435), as does one
+    /// defined with `DEFL` or `SET` in the 8-bit dialect. Instruction
     /// operands are otherwise evaluated once the whole file is read, when only
     /// the last value is left.
     fn bind_set_values(&mut self, mark: usize) {
@@ -1335,13 +1385,40 @@ impl Assembler {
         }
     }
 
+    /// Binds the location counter in one item of a data list to where that
+    /// item is emitted, rather than to the start of the statement.
+    ///
+    /// `.long ., .` is two different addresses to GNU as, and `.word *, *`
+    /// to ca65 and vasm: each `.` is read as its item is. Instructions keep
+    /// the statement's start, which is also where they begin.
+    pub(crate) fn bind_here_to_item(&mut self, e: ExprRef) {
+        let mut here = Vec::new();
+        let mut stack = vec![e];
+        while let Some(r) = stack.pop() {
+            match &self.exprs.get(r).kind {
+                ExprKind::Here => here.push(r),
+                ExprKind::Unary(_, a) | ExprKind::Modifier(_, a) => stack.push(*a),
+                ExprKind::Binary(_, a, b) => stack.extend([*a, *b]),
+                _ => {}
+            }
+        }
+        if here.is_empty() {
+            return;
+        }
+        let span = self.exprs.span(e);
+        let label = self.anon_label(span);
+        for r in here {
+            self.exprs.set_kind(r, ExprKind::SymId(label));
+        }
+    }
+
     /// Rewrites `.` and `1f`/`1b` nodes created by this statement into direct
     /// symbol references, now that the statement's position is known.
-    fn bind_positional(&mut self, mark: usize) {
+    pub(crate) fn bind_positional(&mut self, mark: usize) {
         if self.exprs.len() == mark {
             return;
         }
-        if self.options.dialect.is_cc() {
+        if self.options.dialect.is_cc() || self.options.dialect == Dialect::EightBit {
             self.bind_set_values(mark);
         }
         let Assembler {
@@ -1388,6 +1465,7 @@ impl Assembler {
             dollar_is_here: self.options.dialect.dollar_is_here(),
             star_is_here: self.options.dialect.star_is_here(),
             dialect: self.options.dialect,
+            strings: Some(&self.pool),
         };
         p.parse(cur)
     }
@@ -1452,7 +1530,7 @@ impl Assembler {
         ))
     }
 
-    fn eval_ref_symbol(&self, id: SymbolId) -> Result<Value, EvalError> {
+    pub(crate) fn eval_ref_symbol(&self, id: SymbolId) -> Result<Value, EvalError> {
         let mut env = expr::SymbolEnv::new(&self.exprs, &self.symbols);
         env.symbol_value(id, Span::DUMMY)
     }
@@ -1541,11 +1619,61 @@ impl Assembler {
 
     fn instruction(&mut self, stmt: &Statement, mnemonic: Name, span: Span) {
         let operands = &stmt.toks[stmt.args.min(stmt.toks.len())..];
+        self.instruction_tokens(operands, mnemonic, span, stmt.span);
+    }
+
+    /// Assembles an instruction and emits it into the current section.
+    pub(crate) fn instruction_tokens(
+        &mut self,
+        operands: &[crate::lexer::Token],
+        mnemonic: Name,
+        mnemonic_span: Span,
+        span: Span,
+    ) {
+        let Some((variants, relaxable, requests)) =
+            self.assemble_instruction(operands, mnemonic, mnemonic_span, span)
+        else {
+            return;
+        };
+        // Motorola syntax aligns code as well as data; see `motorola_align`.
+        if self.options.dialect == Dialect::Motorola {
+            let unit = self.arch.align_unit();
+            self.align_to(unit, span);
+        }
+        if self.check_nobits(span) {
+            return;
+        }
+        self.map_code();
+        // A relaxable instruction ends GNU as's fragment, and with it the
+        // record of which instruction set later padding is for.
+        let settled = variants.len() == 1;
+        let idx = self.cur_section().emit_variants(variants, span);
+        self.cur_section().frags[idx as usize].relaxable = relaxable;
+        if settled && self.arch.pads_as_last_instruction() {
+            let state = self.arch_state.clone();
+            self.cur_section().nop_state = Some(state);
+        }
+        self.run_requests(requests, span);
+    }
+
+    /// The candidate encodings of an instruction, and whether its fragment
+    /// is one relaxation revisits, without emitting anything.
+    pub(crate) fn assemble_instruction(
+        &mut self,
+        operands: &[crate::lexer::Token],
+        mnemonic: Name,
+        mnemonic_span: Span,
+        span: Span,
+    ) -> Option<(
+        Vec<crate::section::Variant>,
+        bool,
+        Vec<crate::arch::Request>,
+    )> {
         let req = InsnRequest {
             mnemonic,
-            mnemonic_span: span,
+            mnemonic_span,
             operands,
-            span: stmt.span,
+            span,
         };
         // Disjoint field borrows keep the architecture object accessible while
         // it mutates the interner, expression arena and diagnostics.
@@ -1579,26 +1707,7 @@ impl Assembler {
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;
         let requests = std::mem::take(&mut cx.requests);
-        let Some(variants) = variants else { return };
-        // Motorola syntax aligns code as well as data; see `motorola_align`.
-        if self.options.dialect == Dialect::Motorola {
-            let unit = self.arch.align_unit();
-            self.align_to(unit, stmt.span);
-        }
-        if self.check_nobits(stmt.span) {
-            return;
-        }
-        self.map_code();
-        // A relaxable instruction ends GNU as's fragment, and with it the
-        // record of which instruction set later padding is for.
-        let settled = variants.len() == 1;
-        let idx = self.cur_section().emit_variants(variants, stmt.span);
-        self.cur_section().frags[idx as usize].relaxable = relaxable;
-        if settled && self.arch.pads_as_last_instruction() {
-            let state = self.arch_state.clone();
-            self.cur_section().nop_state = Some(state);
-        }
-        self.run_requests(requests, stmt.span);
+        variants.map(|v| (v, relaxable, requests))
     }
 }
 
@@ -1619,8 +1728,14 @@ impl EvalCtx for Env<'_> {
     fn symbol_value(&mut self, id: SymbolId, span: Span) -> Result<Value, EvalError> {
         self.symbols.get_mut(id).used = true;
         match self.symbols.get(id).value.clone() {
-            // An `.equ` chain is followed through; anything else stays
-            // symbolic until addresses are known.
+            // An `.equ` chain is followed through, unless it ends at a label:
+            // then the name stands for that address itself, as a label's
+            // does. Both references go by that name to decide whether a
+            // reference can be preempted and which symbol a relocation
+            // names, so after `.set alias, sym` a local `alias` is resolved
+            // and relocated against `sym`'s section even where `sym` is
+            // global, and a global `alias` is relocated against itself.
+            // Anything else stays symbolic until addresses are known.
             SymbolValue::Expr(e) => {
                 if self.depth > 64 {
                     return Err(EvalError::new(span, "symbol definition is circular"));
@@ -1629,7 +1744,21 @@ impl EvalCtx for Env<'_> {
                 let exprs = self.exprs;
                 let v = expr::eval(exprs, e, self);
                 self.depth -= 1;
-                v
+                match v {
+                    // A label, or an alias that already stands for one.
+                    Ok(Value {
+                        plus: Some(p),
+                        minus: None,
+                        ..
+                    }) if matches!(
+                        self.symbols.get(p).value,
+                        SymbolValue::Label { .. } | SymbolValue::Expr(_)
+                    ) =>
+                    {
+                        Ok(Value::sym(id, 0))
+                    }
+                    v => v,
+                }
             }
             _ => Ok(Value::sym(id, 0)),
         }

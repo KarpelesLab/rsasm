@@ -95,6 +95,17 @@ impl Architecture for Sparc {
         4
     }
 
+    /// llvm-mc, the reference, aligns `.text` to 4 bytes; GNU as leaves it
+    /// at 1.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        if name == ".text" { 4 } else { 1 }
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         if pcrel {
             reloc::pcrel(size)

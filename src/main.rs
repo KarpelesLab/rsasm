@@ -15,11 +15,11 @@ usage: rsasm [options] <input.s>...
 options:
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default) or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
-                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH) or
-                     ccrx (Renesas CC-RX)
+                     ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
+                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)
@@ -41,6 +41,9 @@ struct Args {
     color: bool,
     /// Whether `-d` was given; otherwise the architecture picks.
     dialect_given: bool,
+    /// The ELF class `-f elf32` or `-f elf64` named, which picks the
+    /// architecture when `-a` does not.
+    elf_bits: Option<u8>,
 }
 
 fn main() -> ExitCode {
@@ -74,6 +77,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         hex: false,
         color: std::io::IsTerminal::is_terminal(&std::io::stderr()),
         dialect_given: false,
+        elf_bits: None,
     };
     let mut i = 0;
     // A value may be written `-o x`, `-ox` or `--out=x`.
@@ -101,6 +105,11 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             "-f" | "--format" => {
                 let v = next(&mut i, arg)?;
                 a.format = Format::from_name(&v).ok_or_else(|| format!("unknown format `{v}`"))?;
+                a.elf_bits = match v.as_str() {
+                    "elf32" => Some(32),
+                    "elf64" => Some(64),
+                    _ => None,
+                };
             }
             "-s" | "--syntax" => {
                 let v = next(&mut i, arg)?;
@@ -176,8 +185,16 @@ fn run(args: Args) -> Result<ExitCode, String> {
                 arch::available().join(", ")
             )
         })?,
-        None => arch::default_arch()
-            .ok_or_else(|| "this build has no architecture backends enabled".to_string())?,
+        // NASM's defaults: a flat binary starts in 16-bit mode. And an ELF
+        // class, however the source is written, names the x86 machine.
+        None => match (args.options.dialect, args.format, args.elf_bits) {
+            (Dialect::Nasm, Format::Binary, _) => arch::lookup("i8086"),
+            (_, Format::Elf, Some(32)) => arch::lookup("i386"),
+            (_, Format::Elf, Some(64)) => arch::lookup("x86-64"),
+            _ => None,
+        }
+        .or_else(arch::default_arch)
+        .ok_or_else(|| "this build has no architecture backends enabled".to_string())?,
     };
 
     let mut options = args.options.clone();
@@ -191,7 +208,12 @@ fn run(args: Args) -> Result<ExitCode, String> {
     if !args.defines.is_empty() {
         let mut src = String::new();
         for (k, v) in &args.defines {
-            src.push_str(&format!(".set {k}, {v}\n"));
+            // NASM's `-D` defines a single-line macro.
+            if asm.options.dialect == Dialect::Nasm {
+                src.push_str(&format!("%define {k} {v}\n"));
+            } else {
+                src.push_str(&format!(".set {k}, {v}\n"));
+            }
         }
         asm.assemble_str("<command line>", &src);
     }

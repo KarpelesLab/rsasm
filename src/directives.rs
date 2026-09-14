@@ -30,6 +30,14 @@ impl Assembler {
             self.run_alias(stmt, alias);
             return;
         }
+        // In the 8-bit dialect a dotted word is ca65's, whose meaning can
+        // differ from the GNU as directive of the same name (`.org`).
+        if let Some(bare) = text.strip_prefix('.')
+            && let Some(alias) = crate::dialect::lookup_dotted(self.options.dialect, bare)
+        {
+            self.run_alias(stmt, alias);
+            return;
+        }
         // CC-RL, CC-RH and CC-RX have tables of their own; the `$` control
         // instructions of the first two keep the `$` in their name.
         if self.options.dialect.renesas_cc()
@@ -238,7 +246,22 @@ impl Assembler {
     /// Offers a directive to the architecture backend. Returns whether the
     /// backend claimed it.
     pub(crate) fn arch_directive(&mut self, stmt: &Statement, text: &str) -> bool {
-        let mut cur = stmt.arg_cursor();
+        let args = &stmt.toks[stmt.args.min(stmt.toks.len())..];
+        self.arch_directive_tokens(text, args)
+    }
+
+    /// [`Assembler::arch_directive`], for arguments that are not a statement's.
+    pub(crate) fn arch_directive_tokens(
+        &mut self,
+        text: &str,
+        args: &[crate::lexer::Token],
+    ) -> bool {
+        // Where a pool or padding the directive asks for is blamed.
+        let span = match (args.first(), args.last()) {
+            (Some(a), Some(b)) => a.span.to(b.span),
+            _ => Span::DUMMY,
+        };
+        let mut cur = Cursor::new(args);
         let Assembler {
             arch,
             interner,
@@ -268,7 +291,7 @@ impl Assembler {
         };
         if arch.directive(&mut cx, text, &mut cur) {
             let requests = std::mem::take(&mut cx.requests);
-            self.run_requests(requests, stmt.span);
+            self.run_requests(requests, span);
             self.expect_end(&mut cur);
             return true;
         }
@@ -340,9 +363,17 @@ impl Assembler {
             self.align_data(size as u64, span);
         }
         loop {
+            let mark = self.exprs.len();
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            // `.` in each value is the address of that value, not of the
+            // statement: `.long a - ., b - .` is two PC-relative values in
+            // GNU as and llvm-mc alike.
+            if self.here_sym.is_some() {
+                self.here_sym = Some(self.anon_label(span));
+                self.bind_positional(mark);
+            }
             self.emit_value(size, e, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
@@ -375,6 +406,7 @@ impl Assembler {
         if self.check_nobits(span) {
             return;
         }
+        self.bind_here_to_item(e);
         // Resolve now if it already has a value: a `.set` symbol is a
         // snapshot at each use, so a later redefinition must not reach back
         // and change bytes that were already emitted.

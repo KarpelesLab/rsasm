@@ -3,8 +3,8 @@
 //! Everything here predates SIMD; the vector families live in sibling modules.
 
 use super::{
-    CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NOTACC, ONLY64, Op, PLUSREG, WIDTHS, d,
-    opsize_bits,
+    CONDITIONS, DEF64, Def, IMM64, ModRm, NO_REX_W, NO64, NOTACC, ONLY64, Op, PLUSREG, WIDTHS, add,
+    d, opsize_bits,
 };
 use std::collections::HashMap;
 
@@ -22,9 +22,18 @@ fn alu_group(table: &mut HashMap<&'static str, Vec<Def>>, mnem: &'static str, ba
         defs.push(d(vec![Op::R(w), Op::Rm(w)], &[base + 3], ModRm::Reg, bits));
     }
 
-    // Immediate forms. The sign-extended `imm8` encodings come first so the
-    // matcher prefers them whenever the value fits.
+    // Immediate forms. The 8-bit accumulator form (`add al, imm8`) is a byte
+    // shorter than the ModRM one and has no sign-extended rival, so it comes
+    // first; GNU as and NASM both prefer it.
+    defs.push(d(
+        vec![Op::Fixed("al"), Op::Imm(1)],
+        &[base + 4],
+        ModRm::None,
+        8,
+    ));
     defs.push(d(vec![Op::Rm(1), Op::Imm(1)], &[0x80], ModRm::Ext(ext), 8));
+    // The wider sign-extended `imm8` encodings come first so the matcher
+    // prefers them whenever the value fits.
     for w in WIDTHS {
         let bits = opsize_bits(w);
         defs.push(d(
@@ -34,14 +43,8 @@ fn alu_group(table: &mut HashMap<&'static str, Vec<Def>>, mnem: &'static str, ba
             bits,
         ));
     }
-    // `op al, imm8` and `op eAX, imm32` are one byte shorter than the ModRM
-    // forms, so they are tried before them but after imm8-sign-extended.
-    defs.push(d(
-        vec![Op::Fixed("al"), Op::Imm(1)],
-        &[base + 4],
-        ModRm::None,
-        8,
-    ));
+    // `op eAX, imm32` is one byte shorter than the ModRM form, so it is tried
+    // before it but after the imm8-sign-extended forms.
     defs.push(d(
         vec![Op::Fixed("ax"), Op::Imm(2)],
         &[base + 5],
@@ -342,6 +345,21 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
 
     for (mnem, ext) in [("inc", 0u8), ("dec", 1)] {
         let mut defs = vec![d(vec![Op::Rm(1)], &[0xfe], ModRm::Ext(ext), 8)];
+        // The one-byte `40+r`/`48+r` forms exist only outside long mode, where
+        // those opcodes became the REX prefixes; they are shorter, so they win
+        // for a bare register there. In 64-bit mode only the ModRM form is
+        // encodable.
+        for w in [2u8, 4] {
+            defs.push(
+                d(
+                    vec![Op::R(w)],
+                    &[0x40 + ext * 8],
+                    ModRm::None,
+                    opsize_bits(w),
+                )
+                .flags(PLUSREG | NO64),
+            );
+        }
         for w in WIDTHS {
             defs.push(d(vec![Op::Rm(w)], &[0xff], ModRm::Ext(ext), opsize_bits(w)));
         }
@@ -376,6 +394,8 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
         vec![
             d(vec![Op::Rel(1)], &[0xeb], ModRm::None, 0),
             d(vec![Op::Rel(4)], &[0xe9], ModRm::None, 0),
+            d(vec![Op::IndirectRm(2)], &[0xff], ModRm::Ext(4), 16).flags(NO64),
+            d(vec![Op::IndirectRm(4)], &[0xff], ModRm::Ext(4), 32).flags(NO64),
             d(vec![Op::IndirectRm(8)], &[0xff], ModRm::Ext(4), 0).flags(DEF64),
         ],
     );
@@ -383,6 +403,8 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
         "call",
         vec![
             d(vec![Op::Rel(4)], &[0xe8], ModRm::None, 0),
+            d(vec![Op::IndirectRm(2)], &[0xff], ModRm::Ext(2), 16).flags(NO64),
+            d(vec![Op::IndirectRm(4)], &[0xff], ModRm::Ext(2), 32).flags(NO64),
             d(vec![Op::IndirectRm(8)], &[0xff], ModRm::Ext(2), 0).flags(DEF64),
         ],
     );
@@ -481,4 +503,349 @@ pub fn install(t: &mut HashMap<&'static str, Vec<Def>>) {
             ));
         }
     }
+
+    install_more(t);
+}
+
+/// The rest of the integer instruction set: the forms real-mode and
+/// 32-bit code lean on that the 64-bit-only corpora never exercised. Every
+/// encoding here was checked byte for byte against NASM 2.16.03; see
+/// `tools/nasm-diff`.
+fn install_more(t: &mut HashMap<&'static str, Vec<Def>>) {
+    // ---- push / pop, in every width and the segment registers ----------
+    // 32-bit register push/pop exist only outside long mode; the 16- and
+    // 64-bit forms are already in the table.
+    if let Some(defs) = t.get_mut("push") {
+        defs.push(d(vec![Op::R(4)], &[0x50], ModRm::None, 32).flags(PLUSREG | NO64));
+        defs.push(d(vec![Op::Rm(4)], &[0xff], ModRm::Ext(6), 32).flags(NO64));
+    }
+    if let Some(defs) = t.get_mut("pop") {
+        defs.push(d(vec![Op::R(4)], &[0x58], ModRm::None, 32).flags(PLUSREG | NO64));
+        defs.push(d(vec![Op::Rm(4)], &[0x8f], ModRm::Ext(0), 32).flags(NO64));
+    }
+    // The segment pushes and pops: one-byte opcodes for the low four, a `0F`
+    // pair for `fs`/`gs`. The low four are gone in long mode.
+    for (seg, push, pop) in [
+        ("es", 0x06u8, 0x07u8),
+        ("cs", 0x0e, 0x00),
+        ("ss", 0x16, 0x17),
+        ("ds", 0x1e, 0x1f),
+    ] {
+        add(
+            t,
+            "push",
+            vec![d(vec![Op::Fixed(seg)], &[push], ModRm::None, 0).flags(NO64)],
+        );
+        if pop != 0 {
+            add(
+                t,
+                "pop",
+                vec![d(vec![Op::Fixed(seg)], &[pop], ModRm::None, 0).flags(NO64)],
+            );
+        }
+    }
+    for (seg, hi) in [("fs", 0xa0u8), ("gs", 0xa8)] {
+        add(
+            t,
+            "push",
+            vec![d(vec![Op::Fixed(seg)], &[0x0f, hi], ModRm::None, 0)],
+        );
+        add(
+            t,
+            "pop",
+            vec![d(vec![Op::Fixed(seg)], &[0x0f, hi + 1], ModRm::None, 0)],
+        );
+    }
+
+    // ---- flags and registers en masse ----------------------------------
+    for (mnem, op, opsize, flags) in [
+        ("pusha", 0x60u8, 0u8, NO64),
+        ("pushad", 0x60, 32, NO64),
+        ("pushaw", 0x60, 16, NO64),
+        ("popa", 0x61, 0, NO64),
+        ("popad", 0x61, 32, NO64),
+        ("popaw", 0x61, 16, NO64),
+        ("pushf", 0x9c, 0, 0),
+        ("pushfd", 0x9c, 32, NO64),
+        ("pushfw", 0x9c, 16, 0),
+        ("pushfq", 0x9c, 0, ONLY64),
+        ("popf", 0x9d, 0, 0),
+        ("popfd", 0x9d, 32, NO64),
+        ("popfw", 0x9d, 16, 0),
+        ("popfq", 0x9d, 0, ONLY64),
+    ] {
+        t.insert(
+            mnem,
+            vec![d(vec![], &[op], ModRm::None, opsize).flags(flags)],
+        );
+    }
+
+    // ---- sign-extension of the accumulator ------------------------------
+    for (mnem, op, opsize) in [
+        ("cbw", 0x98u8, 16u8),
+        ("cwde", 0x98, 32),
+        ("cdqe", 0x98, 64),
+        ("cwd", 0x99, 16),
+        ("cdq", 0x99, 32),
+        ("cqo", 0x99, 64),
+    ] {
+        add(t, mnem, vec![d(vec![], &[op], ModRm::None, opsize)]);
+    }
+
+    // ---- string operations, word and dword forms ------------------------
+    // The byte and quadword forms are already installed; `movsd`/`cmpsd`
+    // with no operands are the string moves, distinct from the SSE rows.
+    for (base, op) in [
+        ("movs", 0xa4u8),
+        ("cmps", 0xa6),
+        ("stos", 0xaa),
+        ("lods", 0xac),
+        ("scas", 0xae),
+    ] {
+        for (suffix, opsize) in [("w", 16u8), ("d", 32)] {
+            let name: &'static str = Box::leak(format!("{base}{suffix}").into_boxed_str());
+            add(t, name, vec![d(vec![], &[op + 1], ModRm::None, opsize)]);
+        }
+    }
+
+    // ---- port I/O -------------------------------------------------------
+    for (acc, w) in [("al", 8u8), ("ax", 16), ("eax", 32)] {
+        let (op_imm, op_dx) = if w == 8 {
+            (0xe4u8, 0xecu8)
+        } else {
+            (0xe5, 0xed)
+        };
+        add(
+            t,
+            "in",
+            vec![d(
+                vec![Op::Fixed(acc), Op::Imm(1)],
+                &[op_imm],
+                ModRm::None,
+                w,
+            )],
+        );
+        add(
+            t,
+            "in",
+            vec![d(
+                vec![Op::Fixed(acc), Op::Fixed("dx")],
+                &[op_dx],
+                ModRm::None,
+                w,
+            )],
+        );
+        let (op_imm, op_dx) = if w == 8 {
+            (0xe6u8, 0xeeu8)
+        } else {
+            (0xe7, 0xef)
+        };
+        add(
+            t,
+            "out",
+            vec![d(
+                vec![Op::Imm(1), Op::Fixed(acc)],
+                &[op_imm],
+                ModRm::None,
+                w,
+            )],
+        );
+        add(
+            t,
+            "out",
+            vec![d(
+                vec![Op::Fixed("dx"), Op::Fixed(acc)],
+                &[op_dx],
+                ModRm::None,
+                w,
+            )],
+        );
+    }
+
+    // ---- bit test and scan ----------------------------------------------
+    for (mnem, rr, ext) in [
+        ("bt", 0xa3u8, 4u8),
+        ("bts", 0xab, 5),
+        ("btr", 0xb3, 6),
+        ("btc", 0xbb, 7),
+    ] {
+        let mut defs = Vec::new();
+        for w in WIDTHS {
+            defs.push(d(
+                vec![Op::Rm(w), Op::R(w)],
+                &[0x0f, rr],
+                ModRm::Reg,
+                opsize_bits(w),
+            ));
+        }
+        for w in WIDTHS {
+            defs.push(d(
+                vec![Op::Rm(w), Op::Imm(1)],
+                &[0x0f, 0xba],
+                ModRm::Ext(ext),
+                opsize_bits(w),
+            ));
+        }
+        t.insert(mnem, defs);
+    }
+    for (mnem, op) in [("bsf", 0xbcu8), ("bsr", 0xbd)] {
+        let defs = WIDTHS
+            .iter()
+            .map(|&w| {
+                d(
+                    vec![Op::R(w), Op::Rm(w)],
+                    &[0x0f, op],
+                    ModRm::Reg,
+                    opsize_bits(w),
+                )
+            })
+            .collect();
+        t.insert(mnem, defs);
+    }
+    // `bswap` only has 32- and 64-bit forms.
+    t.insert(
+        "bswap",
+        vec![
+            d(vec![Op::R(4)], &[0x0f, 0xc8], ModRm::None, 32).flags(PLUSREG),
+            d(vec![Op::R(8)], &[0x0f, 0xc8], ModRm::None, 64).flags(PLUSREG),
+        ],
+    );
+
+    // ---- atomic and double-shift ---------------------------------------
+    for (mnem, op8) in [("cmpxchg", 0xb0u8), ("xadd", 0xc0)] {
+        let mut defs = vec![d(vec![Op::Rm(1), Op::R(1)], &[0x0f, op8], ModRm::Reg, 8)];
+        for w in WIDTHS {
+            defs.push(d(
+                vec![Op::Rm(w), Op::R(w)],
+                &[0x0f, op8 + 1],
+                ModRm::Reg,
+                opsize_bits(w),
+            ));
+        }
+        t.insert(mnem, defs);
+    }
+    for (mnem, imm_op, cl_op) in [("shld", 0xa4u8, 0xa5u8), ("shrd", 0xac, 0xad)] {
+        let mut defs = Vec::new();
+        for w in WIDTHS {
+            defs.push(d(
+                vec![Op::Rm(w), Op::R(w), Op::Imm(1)],
+                &[0x0f, imm_op],
+                ModRm::Reg,
+                opsize_bits(w),
+            ));
+            defs.push(d(
+                vec![Op::Rm(w), Op::R(w), Op::Fixed("cl")],
+                &[0x0f, cl_op],
+                ModRm::Reg,
+                opsize_bits(w),
+            ));
+        }
+        t.insert(mnem, defs);
+    }
+
+    // ---- interrupt return, far return, stack frame ----------------------
+    // `iret` follows the operating mode; `iretw`/`iretd`/`iretq` pin a width.
+    add(t, "iret", vec![d(vec![], &[0xcf], ModRm::None, 0)]);
+    t.insert("iretd", vec![d(vec![], &[0xcf], ModRm::None, 32)]);
+    t.insert("iretw", vec![d(vec![], &[0xcf], ModRm::None, 16)]);
+    t.insert("iretq", vec![d(vec![], &[0xcf], ModRm::None, 64)]);
+    t.insert(
+        "retf",
+        vec![
+            d(vec![], &[0xcb], ModRm::None, 0),
+            d(vec![Op::Imm(2)], &[0xca], ModRm::None, 0),
+        ],
+    );
+    t.insert(
+        "enter",
+        vec![d(vec![Op::Imm(2), Op::Imm(1)], &[0xc8], ModRm::None, 0)],
+    );
+
+    // ---- loops and the ecx-conditional jump -----------------------------
+    for (mnem, op) in [
+        ("loop", 0xe2u8),
+        ("loope", 0xe1),
+        ("loopz", 0xe1),
+        ("loopne", 0xe0),
+        ("loopnz", 0xe0),
+        ("jecxz", 0xe3),
+        ("jrcxz", 0xe3),
+        ("jcxz", 0xe3),
+    ] {
+        t.insert(mnem, vec![d(vec![Op::Rel(1)], &[op], ModRm::None, 0)]);
+    }
+
+    // ---- descriptor tables and the machine-status word ------------------
+    for (mnem, ext) in [
+        ("sgdt", 0u8),
+        ("sidt", 1),
+        ("lgdt", 2),
+        ("lidt", 3),
+        ("smsw", 4),
+        ("lmsw", 6),
+    ] {
+        let width = if matches!(mnem, "smsw") { 2 } else { 0 };
+        t.insert(
+            mnem,
+            vec![d(vec![Op::M(width)], &[0x0f, 0x01], ModRm::Ext(ext), 0)],
+        );
+    }
+
+    // ---- segment, control and debug register moves ----------------------
+    if let Some(defs) = t.get_mut("mov") {
+        // Segment moves ignore REX.W; storing honours the operand-size
+        // prefix, loading does not.
+        defs.push(d(vec![Op::Rm(2), Op::SReg], &[0x8c], ModRm::Reg, 16));
+        defs.push(d(vec![Op::SReg, Op::Rm(2)], &[0x8e], ModRm::Reg, 0));
+        // Control and debug registers: r32 outside long mode, r64 within.
+        // The general register is the r/m operand (mod=11); the special
+        // register fills ModRM.reg. r32 outside long mode, r64 within.
+        for (reg_op, from_cr, to_cr) in [(Op::CReg, 0x20u8, 0x22u8), (Op::DReg, 0x21, 0x23)] {
+            defs.push(d(vec![Op::Rm(4), reg_op], &[0x0f, from_cr], ModRm::Reg, 0).flags(NO64));
+            defs.push(d(vec![reg_op, Op::Rm(4)], &[0x0f, to_cr], ModRm::Reg, 0).flags(NO64));
+            defs.push(d(vec![Op::Rm(8), reg_op], &[0x0f, from_cr], ModRm::Reg, 0).flags(ONLY64));
+            defs.push(d(vec![reg_op, Op::Rm(8)], &[0x0f, to_cr], ModRm::Reg, 0).flags(ONLY64));
+        }
+    }
+
+    // ---- the BCD and miscellaneous one-byte opcodes ---------------------
+    for (mnem, bytes, flags) in [
+        ("aaa", &[0x37u8] as &[u8], NO64),
+        ("daa", &[0x27], NO64),
+        ("aas", &[0x3f], NO64),
+        ("das", &[0x2f], NO64),
+        ("into", &[0xce], NO64),
+        ("xlatb", &[0xd7], 0),
+        ("xlat", &[0xd7], 0),
+        ("salc", &[0xd6], NO64),
+        ("lahf", &[0x9f], 0),
+        ("sahf", &[0x9e], 0),
+        ("iretq", &[0xcf], ONLY64),
+        ("wait", &[0x9b], 0),
+        ("fwait", &[0x9b], 0),
+        ("emms", &[0x0f, 0x77], 0),
+        ("rdmsr", &[0x0f, 0x32], 0),
+        ("wrmsr", &[0x0f, 0x30], 0),
+        ("rdpmc", &[0x0f, 0x33], 0),
+        ("sysenter", &[0x0f, 0x34], 0),
+        ("sysexit", &[0x0f, 0x35], 0),
+        ("clts", &[0x0f, 0x06], 0),
+        ("invd", &[0x0f, 0x08], 0),
+        ("wbinvd", &[0x0f, 0x09], 0),
+    ] {
+        add(t, mnem, vec![d(vec![], bytes, ModRm::None, 0).flags(flags)]);
+    }
+    // `aam`/`aad` take an optional base, defaulting to ten.
+    for (mnem, op) in [("aam", 0xd4u8), ("aad", 0xd5)] {
+        t.insert(
+            mnem,
+            vec![
+                d(vec![], &[op, 0x0a], ModRm::None, 0).flags(NO64),
+                d(vec![Op::Imm(1)], &[op], ModRm::None, 0).flags(NO64),
+            ],
+        );
+    }
+    // `int1`/`icebp`, and `ud2` is already present.
+    add(t, "int1", vec![d(vec![], &[0xf1], ModRm::None, 0)]);
+    add(t, "icebp", vec![d(vec![], &[0xf1], ModRm::None, 0)]);
 }

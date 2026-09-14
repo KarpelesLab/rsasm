@@ -19,13 +19,22 @@ lines, for anything that needs labels, branch relaxation or directives.
 The `<arch>` key and its llvm triple are listed in the `ARCHES` table at the
 top of `run.sh`.
 
-## Comparing relocations
+## Comparing objects
 
 Bytes alone cannot catch a missing or misdirected relocation: an unresolved
 field is zero either way. Snippets in `<arch>-relocs.txt`, in the same
 `=== <name>` format, are assembled into objects by both assemblers and compared
-on the `.text` bytes and on every relocation in every section — type, offset,
-target and addend — as `relocs.awk` prints them from `llvm-readobj`.
+whole, as `canon.sh` prints them from `llvm-readobj`:
+
+- every allocated, non-empty section, by name: its type, flags, size,
+  alignment and bytes. The ABI and attribute sections a reference adds on its
+  own (`.reginfo`, `.MIPS.abiflags`, `.riscv.attributes`, `.note.*`) are left
+  out.
+- every global, weak or undefined symbol: binding, type, visibility, section
+  and value. Local labels are left out, since which of them reach the symbol
+  table, and under what names, means nothing to a linker.
+- every relocation, by section and offset: type, offset, target and addend,
+  through `relocs.awk`.
 
 Targets are compared by what the linker makes of them. llvm-mc on RISC-V
 relocates against a local label where GNU as and rsasm use the label's section
@@ -34,17 +43,37 @@ plus an offset, and linkers read those alike, so both print as
 for: `R_RISCV_PCREL_LO12_*` names the `auipc` holding the high half, and lld
 finds it by the symbol's value, ignoring the addend, while a GOT entry belongs
 to a symbol. For those the symbol has to be a label, and prints as
-`@.text+0x40` with the addend apart.
+`@.text+0x40` with the addend apart. `tools/gas-diff` and `tools/xas-diff`
+compare their objects the same way, with the same script.
 
-The RISC-V corpora cover `auipc` pairs. They leave out, for now, where rsasm
-and llvm-mc 22 still write different (valid) relocations:
+Every target but x86-64 has a corpus (x86 objects are compared against GNU as,
+in `tools/gas-diff`). Each walks a symbol of every binding through the
+target's calls, branches and PC-relative loads, forwards and backwards, into
+another section and out of the file, and through data, plus the alignment of
+the standard sections. The RISC-V corpora also cover `auipc` pairs and the
+`R_RISCV_ADD`/`R_RISCV_SUB` pairs a difference the file cannot fold becomes.
+They leave out, for now, where rsasm and llvm-mc 22 still write different
+objects:
 
-- A conditional branch to an undefined symbol: llvm-mc inverts it around a
-  `jal` with `R_RISCV_JAL`; rsasm keeps the branch with `R_RISCV_BRANCH`.
-- `.word sym - .`: llvm-mc writes an `R_RISCV_ADD32`/`R_RISCV_SUB32` pair,
-  rsasm one `R_RISCV_32_PCREL`.
-- A PC-relative reference to a global or weak symbol in the same section,
-  which llvm-mc relocates and rsasm resolves (see README.md, "Known wrong").
+- A conditional branch that is left to the linker, to a symbol outside the
+  file or a global one in it: llvm-mc inverts it around a `jal` with
+  `R_RISCV_JAL`; rsasm keeps the branch with `R_RISCV_BRANCH`.
+
+And where the ARM and Thumb corpora follow GNU as instead, which is the
+reference for ARM objects (see `tools/xas-diff/README.md`), and llvm-mc
+answers differently, so the snippets there leave the case out and say so:
+
+- A `bl` to a local label in the same section: llvm-mc relocates it, so the
+  linker can make it a `blx`; GNU as and rsasm resolve it, making it a `blx`
+  themselves where the label is a Thumb function.
+- Section alignment: llvm-mc aligns `.text` to 4 bytes from the start; GNU as
+  and rsasm align a section when an instruction is assembled into it, to 4
+  bytes for ARM and 2 for Thumb. The snippets align their code sections.
+- The end of a code section: GNU as and rsasm pad it to its alignment, up to
+  a word; llvm-mc does not. The Thumb snippets end their sections on a word.
+
+The MIPS snippets start with `.set noreorder`, so that llvm-mc does not add a
+`nop` after each branch.
 
 ## The oracle is pinned to LLVM 22
 

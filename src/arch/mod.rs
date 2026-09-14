@@ -12,7 +12,7 @@ use crate::intern::{Interner, Name};
 use crate::lexer::{LitPool, Token};
 use crate::section::{FragKind, SectionId, Variant};
 use crate::source::Span;
-use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
+use crate::symbol::{Binding, SymbolId, SymbolTable, SymbolValue};
 
 #[cfg(feature = "x86")]
 pub mod x86;
@@ -94,6 +94,10 @@ impl Endian {
         v
     }
 }
+
+/// A bit of [`ArchState::features`] set by NASM's `default rel`: a memory
+/// operand with no register in it is RIP-relative. Only x86 reads it.
+pub const FEATURE_DEFAULT_REL: u64 = 1 << 63;
 
 /// Operand syntax flavour. Distinct from the [`crate::lexer::Dialect`]: GAS can
 /// assemble Intel-syntax operands via `.intel_syntax`, keeping `#` comments.
@@ -177,6 +181,57 @@ pub enum Literal {
     Const(i64),
     /// Anything else, which the entry relocates if it has to.
     Expr(ExprRef),
+}
+
+/// A PC-relative reference to a symbol defined in the fixup's own section,
+/// as [`Architecture::defers_to_linker`] is asked about it.
+#[derive(Copy, Clone, Debug)]
+pub struct SameSectionRef<'a> {
+    /// The binding of the symbol as written: `alias` in `call alias` after
+    /// `.set alias, target`, not `target`.
+    pub binding: Binding,
+    /// The relocation the reference would get, after any `@` modifier.
+    pub reloc: u32,
+    /// The `@` modifier, lowercased, if the reference was written with one.
+    pub modifier: Option<&'a str>,
+    /// Whether the instruction has more than one size to relax between.
+    pub relaxable: bool,
+}
+
+/// How relaxation picks instruction sizes, as each reference assembler does;
+/// see [`Architecture::relaxation`]. Where a file uses backends that relax
+/// differently, the one listed last here wins for the whole file, since each
+/// is a refinement of the ones before it.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Relaxation {
+    /// Every size is chosen at once from the previous pass's addresses, and
+    /// only grows. Layout starts each instruction at its smallest candidate,
+    /// which finds the smallest layout whenever a form that reaches a target
+    /// also reaches every nearer one.
+    FromLastPass,
+    /// Sizes are chosen walking each section in order, as GNU as's generic
+    /// `relax_frag` chooses them, and only grow. The two can settle on
+    /// different layouts: a branch that was out of reach at the previous
+    /// pass's addresses, and is back in reach once an alignment has absorbed
+    /// an earlier branch's growth, stays short when sized in order and grows
+    /// when not. SuperH's GNU as works this way.
+    InOrder,
+    /// Sizes are picked afresh on every pass, walking each section in order,
+    /// the way GNU as's ARM port picks them (`arm_relax_frag`). A target in a
+    /// fragment the walk has yet to reach is taken to have moved by the
+    /// growth so far, less what each alignment in between would absorb of it
+    /// (GNU's `relaxed_symbol_addr`), which can let a fragment shrink back. A
+    /// fragment that takes a larger candidate on a pass where nothing before
+    /// it grew keeps that size for good, which is how GNU as stops the walk
+    /// from cycling.
+    EachPass,
+    /// Every size is re-picked on each pass, and may shrink, with a target
+    /// ahead moved by the growth so far as decided by its last-pass address.
+    /// RX needs it: `bra.s` reaches 3 to 10 bytes forward, not 0 to 10, so a
+    /// branch that was too close early on can come within reach once the code
+    /// around it grows. GNU as's RX port re-picks every size for this reason,
+    /// under a limit on how often one fragment may flip.
+    Shrinking,
 }
 
 /// Mutable, architecture-specific assembler state.
@@ -315,11 +370,26 @@ impl AsmCtx<'_> {
             dollar_is_here: self.dialect.dollar_is_here(),
             star_is_here: self.dialect.star_is_here(),
             dialect: self.dialect,
+            strings: Some(self.pool),
         }
     }
 
     pub fn name(&self, n: Name) -> &str {
         self.interner.get(n)
+    }
+
+    /// The first relocation modifier (`foo wrt ..got`, `foo@PLT`) in an
+    /// expression, if any.
+    pub fn find_modifier_for(&self, e: crate::expr::ExprRef) -> Option<Name> {
+        use crate::expr::ExprKind::*;
+        match &self.exprs.get(e).kind {
+            Modifier(n, _) => Some(*n),
+            Unary(_, a) => self.find_modifier_for(*a),
+            Binary(_, a, b) => self
+                .find_modifier_for(*a)
+                .or_else(|| self.find_modifier_for(*b)),
+            _ => None,
+        }
     }
 
     /// The constant value of an expression, following `.set` definitions.
@@ -332,6 +402,33 @@ impl AsmCtx<'_> {
 
     pub fn error(&mut self, span: Span, msg: impl Into<String>) {
         self.diags.error(span, msg);
+    }
+
+    /// The address `e` has now, in a flat image: a constant, or a label whose
+    /// section starts at an address the source gave it (the 8-bit dialect's
+    /// `ORG`) with nothing between that start and the label that could change
+    /// size.
+    ///
+    /// ca65 reads a label after `.org` as the number it is, so it can choose
+    /// zero-page addressing for one defined earlier, just as it does for a
+    /// constant; this is what lets the 6502 backend do the same.
+    pub fn address_now(&self, e: crate::expr::ExprRef) -> Option<i64> {
+        let v = crate::expr::SymbolEnv::new(self.exprs, self.symbols).value(e)?;
+        let at = |id: SymbolId| -> Option<i64> {
+            let (section, frag) = self.label_position(id)?;
+            let origin = self.sections[section.0 as usize].origin?;
+            let d = self.fixed_distance((section, 0), (section, frag))?;
+            Some(origin as i64 + d)
+        };
+        let plus = match v.plus {
+            Some(p) => at(p)?,
+            None => 0,
+        };
+        let minus = match v.minus {
+            Some(m) => at(m)?,
+            None => 0,
+        };
+        Some(v.addend + plus - minus)
     }
 
     /// Where a label was defined: its section, and the index of the fragment
@@ -462,6 +559,14 @@ pub trait Architecture {
         crate::lexer::Dialect::Gas
     }
 
+    /// Recognises this backend's mnemonics, lowercased, for the 8-bit dialect,
+    /// in which a word in the first column is a label unless it names an
+    /// instruction or a directive. `None`, the default, makes every such word
+    /// that is not a directive a label.
+    fn mnemonics(&self) -> Option<fn(&str) -> bool> {
+        None
+    }
+
     /// Adjusts GNU-dialect lexing beyond comment characters, for targets whose
     /// GNU as port differs: RL78's accepts `10H`, m68k's comments with `|`.
     /// Only called for the GNU dialect; the vendor dialects are fixed.
@@ -478,17 +583,10 @@ pub trait Architecture {
         2
     }
 
-    /// Whether relaxation may move an instruction back to a smaller form.
-    ///
-    /// Layout normally only grows candidates, starting from the smallest,
-    /// which finds the smallest layout whenever a form that reaches a target
-    /// also reaches every nearer one. RX breaks that: `bra.s` reaches 3 to 10
-    /// bytes forward, not 0 to 10, so a branch that was too close early on
-    /// can come within reach once the code around it grows. GNU as's RX port
-    /// re-picks every size on each pass for this reason, and a backend that
-    /// returns true gets the same treatment.
-    fn relaxation_may_shrink(&self) -> bool {
-        false
+    /// How relaxation picks the sizes of instructions with more than one
+    /// encoding; see [`Relaxation`].
+    fn relaxation(&self) -> Relaxation {
+        Relaxation::FromLastPass
     }
 
     /// Whether `.short`, `.word`, `.int`, `.long` and `.quad` must each start
@@ -504,35 +602,6 @@ pub trait Architecture {
         false
     }
 
-    /// Whether sizes are chosen walking each section in order, as GNU as's
-    /// generic `relax_frag` chooses them, rather than all at once from the
-    /// previous pass's addresses.
-    ///
-    /// Both only grow, but they can settle on different layouts: a branch
-    /// that was out of reach at the previous pass's addresses, and is back in
-    /// reach once an alignment has absorbed an earlier branch's growth, stays
-    /// short when sized in order and grows when not. SuperH's GNU as works
-    /// this way. [`Architecture::relaxation_may_shrink`] takes precedence.
-    fn relaxes_in_order(&self) -> bool {
-        false
-    }
-
-    /// Whether sizes are picked afresh on every pass, walking each section in
-    /// order, the way GNU as's ARM port picks them (`arm_relax_frag`).
-    ///
-    /// Each relaxable fragment takes the smallest candidate that reaches from
-    /// where it now is. A target in a fragment the walk has yet to reach is
-    /// taken to have moved by the growth so far, less what each alignment in
-    /// between would absorb of it; that is GNU's `relaxed_symbol_addr`, and
-    /// it can let a fragment shrink back. A fragment that takes a larger
-    /// candidate on a pass where nothing before it grew keeps that size for
-    /// good, which is how GNU as stops such a walk from cycling. Takes
-    /// precedence over [`Architecture::relaxes_in_order`], and
-    /// [`Architecture::relaxation_may_shrink`] over it.
-    fn relaxes_each_pass(&self) -> bool {
-        false
-    }
-
     /// Whether a plain number as a PC-relative target (`call 0x1000`) is an
     /// absolute address, which relocatable output must relocate against no
     /// symbol, rather than an offset into the current section.
@@ -542,6 +611,85 @@ pub trait Architecture {
     /// x86, measure from the start of the section.
     fn pcrel_number_is_address(&self) -> bool {
         false
+    }
+
+    /// Whether a PC-relative reference to a symbol in the fixup's own section
+    /// is left to the linker in relocatable output, rather than resolved.
+    ///
+    /// A global or weak symbol can be preempted: the linker may bind the name
+    /// to a definition in another object, whether from a shared library or,
+    /// for a weak one, a strong definition elsewhere. So on AArch64, ARM,
+    /// PowerPC, MIPS, SPARC, RX and V850, and for calls on x86 and RISC-V, both
+    /// references relocate a reference to a global or weak symbol, whatever
+    /// its visibility, and resolve one to a local symbol, including a local
+    /// `.set` alias of a global one; that is the default. A difference of two
+    /// labels in one section is never affected: both references fold `.long
+    /// weak - .` to a constant. A field no relocation can describe is
+    /// resolved, unless the instruction has a larger form that one can.
+    ///
+    /// The ports whose reference differs override this, and every binding is
+    /// checked in the `*-relocs.txt` corpora of `tools/gas-diff`,
+    /// `tools/mc-diff` and `tools/xas-diff`.
+    fn defers_to_linker(&self, r: &SameSectionRef<'_>) -> bool {
+        r.binding != Binding::Local
+    }
+
+    /// What goes in the field of a PC-relative fixup at section offset `pc`
+    /// that is relocated against a `binding` symbol in its own section, where
+    /// that is not zero. A linker overwrites the field, so this only matters
+    /// for matching the reference byte for byte: GNU as for V850 measures
+    /// such a reference from the fixup as if the symbol were at 0, and writes
+    /// `-pc`.
+    fn relocated_pcrel_field(&self, _binding: Binding, _pc: u64) -> Option<i64> {
+        None
+    }
+
+    /// The relocation pair, adding one symbol and subtracting another, that
+    /// a `size`-byte data field holding a difference the file cannot fold is
+    /// written as, if the target has one.
+    ///
+    /// Without one, only `sym - label` with the label in the field's own
+    /// section can be relocated, as `sym` relative to the field. RISC-V's
+    /// linker relaxation needs every difference it cannot see through kept as
+    /// its two symbols, so llvm-mc writes `R_RISCV_ADD32`/`R_RISCV_SUB32` for
+    /// that one too, and for a difference across sections.
+    fn difference_relocs(&self, _size: u8) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Whether a relocation against a global symbol defined in this object
+    /// names the symbol's section plus an offset, as one against a local
+    /// label does, rather than the symbol. GNU as for m68k does this for all
+    /// but weak symbols.
+    fn relocates_globals_by_section(&self) -> bool {
+        false
+    }
+
+    /// The relocation to write for a PC-relative `reloc` that names a local
+    /// label's section. GNU as for x86 writes a `call` to a local label as
+    /// `PC32` rather than `PLT32`, there being no PLT entry to go through.
+    fn section_relative_reloc(&self, reloc: u32) -> u32 {
+        reloc
+    }
+
+    /// The alignment a section is given when it is created, before anything
+    /// in it asks for more.
+    ///
+    /// This shows as `sh_addralign` in an object, and as where the section
+    /// starts in a flat image. The references decide it mostly by name, and
+    /// not all of them agree: llvm-mc aligns `.text` on every target, every
+    /// executable section on AArch64, and `.data` and `.bss` too on MIPS,
+    /// while GNU as aligns `.text`, `.data` and `.bss` on m68k, `.text` alone
+    /// on MIPS and RISC-V, and on ARM and AArch64 whatever section an
+    /// instruction is assembled into. Where both references exist, the one
+    /// whose harness checks the target wins; each override says which.
+    fn section_align(
+        &self,
+        _state: &ArchState,
+        _name: &str,
+        _flags: &crate::section::SectionFlags,
+    ) -> u64 {
+        1
     }
 
     /// `e_flags` for ELF output, given the state at the end of the source.
@@ -671,6 +819,14 @@ pub trait Architecture {
     /// it. SuperH's `@(8,pc)` means `. + 8`.
     fn operands_use_location(&self, _interner: &Interner, _operands: &[Token]) -> bool {
         false
+    }
+
+    /// Whether `name` (lowercased) could be one of this backend's
+    /// instructions. NASM source may write a label without a colon, and a
+    /// first word that is not an instruction is taken as one; a backend that
+    /// cannot tell says yes, which makes the colon required.
+    fn is_mnemonic(&self, _name: &str) -> bool {
+        true
     }
 
     /// Handles an architecture-specific directive such as `.code64`. Returns
