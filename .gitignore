@@ -8,3 +8,6 @@
 
 # Default output of the rsasm binary when no -o is given.
 /a.out
+
+# Python bytecode from the fuzzers under tools/fuzz.
+__pycache__/

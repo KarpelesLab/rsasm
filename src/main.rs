@@ -16,15 +16,15 @@ options:
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
   -f, --format <fmt> output format: elf (default), elf32, elf64, coff,
-                     win64, win32 or bin
+                     win64, win32, bin or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
-                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080)
+                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)
-      --base <addr>  base address for `bin` output (default 0)
+      --base <addr>  base address for `bin` and `ihex` output (default 0)
       --hex          print the output as hex instead of writing a file
   -g                 describe the assembly source in DWARF line information
       --gdwarf-<n>   the same, as DWARF version <n> (2 to 5); the version
@@ -174,8 +174,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
     if a.format == Format::Coff && a.options.debug_source {
         return Err("`-g` writes DWARF, which rsasm does not write into COFF objects yet".into());
     }
-    // Flat binary output has no relocations to defer to a linker.
-    if a.format == Format::Binary {
+    // Flat output has no relocations to defer to a linker.
+    if a.format.is_flat() {
         a.options.relocatable = false;
     }
     Ok(Some(a))
@@ -200,7 +200,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
         // NASM's defaults: a flat binary starts in 16-bit mode. And an ELF
         // class, however the source is written, names the x86 machine.
         None => match (args.options.dialect, args.format, args.elf_bits) {
-            (Dialect::Nasm, Format::Binary, _) => arch::lookup("i8086"),
+            (Dialect::Nasm, Format::Binary | Format::IntelHex, _) => arch::lookup("i8086"),
             // `-f elf32`, `-f win32` and their 64-bit spellings name the x86
             // machine as well as the format, as they do in NASM.
             (_, Format::Elf | Format::Coff, Some(32)) => arch::lookup("i386"),
@@ -254,8 +254,14 @@ fn run(args: Args) -> Result<ExitCode, String> {
         Format::Elf => output::elf::build(&asm).map_err(|e| e.to_string())?,
         Format::Coff => output::coff::build(&asm).map_err(|e| e.to_string())?,
         Format::Binary => output::raw::build(&asm).map_err(|e| e.to_string())?,
+        Format::IntelHex => output::ihex::build(&asm).map_err(|e| e.to_string())?,
     };
 
+    // Intel HEX is already text; `--hex` prints it as it is.
+    if args.hex && args.format == Format::IntelHex {
+        print!("{}", String::from_utf8_lossy(&bytes));
+        return Ok(ExitCode::SUCCESS);
+    }
     if args.hex {
         for chunk in bytes.chunks(16) {
             println!(

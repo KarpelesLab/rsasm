@@ -39,6 +39,15 @@ ASL_BUILD=142-bld311
 ASL_URL="http://john.ccac.rwth-aachen.de:8000/ftp/as/source/c_version/asl-current-$ASL_BUILD.tar.gz"
 ASL_SHA256=b3213b8f6b9dace8eec06e1bdffdfa5a937fa1a6e588edf0205918220e67d6f8
 
+# SDCC, for sdas8051 and sdld: the asxxxx-lineage assembler and linker that
+# SDCC ships, and the second reference for the 8051. Only the `sdas` directory
+# is used, and it needs no configure — the handful of macros configure would
+# have written are passed on the command line — so nothing of the compiler
+# itself is built. 4.4.0 is a release tarball with a stable URL.
+SDCC_VERSION=4.4.0
+SDCC_URL="https://downloads.sourceforge.net/project/sdcc/sdcc/$SDCC_VERSION/sdcc-src-$SDCC_VERSION.tar.bz2"
+SDCC_SHA256=ae8c12165eb17680dff44b328d8879996306b7241efa3a83b2e3b2d2f7906a75
+
 # NASM, the reference for the `nasm` dialect. 2.16.03 is the last 2.16.x
 # release, the version most NASM source in circulation was written against.
 # The SHA-256 was taken from the tarball on nasm.us, and its SHA-512 checked
@@ -80,7 +89,7 @@ src="$out/src"
 mkdir -p "$src" "$out/bin"
 jobs=$(nproc 2>/dev/null || echo 4)
 
-wanted="${*:-$BINUTILS_TARGETS vasm vasm-6502 vasm-z80 cc65 asl nasm}"
+wanted="${*:-$BINUTILS_TARGETS vasm vasm-6502 vasm-z80 cc65 asl sdas nasm}"
 
 fetch() { # url dest sha256
   [ -s "$2" ] || { echo "fetching $1"; curl -fsSL --retry 3 -o "$2.part" "$1" && mv "$2.part" "$2"; }
@@ -147,17 +156,71 @@ build_cc65() {
 }
 
 build_asl() {
-  if [ -x "$out/bin/asl" ] && [ -x "$out/bin/p2bin" ]; then echo "asl already built"; return; fi
+  if [ -x "$out/bin/asl" ] && [ -x "$out/bin/p2bin" ] && [ -x "$out/bin/p2hex" ] &&
+    [ -f "$out/share/asl/stddef51.inc" ]; then echo "asl already built"; return; fi
   fetch "$ASL_URL" "$src/asl-$ASL_BUILD.tar.gz" "$ASL_SHA256"
   local b="$out/build/asl"
   rm -rf "$b" && mkdir -p "$b" && tar -xzf "$src/asl-$ASL_BUILD.tar.gz" -C "$b"
-  echo "building asl $ASL_BUILD (asl, p2bin)"
+  echo "building asl $ASL_BUILD (asl, p2bin, p2hex)"
   # AS has no configure script; its Makefile.def names the compiler.
   sed 's/^CFLAGS = .*/CFLAGS = -O2/' "$b/asl-current/Makefile.def.tmpl" > "$b/asl-current/Makefile.def"
-  (cd "$b/asl-current" && make -j"$jobs" asl p2bin > make.log 2>&1) \
+  (cd "$b/asl-current" && make -j"$jobs" asl p2bin p2hex > make.log 2>&1) \
     || { echo "asl build failed; see $b/asl-current/make.log" >&2; return 1; }
-  cp "$b/asl-current/asl" "$b/asl-current/p2bin" "$out/bin/"
-  echo "built asl and p2bin"
+  cp "$b/asl-current/asl" "$b/asl-current/p2bin" "$b/asl-current/p2hex" "$out/bin/"
+  # AS predefines no register names: the MCS-51 SFR and bit definitions live
+  # in include/stddef51.inc, which the 8051 corpora include.
+  mkdir -p "$out/share/asl"
+  cp -r "$b/asl-current/include/." "$out/share/asl/"
+  echo "built asl, p2bin and p2hex"
+}
+
+build_sdas() {
+  if [ -x "$out/bin/sdas8051" ] && [ -x "$out/bin/sdld" ]; then echo "sdas8051 already built"; return; fi
+  fetch "$SDCC_URL" "$src/sdcc-src-$SDCC_VERSION.tar.bz2" "$SDCC_SHA256"
+  local b="$out/build/sdas"
+  rm -rf "$b" && mkdir -p "$b" && tar -xjf "$src/sdcc-src-$SDCC_VERSION.tar.bz2" -C "$b"
+  local t="$b/sdcc-$SDCC_VERSION"
+  echo "building sdcc $SDCC_VERSION (sdas8051, sdld)"
+  # sdas includes ../../sdccconf.h, which configure would write; the only
+  # thing it takes from it is the path separator. The linker's
+  # asxxxx_config.h.in is a template of `#undef`s that only Windows fills in,
+  # so the *nix widths go in directly.
+  printf "#define DIR_SEPARATOR_CHAR '/'\n" > "$t/sdccconf.h"
+  sed -e 's/^#undef TYPE_BYTE/#define TYPE_BYTE char/' \
+      -e 's/^#undef TYPE_WORD/#define TYPE_WORD short/' \
+      -e 's/^#undef TYPE_DWORD/#define TYPE_DWORD int/' \
+      -e 's/^#undef TYPE_UBYTE/#define TYPE_UBYTE unsigned char/' \
+      -e 's/^#undef TYPE_UWORD/#define TYPE_UWORD unsigned short/' \
+      -e 's/^#undef TYPE_UDWORD/#define TYPE_UDWORD unsigned int/' \
+      "$t/sdas/linksrc/asxxxx_config.h.in" > "$t/sdas/linksrc/asxxxx_config.h"
+  # `-std=gnu17`: the sources declare `elf()` unprototyped and define it with
+  # an argument, which C23 makes an error.
+  local defs="-O2 -w -std=gnu17 -DVERSIONHI=4 -DVERSIONLO=4 -DVERSIONP=0"
+  (
+    cd "$t"
+    # shellcheck disable=SC2086
+    ${CC:-cc} $defs -DVERSION=\"$SDCC_VERSION\" -DSDCDB -DNOICE -DINDEXLIB \
+      -Isdas/as8051 -Isdas/asxxsrc -Isupport/util -o "$out/bin/sdas8051" \
+      sdas/as8051/i51pst.c sdas/as8051/i51mch.c sdas/as8051/i51adr.c \
+      sdas/asxxsrc/asdbg.c sdas/asxxsrc/asdata.c sdas/asxxsrc/asexpr.c \
+      sdas/asxxsrc/aslex.c sdas/asxxsrc/aslist.c sdas/asxxsrc/asmain.c \
+      sdas/asxxsrc/asout.c sdas/asxxsrc/assubr.c sdas/asxxsrc/assym.c \
+      sdas/asxxsrc/asmcro.c sdas/asxxsrc/sdas.c sdas/asxxsrc/strcmpi.c \
+      support/util/dbuf.c support/util/dbuf_string.c -lm > as.log 2>&1
+    # shellcheck disable=SC2086
+    ${CC:-cc} $defs -DVERSION=\"$SDCC_VERSION\" -DINDEXLIB \
+      -Isdas/linksrc -Isdas/asxxsrc -Isupport/util -o "$out/bin/sdld" \
+      sdas/linksrc/lk_readnl.c sdas/linksrc/lkaomf51.c sdas/linksrc/lkar.c \
+      sdas/linksrc/lkarea.c sdas/linksrc/lkdata.c sdas/linksrc/lkelf.c \
+      sdas/linksrc/lkeval.c sdas/linksrc/lkhead.c sdas/linksrc/lklex.c \
+      sdas/linksrc/lklib.c sdas/linksrc/lklibr.c sdas/linksrc/lklist.c \
+      sdas/linksrc/lkmain.c sdas/linksrc/lkmem.c sdas/linksrc/lknoice.c \
+      sdas/linksrc/lkout.c sdas/linksrc/lkrel.c sdas/linksrc/lkrloc.c \
+      sdas/linksrc/lkrloc3.c sdas/linksrc/lksdcclib.c sdas/linksrc/lksym.c \
+      sdas/linksrc/sdld.c sdas/linksrc/lksdcdb.c sdas/linksrc/lkbank.c \
+      sdas/asxxsrc/strcmpi.c -lm > ld.log 2>&1
+  ) || { echo "sdas build failed; see $t/as.log and $t/ld.log" >&2; return 1; }
+  echo "built sdas8051 and sdld"
 }
 
 build_nasm() {
@@ -181,6 +244,7 @@ for w in $wanted; do
     vasm-z80) build_vasm z80 oldstyle ;;
     cc65) build_cc65 ;;
     asl) build_asl ;;
+    sdas) build_sdas ;;
     nasm) build_nasm ;;
     *) build_binutils "$w" ;;
   esac
