@@ -27,6 +27,9 @@ pub mod operand;
 pub mod reg;
 pub mod reloc;
 pub mod sysreg;
+pub mod table;
+mod table_data;
+mod table_names;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
@@ -173,6 +176,18 @@ impl Architecture for AArch64 {
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
+        // A mnemonic only the table has is the table's. One the handwritten
+        // encoders also have is theirs until an operand is something only a
+        // table form takes: `add x0, x1, x2` is handwritten, `add v0.8b,
+        // v1.8b, v2.8b` and `add d0, d1, d2` are not, and `ldr d0, [x0]` is
+        // handwritten again, since loads and stores take the scalar SIMD
+        // registers themselves.
+        if table::knows(&mnemonic)
+            && (!insn::handwritten(&mnemonic)
+                || table::has_simd_operand(cx, req.operands, !insn::loads(&mnemonic)))
+        {
+            return table::assemble(cx, &mnemonic, req.mnemonic_span, req.operands);
+        }
         let cur = req.cursor();
         let ops = operand::parse_list(cx, &cur)?;
         insn::assemble(cx, req, &mnemonic, &ops)
@@ -182,5 +197,5 @@ impl Architecture for AArch64 {
 /// True if `name` is a register, so the generic parser does not treat a
 /// register name as a symbol.
 pub fn is_register(name: &str) -> bool {
-    reg::is_register(name)
+    reg::is_register(name) || table::is_register(name)
 }

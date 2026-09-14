@@ -9,7 +9,7 @@
 
 use super::encode::{const_in_range, field, logical_imm, word, word_fixup};
 use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp};
-use super::reg::{self, Arrangement, Reg, RegClass, VecReg};
+use super::reg::{self, Reg, RegClass};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
 use crate::expr::{ExprKind, ExprRef};
@@ -106,24 +106,6 @@ impl Insn<'_, '_> {
         }
     }
 
-    fn vec(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<VecReg> {
-        let op = self.op(i)?;
-        match op.kind {
-            OperandKind::Vec(v) => Some(v),
-            _ => {
-                cx.error(
-                    op.span,
-                    format!(
-                        "operand {} of `{}` must be a vector register",
-                        i + 1,
-                        self.mnemonic
-                    ),
-                );
-                None
-            }
-        }
-    }
-
     fn cond(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<u8> {
         let op = self.op(i)?;
         match op.cond() {
@@ -206,6 +188,170 @@ fn one(w: u32) -> Option<Vec<Variant>> {
 
 fn one_fixup(w: u32, e: ExprRef, k: crate::section::FixupKind, span: Span) -> Option<Vec<Variant>> {
     Some(vec![word_fixup(w, e, k, span)])
+}
+
+/// True for a mnemonic the encoders here handle, whatever else the
+/// generated table has under the same name: `add` is handwritten for the
+/// general-purpose registers and a table form for vectors. Keep in step with
+/// the dispatch in [`assemble`].
+pub fn handwritten(mnemonic: &str) -> bool {
+    mnemonic.starts_with("b.")
+        || matches!(
+            mnemonic,
+            "add"
+                | "adds"
+                | "sub"
+                | "subs"
+                | "cmp"
+                | "cmn"
+                | "neg"
+                | "negs"
+                | "adc"
+                | "adcs"
+                | "sbc"
+                | "sbcs"
+                | "ngc"
+                | "ngcs"
+                | "and"
+                | "ands"
+                | "orr"
+                | "eor"
+                | "bic"
+                | "bics"
+                | "orn"
+                | "eon"
+                | "tst"
+                | "mvn"
+                | "mov"
+                | "movz"
+                | "movn"
+                | "movk"
+                | "sbfm"
+                | "ubfm"
+                | "bfm"
+                | "sbfx"
+                | "ubfx"
+                | "bfxil"
+                | "sbfiz"
+                | "ubfiz"
+                | "bfi"
+                | "sxtb"
+                | "sxth"
+                | "sxtw"
+                | "uxtb"
+                | "uxth"
+                | "lsl"
+                | "lsr"
+                | "asr"
+                | "ror"
+                | "lslv"
+                | "lsrv"
+                | "asrv"
+                | "rorv"
+                | "extr"
+                | "mul"
+                | "mneg"
+                | "smull"
+                | "umull"
+                | "smnegl"
+                | "umnegl"
+                | "smulh"
+                | "umulh"
+                | "madd"
+                | "msub"
+                | "smaddl"
+                | "umaddl"
+                | "smsubl"
+                | "umsubl"
+                | "sdiv"
+                | "udiv"
+                | "rbit"
+                | "rev"
+                | "rev16"
+                | "rev32"
+                | "rev64"
+                | "clz"
+                | "cls"
+                | "csel"
+                | "csinc"
+                | "csinv"
+                | "csneg"
+                | "cset"
+                | "csetm"
+                | "cinc"
+                | "cinv"
+                | "cneg"
+                | "ccmp"
+                | "ccmn"
+                | "b"
+                | "bl"
+                | "cbz"
+                | "cbnz"
+                | "tbz"
+                | "tbnz"
+                | "br"
+                | "blr"
+                | "ret"
+                | "eret"
+                | "drps"
+                | "adr"
+                | "adrp"
+                | "nop"
+                | "yield"
+                | "wfe"
+                | "wfi"
+                | "sev"
+                | "sevl"
+                | "hint"
+                | "dmb"
+                | "dsb"
+                | "isb"
+                | "clrex"
+                | "svc"
+                | "hvc"
+                | "smc"
+                | "brk"
+                | "hlt"
+                | "dcps1"
+                | "dcps2"
+                | "dcps3"
+                | "mrs"
+                | "msr"
+        )
+        || loads(mnemonic)
+}
+
+/// True for the handwritten loads and stores, which take the scalar SIMD
+/// registers (`ldr d0, [x0]`) and leave only the SVE forms to the table.
+pub fn loads(mnemonic: &str) -> bool {
+    matches!(
+        mnemonic,
+        "ldr"
+            | "str"
+            | "ldrb"
+            | "strb"
+            | "ldrh"
+            | "strh"
+            | "ldrsb"
+            | "ldrsh"
+            | "ldrsw"
+            | "ldur"
+            | "stur"
+            | "ldurb"
+            | "sturb"
+            | "ldurh"
+            | "sturh"
+            | "ldursb"
+            | "ldursh"
+            | "ldursw"
+            | "prfm"
+            | "prfum"
+            | "ldp"
+            | "stp"
+            | "ldpsw"
+            | "ldnp"
+            | "stnp"
+    )
 }
 
 /// Entry point: resolves a mnemonic to a family and encodes it.
@@ -294,9 +440,6 @@ pub fn assemble(
         "mrs" => mrs(cx, &i),
         "msr" => msr(cx, &i),
 
-        "dup" => dup(cx, &i),
-        "fmov" => fmov(cx, &i),
-
         _ => {
             cx.error(
                 req.mnemonic_span,
@@ -322,9 +465,6 @@ fn addsub_bits(mnemonic: &str) -> (u32, u32) {
 
 /// `add`/`adds`/`sub`/`subs` with three or four operands.
 fn addsub(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_arith(cx, i);
-    }
     i.arity(cx, &[3, 4]).then_some(())?;
     let rd = i.gpr_or_sp(cx, 0)?;
     let rn = i.gpr_or_sp(cx, 1)?;
@@ -656,10 +796,6 @@ fn logic_bits(mnemonic: &str) -> Option<(u32, u32)> {
 }
 
 fn logic(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    // The SIMD spellings share these mnemonics but take vector operands.
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_logic(cx, i);
-    }
     i.arity(cx, &[3, 4]).then_some(())?;
     // Only the immediate forms can write the stack pointer; the register forms
     // check again once they know which form they are.
@@ -763,9 +899,6 @@ fn tst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 /// `mvn`, which is `orn` from the zero register.
 fn mvn(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_logic(cx, i);
-    }
     i.arity(cx, &[2, 3]).then_some(())?;
     let rd = i.gpr(cx, 0)?;
     encode_logic(cx, i, 1, 1, rd, Reg::zero(rd.class), 1)
@@ -817,9 +950,6 @@ fn movw(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 /// the order GNU as and llvm-mc both use.
 fn mov(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[2]).then_some(())?;
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_logic(cx, i);
-    }
     let rd = i.gpr_or_sp(cx, 0)?;
     let src = i.op(1)?;
 
@@ -1931,188 +2061,4 @@ fn msr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         return None;
     }
     one(0xd510_0000 | enc | field(rt.num as u32, 0, 5))
-}
-
-// ---- a small slice of SIMD -------------------------------------------------
-
-/// `add`/`sub` on vectors, lane by lane.
-fn simd_arith(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[3]).then_some(())?;
-    let rd = i.vec(cx, 0)?;
-    let rn = i.vec(cx, 1)?;
-    let rm = i.vec(cx, 2)?;
-    let arr = same_arrangement(cx, i, &[rd, rn, rm])?;
-    if arr.lanes == 1 {
-        cx.error(i.span, "`1d` has no vector add or subtract");
-        return None;
-    }
-    let u = u32::from(i.mnemonic == "sub");
-    one(field(arr.q(), 30, 1)
-        | field(u, 29, 1)
-        | 0x0e20_8400
-        | field(arr.size(), 22, 2)
-        | field(rm.num as u32, 16, 5)
-        | field(rn.num as u32, 5, 5)
-        | field(rd.num as u32, 0, 5))
-}
-
-/// The bitwise vector group: `and`, `orr`, `eor`, `bic`, `orn`, and `mov`,
-/// which is `orr` with both sources the same.
-fn simd_logic(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    let two = matches!(i.mnemonic, "mov" | "mvn");
-    i.arity(cx, if two { &[2] } else { &[3] }).then_some(())?;
-    let rd = i.vec(cx, 0)?;
-    let rn = i.vec(cx, 1)?;
-    let rm = if two { rn } else { i.vec(cx, 2)? };
-    let arr = same_arrangement(cx, i, &[rd, rn, rm])?;
-    // These operate on raw bytes, so only `8b` and `16b` are spelled.
-    if arr.elem_bits != 8 || arr.lanes == 0 {
-        cx.error(
-            i.span,
-            "a bitwise vector operation is written with `8b` or `16b`",
-        );
-        return None;
-    }
-    let (u, opc2) = match i.mnemonic {
-        "and" => (0, 0),
-        "bic" => (0, 1),
-        "orr" | "mov" => (0, 2),
-        "orn" | "mvn" => (0, 3),
-        "eor" => (1, 0),
-        _ => {
-            cx.error(i.span, format!("`{}` has no vector form here", i.mnemonic));
-            return None;
-        }
-    };
-    one(field(arr.q(), 30, 1)
-        | field(u, 29, 1)
-        | 0x0e20_1c00
-        | field(opc2, 22, 2)
-        | field(rm.num as u32, 16, 5)
-        | field(rn.num as u32, 5, 5)
-        | field(rd.num as u32, 0, 5))
-}
-
-fn same_arrangement(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, regs: &[VecReg]) -> Option<Arrangement> {
-    let first = regs.first()?.arr;
-    if regs.iter().any(|r| r.arr != first) {
-        cx.error(
-            i.span,
-            "every vector operand must have the same arrangement",
-        );
-        return None;
-    }
-    Some(first)
-}
-
-/// `dup`, from a general-purpose register or from one lane of a vector.
-fn dup(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[2]).then_some(())?;
-    let rd = i.vec(cx, 0)?;
-    let arr = rd.arr;
-    if arr.lanes == 0 {
-        cx.error(i.ops[0].span, "`dup` writes a whole vector");
-        return None;
-    }
-    // `imm5` is a one-hot marker for the element width with the lane index
-    // stacked above it, which is why it is built by shifting rather than by a
-    // table.
-    let width_marker = match arr.elem_bits {
-        8 => 1,
-        16 => 2,
-        32 => 4,
-        _ => 8,
-    };
-    let src = i.op(1)?;
-    match src.kind {
-        OperandKind::VecElem(v, index) => {
-            let lanes = 128 / arr.elem_bits as u64;
-            if v.arr.elem_bits != arr.elem_bits || v.arr.lanes != 0 {
-                cx.error(
-                    src.span,
-                    "the source element must match the destination's lane width",
-                );
-                return None;
-            }
-            if index >= lanes {
-                cx.error(
-                    src.span,
-                    format!("lane index {index} is out of range 0..{lanes}"),
-                );
-                return None;
-            }
-            let imm5 = width_marker | (index as u32 * width_marker * 2);
-            one(field(arr.q(), 30, 1)
-                | 0x0e00_0400
-                | field(imm5, 16, 5)
-                | field(v.num as u32, 5, 5)
-                | field(rd.num as u32, 0, 5))
-        }
-        _ => {
-            let rn = i.gpr(cx, 1)?;
-            let want = if arr.elem_bits == 64 {
-                RegClass::X
-            } else {
-                RegClass::W
-            };
-            if rn.class != want {
-                cx.error(
-                    src.span,
-                    format!(
-                        "`dup` to `{}`-lanes reads a `{}` register",
-                        arr.elem_bits,
-                        want.letter()
-                    ),
-                );
-                return None;
-            }
-            one(field(arr.q(), 30, 1)
-                | 0x0e00_0c00
-                | field(width_marker, 16, 5)
-                | field(rn.num as u32, 5, 5)
-                | field(rd.num as u32, 0, 5))
-        }
-    }
-}
-
-/// `fmov` between two scalar FP registers, or between a GPR and the bits of
-/// one.
-fn fmov(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[2]).then_some(())?;
-    let rd = i.any_reg(cx, 0)?;
-    let rn = i.any_reg(cx, 1)?;
-    if rd.is_sp() || rn.is_sp() {
-        cx.error(i.span, "`fmov` cannot use the stack pointer");
-        return None;
-    }
-    // `type` is the FP width field: 0 for single, 1 for double.
-    let (sf, ftype, opcode) = match (rd.class, rn.class) {
-        (RegClass::S, RegClass::S) | (RegClass::D, RegClass::D) => {
-            let ftype = u32::from(rd.class == RegClass::D);
-            return one(0x1e20_4000
-                | field(ftype, 22, 2)
-                | field(rn.num as u32, 5, 5)
-                | field(rd.num as u32, 0, 5));
-        }
-        // Between a general register and an FP one, `fmov` copies raw bits,
-        // so the two widths must agree. The opcode's low bit gives the
-        // direction: 7 moves into the FP register, 6 out of it.
-        (RegClass::S, RegClass::W) => (0, 0, 7),
-        (RegClass::W, RegClass::S) => (0, 0, 6),
-        (RegClass::D, RegClass::X) => (1, 1, 7),
-        (RegClass::X, RegClass::D) => (1, 1, 6),
-        _ => {
-            cx.error(
-                i.span,
-                "`fmov` needs two `s`/`d` registers, or an FP and a general register of the same width",
-            );
-            return None;
-        }
-    };
-    one(field(sf, 31, 1)
-        | 0x1e20_0000
-        | field(ftype, 22, 2)
-        | field(opcode, 16, 5)
-        | field(rn.num as u32, 5, 5)
-        | field(rd.num as u32, 0, 5))
 }
