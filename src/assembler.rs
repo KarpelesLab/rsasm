@@ -1707,6 +1707,24 @@ impl Assembler {
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;
         let requests = std::mem::take(&mut cx.requests);
+        // A symbol a relocation modifier implies exists from where the
+        // modifier is read, so it takes its place in the symbol table ahead
+        // of the targets that layout interns later.
+        // NASM declares every external symbol, and makes nothing of the kind.
+        let nasm = self.options.dialect == crate::lexer::Dialect::Nasm;
+        for f in variants.iter().flatten().flat_map(|v| &v.fixups) {
+            if nasm {
+                break;
+            }
+            if let Some(m) = self.find_modifier(f.expr) {
+                let name = self.interner.get(m).to_string();
+                if let Some(needs) = self.arch.modifier_symbols(&name).needs {
+                    let name = self.interner.intern(needs);
+                    let id = self.symbols.intern(name, span);
+                    self.symbols.get_mut(id).used = true;
+                }
+            }
+        }
         variants.map(|v| (v, relaxable, requests))
     }
 }

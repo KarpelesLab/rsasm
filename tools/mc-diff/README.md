@@ -17,7 +17,14 @@ $ tools/mc-diff/run.sh aarch64    # just one
 lines, for anything that needs labels, branch relaxation or directives.
 
 The `<arch>` key and its llvm triple are listed in the `ARCHES` table at the
-top of `run.sh`.
+top of `run.sh`, with any extra llvm-mc flags and a source header put before
+every case. The header is how the x86 variants ask for their mode and syntax:
+`i8086` and `i8086-intel` are 16-bit code in an i386 object (`.code16`), since
+llvm-mc 22 cannot write an object for an `i8086` triple, and the `-intel`
+variants start with `.intel_syntax noprefix`. Where llvm-mc and GNU as
+disagree on x86, rsasm follows GNU as, and the case is commented out in the
+llvm-mc corpus with llvm-mc's answer beside it; the header of each x86 corpus
+lists the kinds of difference.
 
 ## Comparing objects
 

@@ -1,8 +1,8 @@
-//! x86-64 encoding tests.
+//! x86 encoding tests, in all three modes.
 //!
-//! Every expected byte string here was checked against GNU as 2.46
-//! (`as --64`), so this file doubles as a record of where rsasm intends to be
-//! byte-compatible with it.
+//! Every expected byte string here was checked against GNU as 2.46 (`as
+//! --64`, or `--32`), so this file doubles as a record of where rsasm intends
+//! to be byte-compatible with it.
 
 #![cfg(feature = "x86")]
 
@@ -262,4 +262,154 @@ fn operating_mode_directives() {
     enc(".code16\nmovl %ebx, %eax", "66 89 d8");
     enc(".code32\nmovl %ebx, %eax", "89 d8");
     enc(".code16\nmovw %bx, %ax", "89 d8");
+}
+
+// ---- 32- and 16-bit mode ---------------------------------------------------
+//
+// Checked against GNU as with `--32`, and `.code16` for 16-bit code; see
+// tools/gas-diff/i386*.txt and i8086*.txt for the full corpora, and
+// tools/fuzz/x86.py for how several of these cases were found.
+
+/// Asserts that `src` assembles to `want` for the i386 target.
+#[track_caller]
+fn enc32(src: &str, want: &str) {
+    let got = hex(&text_for("i386", src));
+    assert_eq!(got, want, "\nsource: {src}\n  want: {want}\n   got: {got}");
+}
+
+/// The same in 16-bit mode.
+#[track_caller]
+fn enc16(src: &str, want: &str) {
+    enc32(&format!(".code16\n{src}"), want);
+}
+
+#[test]
+fn i386_register_short_forms() {
+    enc32("push %eax", "50");
+    enc32("dec %eax", "48");
+    enc32("inc %cx", "66 41");
+    enc16("inc %ax", "40");
+    enc16("push %eax", "66 50");
+    enc32("push %ds", "1e");
+    enc32("pop %ss", "17");
+    enc32("pusha", "60");
+    enc32("popfw", "66 9d");
+    enc32(".intel_syntax noprefix\npushfw", "66 9c");
+}
+
+#[test]
+fn stack_instructions_take_the_modes_size() {
+    enc32("pushw $1", "66 6a 01");
+    enc16("push $0x1000", "68 00 10");
+    enc16("pushl $1", "66 6a 01");
+    enc16("retl", "66 c3");
+    enc16("iret", "cf");
+    enc16("calll *(%bx)", "66 ff 17");
+    enc32("enter $8, $1", "c8 08 00 01");
+    enc32("lret $4", "ca 04 00");
+}
+
+#[test]
+fn sixteen_bit_addressing() {
+    enc16("mov (%bx,%si), %ax", "8b 00");
+    // `bp` alone has no form without a displacement.
+    enc16("mov (%bp), %ax", "8b 46 00");
+    enc16("mov 0x1234(%di), %cx", "8b 8d 34 12");
+    // A displacement that fits 16 bits is read as a signed word.
+    enc16("mov 0xffff(%bx), %ax", "8b 47 ff");
+    enc16("mov 0x1234, %ax", "a1 34 12");
+    enc16(".intel_syntax noprefix\nmov ax, [bx+si+4]", "8b 40 04");
+    // The other address size, and the other operand size, in that order.
+    enc16("mov (%eax,%ebx,4), %eax", "67 66 8b 04 98");
+    enc32("movl (%bx,%si), %eax", "67 8b 00");
+    enc32(".intel_syntax noprefix\nmov ax, [si+bx]", "67 66 8b 00");
+}
+
+#[test]
+fn segment_overrides_the_address_implies_are_left_out() {
+    enc32("movb %ds:(%ebx), %al", "8a 03");
+    enc32("movb %al, %ss:(%ebp)", "88 45 00");
+    enc32("movb %al, %fs:(%ebp)", "64 88 45 00");
+    enc32("movw %ax, 0x1000", "66 a3 00 10 00 00");
+}
+
+#[test]
+fn far_pointers() {
+    enc32("ljmp $0x10, $0x1000", "ea 00 10 00 00 10 00");
+    enc16("ljmp $0x10, $0x1000", "ea 00 10 10 00");
+    enc32(
+        ".intel_syntax noprefix\njmp 0x10:0x1000",
+        "ea 00 10 00 00 10 00",
+    );
+    enc32("lcall *(%eax)", "ff 18");
+    enc32(".intel_syntax noprefix\njmp fword ptr [eax]", "ff 28");
+    // In 16-bit code GNU as's Intel syntax reads a doubleword as a far pointer.
+    enc16(".intel_syntax noprefix\njmp dword ptr [bx]", "ff 2f");
+}
+
+#[test]
+fn instructions_long_mode_dropped() {
+    enc32("bound %eax, (%ebx)", "62 03");
+    enc32(
+        ".intel_syntax noprefix\nbound eax, qword ptr [ebx]",
+        "62 03",
+    );
+    enc32("arpl %ax, %bx", "63 c3");
+    enc32("les (%eax), %ax", "66 c4 00");
+    enc32("aam $16", "d4 10");
+    enc32("into", "ce");
+    enc32("int $3", "cc");
+}
+
+#[test]
+fn string_instructions() {
+    enc32("rep movsl", "f3 a5");
+    enc32("rep stosw", "66 f3 ab");
+    enc16("movsl", "66 a5");
+    enc32("movsb %fs:(%esi), %es:(%edi)", "64 a4");
+    enc32(
+        ".intel_syntax noprefix\nmovs byte ptr es:[edi], byte ptr [esi]",
+        "a4",
+    );
+    enc32("xlat %fs:(%ebx)", "64 d7");
+    enc32("in (%dx), %al", "ec");
+    enc32("outl %eax, $0x80", "e7 80");
+    enc16("jecxz 1f\n1:", "67 e3 00");
+}
+
+#[test]
+fn system_register_moves() {
+    enc32("mov %cr0, %eax", "0f 20 c0");
+    enc32("mov %eax, %ds", "8e d8");
+    enc32("movw %ds, (%eax)", "8c 18");
+}
+
+#[test]
+fn x87() {
+    enc32("fld1", "d9 e8");
+    // AT&T syntax swaps `fsub` and `fsubr` with `st(i)` as destination.
+    enc32("fsub %st, %st(1)", "dc e1");
+    enc32(".intel_syntax noprefix\nfsub st(1), st", "dc e9");
+    enc32("fsubr %st(1), %st", "d8 e9");
+    enc32("fildll (%eax)", "df 28");
+    enc32("fnstsw %ax", "df e0");
+    enc32("fstcw (%esp)", "9b d9 3c 24");
+}
+
+#[test]
+fn immediates_are_read_at_the_operation_size() {
+    enc32("addw $0xffff, %ax", "66 83 c0 ff");
+    enc32("addl $0xffffffff, %ecx", "83 c1 ff");
+    enc32("imul $5, %esi", "6b f6 05");
+    enc16("cwtl", "66 98");
+}
+
+#[test]
+fn simd_in_32_and_16_bit_mode() {
+    enc32("cvtsi2sdl %eax, %xmm1", "f2 0f 2a c8");
+    enc32("vaddps %zmm1, %zmm2, %zmm3", "62 f1 6c 48 58 d9");
+    // The GPR of a conversion needs no operand size prefix in 16-bit code,
+    // while `crc32` reads it at the operand size.
+    enc16("cvtsi2sd %edi, %xmm2", "f2 0f 2a d7");
+    enc16("crc32l %ecx, %ebp", "66 f2 0f 38 f1 e9");
 }

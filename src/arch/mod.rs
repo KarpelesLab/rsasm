@@ -493,6 +493,15 @@ impl AsmCtx<'_> {
     }
 }
 
+/// See [`Architecture::modifier_symbols`].
+#[derive(Copy, Clone, Default, Debug)]
+pub struct ModifierSymbols {
+    /// The name of a symbol to add, undefined, to the object.
+    pub needs: Option<&'static str>,
+    /// The target is a thread-local variable.
+    pub tls: bool,
+}
+
 pub trait Architecture {
     /// Canonical name, as accepted by `--arch` and `.arch`.
     fn name(&self) -> &'static str;
@@ -523,6 +532,22 @@ pub trait Architecture {
     /// `foo@PLT`. `None` means the modifier is not recognised.
     fn modifier_reloc(&self, _name: &str, _size: u8, _pcrel: bool) -> Option<u32> {
         None
+    }
+
+    /// What a relocation modifier implies about the symbols of the object,
+    /// beyond the relocation it selects: GNU as on x86 marks the target of a
+    /// TLS modifier `STT_TLS`, and adds an undefined `_GLOBAL_OFFSET_TABLE_`
+    /// for any modifier the linker needs a GOT for.
+    fn modifier_symbols(&self, _name: &str) -> ModifierSymbols {
+        ModifierSymbols::default()
+    }
+
+    /// The relocation a modifier selects for an instruction's fixup, which
+    /// can depend on more than its size: i386 marks a `@GOT` load the linker
+    /// may rewrite with a relocation of its own. The backend says so in the
+    /// fixup it built. Defaults to [`Architecture::modifier_reloc`].
+    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+        self.modifier_reloc(name, kind.size, kind.pcrel)
     }
 
     /// What a source-level `@` modifier means in a flat binary, where there is

@@ -1410,6 +1410,35 @@ impl Assembler {
                             for mut r in self.build_relocation(e, &kind, id, fi, at, span) {
                                 let (arch, _) = self.frag_arch(si, fi);
                                 if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
+                                    // A byte or word field has no room for a
+                                    // larger addend, which GNU as refuses
+                                    // rather than truncate. It reads a 32-bit
+                                    // one as signed first, as `0xffffffff`
+                                    // for -1.
+                                    let bits = kind.size as u32 * 8;
+                                    let addend = if (0..=0xffff_ffff).contains(&r.addend) {
+                                        r.addend as i32 as i64
+                                    } else {
+                                        r.addend
+                                    };
+                                    if !rela
+                                        && bits <= 16
+                                        && matches!(
+                                            kind.encoding,
+                                            crate::section::FieldEncoding::Whole
+                                        )
+                                        && !(-(1i64 << (bits - 1))..(1i64 << bits))
+                                            .contains(&addend)
+                                    {
+                                        self.diags.error(
+                                            span,
+                                            format!(
+                                                "value {:#x} does not fit in the {}-byte field it is relocated in",
+                                                r.addend, kind.size
+                                            ),
+                                        );
+                                        continue;
+                                    }
                                     let endian = arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =
                                         &mut self.sections[si].frags[fi].kind
@@ -1445,6 +1474,20 @@ impl Assembler {
         span: Span,
     ) -> Vec<Relocation> {
         let si = section.0 as usize;
+        // A modifier can imply a symbol of its own, which GNU as creates as it
+        // reads the modifier, before the target's.
+        let effects = self
+            .find_modifier(e)
+            .filter(|_| self.options.dialect != crate::lexer::Dialect::Nasm)
+            .map(|m| {
+                let name = self.interner.get(m).to_string();
+                self.frag_arch(si, fi).0.modifier_symbols(&name)
+            });
+        if let Some(needs) = effects.and_then(|x| x.needs) {
+            let name = self.interner.intern(needs);
+            let id = self.symbols.intern(name, span);
+            self.symbols.get_mut(id).used = true;
+        }
         let v = match self.eval(e) {
             Ok(v) => v,
             Err(err) => {
@@ -1509,6 +1552,12 @@ impl Assembler {
             kind.reloc = r;
         }
         let kind = &kind;
+        if effects.is_some_and(|x| x.tls)
+            && let Some(t) = v.plus
+            && self.symbols.get(t).ty == crate::symbol::SymType::NoType
+        {
+            self.symbols.get_mut(t).ty = crate::symbol::SymType::Tls;
+        }
         let target = match v.plus {
             Some(t) => Some(t),
             // A PC-relative reference to a plain number, relocated against
@@ -1557,9 +1606,7 @@ impl Assembler {
             .find_modifier(e)
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
-                self.frag_arch(si, fi)
-                    .0
-                    .modifier_reloc(&name, kind.size, kind.pcrel)
+                self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
             })
             .unwrap_or(kind.reloc);
         if reloc == 0 {

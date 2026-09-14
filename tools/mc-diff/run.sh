@@ -18,9 +18,17 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
-# arch | rsasm arch name | llvm triple | extra llvm-mc flags
+# arch | rsasm arch name | llvm triple | extra llvm-mc flags | source header
+#
+# The header is put before every case, with `\n` between lines: that is how
+# 16-bit mode and Intel syntax are asked for, since llvm-mc 22 cannot write an
+# object for an `i8086` triple.
 ARCHES="
 x86-64|x86-64|x86_64|
+i386|i386|i386|
+i386-intel|i386|i386||.intel_syntax noprefix
+i8086|i386|i386||.code16
+i8086-intel|i386|i386||.code16\\n.intel_syntax noprefix
 aarch64|aarch64|aarch64|
 arm|arm|armv7|
 thumb|thumb|thumbv7|
@@ -67,8 +75,14 @@ mc() { # triple, flags, source on stdin
   rm -rf "$d"
 }
 
-compare() { # arch, rsasm_arch, triple, flags, name, source
-  local arch=$1 rs=$2 triple=$3 flags=$4 name=$5 src=$6 m r
+with_header() { # header, source
+  [ -n "$1" ] && printf '%b\n' "$1"
+  printf '%s\n' "$2"
+}
+
+compare() { # arch, rsasm_arch, triple, flags, header, name, source
+  local arch=$1 rs=$2 triple=$3 flags=$4 name=$6 src m r
+  src=$(with_header "$5" "$7")
   m=$(printf '%s\n' "$src" | mc "$triple" "$flags")
   r=$(printf '%s\n' "$src" | "$hexdump" "$rs" 2>&1)
   if [ "$m" = "$r" ]; then
@@ -89,8 +103,9 @@ canon() { # object
   "$here/canon.sh" "$1"
 }
 
-compare_object() { # arch, rsasm_arch, triple, flags, name, source
-  local arch=$1 rs=$2 triple=$3 flags=$4 name=$5 src=$6 m r d
+compare_object() { # arch, rsasm_arch, triple, flags, header, name, source
+  local arch=$1 rs=$2 triple=$3 flags=$4 name=$6 src m r d
+  src=$(with_header "$5" "$7")
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
   if llvm-mc -triple="$triple" $flags -filetype=obj -o "$d/m.o" "$d/in.s" 2> "$d/err"; then
@@ -118,7 +133,7 @@ compare_object() { # arch, rsasm_arch, triple, flags, name, source
 }
 
 # Runs `compare` or `compare_object` over each `=== name` snippet of a file.
-snippets() { # file, compare function, arch, rsasm_arch, triple, flags
+snippets() { # file, compare function, arch, rsasm_arch, triple, flags, header
   local file=$1 fn=$2 snippet="" name="" line
   shift 2
   while IFS= read -r line; do
@@ -134,8 +149,8 @@ snippets() { # file, compare function, arch, rsasm_arch, triple, flags
   return 0
 }
 
-run_arch() { # arch, rsasm_arch, triple, flags
-  local arch=$1 rs=$2 triple=$3 flags=$4
+run_arch() { # arch, rsasm_arch, triple, flags, header
+  local arch=$1 rs=$2 triple=$3 flags=$4 header=$5
   local lines="$here/$arch.txt" progs="$here/$arch-programs.txt" objs="$here/$arch-relocs.txt"
   local before=$((pass + fail))
 
@@ -143,12 +158,12 @@ run_arch() { # arch, rsasm_arch, triple, flags
     while IFS= read -r line; do
       [ -z "$line" ] && continue
       case "$line" in \#*) continue ;; esac
-      compare "$arch" "$rs" "$triple" "$flags" "$line" "$line"
+      compare "$arch" "$rs" "$triple" "$flags" "$header" "$line" "$line"
     done < "$lines"
   fi
 
-  [ -f "$progs" ] && snippets "$progs" compare "$arch" "$rs" "$triple" "$flags"
-  [ -f "$objs" ] && snippets "$objs" compare_object "$arch" "$rs" "$triple" "$flags"
+  [ -f "$progs" ] && snippets "$progs" compare "$arch" "$rs" "$triple" "$flags" "$header"
+  [ -f "$objs" ] && snippets "$objs" compare_object "$arch" "$rs" "$triple" "$flags" "$header"
 
   local n=$((pass + fail - before))
   [ "$n" -gt 0 ] && echo "[$arch] $n cases"
@@ -156,14 +171,14 @@ run_arch() { # arch, rsasm_arch, triple, flags
 }
 
 wanted="${*:-}"
-while IFS='|' read -r arch rs triple flags; do
+while IFS='|' read -r arch rs triple flags header; do
   [ -z "$arch" ] && continue
   if [ -n "$wanted" ]; then
     case " $wanted " in *" $arch "*) ;; *) continue ;; esac
   fi
   # Skip architectures that have no corpus yet.
   [ -f "$here/$arch.txt" ] || [ -f "$here/$arch-programs.txt" ] || [ -f "$here/$arch-relocs.txt" ] || continue
-  run_arch "$arch" "$rs" "$triple" "$flags"
+  run_arch "$arch" "$rs" "$triple" "$flags" "$header"
 done <<< "$ARCHES"
 
 echo "--- $pass matched, $fail differed"
