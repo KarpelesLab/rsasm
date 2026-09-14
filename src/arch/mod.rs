@@ -587,6 +587,15 @@ pub trait Architecture {
         u64::MAX
     }
 
+    /// Whether no-op padding is for the state the last instruction before it
+    /// was assembled in, rather than the state in force where the padding is
+    /// written. GNU as's ARM port pads so (its PR 9814), so that padding
+    /// after Thumb code is Thumb no-ops even once `.arm` has been seen; its
+    /// x86 port pads for the mode in force. See `Section::nop_state`.
+    fn pads_as_last_instruction(&self) -> bool {
+        false
+    }
+
     /// The mapping symbol that marks code this backend emits in `state`, and
     /// the alignment in bytes such code gives its section, for a target whose
     /// ELF objects mark code and data apart: ARM's `$a` and `$t`. `None`, the

@@ -204,6 +204,10 @@ impl Architecture for Arm {
         4
     }
 
+    fn pads_as_last_instruction(&self) -> bool {
+        true
+    }
+
     /// Thumb branches, literal loads and `adr` are sized as GNU as's
     /// `arm_relax_frag` sizes them.
     fn relaxes_each_pass(&self) -> bool {

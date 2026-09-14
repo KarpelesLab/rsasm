@@ -563,10 +563,13 @@ pub struct Section {
     /// The mapping symbols recorded so far, placed once the layout is known.
     pub map_events: Vec<crate::mapping::MapEvent>,
     /// The backend state the last instruction was assembled in, while no
-    /// other kind of fragment has followed it: an alignment here pads with
-    /// that state's no-ops, as GNU as's ARM port pads with the instruction
-    /// set of the last instruction in the fragment, whatever `.arm` or
-    /// `.thumb` has said since.
+    /// other kind of fragment has followed it, for a backend whose
+    /// [`Architecture::pads_as_last_instruction`]: an alignment here pads
+    /// with that state's no-ops, as GNU as's ARM port pads with the
+    /// instruction set of the last instruction in the fragment, whatever
+    /// `.arm` or `.thumb` has said since.
+    ///
+    /// [`Architecture::pads_as_last_instruction`]: crate::arch::Architecture::pads_as_last_instruction
     pub nop_state: Option<crate::arch::ArchState>,
 }
 

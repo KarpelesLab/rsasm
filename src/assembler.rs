@@ -1594,7 +1594,7 @@ impl Assembler {
         let settled = variants.len() == 1;
         let idx = self.cur_section().emit_variants(variants, stmt.span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
-        if settled {
+        if settled && self.arch.pads_as_last_instruction() {
             let state = self.arch_state.clone();
             self.cur_section().nop_state = Some(state);
         }
