@@ -25,6 +25,19 @@ pub struct Prefixes {
     /// address size override whether or not the operands need it.
     pub data: bool,
     pub addr: bool,
+    /// A `{vex}`, `{vex3}` or `{evex}` pseudo-prefix.
+    pub encoding: Option<EncodingPrefix>,
+}
+
+/// The encoding a pseudo-prefix asks for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EncodingPrefix {
+    /// `{vex}` (or `{vex2}`): VEX, in whichever length fits.
+    Vex,
+    /// `{vex3}`: VEX in its three-byte form even where two bytes would do.
+    Vex3,
+    /// `{evex}`: EVEX even where VEX would do.
+    Evex,
 }
 
 /// Which operand fills which encoding slot, worked out from the pattern.
@@ -530,8 +543,10 @@ pub fn encode(
             let pp = pp_bits(def.pfx);
             let w = def.vex_w();
             // The two-byte form has no room for X, B or W, and only reaches
-            // the `0F` map; anything else has to spell the prefix out.
-            if def.map == 1 && !w && !ext_x && !ext_b {
+            // the `0F` map; anything else has to spell the prefix out, and so
+            // does `{vex3}`.
+            let short = prefixes.encoding != Some(EncodingPrefix::Vex3);
+            if short && def.map == 1 && !w && !ext_x && !ext_b {
                 bytes.push(0xc5);
                 bytes.push(((!ext_r as u8) << 7) | ((!vvvv & 0xf) << 3) | (l << 2) | pp);
             } else {

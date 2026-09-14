@@ -357,10 +357,16 @@ enum PrefixKind {
     Data(u8),
     /// `addr16`/`addr32`: the address size override, with its size.
     Addr(u8),
+    /// `{vex}`, `{vex3}`, `{evex}`: which encoding to choose. Emits nothing.
+    Encoding(encode::EncodingPrefix),
 }
 
 fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
+    use encode::EncodingPrefix as E;
     Some(match mnemonic {
+        "{vex}" | "{vex2}" => PrefixKind::Encoding(E::Vex),
+        "{vex3}" => PrefixKind::Encoding(E::Vex3),
+        "{evex}" => PrefixKind::Encoding(E::Evex),
         "lock" => PrefixKind::Lock,
         "rep" | "repe" | "repz" => PrefixKind::Rep(0xf3),
         "repne" | "repnz" => PrefixKind::Rep(0xf2),
@@ -396,6 +402,16 @@ fn assemble_inner(
             PrefixKind::Lock => prefixes.lock = true,
             PrefixKind::Rep(r) => prefixes.rep = Some(r),
             PrefixKind::Segment(s) => prefixes.seg = Some(s),
+            PrefixKind::Encoding(e) => {
+                if req.cursor().at_end() {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` needs an instruction after it"),
+                    );
+                    return None;
+                }
+                prefixes.encoding = Some(e);
+            }
             // A size prefix names the size it switches to, so the mode's own
             // size is refused as redundant, and long mode has no 32-bit
             // operand or 16-bit address prefix to write.
@@ -607,6 +623,24 @@ fn assemble_inner(
     if matches.is_empty() {
         report_no_match(cx, req, mnemonic, &resolved, &ops);
         return None;
+    }
+    // `{vex}` and `{evex}` narrow the choice to one encoding. That is the only
+    // way to reach the VEX forms of AVX-VNNI and AVX-IFMA, whose mnemonics
+    // AVX-512 already spells.
+    if let Some(want) = prefixes.encoding {
+        let enc = match want {
+            encode::EncodingPrefix::Evex => Enc::Evex,
+            _ => Enc::Vex,
+        };
+        matches.retain(|d| d.enc == enc);
+        if matches.is_empty() {
+            let name = if enc == Enc::Evex { "EVEX" } else { "VEX" };
+            cx.error(
+                req.span,
+                format!("`{mnemonic}` has no {name} encoding for these operands"),
+            );
+            return None;
+        }
     }
 
     // NASM loads a 64-bit register from a symbol with the full `movabs`

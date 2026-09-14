@@ -453,6 +453,24 @@ impl Builder {
             return Some(Body::SetLocation { span: first.span });
         }
 
+        // `{vex}`, `{evex}` and the other pseudo-prefixes GNU as and llvm-mc
+        // take in front of an x86 instruction. They read as an instruction
+        // named with its braces, which the backend treats as a prefix; any
+        // other backend reports it as an instruction it does not know.
+        if self.dialect == Dialect::Gas
+            && first.is_punct(Punct::LBrace)
+            && let (Some(word), Some(close)) = (toks.get(*i + 1), toks.get(*i + 2))
+            && let TokKind::Ident(word) = word.kind
+            && close.is_punct(Punct::RBrace)
+        {
+            let text = format!("{{{}}}", interner.get(word).to_ascii_lowercase());
+            *i += 3;
+            return Some(Body::Insn {
+                mnemonic: interner.intern(&text),
+                span: first.span.to(close.span),
+            });
+        }
+
         let TokKind::Ident(name) = first.kind else {
             *i = toks.len();
             let _ = &diags;
