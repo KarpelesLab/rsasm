@@ -4,10 +4,9 @@ pub mod elf;
 pub mod macho;
 pub mod raw;
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Format {
     /// ELF relocatable object.
-    #[default]
     Elf,
     /// Mach-O relocatable object (`MH_OBJECT`).
     MachO,
@@ -19,7 +18,7 @@ impl Format {
     pub fn from_name(s: &str) -> Option<Format> {
         Some(match s {
             "elf" | "elf32" | "elf64" | "o" | "obj" => Format::Elf,
-            "macho" | "macho64" | "mach-o" | "macho-x86-64" => Format::MachO,
+            "macho" | "macho64" | "mach-o" => Format::MachO,
             "bin" | "binary" | "raw" => Format::Binary,
             _ => return None,
         })

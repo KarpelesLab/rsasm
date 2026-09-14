@@ -26,10 +26,13 @@
 //!   atom carried as the addend. That is [`Atoms`], and it is why a Mach-O
 //!   object has relocations where an ELF one has none.
 //!
-//! What is written: one `LC_SEGMENT_64` with every section, `LC_SYMTAB`,
-//! `LC_DYSYMTAB` (the three-way split of the symbol table it describes is
-//! required, not optional), and `LC_BUILD_VERSION` where the source gave
-//! `.build_version`.
+//! What is written: one `LC_SEGMENT_64` with every section; `LC_BUILD_VERSION`
+//! where the source gave `.build_version`, and `LC_DATA_IN_CODE` where it
+//! marked data in code; and `LC_SYMTAB` with `LC_DYSYMTAB`, whose three-way
+//! split of the symbol table is required, not optional, unless there are no
+//! symbols at all. As far as llvm-mc 22 writes the same object, rsasm writes it
+//! byte for byte, down to the order of the symbols and the string table's
+//! shared tails; `tools/macho-diff` checks that.
 
 mod directives;
 mod relocations;
@@ -425,17 +428,18 @@ pub fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
     }
 }
 
-/// Whether a relocation type is PC-relative, which its entry says whatever
-/// the fixup it came from was: an `adrp` is a page count to rsasm, not a
-/// distance, but its relocation is still measured from the instruction.
-fn type_pcrel(cpu: Cpu, ty: u8) -> bool {
+/// Whether a relocation of type `ty` is PC-relative, which its entry says
+/// whatever the fixup it came from was: an `adrp` is a page count to rsasm,
+/// not a distance, but its relocation is still measured from the instruction.
+fn entry_pcrel(cpu: Cpu, ty: u8, r: &Relocation) -> bool {
     match cpu {
         Cpu::X86_64 => !matches!(ty, x86_64_reloc::UNSIGNED | x86_64_reloc::SUBTRACTOR),
-        // `POINTER_TO_GOT` is PC-relative only as `sym@GOT - .`.
-        Cpu::Arm64 => matches!(
-            ty,
-            arm64_reloc::BRANCH26 | arm64_reloc::PAGE21 | arm64_reloc::GOT_LOAD_PAGE21
-        ),
+        Cpu::Arm64 => match ty {
+            arm64_reloc::BRANCH26 | arm64_reloc::PAGE21 | arm64_reloc::GOT_LOAD_PAGE21 => true,
+            // As `sym@GOT - .`.
+            arm64_reloc::POINTER_TO_GOT => r.desc.pcrel,
+            _ => false,
+        },
     }
 }
 
@@ -764,6 +768,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         ))
     })?;
 
+    if !asm.options.relocatable {
+        return Err(OutputError::Unsupported(
+            "`--base` lays out a flat binary; a Mach-O object is placed by the linker".into(),
+        ));
+    }
     if asm.options.dialect == crate::lexer::Dialect::Nasm {
         return Err(OutputError::Unsupported(
             "NASM source is assembled to ELF objects and flat binaries; Mach-O output \
@@ -880,8 +889,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 entries.push(Entry {
                     address,
                     symbolnum,
-                    pcrel: type_pcrel(cpu, ty)
-                        || (ty == arm64_reloc::POINTER_TO_GOT && r.desc.pcrel),
+                    pcrel: entry_pcrel(cpu, ty, r),
                     length,
                     external,
                     ty,
