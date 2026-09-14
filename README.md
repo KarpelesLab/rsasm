@@ -53,7 +53,7 @@ assembler, not against rsasm's own idea of the manual. See
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 1594 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 8100 |
 | AArch64 | `aarch64` | llvm-mc | 480 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc | 371 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
@@ -86,6 +86,7 @@ but 18 forms where both manuals show MAME to be wrong.
 **Working**
 
 - AT&T and Intel syntax on x86, switchable mid-file; `.code16`/`.code32`/`.code64`
+  and `.code16gcc`
 - NASM source (`-d nasm`): its preprocessor (`%macro`, `%rep`, `%if`, `%define`,
   `%assign`, contexts, `%include`), `db`/`resb`/`times`/`equ`/`struc`, sections
   with attributes, `default rel`, and NASM's operand syntax and `wrt`
@@ -435,9 +436,10 @@ own target's reference, and rsasm has to produce the concatenation.
 Five differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
-- `tools/gas-diff/run.sh` against the host's GNU as, for x86. 854 of 854 match.
-- `tools/mc-diff/run.sh` against llvm-mc 22, for x86-64 and the targets LLVM
-  supports. 4,042 of 4,042 match across fourteen target variants. For RISC-V
+- `tools/gas-diff/run.sh` against the host's GNU as, for x86 in 64-, 32- and
+  16-bit mode, in AT&T and Intel syntax. 4,172 of 4,172 match.
+- `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
+  supports. 7,230 of 7,230 match across eighteen target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
@@ -458,6 +460,14 @@ independent assembler, and compare the bytes:
   a checksum-pinned source.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.
+
+The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
+instructions from a table of forms written from the Intel manual, in all three
+modes and both syntaxes, some of them deliberately invalid, and compares
+rsasm's bytes, relocations and accept/reject decision with GNU as's and
+llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
+from the few cases the corpora note; a run of 600,000 instructions finds no
+case where rsasm differs from both. See `tools/fuzz/README.md`.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment

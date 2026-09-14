@@ -42,6 +42,12 @@ batch of 200; a batch with errors is reassembled without the rejected cases.
 Findings are grouped by table row, mutation and prefix, most frequent first,
 each with its shortest example.
 
+rsasm follows GNU as where the references split. The splits it still follows
+llvm-mc on are forms only GNU as accepts and nothing is written in: Intel
+`jmp seg, off` with two operands and `callw` in Intel syntax, `arpl` with a
+32-bit register, `fcoml %st(1)`, suffixed `loopel` and `cmpxchg8bq`, and
+64-bit-mode quirks such as Intel `sysret` being ambiguous without a size.
+
 ## Environment
 
 | Variable | Default |

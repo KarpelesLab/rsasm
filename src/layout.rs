@@ -1178,8 +1178,15 @@ impl Assembler {
                                 if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
                                     // A byte or word field has no room for a
                                     // larger addend, which GNU as refuses
-                                    // rather than truncate.
+                                    // rather than truncate. It reads a 32-bit
+                                    // one as signed first, as `0xffffffff`
+                                    // for -1.
                                     let bits = kind.size as u32 * 8;
+                                    let addend = if (0..=0xffff_ffff).contains(&r.addend) {
+                                        r.addend as i32 as i64
+                                    } else {
+                                        r.addend
+                                    };
                                     if !rela
                                         && bits <= 16
                                         && matches!(
@@ -1187,7 +1194,7 @@ impl Assembler {
                                             crate::section::FieldEncoding::Whole
                                         )
                                         && !(-(1i64 << (bits - 1))..(1i64 << bits))
-                                            .contains(&r.addend)
+                                            .contains(&addend)
                                     {
                                         self.diags.error(
                                             span,

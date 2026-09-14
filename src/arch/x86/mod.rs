@@ -532,7 +532,8 @@ fn assemble_inner(
     // destination leaves only one.
     let extends = matches!(mnemonic, "movzx" | "movsx")
         && ops.iter().any(|o| o.is_mem() && o.size_hint.is_none());
-    if syntax == Syntax::Intel && !stack && (extends || ambiguous_memory_size(&matches, &ops)) {
+    if syntax == Syntax::Intel && !stack && (extends || ambiguous_memory_size(bits, &matches, &ops))
+    {
         cx.error(
             req.span,
             format!("`{mnemonic}` needs the size of its memory operand, as in `dword ptr [...]`"),
@@ -1237,7 +1238,7 @@ fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::Sectio
 ///
 /// GNU as's Intel syntax refuses `add [eax], 1` and `fld [eax]` for want of a
 /// `dword ptr`, where its AT&T syntax only warns and takes a default.
-fn ambiguous_memory_size(matches: &[&Def], ops: &[Operand]) -> bool {
+fn ambiguous_memory_size(bits: u8, matches: &[&Def], ops: &[Operand]) -> bool {
     let Some(slot) = ops.iter().position(|o| o.is_mem() && o.size_hint.is_none()) else {
         return false;
     };
@@ -1247,8 +1248,14 @@ fn ambiguous_memory_size(matches: &[&Def], ops: &[Operand]) -> bool {
         }
         _ => 0,
     };
-    let first = width(matches[0]);
-    matches.iter().any(|d| width(d) != first)
+    // A 64-bit operation outside long mode is no rival.
+    let mut usable = matches
+        .iter()
+        .filter(|d| bits == 64 || d.opsize != 64 || d.flags & DEF64 != 0);
+    let Some(first) = usable.next().map(|d| width(d)) else {
+        return false;
+    };
+    usable.any(|d| width(d) != first)
 }
 
 fn report_no_match(
