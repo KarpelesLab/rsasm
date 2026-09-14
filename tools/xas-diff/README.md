@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502 and 8080.
+and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm).
 
@@ -12,8 +12,8 @@ $ tools/xas-diff/run.sh           # every target with a corpus
 $ tools/xas-diff/run.sh m68k-mot  # just one
 ```
 
-The references are GNU binutils 2.47, vasm, cc65 2.19's ca65 and the Macro
-Assembler AS, built into `target/oracles/`,
+The references are GNU binutils 2.47, vasm, cc65 2.19's ca65, the Macro
+Assembler AS and SDCC 4.4.0's sdas8051 and sdld, built into `target/oracles/`,
 or wherever `RSASM_ORACLES` points — useful for sharing one build between
 worktrees, since binutils takes minutes per target.
 See `tools/oracles/build.sh` for why the versions are pinned.
@@ -41,6 +41,9 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
 | `powerpc64` / `powerpc64le` | `powerpc64` / `powerpc64le` | `powerpc64-linux-gnu-as -a64 -mfuture` with `-mbig` / `-mlittle`, both on `powerpc64.txt`; see [PowerPC](#powerpc) |
 | `powerpc` | `powerpc`, relocations only | `powerpc64-linux-gnu-as -a32 -mfuture` |
+| `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
+| `i8051-sdas` | `8051`, 8-bit syntax | `sdas8051`, linked by `sdld` into Intel HEX |
+| `i8051-hex` | `8051`, 8-bit syntax, `-f ihex` | `asl -cpu 8051`, converted by `p2hex`; the text is compared |
 
 ## Comparing objects
 
@@ -202,6 +205,22 @@ reference, and a second where one reads the same syntax:
   and AS does, with two gaps of its own: it has no `D` radix suffix or `AND`-
   style word operators, and its `$` in a data list is the statement's
   address rather than the item's.
+- **8051: AS, and sdas8051.** AS reads ASM51's syntax and defines no register
+  names of its own, so every `i8051` snippet is assembled after the
+  `stddef51.inc` AS ships, which is where rsasm's predefined names come from.
+  SDCC's sdas8051 is the second: an asxxxx assembler with its own directives,
+  `0x` numbers and `.` for the location counter, so it has a corpus of its
+  own in the spelling both read, `i8051-sdas.txt`, generated with the AS one
+  by `tools/fuzz/mcs51.py corpus`. It needs an absolute area before an `.org`,
+  which the harness supplies; it writes `.dw` high byte first, where AS's
+  `DW` is low byte first, so its corpus has no words; and sdld refuses a
+  numeric `AJMP` target outside block 0, so its programs use labels. Where
+  the two disagree rsasm follows AS, apart from what `i8051-pairs.txt` pairs
+  with the AS source that means the same: ASM51's `DATA`, `IDATA`, `XDATA`
+  and `CODE`, which AS lacks and are its `EQU`; and an `AJMP` or `ACALL` in
+  the last two bytes of a 2 KiB block, which both references check against
+  the instruction's own address and the CPU, and rsasm, against the address
+  after it — the pair is AS's generic `JMP`, which uses that address too.
 
 A reference that refuses a case never matches, so the corpora hold only
 source every reference for the key accepts.

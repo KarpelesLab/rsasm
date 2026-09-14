@@ -41,6 +41,9 @@
 //! - **A comparison is 1 when true,** as in ca65 and AS; GNU as and vasm give
 //!   -1. Operators bind as in C, where ca65 puts `&` with `*`.
 //! - **`.align` counts bytes,** as in ca65. vasm's `align` counts bits.
+//! - **On the 8051, `.` is a bit number and `BIT` defines a name,** as in AS:
+//!   `P1.3` is one operand, and `BIT`, `DATA`, `IDATA`, `XDATA`, `CODE`,
+//!   `SFR` and `SFRB` work as `EQU` does; see `arch::retro::mcs51`.
 //! - **Only dotted names switch segments.** ca65's `.code`, `.data`,
 //!   `.rodata`, `.bss`, `.zeropage` and `.segment "NAME"` do; the bare word
 //!   `data` is vasm's byte directive in other assemblers and is not one here.
