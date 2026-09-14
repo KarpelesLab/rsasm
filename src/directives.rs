@@ -6,7 +6,7 @@
 
 use crate::assembler::{Assembler, Cond};
 use crate::cursor::Cursor;
-use crate::expr::ExprRef;
+use crate::expr::{ExprKind, ExprRef};
 use crate::intern::Name;
 use crate::lexer::{Dialect, Punct, TokKind};
 use crate::parser::Statement;
@@ -335,16 +335,36 @@ impl Assembler {
         if aligned && self.arch.aligns_data() {
             self.align_data(size as u64, span);
         }
-        loop {
+        for item in 0.. {
+            let mark = self.exprs.len();
             let Some(e) = self.parse_expr(cur) else {
                 return true;
             };
+            // `.` in a later value is where that value goes, not where the
+            // statement starts: `.long 1, .` stores its own address.
+            if item > 0 && self.here_sym.is_some() {
+                self.bind_here(mark, span);
+            }
             self.emit_value(size, e, span);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
             }
         }
         true
+    }
+
+    /// Points each `.` among the expression nodes from `mark` on at a new
+    /// label at the current position.
+    fn bind_here(&mut self, mark: usize, span: Span) {
+        if !(mark..self.exprs.len()).any(|i| matches!(self.exprs.nodes[i].kind, ExprKind::Here)) {
+            return;
+        }
+        let label = self.anon_label(span);
+        for i in mark..self.exprs.len() {
+            if matches!(self.exprs.nodes[i].kind, ExprKind::Here) {
+                self.exprs.nodes[i].kind = ExprKind::SymId(label);
+            }
+        }
     }
 
     /// Pads to a `size`-byte boundary ahead of data that must start on one,

@@ -44,8 +44,7 @@ far:
     movl msg, %edx
     movw $msg, %ax
     pushl $msg
-    .long msg
-    .long msg - .
+    .long msg, msg - ., . - msg
     .word msg - start
 msg:
     .ascii "hi"

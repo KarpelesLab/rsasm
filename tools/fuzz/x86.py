@@ -1414,7 +1414,7 @@ KNOWN_SPLITS = [
     ("gas-data-prefix", gas_data_prefix, None),
     ("mc-addr32-in-16", mc_addr32_in_16, "gas"),
     ("unsized-memory", unsized_memory, None),
-    ("register-as-symbol", register_as_symbol, "mc"),
+    ("register-as-symbol", register_as_symbol, "gas"),
     ("intel-suffix", intel_suffix, None),
     ("intel-far-direct", intel_far_direct, "gas"),
     ("xchg-order", xchg_order, None),
