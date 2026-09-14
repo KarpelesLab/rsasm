@@ -273,8 +273,8 @@ impl Builder {
         // `NAME equ value`, the vendor spelling of `.set NAME, value`. The name
         // may already have been taken as a label — by a colon, or by starting
         // in the first column — in which case it is the name being defined
-        // rather than a place.
-        // ca65 also writes `NAME := value` and `NAME: = value`.
+        // rather than a place. ca65 also writes `NAME := value`, which is the
+        // same thing with `=` for the keyword.
         if self.dialect == Dialect::EightBit
             && toks.get(i).is_some_and(|t| t.is_punct(Punct::Eq))
             && let [LabelDef::Named(name, name_span)] = labels.as_slice()

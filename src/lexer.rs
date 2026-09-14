@@ -301,9 +301,9 @@ impl LexConfig {
             },
             // The 8-bit references agree on `;` comments, no statement
             // separator, and `$` and `%` prefixes. ca65 has no radix suffixes,
-            // but GNU as for the Z80, vasm and AS all read `0FFH`, and none of
-            // them has GNU's `1b` local label references to conflict with a
-            // binary `1B`. A `0B00H` is hex, as it is to all three.
+            // but GNU as for the Z80, vasm and AS all read `0FFH`; a `0B00H`
+            // is hex, as it is to all three. Only GNU as has `1b` local label
+            // references, which the others would read as binary, as this does.
             Dialect::EightBit => LexConfig {
                 dialect: d,
                 line_comment: vec![";"],

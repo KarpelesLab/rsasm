@@ -160,3 +160,13 @@ debug   = 1
         lda #2
         .endif
         rts
+=== macros with named parameters, and repeats
+        .macro  load val, addr
+        lda #val
+        sta addr
+        .endmacro
+        load 1, $0200
+        load $ff, $10
+        .repeat 3
+        nop
+        .endrep

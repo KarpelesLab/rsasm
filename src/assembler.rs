@@ -618,13 +618,19 @@ impl Assembler {
         // CC-RL, CC-RH and CC-RX write `NAME .MACRO params`, with the name in
         // the symbol field, and CC-RH allows the parameters in parentheses
         // (CC-RL page 527, CC-RH page 460, CC-RX R20UT3248EJ0115 page 486).
+        // vasm and AS write it that way in the 8-bit dialect too, and AS puts
+        // the parameters after the keyword: `LOAD MACRO VAL,ADDR`.
+        let eight_bit = self.options.dialect == Dialect::EightBit;
         let label_name = match (cc, stmt.symbol, stmt.labels.as_slice()) {
             (true, Some((n, _)), _) => Some(self.interner.get(n).to_string()),
-            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() => {
+            (false, _, [LabelDef::Named(n, _)]) if name_text.is_empty() || eight_bit => {
                 Some(self.interner.get(*n).to_string())
             }
             _ => None,
         };
+        if eight_bit && label_name.is_some() {
+            params_text = header.trim();
+        }
         if cc {
             name_text = "";
             params_text = header.trim();
@@ -848,6 +854,10 @@ impl Assembler {
         let text = if self.options.dialect.renesas_cc() {
             let bindings = self.cc_local_bindings(&def.body, &bindings);
             self.cc_substitute(&def.body, &bindings)
+        } else if self.options.dialect == Dialect::EightBit && !def.params.is_empty() {
+            // ca65 names its parameters in the body as plain words. With no
+            // parameters declared, vasm's `\1` is what the body uses.
+            macros::substitute_words(&def.body, &bindings, '\0', false)
         } else {
             macros::substitute_with(&def.body, &bindings, counter, positional)
         };

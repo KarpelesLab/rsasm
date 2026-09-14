@@ -48,3 +48,20 @@ halt1   halt
         ds 2
         defs 2,$aa
 label   db 0
+=== undocumented OUT (C),0
+        out (c),0
+=== a macro with positional arguments, repeats and conditionals
+load    macro
+        ld a,\1
+        ld (\2),a
+        endm
+        load 1,$4000
+        load $ff,1234h
+        rept 2
+        nop
+        endr
+        if 0
+        halt
+        else
+        scf
+        endif

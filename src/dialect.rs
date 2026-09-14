@@ -30,6 +30,16 @@
 //!   counter without padding. GNU as pads from the section start for every
 //!   `.org`, which is what an ELF object needs, and is what the 8-bit
 //!   dialect does in relocatable output too.
+//! - **A first-column word is a label unless it names an instruction or a
+//!   directive,** which reads both vasm's and AS's colonless labels and ca65's
+//!   first-column instructions; see `Builder::build` in [`crate::parser`].
+//! - **No bare directive is a 6502, Z80 or 8080 mnemonic.** `RES` is a Z80
+//!   instruction, so ca65's `res` needs its dot, and `SET` defines a name
+//!   only on a target that has no `SET` instruction.
+//! - **The location counter in a data list is each item's address,** as in
+//!   ca65, vasm and GNU as; AS keeps the statement's.
+//! - **A comparison is 1 when true,** as in ca65 and AS; GNU as and vasm give
+//!   -1. Operators bind as in C, where ca65 puts `&` with `*`.
 //! - **`.align` counts bytes,** as in ca65. vasm's `align` counts bits.
 //! - **Only dotted names switch segments.** ca65's `.code`, `.data`,
 //!   `.rodata`, `.bss`, `.zeropage` and `.segment "NAME"` do; the bare word

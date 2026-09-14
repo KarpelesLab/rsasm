@@ -25,13 +25,14 @@
 //! reviewable: a mistake is visible as a wrong table entry, not as one wrong
 //! byte buried in a list.
 //!
-//! # Deliberate omissions
+//! # Undocumented instructions
 //!
-//! * The undocumented halves of the index registers (`IXH`, `IXL`, `IYH`,
-//!   `IYL`) and the undocumented `DD CB d op,r` forms that write a register as
-//!   well as memory. The documented `DD CB d op` forms *are* implemented.
-//! * The undocumented `IN F,(C)` and `OUT (C),0` (`ED` page, `y = 6`).
-//! * `SLL` is accepted, and is marked undocumented in the table.
+//! Those that GNU as and vasm both accept are implemented, and checked against
+//! both: the halves of the index registers (`IXH`, `IXL`, `IYH`, `IYL`) in
+//! the 8-bit load and arithmetic groups, `IN F,(C)` (also `IN (C)`) and
+//! `OUT (C),0`, and `SLL`. The `DD CB d op,r` forms that write a register as
+//! well as memory are not: vasm refuses them, and GNU as only takes them
+//! when asked. The documented `DD CB d op` forms *are* implemented.
 //!
 //! `EX AF,AF'` may also be written without the prime, which rsasm's lexer
 //! could once not read; GNU as accepts both too.
@@ -183,7 +184,10 @@ fn is_reserved(name: &str) -> bool {
         || RP.contains(&name)
         || RP2.contains(&name)
         || CC.contains(&name)
-        || matches!(name, "i" | "r" | "ix" | "iy" | "af'")
+        || matches!(
+            name,
+            "i" | "r" | "ix" | "iy" | "af'" | "ixh" | "ixl" | "iyh" | "iyl"
+        )
 }
 
 /// The `alu[]` field of an ALU mnemonic. Only called with names the
@@ -250,6 +254,9 @@ impl Arg {
 struct Slot {
     field: u8,
     idx: Option<(u8, Option<ExprRef>)>,
+    /// The prefix of an index register half, `IXH` to `IYL`: the `H` or `L`
+    /// field read through `DD` or `FD`, with no displacement.
+    half: Option<u8>,
     span: Span,
 }
 
@@ -266,6 +273,18 @@ fn slot_of(arg: &Arg) -> Option<Slot> {
         return Some(Slot {
             field: f,
             idx: None,
+            half: None,
+            span: arg.span,
+        });
+    }
+    if let Some((reg, half)) = arg.name.as_deref().and_then(|n| n.split_at_checked(2))
+        && let Some(prefix) = index_prefix(reg)
+        && let Some(field) = position(&["h", "l"], half)
+    {
+        return Some(Slot {
+            field: 4 + field,
+            idx: None,
+            half: Some(prefix),
             span: arg.span,
         });
     }
@@ -273,17 +292,20 @@ fn slot_of(arg: &Arg) -> Option<Slot> {
         Mem::Reg(r) if r == "hl" => Some(Slot {
             field: 6,
             idx: None,
+            half: None,
             span: arg.span,
         }),
         // A bare `(ix)` is `(ix+0)`; the displacement byte is still there.
         Mem::Reg(r) => index_prefix(r).map(|p| Slot {
             field: 6,
             idx: Some((p, None)),
+            half: None,
             span: arg.span,
         }),
         Mem::Idx(p, d) => Some(Slot {
             field: 6,
             idx: Some((*p, Some(*d))),
+            half: None,
             span: arg.span,
         }),
         Mem::Addr(_) => None,
@@ -293,6 +315,9 @@ fn slot_of(arg: &Arg) -> Option<Slot> {
 /// Emits `[prefix] opcode [d]` — the shape of every main-page instruction
 /// that can carry an `(IX+d)` operand.
 fn emit_slot(enc: &mut Enc, slot: &Slot, opcode: u8) {
+    if let Some(prefix) = slot.half {
+        enc.byte(prefix);
+    }
     match &slot.idx {
         Some((prefix, disp)) => {
             enc.byte(*prefix);
@@ -608,6 +633,14 @@ fn encode(
             Enc::op(&[PREFIX_ED, opcode]).done()
         }
         "in" => match args {
+            // `IN F,(C)`, also written `IN (C)`, sets the flags and keeps
+            // nothing (undocumented).
+            [src] if matches!(&src.mem, Some(Mem::Reg(r)) if r == "c") => {
+                Enc::op(&[PREFIX_ED, 0x70]).done()
+            }
+            [dst, src] if dst.is("f") && matches!(&src.mem, Some(Mem::Reg(r)) if r == "c") => {
+                Enc::op(&[PREFIX_ED, 0x70]).done()
+            }
             // `IN A,(n)` reads port `n`; `IN r,(C)` reads the port in BC and
             // is a different page entirely.
             [dst, src] => match &src.mem {
@@ -625,6 +658,21 @@ fn encode(
             _ => common::bad_operands(cx, span, m),
         },
         "out" => match args {
+            // `OUT (C),0` (undocumented): the `y = 6` slot that would be
+            // `OUT (C),(HL)`.
+            [dst, src]
+                if matches!(&dst.mem, Some(Mem::Reg(r)) if r == "c")
+                    && src.name.is_none()
+                    && src.mem.is_none() =>
+            {
+                match src.expr.and_then(|e| cx.constant(e)) {
+                    Some(0) => Enc::op(&[PREFIX_ED, 0x71]).done(),
+                    _ => {
+                        cx.error(src.span, "`out (c),` takes a register or 0");
+                        None
+                    }
+                }
+            }
             [dst, src] => match &dst.mem {
                 Some(Mem::Reg(r)) if r == "c" => match src.name.as_deref().and_then(r8_of) {
                     Some(f) => Enc::op(&[PREFIX_ED, 0x41 | f << 3]).done(),
@@ -644,7 +692,7 @@ fn encode(
                 let [arg] = args else {
                     return common::bad_operands(cx, span, m);
                 };
-                let Some(slot) = slot_of(arg) else {
+                let Some(slot) = slot_of(arg).filter(|s| s.half.is_none()) else {
                     return common::bad_operands(cx, span, m);
                 };
                 return cb(&slot, cb_rot(y, slot.field));
@@ -669,7 +717,7 @@ fn encode(
                     cx.error(n.span, format!("a bit number must be 0 to 7, not {v}"));
                     return None;
                 }
-                let Some(slot) = slot_of(arg) else {
+                let Some(slot) = slot_of(arg).filter(|s| s.half.is_none()) else {
                     return common::bad_operands(cx, span, m);
                 };
                 let opcode = cb_bit(x, v as u8, slot.field);
@@ -921,7 +969,28 @@ fn ld(cx: &mut AsmCtx<'_>, m: &str, dst: &Arg, src: &Arg) -> Option<Vec<Variant>
             );
             return None;
         }
-        let indexed = if d.prefix().is_some() { &d } else { &s };
+        // The prefix that makes `H` read as `IXH` makes it read that way on
+        // both sides, and makes `(HL)` read as `(IX+d)`.
+        if let Some(prefix) = d.half.or(s.half) {
+            let other = if d.half.is_some() { &s } else { &d };
+            let clash = match other.half {
+                Some(p) => p != prefix,
+                None => other.field >= 4 && other.field <= 6,
+            };
+            if clash {
+                cx.error(
+                    span,
+                    "an index register half can only be loaded to or from `a` to `e`, a number, \
+                     or a half of the same register",
+                );
+                return None;
+            }
+        }
+        let indexed = if d.prefix().is_some() || d.half.is_some() {
+            &d
+        } else {
+            &s
+        };
         let mut enc = Enc::new();
         emit_slot(&mut enc, indexed, ld_r_r(d.field, s.field));
         return enc.done();

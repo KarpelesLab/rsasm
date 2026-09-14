@@ -82,3 +82,14 @@ V       EQU     1234H
 Start:  LXI     H,Text
         JMP     Start
 Text:   DB      "it's",0
+=== a macro with parameters, and conditional assembly
+LOAD    MACRO   REG,VAL
+        MVI     REG,VAL
+        ENDM
+        LOAD    A,12H
+        LOAD    B,3
+        IF      1
+        NOP
+        ELSE
+        HLT
+        ENDIF
