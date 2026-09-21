@@ -717,7 +717,8 @@ impl Assembler {
             b.u8(DW_LNE_END_SEQUENCE);
             return;
         };
-        // Even an advance of no lines, as `emit_fixed_inc_line_addr` does.
+        // Even an advance of 0: GNU as sizes the row before it knows the
+        // delta, and always writes one.
         b.u8(DW_LNS_ADVANCE_LINE);
         b.sleb(line_delta);
         if delta > 50000 {

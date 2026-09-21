@@ -11,6 +11,9 @@
 #   type, binding, visibility and section). Local symbols are not compared:
 #   NASM writes every label into the symbol table, where rsasm, like GNU as,
 #   keeps them to itself, and a linker never sees the difference.
+# - a COFF object (`win32`, `win64`) as tools/coff-diff/canon.sh prints it:
+#   every section's characteristics and bytes, every symbol, locals included,
+#   with its auxiliary records, and every relocation.
 #
 #   tools/nasm-diff/run.sh                 # every corpus
 #   tools/nasm-diff/run.sh bin elf64       # just these formats
@@ -89,6 +92,7 @@ reference() { # format dir
   fi
   case "$1" in
     bin) xxd -p "$2/ref.out" | tr -d '\n'; echo ;;
+    win*) "$here/../coff-diff/canon.sh" "$2/ref.out" ;;
     *) describe_elf "$2/ref.out" ;;
   esac
 }
@@ -100,6 +104,7 @@ ours() { # format dir
   fi
   case "$1" in
     bin) xxd -p "$2/ours.out" | tr -d '\n'; echo ;;
+    win*) "$here/../coff-diff/canon.sh" "$2/ours.out" ;;
     *) describe_elf "$2/ours.out" ;;
   esac
 }
@@ -151,7 +156,7 @@ $line"
   return 0
 }
 
-for f in ${*:-bin elf32 elf64}; do
+for f in ${*:-bin elf32 elf64 win32 win64}; do
   run_format "$f"
 done
 

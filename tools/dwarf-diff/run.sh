@@ -17,7 +17,7 @@
 #
 # The reference is whichever assembler checks the target's encodings, since
 # the two write different DWARF from the same source (see src/dwarf): GNU as
-# 2.47 for x86, m68k, SuperH, RX, RL78 and V850, from tools/oracles/build.sh
+# 2.47 for x86, m68k, SuperH, RX, RL78, V850 and AVR, from tools/oracles/build.sh
 # (found in RSASM_ORACLES, as for tools/xas-diff), and llvm-mc 22 for the
 # rest. x86 is checked against the cross x86_64-elf-as rather than the host's
 # as, which compresses debug sections by default and is a different release.
@@ -44,14 +44,17 @@ awkscript="$root/tools/mc-diff/relocs.awk"
 # key | rsasm arch, and options | reference: `xas <tool> <flags>` or
 # `mc <triple> <flags>`
 # | what differs: `cfi` where the reference has call frame information,
-# `P` where it names the code section `P` (RX; rsasm writes `.text`), and
+# `P` where it names the code section `P` (RX; rsasm writes `.text`),
 # `norelocs` where its relocations are not compared (RL78, whose GNU as leaves
 # every distance in the line table to the linker as a stack of relocation
-# operations, where rsasm writes the numbers), and `byoffset` where they are
-# compared in offset order (MSP430, whose GNU as writes the `R_MSP430_SYM_DIFF`
-# pairs of the line table's address advances after its other relocations,
-# when it converts their frags; a pair stays together, and a linker reads the
-# rest in any order)
+# operations, where rsasm writes the numbers), and `nodiffs` where the
+# relocations that restate a difference already in the bytes are not (AVR,
+# whose GNU as adds an `R_AVR_DIFF*` to every distance into code, for linker
+# relaxation, where rsasm writes the number alone), and `byoffset` where they are
+# compared in offset order (MSP430, whose GNU as writes the
+# `R_MSP430_SYM_DIFF` pairs of the line table's address advances after its
+# other relocations, when it converts their frags; a pair stays together, and
+# a linker reads the rest in any order)
 TARGETS="
 x86-64|x86-64|xas x86_64-elf-as|cfi
 i386|i386|xas x86_64-elf-as --32|cfi
@@ -74,6 +77,9 @@ shl|shl|xas sh-elf-as -little|cfi
 rx|rx|xas rx-elf-as|P
 rl78|rl78|xas rl78-elf-as|norelocs
 v850|v850|xas v850-elf-as|
+avr|avr|xas avr-elf-as|cfi nodiffs
+avr5|avr5|xas avr-elf-as -mmcu=avr5|cfi nodiffs
+avr6|avr6|xas avr-elf-as -mmcu=avr6|cfi nodiffs
 msp430|msp430|xas msp430-elf-as -mcpu=430|byoffset
 msp430x|msp430x|xas msp430-elf-as -mcpu=430x|byoffset
 "
@@ -161,6 +167,9 @@ compare() { # key, rsasm arch, reference, quirks, name, source, flag
     *" norelocs "*)
       m=$(printf '%s\n' "$m" | grep -v '^\.rel')
       r=$(printf '%s\n' "$r" | grep -v '^\.rel') ;;
+    *" nodiffs "*)
+      m=$(printf '%s\n' "$m" | grep -v ' R_AVR_DIFF')
+      r=$(printf '%s\n' "$r" | grep -v ' R_AVR_DIFF') ;;
     *" byoffset "*)
       m=$(printf '%s\n' "$m" | by_offset)
       r=$(printf '%s\n' "$r" | by_offset) ;;

@@ -59,6 +59,8 @@ rx|xas rx-elf-as|P
 rl78|xas rl78-elf-as|.text
 v850|xas v850-elf-as|.text
 rh850|xas v850-elf-as -mv850e3v5|.text
+avr|xas avr-elf-as|.text
+avr5|xas avr-elf-as -mmcu=avr5|.text
 msp430|xas msp430-elf-as -mcpu=430|.text
 msp430x|xas msp430-elf-as -mcpu=430x|.text
 "

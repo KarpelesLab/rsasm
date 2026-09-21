@@ -49,6 +49,13 @@ pub enum RelocClass {
     /// an x86-64 displacement, or a 64-bit operation's immediate. ELF calls it
     /// `R_X86_64_32S`; Mach-O has no relocation for it.
     SignExtended,
+    /// The target's address relative to the base the image is loaded at,
+    /// which only a PE image has: COFF's `.rva` and `@IMGREL`.
+    ImageRelative,
+    /// The target's offset within its own section: COFF's `.secrel32`.
+    SectionRelative,
+    /// The one-based index of the target's section: COFF's `.secidx`.
+    SectionIndex,
 }
 
 /// The format-neutral description of one relocation, recorded next to the

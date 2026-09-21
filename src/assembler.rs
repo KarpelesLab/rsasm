@@ -56,7 +56,9 @@ pub struct Options {
     pub debug_source: bool,
     /// The object format being written, which the source can see: Mach-O
     /// names its sections differently, counts `.align` in bits rather than
-    /// bytes, and decides what a linker is told by rules of its own. Flat
+    /// bytes, and decides what a linker is told by rules of its own; COFF
+    /// has directives of its own, keeps relocation addends in the bytes they
+    /// relocate, and starts its sections with alignments of its own. Flat
     /// output leaves this at its default, since `relocatable` already says
     /// there is no object.
     pub format: crate::output::Format,
@@ -195,6 +197,8 @@ pub struct Assembler {
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
+    /// What COFF output needs that ELF has no room for; see [`crate::coff`].
+    pub(crate) coff: crate::coff::State,
     /// What the source said that only a Mach-O object records.
     pub(crate) macho: crate::output::macho::State,
     /// The backends whose [`Architecture::prelude`] has been assembled.
@@ -255,6 +259,7 @@ impl Assembler {
             literal_pools: HashMap::new(),
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
+            coff: crate::coff::State::default(),
             macho: crate::output::macho::State::default(),
             arch_preludes: Vec::new(),
             arch_prelude_text: Vec::new(),
@@ -344,9 +349,13 @@ impl Assembler {
         let mut s = Section::new(id, name, kind, flags);
         // The backend active where a section is first named decides its
         // starting alignment, as the reference for that backend would. In a
-        // Mach-O object every section starts unaligned, on every machine, as
-        // llvm-mc starts them.
-        let default = if self.options.format == crate::output::Format::MachO {
+        // COFF or Mach-O object the format decides instead: llvm-mc aligns
+        // the three sections COFF always has to four bytes on every machine,
+        // gives a COFF section the source names none of its own, and starts
+        // every Mach-O section unaligned.
+        let default = if self.options.format.is_coff() {
+            crate::output::coff::default_align(self.interner.get(name))
+        } else if self.options.format == crate::output::Format::MachO {
             1
         } else {
             self.arch
@@ -546,6 +555,12 @@ impl Assembler {
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
             self.arch.tune_lexer(&mut config);
+            // COFF names carry `@`: MSVC's mangled C++ names, clang's
+            // `__xmm@...` constants, `@feat.00`. A relocation modifier is then
+            // split off the end of a name by the expression parser.
+            if self.options.format.is_coff() {
+                config.at_in_idents = true;
+            }
             // Darwin's arm64 assembly comments with `;`, which everywhere
             // else separates statements: `bl _f ; call it`.
             if self.options.format == crate::output::Format::MachO
@@ -1921,11 +1936,12 @@ impl Assembler {
         // modifier is read, so it takes its place in the symbol table ahead
         // of the targets that layout interns later.
         // NASM declares every external symbol, and makes nothing of the kind;
-        // nor does a Mach-O object, which has no `_GLOBAL_OFFSET_TABLE_`.
+        // nor does a Mach-O or COFF object, which have no
+        // `_GLOBAL_OFFSET_TABLE_` for one to name.
         let nasm = self.options.dialect == crate::lexer::Dialect::Nasm
             || self.options.format == crate::output::Format::MachO;
         for f in variants.iter().flatten().flat_map(|v| &v.fixups) {
-            if nasm {
+            if nasm || self.options.format.is_coff() {
                 break;
             }
             if let Some(m) = self.find_modifier(f.expr) {
