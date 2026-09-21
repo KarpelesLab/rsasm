@@ -10,6 +10,7 @@ use super::reg::{self, Reg, RegClass};
 use super::reloc;
 use crate::arch::AsmCtx;
 use crate::expr::{ExprKind, ExprRef};
+use crate::reloc::RelocClass;
 use crate::section::{Fixup, FixupKind, Variant};
 use crate::source::Span;
 
@@ -693,6 +694,9 @@ pub fn encode(
                 };
                 let mut kind = FixupKind::data(width).with_reloc(r);
                 kind.signed = sign_extended;
+                if sign_extended {
+                    kind.class = RelocClass::SignExtended;
+                }
                 if abi == reloc::Abi::I386 && width == 4 && names_got(cx, e) {
                     kind = got_distance(offset);
                 }
@@ -721,7 +725,21 @@ pub fn encode(
     if let Some((offset, e, dspan, rip_relative, width)) = disp_fixup {
         let trailing = (bytes.len() - offset - width as usize) as i8;
         let kind = if rip_relative {
-            FixupKind::pcrel(4, trailing + 4).with_reloc(abi.pcrel(4).unwrap_or(0))
+            // A `movq` load through the GOT is one a linker may turn into a
+            // `leaq` of the symbol itself, which Mach-O records in the
+            // relocation's type; ELF's `R_X86_64_GOTPCREL` does not say.
+            let class = if def.opcode == [0x8b]
+                && def.opsize == 64
+                && def.enc == Enc::Legacy
+                && modifier(cx, e).as_deref() == Some("gotpcrel")
+            {
+                RelocClass::GotLoad
+            } else {
+                RelocClass::Plain
+            };
+            FixupKind::pcrel(4, trailing + 4)
+                .with_reloc(abi.pcrel(4).unwrap_or(0))
+                .with_class(class)
         } else if width != 4 {
             FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
         } else if bits == 64
@@ -732,7 +750,18 @@ pub fn encode(
             // width, so the linker has to range-check it as signed. With
             // 32-bit addressing it is an unsigned address instead, and so is
             // the result of a `lea` into a 32-bit register.
-            FixupKind::data(4).with_reloc(abi.abs32_signed())
+            FixupKind::data(4)
+                .with_reloc(abi.abs32_signed())
+                .with_class(RelocClass::SignExtended)
+        } else if bits == 64
+            && abi == reloc::Abi::X86_64
+            && mem.as_ref().is_none_or(|m| m.addr_size == 8)
+        {
+            // The CPU still sign-extends the `lea`'s displacement; only the
+            // result is truncated.
+            FixupKind::data(4)
+                .with_reloc(abi.abs(4).unwrap_or(0))
+                .with_class(RelocClass::SignExtended)
         } else if abi == reloc::Abi::I386 && names_got(cx, e) {
             got_distance(offset as u32)
         } else if abi == reloc::Abi::I386
@@ -777,7 +806,9 @@ pub fn encode(
             expr: e,
             // The displacement is measured from the end of the instruction,
             // which is `width` bytes past the start of this field.
-            kind: FixupKind::pcrel(width, width as i8).with_reloc(reloc),
+            kind: FixupKind::pcrel(width, width as i8)
+                .with_reloc(reloc)
+                .with_class(RelocClass::Branch),
             span: cx.exprs.span(e),
         });
     }

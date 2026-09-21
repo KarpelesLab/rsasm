@@ -14,8 +14,11 @@ usage: rsasm [options] <input.s>...
 
 options:
   -o <file>          write output to <file> (default: a.out)
-  -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default), elf32, elf64, bin or ihex
+  -a, --arch <name>  target architecture (default: the host, if supported),
+                     or a target triple: `x86_64-apple-macos` also picks
+                     Mach-O output
+  -f, --format <fmt> output format: elf (default), elf32, elf64, macho, bin
+                     or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
@@ -47,6 +50,8 @@ struct Args {
     /// The ELF class `-f elf32` or `-f elf64` named, which picks the
     /// architecture when `-a` does not.
     elf_bits: Option<u8>,
+    /// Whether `-f` was given; otherwise a Darwin target triple picks Mach-O.
+    format_given: bool,
 }
 
 fn main() -> ExitCode {
@@ -81,6 +86,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         color: std::io::IsTerminal::is_terminal(&std::io::stderr()),
         dialect_given: false,
         elf_bits: None,
+        format_given: false,
     };
     let mut i = 0;
     // A value may be written `-o x`, `-ox` or `--out=x`.
@@ -108,6 +114,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             "-f" | "--format" => {
                 let v = next(&mut i, arg)?;
                 a.format = Format::from_name(&v).ok_or_else(|| format!("unknown format `{v}`"))?;
+                a.format_given = true;
                 a.elf_bits = match v.as_str() {
                     "elf32" => Some(32),
                     "elf64" => Some(64),
@@ -169,6 +176,20 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
 
     if a.inputs.is_empty() {
         return Err("no input files".into());
+    }
+    // A target triple names the architecture first and the object format
+    // with the rest of it: `arm64-apple-macos` is arm64 in a Mach-O object.
+    if let Some(name) = a.arch.clone()
+        && let Some((cpu, rest)) = name.split_once('-')
+        && arch::lookup(&name).is_none()
+    {
+        if !a.format_given {
+            a.format = Format::for_target(rest);
+        }
+        a.arch = Some(cpu.to_string());
+    }
+    if a.format == Format::MachO {
+        a.options.format = Format::MachO;
     }
     // Flat output has no relocations to defer to a linker.
     if a.format.is_flat() {
@@ -245,6 +266,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
 
     let bytes = match args.format {
         Format::Elf => output::elf::build(&asm).map_err(|e| e.to_string())?,
+        Format::MachO => output::macho::build(&asm).map_err(|e| e.to_string())?,
         Format::Binary => output::raw::build(&asm).map_err(|e| e.to_string())?,
         Format::IntelHex => output::ihex::build(&asm).map_err(|e| e.to_string())?,
     };

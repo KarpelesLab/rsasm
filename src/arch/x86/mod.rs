@@ -141,6 +141,23 @@ impl Architecture for X86 {
         }
     }
 
+    /// Mach-O's one x86-64 modifier is `@GOTPCREL`: a load through the GOT in
+    /// a RIP-relative operand, or in data the address of the GOT slot
+    /// relative to the field. A branch cannot go through one.
+    fn modifier_class(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> Option<crate::reloc::RelocClass> {
+        use crate::reloc::RelocClass;
+        match (name, kind.class) {
+            (_, RelocClass::Branch) => None,
+            ("gotpcrel", RelocClass::GotLoad) if self.bits == 64 => Some(RelocClass::GotLoad),
+            ("gotpcrel", _) if self.bits == 64 => Some(RelocClass::Got),
+            _ => None,
+        }
+    }
+
     /// GNU as creates `_GLOBAL_OFFSET_TABLE_` for every modifier but `@PLT`,
     /// `@PLTOFF` and `@SIZE`, and marks the target of a TLS one thread-local.
     fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
@@ -1299,7 +1316,7 @@ fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
         ExprKind::Binary(op, l, r) => {
             if op == BinOp::Sub
                 && let (Some(to), Some(from)) = (label_position(cx, l), label_position(cx, r))
-                && let Some(d) = cx.fixed_distance(from, to)
+                && let Some(d) = cx.fixed_label_distance(from, to)
             {
                 return cx.exprs.int(d as u64, node.span);
             }
@@ -1322,17 +1339,22 @@ fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
     }
 }
 
-/// Where a label an expression names was defined, or where `.` is.
-fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::SectionId, u32)> {
+/// Where a label an expression names was defined, or where `.` is, with the
+/// order it was defined in; see [`AsmCtx::fixed_label_distance`].
+fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::SectionId, u32, u32)> {
     let node = cx.exprs.get(e);
     let id = match node.kind {
-        ExprKind::Here => return Some(cx.here()),
+        ExprKind::Here => {
+            let (section, frag) = cx.here();
+            return Some((section, frag, u32::MAX));
+        }
         ExprKind::SymId(id) => id,
         ExprKind::Sym(name) => cx.symbols.lookup(name)?,
         ExprKind::LocalRef(n, LocalDir::Backward) => cx.symbols.local_backward(n, node.span)?,
         _ => return None,
     };
-    cx.label_position(id)
+    let (section, frag) = cx.label_position(id)?;
+    Some((section, frag, cx.symbols.get(id).def_order))
 }
 
 /// True when an unsized memory operand leaves more than one width possible.
