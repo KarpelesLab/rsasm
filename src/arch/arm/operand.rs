@@ -21,7 +21,8 @@ use crate::source::Span;
 
 /// Which bank a vector register comes from: 32 single-precision `s`
 /// registers, 32 double-precision `d` registers over the same bytes, and 16
-/// quadword `q` registers over pairs of those.
+/// quadword `q` registers over pairs of those. Not API.
+#[doc(hidden)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum VecKind {
     S,
@@ -29,6 +30,7 @@ pub enum VecKind {
     Q,
 }
 
+#[doc(hidden)]
 impl VecKind {
     pub fn letter(self) -> char {
         match self {
@@ -39,7 +41,8 @@ impl VecKind {
     }
 }
 
-/// One vector register, and the lane of it an operand may name.
+/// One vector register, and the lane of it an operand may name. Not API.
+#[doc(hidden)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct VecReg {
     pub kind: VecKind,
@@ -52,7 +55,8 @@ pub struct VecReg {
     pub all: bool,
 }
 
-/// The vector register a name spells, if it is one.
+/// The vector register a name spells, if it is one. Not API.
+#[doc(hidden)]
 pub fn vec_register(name: &str) -> Option<(VecKind, u8)> {
     let (kind, rest) = match name.as_bytes().first()? {
         b's' => (VecKind::S, &name[1..]),
@@ -156,7 +160,8 @@ pub struct Mem {
     pub offset: MemOffset,
     pub index: Index,
     /// `[r0:64]`: the alignment a NEON structure transfer may promise, in
-    /// bits.
+    /// bits. Not API.
+    #[doc(hidden)]
     pub align: Option<u32>,
     pub span: Span,
 }
@@ -217,7 +222,8 @@ pub struct Operand {
 }
 
 impl Operand {
-    /// The vector register this operand is, if it is one.
+    /// The vector register this operand is, if it is one. Not API.
+    #[doc(hidden)]
     pub fn vec(&self) -> Option<VecReg> {
         match self.kind {
             OperandKind::Vec(v) => Some(v),
