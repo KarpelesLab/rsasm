@@ -207,6 +207,18 @@ jobs:
             || { echo "::error::mc-diff compared nothing"; exit 1; }
           exit $status
 
+      # Mach-O objects against the same pinned llvm-mc, compared as
+      # llvm-readobj reads them.
+      - name: tools/macho-diff/run.sh
+        run: |
+          set +e -uo pipefail
+          tools/macho-diff/run.sh > macho-diff.log 2>&1
+          status=$?
+          cat macho-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" macho-diff.log \
+            || { echo "::error::macho-diff compared nothing"; exit 1; }
+          exit $status
+
   xas_diff:
     name: Differential tests against cross GNU as, vasm and GNU ld
     runs-on: ubuntu-latest

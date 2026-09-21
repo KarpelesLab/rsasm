@@ -17,6 +17,7 @@ use crate::assembler::{Assembler, Relocation};
 use crate::expr::{self, EvalError, ExprKind, ExprRef, Value};
 use crate::intern::Name;
 use crate::lexer::LocalDir;
+use crate::reloc::RelocDesc;
 use crate::section::{
     FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
 };
@@ -65,6 +66,18 @@ impl Assembler {
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
+        // Which references a Mach-O object resolves depends on where its
+        // atoms start, which is settled once every label has been read.
+        if self.macho_object() {
+            self.macho.atoms = crate::output::macho::atoms(self);
+            if let Some(open) = self.macho.data_regions.iter().find(|r| r.end.is_none()) {
+                let span = open.span;
+                self.diags.error(
+                    span,
+                    "`.data_region` is never ended with `.end_data_region`",
+                );
+            }
+        }
 
         if !self.settle_layout() {
             return false;
@@ -1213,6 +1226,14 @@ impl Assembler {
         if kind.object_reloc {
             return true;
         }
+        // A Mach-O object decides by atoms, not by binding; see
+        // `crate::output::macho::defers_to_linker`.
+        if self.macho_object() {
+            // A modifier names something only the linker makes, such as a
+            // GOT slot, however near the symbol is.
+            return self.find_modifier(e).is_some()
+                || crate::output::macho::defers_to_linker(self, target, section, fi as u32);
+        }
         let (arch, _) = self.frag_arch(section.0 as usize, fi);
         let modifier = self.find_modifier(e).map(|m| self.interner.get(m));
         let reloc = modifier
@@ -1353,6 +1374,11 @@ impl Assembler {
         if let (Some(p), Some(m)) = (v.plus, v.minus) {
             let (ps, ms) = (self.symbol_section(p), self.symbol_section(m));
             if ps.is_some() && (ps == ms || !self.options.relocatable) {
+                // Unless the linker may move them apart: a Mach-O object
+                // keeps a difference between two atoms for the linker.
+                if self.macho_object() && !crate::output::macho::folds_difference(self, p, m) {
+                    return None;
+                }
                 return self.resolve_value(v);
             }
             return None;
@@ -1455,7 +1481,13 @@ impl Assembler {
                                 symbol: Some(label),
                                 addend: 0,
                                 kind: kind.reloc,
+                                desc: RelocDesc::of(&kind),
                             });
+                        }
+                        // A Mach-O field is filled in by the writer, which
+                        // alone knows what each relocation will name.
+                        None if self.macho_object() => {
+                            relocs.extend(self.macho_relocation(e, &kind, id, fi, at, span));
                         }
                         None => {
                             let leftover = self.relocated_field(e, &kind, id, fi, at);
@@ -1607,6 +1639,7 @@ impl Assembler {
                 symbol: Some(symbol),
                 addend,
                 kind: reloc,
+                desc: RelocDesc::of(&kind),
             });
             v.minus = None;
             kind.reloc = add;
@@ -1745,6 +1778,7 @@ impl Assembler {
             symbol,
             addend,
             kind: reloc,
+            desc: RelocDesc::of(kind),
         }];
         relocs.extend(subtrahend);
         relocs
