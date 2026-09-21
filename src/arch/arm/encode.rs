@@ -724,9 +724,9 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         | field))
 }
 
-fn register_list(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<u16> {
+fn register_list(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<(u16, bool)> {
     match op.kind {
-        OperandKind::List(m) => Some(m),
+        OperandKind::List { mask, user } => Some((mask, user)),
         _ => {
             cx.error(
                 op.span,
@@ -742,37 +742,53 @@ fn sole_register(list: u16) -> Option<u32> {
     (list.count_ones() == 1).then(|| list.trailing_zeros())
 }
 
+/// The register list of a `push` or `pop`, which GNU as says in so many
+/// words has no `^` form.
+fn no_user_bank(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<u16> {
+    let (list, user) = register_list(cx, &ins.ops[0])?;
+    if user {
+        cx.error(
+            ins.ops[0].span,
+            format!("`{}` does not take a `^` register list", ins.text),
+        );
+        return None;
+    }
+    Some(list)
+}
+
 fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     // `push`/`pop` are `stmdb sp!` / `ldmia sp!` under another name.
-    let (rn, writeback, mode, load, list) = match ins.mnem {
+    let (rn, writeback, mode, load, list, user) = match ins.mnem {
         Mnem::Push => {
             arity(cx, ins, &[1])?;
-            let list = register_list(cx, &ins.ops[0])?;
+            let list = no_user_bank(cx, ins)?;
             // A one-register push is a plain pre-indexed store, which is one
             // cycle cheaper; GNU as and LLVM both rewrite it that way.
             if let Some(rt) = sole_register(list) {
                 return Some(one(word(ins.cond, 0x052d_0004 | (rt << 12))));
             }
-            (reg::SP, true, (true, false), false, list)
+            (reg::SP, true, (true, false), false, list, false)
         }
         Mnem::Pop => {
             arity(cx, ins, &[1])?;
-            let list = register_list(cx, &ins.ops[0])?;
+            let list = no_user_bank(cx, ins)?;
             if let Some(rt) = sole_register(list) {
                 return Some(one(word(ins.cond, 0x049d_0004 | (rt << 12))));
             }
-            (reg::SP, true, (false, true), true, list)
+            (reg::SP, true, (false, true), true, list, false)
         }
         Mnem::Ldm(m) | Mnem::Stm(m) => {
             arity(cx, ins, &[2])?;
             let rn = reg_of(cx, &ins.ops[0])?;
+            let (list, user) = register_list(cx, &ins.ops[1])?;
             (
                 rn,
                 ins.ops[0].writeback,
                 (m.before, m.increment),
                 matches!(ins.mnem, Mnem::Ldm(_)),
-                register_list(cx, &ins.ops[1])?,
+                list,
+                user,
             )
         }
         _ => return None,
@@ -782,6 +798,7 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         (1 << 27)
             | (u32::from(mode.0) << 24)
             | (u32::from(mode.1) << 23)
+            | (u32::from(user) << 22)
             | (u32::from(writeback) << 21)
             | (u32::from(load) << 20)
             | ((rn as u32) << 16)

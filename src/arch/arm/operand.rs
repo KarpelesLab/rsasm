@@ -118,8 +118,13 @@ pub enum OperandKind {
     /// An immediate or a branch target; which one depends on the instruction.
     Imm(ExprRef),
     Mem(Mem),
-    /// `{r0-r3, lr}`, as a bitmask of registers.
-    List(u16),
+    /// `{r0-r3, lr}`, as a bitmask of registers. `user` is the `^` that
+    /// makes an A32 block transfer read the user-mode register bank, or,
+    /// with the PC in the list, restore the saved status register.
+    List {
+        mask: u16,
+        user: bool,
+    },
     /// `=expr`: a value for `ldr` to load from the literal pool.
     Literal(ExprRef),
     /// `{expr}`: `nop`'s hint number and the coprocessor opcode of `cdp`.
@@ -160,7 +165,7 @@ impl Operand {
             OperandKind::Shifted { .. } => "a shifted register".into(),
             OperandKind::Imm(_) => "an immediate".into(),
             OperandKind::Mem(_) => "a memory operand".into(),
-            OperandKind::List(_) => "a register list".into(),
+            OperandKind::List { .. } => "a register list".into(),
             OperandKind::Literal(_) => "a literal pool value".into(),
             OperandKind::Braced(_) => "a value in braces".into(),
         }
@@ -384,8 +389,11 @@ impl Parser<'_, '_> {
                 .error(span, "expected `,` or `}` in a register list");
             return None;
         }
+        // `^` after the list asks for the user-mode bank, or, with the PC
+        // in it, an exception return.
+        let user = cur.eat_punct(Punct::Caret).is_some();
         Some(Operand {
-            kind: OperandKind::List(mask),
+            kind: OperandKind::List { mask, user },
             span: start.to(cur.nth(0).span),
             word: None,
             writeback: false,

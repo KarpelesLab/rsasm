@@ -1543,6 +1543,15 @@ fn narrow_load_store(t: Transfer, rt: Reg, mem: &Mem) -> Option<u16> {
     }
 }
 
+/// Thumb has no user-mode bank, so no `^` register list.
+fn no_user_bank(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, user: bool) -> Option<()> {
+    if user {
+        cx.error(ins.span, "Thumb has no `^` register list");
+        return None;
+    }
+    Some(())
+}
+
 /// What a 32-bit Thumb block transfer may carry: never the stack pointer,
 /// never the PC in a store, and never both `lr` and `pc` in a load.
 fn check_list(cx: &mut AsmCtx<'_>, span: Span, mask: u16, load: bool) -> Option<()> {
@@ -1584,10 +1593,11 @@ fn push_pop(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[1])?;
-    let OperandKind::List(mask) = ins.ops[0].kind else {
+    let OperandKind::List { mask, user } = ins.ops[0].kind else {
         cx.error(ins.ops[0].span, "expected a register list");
         return None;
     };
+    no_user_bank(cx, ins, user)?;
     let push = ins.mnem == Mnem::Push;
     // The 16-bit forms carry r0-r7 plus exactly one of lr (push) or pc (pop).
     let extra = if push { 1 << reg::LR } else { 1 << reg::PC };
@@ -1622,10 +1632,11 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     };
     let load = matches!(ins.mnem, Mnem::Ldm(_));
     let rn = encode::reg_of(cx, &ins.ops[0])?;
-    let OperandKind::List(mask) = ins.ops[1].kind else {
+    let OperandKind::List { mask, user } = ins.ops[1].kind else {
         cx.error(ins.ops[1].span, "expected a register list");
         return None;
     };
+    no_user_bank(cx, ins, user)?;
     let writeback = ins.ops[0].writeback;
     if writeback && mask & (1 << rn) != 0 {
         cx.error(
