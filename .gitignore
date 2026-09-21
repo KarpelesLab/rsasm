@@ -11,3 +11,4 @@
 
 # Python bytecode from the fuzzers under tools/fuzz.
 __pycache__/
+/Cargo.lock
