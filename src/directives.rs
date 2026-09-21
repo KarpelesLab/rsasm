@@ -68,6 +68,15 @@ impl Assembler {
         }
 
         let handled = match text.as_str() {
+            // ---- COFF ------------------------------------------------------
+            // First, because `.type` means one thing on its own and another
+            // between `.def` and `.endef`.
+            _ if crate::coff::is_directive(&text)
+                || (self.coff.in_def() && crate::coff::is_def_field(&text)) =>
+            {
+                self.coff_directive(&text, &mut cur, span)
+            }
+
             // ---- sections -------------------------------------------------
             ".text" | ".data" | ".bss" | ".rodata" => {
                 let id = self.standard_section(&text);
@@ -215,8 +224,30 @@ impl Assembler {
             ".include" => self.dir_include(&mut cur, span),
             ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
             // ---- debugging information ------------------------------------
+            // A COFF object records the source file name as a symbol of its
+            // own; the numbered form is DWARF's either way.
+            ".file" if self.options.format.is_coff() && !Self::is_numbered_file(&cur) => {
+                if let Some(s) = self.expect_string(&mut cur, "a file name") {
+                    let name = String::from_utf8_lossy(&s).into_owned();
+                    self.coff.files.push(name);
+                }
+                true
+            }
             ".file" => {
                 self.dir_dwarf_file(&mut cur, span);
+                true
+            }
+            // DWARF in a COFF object needs section-relative relocations and
+            // conventions of its own, which rsasm does not write yet; a table
+            // a linker would misread is worse than none.
+            ".loc" | ".loc_mark_labels" if self.options.format.is_coff() => {
+                self.coff_refuse_dwarf(&text, span);
+                cur.set_pos(cur.all().len());
+                true
+            }
+            _ if text.starts_with(".cfi_") && self.options.format.is_coff() => {
+                self.coff_refuse_dwarf(&text, span);
+                cur.set_pos(cur.all().len());
                 true
             }
             ".loc" => {
@@ -355,7 +386,7 @@ impl Assembler {
         Some(String::from_utf8_lossy(self.pool.get(i)).into_owned())
     }
 
-    fn expect_string(&mut self, cur: &mut Cursor<'_>, what: &str) -> Option<Vec<u8>> {
+    pub(crate) fn expect_string(&mut self, cur: &mut Cursor<'_>, what: &str) -> Option<Vec<u8>> {
         let tok = cur.peek();
         let TokKind::Str(i) = tok.kind else {
             self.diags
@@ -394,7 +425,7 @@ impl Assembler {
         }
         loop {
             let mark = self.exprs.len();
-            let Some(e) = self.parse_expr(cur) else {
+            let Some(e) = self.parse_data_expr(cur) else {
                 return true;
             };
             if self.dwarf.line.pending {
@@ -413,6 +444,41 @@ impl Assembler {
             }
         }
         true
+    }
+
+    /// One value of a data directive. On a target whose relocation modifiers
+    /// are written as a call around the whole value (AVR's `.word pm(main)`;
+    /// see [`Architecture::expr_modifiers`]) that call is read here, as GNU
+    /// as reads it in `avr_parse_cons_expression`: only directly after the
+    /// directive or a comma, and only where a `(` follows the name.
+    ///
+    /// [`Architecture::expr_modifiers`]: crate::arch::Architecture::expr_modifiers
+    fn parse_data_expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
+        let tok = cur.peek();
+        let name = tok.ident().and_then(|n| {
+            let text = self.interner.get(n);
+            self.arch
+                .expr_modifiers()
+                .iter()
+                .find(|m| text.eq_ignore_ascii_case(m))
+                .copied()
+        });
+        let Some(name) = name.filter(|_| cur.nth(1).is_punct(Punct::LParen)) else {
+            return self.parse_expr(cur);
+        };
+        cur.advance();
+        let open = cur.advance();
+        let inner = self.parse_expr(cur)?;
+        let Some(close) = cur.eat_punct(Punct::RParen) else {
+            self.diags.emit(
+                crate::diag::Diagnostic::error(cur.peek().span, "expected `)`")
+                    .with_note(open.span, "to match this `(`"),
+            );
+            return None;
+        };
+        let name = self.interner.intern(name);
+        let kind = crate::expr::ExprKind::Modifier(name, inner);
+        Some(self.exprs.alloc(kind, tok.span.to(close.span)))
     }
 
     /// Pads to a `size`-byte boundary ahead of data that must start on one,
@@ -436,50 +502,84 @@ impl Assembler {
     /// Emits `size` bytes for `e`, as literal bytes when it already folds to a
     /// constant and as a fixup otherwise.
     pub(crate) fn emit_value(&mut self, size: u8, e: ExprRef, span: Span) {
+        // A zero takes space in a section with no contents, in GNU as and
+        // llvm-mc alike: Clang writes a zero-initialised AVR global as
+        // `.short 0` in `.bss`. Anything else has nowhere to go.
+        if self.section(self.cur).kind == SectionKind::Nobits
+            && self.eval_ref(e).ok().and_then(|v| v.as_abs()) == Some(0)
+        {
+            let size = self.exprs.int(size as u64, span);
+            let fill = self.exprs.int(0, span);
+            self.push_frag(
+                FragKind::Space {
+                    size,
+                    fill,
+                    resolved: 0,
+                },
+                span,
+            );
+            return;
+        }
         if self.check_nobits(span) {
             return;
         }
         self.bind_here_to_item(e);
-        // Resolve now if it already has a value: a `.set` symbol is a
-        // snapshot at each use, so a later redefinition must not reach back
-        // and change bytes that were already emitted. In a Mach-O object a
-        // difference of labels already a fixed distance apart is a value too;
-        // see `Assembler::macho_fixed_difference`.
-        if let Some(v) = self
-            .eval_ref(e)
-            .ok()
-            .and_then(|v| v.as_abs())
-            .or_else(|| self.macho_fixed_difference(e))
-        {
-            let kind = crate::section::FixupKind::data(size);
-            if !kind.fits(v as i128) {
-                let espan = self.exprs.span(e);
-                self.diags
-                    .error(espan, format!("value {v} does not fit in {size} byte(s)"));
-                return;
-            }
-            let bytes = self.arch.endian().bytes(v as u64, size as usize);
-            self.cur_section().emit_bytes(&bytes, span);
-            return;
-        }
         let mut reloc = self.arch.data_reloc(size, false).unwrap_or(0);
+        let mut kind = crate::section::FixupKind::data(size);
         // A modifier the target does not recognise used to fall back to the
         // plain data relocation, so `.long foo@got` quietly became an
         // absolute reference to `foo`. That is a different program, so it is
-        // an error instead. A Mach-O object checks its modifiers against its
-        // own relocations, once it builds them.
+        // an error instead. The check comes before the constant fold below
+        // because a modifier can be wrong for the field's width whatever the
+        // value is: AVR has `pm()` for a `.word` and none for a `.byte`.
+        // A Mach-O object checks its modifiers against its own
+        // relocations, once it builds them.
         if let Some(m) = self.find_modifier(e)
             && !self.macho_object()
         {
             let name = self.interner.get(m).to_string();
+            // COFF's own modifiers (`@IMGREL`) are the format's, not the
+            // backend's: they name what the field holds, not a relocation
+            // number; see `crate::coff::modifier_class`.
+            let coff = self
+                .options
+                .format
+                .is_coff()
+                .then(|| crate::coff::modifier_class(&name))
+                .flatten();
+            if let Some(class) = coff {
+                let kind = crate::section::FixupKind::data(size)
+                    .with_reloc(reloc)
+                    .with_class(class);
+                let espan = self.exprs.span(e);
+                self.cur_section().emit_fixup(size, e, kind, espan);
+                return;
+            }
             match self.arch.modifier_reloc(&name, size, false) {
-                Some(r) => reloc = r,
+                Some(r) => {
+                    reloc = r;
+                    // One that takes part of the value writes the field
+                    // itself; the value it takes that part of is what has
+                    // to fit.
+                    if let crate::arch::FlatModifier::Field { write, unit } =
+                        self.arch.flat_modifier(&name)
+                    {
+                        kind = kind.with_field(63, unit).scatter(write);
+                    }
+                }
                 None => {
                     let espan = self.exprs.span(e);
+                    // Spelled the way the target writes it: `lo8(x)` on AVR,
+                    // `x@got` everywhere else.
+                    let written = if self.arch.expr_modifiers().contains(&name.as_str()) {
+                        format!("`{name}()`")
+                    } else {
+                        format!("`@{name}`")
+                    };
                     self.diags.error(
                         espan,
                         format!(
-                            "`@{name}` is not a relocation modifier the `{}` backend supports \
+                            "{written} is not a relocation modifier the `{}` backend supports \
                              in a {size}-byte data field",
                             self.arch.name()
                         ),
@@ -488,7 +588,33 @@ impl Assembler {
                 }
             }
         }
-        let kind = crate::section::FixupKind::data(size).with_reloc(reloc);
+        // Resolve now if it already has a value: a `.set` symbol is a
+        // snapshot at each use, so a later redefinition must not reach back
+        // and change bytes that were already emitted.
+        // In a Mach-O object a difference of labels already a fixed distance
+        // apart is a value too; see `Assembler::macho_fixed_difference`.
+        if let Some(v) = self
+            .eval_ref(e)
+            .ok()
+            .and_then(|v| v.as_abs())
+            .or_else(|| self.macho_fixed_difference(e))
+        {
+            if !kind.fits(v as i128) {
+                let espan = self.exprs.span(e);
+                let msg = if kind.value_align > 1 && v % kind.value_align as i64 != 0 {
+                    format!("value {v} is not a multiple of {}", kind.value_align)
+                } else {
+                    format!("value {v} does not fit in {size} byte(s)")
+                };
+                self.diags.error(espan, msg);
+                return;
+            }
+            let mut bytes = vec![0; size as usize];
+            kind.write(self.arch.endian(), &mut bytes, v);
+            self.cur_section().emit_bytes(&bytes, span);
+            return;
+        }
+        let kind = kind.with_reloc(reloc);
         let espan = self.exprs.span(e);
         self.cur_section().emit_fixup(size, e, kind, espan);
     }
@@ -744,7 +870,7 @@ impl Assembler {
 
     // ---- sections ---------------------------------------------------------
 
-    fn dir_section(&mut self, cur: &mut Cursor<'_>, _span: Span, push: bool) -> bool {
+    fn dir_section(&mut self, cur: &mut Cursor<'_>, span: Span, push: bool) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
             // A name is everything up to a comma or a space, as GNU as reads
@@ -777,6 +903,11 @@ impl Assembler {
         };
 
         let text = self.interner.get(name).to_string();
+        // GNU as for MSP430 refers to the C runtime's set-up routine for the
+        // section as soon as it is named; see `Architecture::section_symbols`.
+        for sym in self.target().section_symbols(&text) {
+            self.refer_to_symbol(sym, tok.span);
+        }
         let mut kind = if text.starts_with(".bss") {
             SectionKind::Nobits
         } else {
@@ -784,6 +915,38 @@ impl Assembler {
         };
         let mut flags = default_flags_for(&text);
         let mut entsize = 0u64;
+
+        // A COFF section's attributes are its own: flag letters that mean
+        // different things, and a COMDAT selection where ELF has a type.
+        if self.options.format.is_coff() {
+            let mut info = None;
+            let mut key = name;
+            if cur.eat_punct(Punct::Comma).is_some() {
+                let (characteristics, comdat, k) =
+                    crate::coff::parse_section_attributes(self, &mut *cur, &text, span);
+                flags = crate::coff::section_flags(characteristics);
+                kind = k;
+                info = Some(crate::coff::SectionInfo {
+                    characteristics,
+                    comdat,
+                });
+                // llvm-mc tells sections apart by name and COMDAT symbol.
+                if let Some(sym) = comdat.and_then(|c| c.symbol) {
+                    let sym = self.interner.get(self.symbols.get(sym).name).to_string();
+                    key = self.interner.intern(&format!("{text}\u{0}{sym}"));
+                }
+            }
+            let id = self.get_or_create_section(key, kind, flags, 1);
+            // The first description of a section is the one that counts.
+            if let Some(info) = info {
+                self.coff.sections.entry(id).or_insert(info);
+            }
+            if push {
+                self.push_section_stack();
+            }
+            self.set_section(id);
+            return true;
+        }
 
         if cur.eat_punct(Punct::Comma).is_some() {
             if let Some(s) = self.expect_string(cur, "of section flags") {
@@ -863,6 +1026,15 @@ impl Assembler {
     /// True for `.set word` — a single identifier and nothing else, which no
     /// assignment can be. Returning `false` from the table sends it on to the
     /// architecture's directive hook.
+    /// Whether a `.file` is the numbered form, which is DWARF's whatever the
+    /// object format; `.file "name"` alone is the source file's name.
+    fn is_numbered_file(cur: &Cursor<'_>) -> bool {
+        matches!(
+            cur.peek().kind,
+            TokKind::Int(_) | TokKind::Punct(Punct::Minus)
+        )
+    }
+
     fn is_set_option(cur: &Cursor<'_>) -> bool {
         let rest = cur.rest();
         rest.len() == 1 && matches!(rest[0].kind, TokKind::Ident(_))
@@ -928,8 +1100,9 @@ impl Assembler {
         let Some((tname, tspan)) = self.expect_name(cur) else {
             return true;
         };
+        // Where `@` may start a name (COFF), `@function` is one word.
         let t = self.interner.get(tname).to_ascii_lowercase();
-        let ty = match t.trim_start_matches("stt_") {
+        let ty = match t.trim_start_matches('@').trim_start_matches("stt_") {
             "function" | "func" => SymType::Func,
             "object" => SymType::Object,
             "notype" => SymType::NoType,
@@ -962,28 +1135,52 @@ impl Assembler {
             return true;
         };
         let mut align = 1u64;
+        let mut given = None;
         if cur.eat_punct(Punct::Comma).is_some()
             && let Some(e) = self.parse_expr(cur)
         {
-            align = self
-                .eval_absolute(e, "`.comm` alignment")
-                .unwrap_or(1)
-                .max(1) as u64;
+            let v = self.eval_absolute(e, "`.comm` alignment").unwrap_or(1);
+            align = v.max(1) as u64;
+            given = Some(v.max(0) as u64);
         }
         if size < 0 {
             self.diags.error(span, "`.comm` size must not be negative");
             return true;
         }
+        // COFF has no local common block: `.lcomm` puts the object in
+        // `.bss` instead, which is where llvm-mc and GNU as put it.
+        if local && self.options.format.is_coff() {
+            self.coff_lcomm(name, nspan, size as u64, align, span);
+            return true;
+        }
+        let mut size = size as u64;
+        // A COFF common block records only its size, and `.comm`'s alignment
+        // is a power of two there, as both references read it. llvm-mc makes
+        // the block at least that large, which is how the linker, placing it
+        // at a boundary of its size, honours the alignment.
+        if self.options.format.is_coff()
+            && let Some(log2) = given
+        {
+            if log2 > 5 {
+                self.diags.error(
+                    span,
+                    format!("a COFF common block can be aligned to at most 32 bytes, not 2^{log2}"),
+                );
+                return true;
+            }
+            align = 1 << log2;
+            size = size.max(align);
+        }
         let id = self.symbols.intern(name, nspan);
         let sym = self.symbols.get_mut(id);
-        sym.value = SymbolValue::Common {
-            size: size as u64,
-            align,
-        };
+        sym.value = SymbolValue::Common { size, align };
         sym.def_span = nspan;
         sym.ty = SymType::Object;
         if !local {
             sym.binding = Binding::Global;
+        }
+        for sym in self.target().common_symbols() {
+            self.refer_to_symbol(sym, nspan);
         }
         true
     }

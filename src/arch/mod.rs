@@ -56,6 +56,14 @@ pub mod superh;
 #[cfg(feature = "k78")]
 pub mod k78;
 
+// Backend internals — the opcode table, the operand parser, the relocation
+// numbers — are the crate's own, not API anyone depends on, so the module is
+// crate-visible and only `lookup` and `NAMES` are used from here.
+#[cfg(feature = "avr")]
+pub(crate) mod avr;
+#[cfg(feature = "msp430")]
+pub(crate) mod msp430;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Endian {
     Little,
@@ -133,7 +141,7 @@ impl CommentSyntax {
 
 /// What a relocation modifier makes of a value in a flat binary; see
 /// [`Architecture::flat_modifier`].
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum FlatModifier {
     /// The value itself. `call foo@PLT` in an image with no PLT calls `foo`.
     Plain,
@@ -143,6 +151,18 @@ pub enum FlatModifier {
     PcRelative,
     /// Something only a linker creates, such as a GOT entry; refused.
     LinkerOnly,
+    /// Part of the value, taken as it is written into the field: AVR's
+    /// `lo8(x)` is the low byte of `x`, and `pm(x)` is `x` counted in words,
+    /// which `x` has to be a multiple of `unit` for. Such a modifier is
+    /// arithmetic rather than something only a linker can do, so it applies
+    /// wherever the value is known, in an object as well as in a flat image.
+    /// `write` is the field's [`FieldEncoding::Scatter`] function.
+    ///
+    /// [`FieldEncoding::Scatter`]: crate::section::FieldEncoding::Scatter
+    Field {
+        write: fn(u64, i64) -> u64,
+        unit: u8,
+    },
 }
 
 /// Something a backend asks the core to do to the section, which it cannot do
@@ -546,6 +566,42 @@ pub(crate) fn fixed_distance(
     Some(sign * total)
 }
 
+/// An alignment or `.org` in a code section, as the layout finally placed
+/// it; see [`Architecture::layout_records`].
+#[derive(Copy, Clone, Debug)]
+pub struct LayoutPlace {
+    pub kind: PlaceKind,
+    pub section: SectionId,
+    /// The offset just past the padding, where what follows it starts.
+    pub offset: u64,
+    /// The fill byte the source gave, or 0 where it gave none.
+    pub fill: u8,
+}
+
+/// What made a [`LayoutPlace`].
+#[derive(Copy, Clone, Debug)]
+pub enum PlaceKind {
+    /// `.align` or one of its relatives, or the padding that rounds a
+    /// section up to its alignment, which is a power of two: this is the
+    /// exponent.
+    Align(u32),
+    /// `.org`, or an assignment to `.`, with the constant part of its target
+    /// (4 in `. = . + 4`, 0 in `.org label`).
+    Org(i64),
+}
+
+/// A section of records about the finished layout; see
+/// [`Architecture::layout_records`].
+#[derive(Clone, Debug)]
+pub struct LayoutRecords {
+    pub name: &'static str,
+    pub bytes: Vec<u8>,
+    /// The four-byte fields in `bytes` that hold where a place is, each as its
+    /// offset and the index of the place: absolute references, which an
+    /// object relocates against the place's section.
+    pub refs: Vec<(u32, usize)>,
+}
+
 /// See [`Architecture::modifier_symbols`].
 #[derive(Copy, Clone, Default, Debug)]
 pub struct ModifierSymbols {
@@ -616,14 +672,27 @@ pub trait Architecture {
         None
     }
 
-    /// What a source-level `@` modifier means in a flat binary, where there is
-    /// no relocation for it to choose and no linker to build what it names.
-    /// Only asked about modifiers on fixups whose [`FixupKind::link`] is
-    /// plain; the default refuses them all.
+    /// What a source-level relocation modifier means where the value is
+    /// known: in a flat binary, which has no relocation for it to choose and
+    /// no linker to build what it names, and for a
+    /// [`FlatModifier::Field`] modifier in an object too. Only asked about
+    /// modifiers on fixups whose [`FixupKind::link`] is plain; the default
+    /// refuses them all.
     ///
     /// [`FixupKind::link`]: crate::section::FixupKind::link
     fn flat_modifier(&self, _name: &str) -> FlatModifier {
         FlatModifier::LinkerOnly
+    }
+
+    /// Relocation modifiers this target's GNU as writes around the whole of
+    /// a data directive's value as a call, `.word pm(main)`, rather than as
+    /// the `main@pm` suffix the GNU syntax otherwise uses. Only AVR has them.
+    /// A name is one only where a `(` follows it, so a symbol of the same
+    /// name still works; [`Architecture::modifier_reloc`] then says which
+    /// relocation it picks and [`Architecture::flat_modifier`] what it
+    /// computes.
+    fn expr_modifiers(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Comment characters in GNU-style source. Ignored for the NASM dialect,
@@ -698,8 +767,10 @@ pub trait Architecture {
     /// symbol, rather than an offset into the current section.
     ///
     /// The references split on this. GNU as on x86, m68k, RL78 and RX takes
-    /// the address; GNU as on SuperH and V850, and llvm-mc everywhere except
-    /// x86, measure from the start of the section.
+    /// the address; GNU as on SuperH, V850 and AVR, and llvm-mc everywhere
+    /// except x86, measure from the start of the section, and resolve the
+    /// branch, so a flat image measures it from there too. The 8-bit targets,
+    /// which write no objects, take the address.
     fn pcrel_number_is_address(&self) -> bool {
         false
     }
@@ -748,6 +819,41 @@ pub trait Architecture {
         None
     }
 
+    /// Whether the subtrahend's relocation of a
+    /// [`difference_relocs`](Architecture::difference_relocs) pair comes
+    /// first. GNU as for MSP430 writes `R_MSP430_SYM_DIFF` before the value's
+    /// relocation; llvm-mc for RISC-V writes `ADD` before `SUB`.
+    fn difference_subtrahend_first(&self) -> bool {
+        false
+    }
+
+    /// The relocations, subtracting and then setting a value, that a
+    /// `.uleb128` of a difference of two labels in one section with
+    /// `symbols_in` flags is left to the linker as, where the target leaves
+    /// it at all. GNU as for MSP430 writes `R_MSP430_GNU_SUB_ULEB128` and
+    /// `R_MSP430_GNU_SET_ULEB128` for one whose labels are in code, which its
+    /// linker may relax; the value the file computes stays in the field.
+    fn uleb128_difference_relocs(
+        &self,
+        _symbols_in: &crate::section::SectionFlags,
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Whether a difference of two labels in one section, in a field of
+    /// `kind`, is still left to the linker as a
+    /// [`difference_relocs`](Architecture::difference_relocs) pair rather
+    /// than folded. `symbols_in` is the flags of the labels' section. GNU as
+    /// for MSP430 keeps every difference of labels in code as a pair, since
+    /// its linker may relax the code between them.
+    fn defers_difference(
+        &self,
+        _kind: &crate::section::FixupKind,
+        _symbols_in: &crate::section::SectionFlags,
+    ) -> bool {
+        false
+    }
+
     /// Whether a relocation against a global symbol defined in this object
     /// names the symbol's section plus an offset, as one against a local
     /// label does, rather than the symbol. GNU as for m68k does this for all
@@ -786,6 +892,37 @@ pub trait Architecture {
     /// `e_flags` for ELF output, given the state at the end of the source.
     fn elf_flags(&self, _state: &ArchState) -> u32 {
         0
+    }
+
+    /// `EI_OSABI` for ELF output. BFD writes `ELFOSABI_STANDALONE` for
+    /// MSP430; everything else here is `ELFOSABI_NONE`.
+    fn elf_osabi(&self) -> u8 {
+        0
+    }
+
+    /// The build attributes section GNU as adds to every object of its own
+    /// accord, as its name and contents, given the state at the end of the
+    /// source: MSP430's `.MSP430.attributes`, which records the instruction
+    /// set and memory model. It is written with the processor-specific
+    /// attributes type, `SHT_LOPROC + 3`, and no flags.
+    fn elf_attributes(&self, _state: &ArchState) -> Option<(&'static str, Vec<u8>)> {
+        None
+    }
+
+    /// Undefined symbols an object refers to because it has a section of
+    /// this name: GNU as for MSP430 adds `__crt0_movedata` for `.data` and
+    /// `__crt0_init_bss` for `.bss`, so that the C runtime's code for setting
+    /// each up is only linked in where some object needs it. Asked when a
+    /// `.section` directive names the section, and again at the end for each
+    /// section with contents.
+    fn section_symbols(&self, _name: &str) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Undefined symbols `.comm` and `.lcomm` refer to, for the same reason
+    /// as [`Architecture::section_symbols`].
+    fn common_symbols(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Whether a relocation of type `reloc` keeps its addend in the relocated
@@ -882,6 +1019,15 @@ pub trait Architecture {
         "$d"
     }
 
+    /// Whether alignment padding written as zeros in a code section counts
+    /// as code for the mapping symbols. GNU as decides this per target:
+    /// `aarch64_init_frag` marks such a fragment as instructions, where
+    /// `arm_init_frag` marks it as data. It shows between the runs of a
+    /// literal pool, which are aligned to each run's width.
+    fn align_padding_is_code(&self) -> bool {
+        false
+    }
+
     /// Bits to record on a label as it is defined, in the backend's own
     /// terms, from the state it is defined in: ARM marks a label in Thumb
     /// code, and the one a `.thumb_func` names. `name` is the label's, and
@@ -923,6 +1069,18 @@ pub trait Architecture {
     /// keeps its relocation. `class` is the backend's own.
     fn interwork(&self, _class: u8, _target: &InterworkTarget) -> Interwork {
         Interwork::AsWritten
+    }
+
+    /// A section describing where the code sections were padded, for a
+    /// linker that deletes code and has to keep those places where they
+    /// belong: GNU as for AVR, preparing an object for linker relaxation,
+    /// writes every `.align` and `.org` in a code section to `.avr.prop`.
+    /// Given each of them in every executable section, section by section in
+    /// order (the padding that rounds a section's end up to its alignment
+    /// included), the backend returns the section to add, or `None` — the
+    /// default — to add none. Only asked for relocatable output.
+    fn layout_records(&self, _places: &[LayoutPlace]) -> Option<LayoutRecords> {
+        None
     }
 
     /// Padding for `.align` in an executable section: real no-ops where the
@@ -1070,6 +1228,14 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     if let Some(a) = k78::lookup(&lower) {
         return Some(a);
     }
+    #[cfg(feature = "avr")]
+    if let Some(a) = avr::lookup(&lower) {
+        return Some(a);
+    }
+    #[cfg(feature = "msp430")]
+    if let Some(a) = msp430::lookup(&lower) {
+        return Some(a);
+    }
     let _ = lower;
     None
 }
@@ -1108,6 +1274,10 @@ pub fn available() -> Vec<&'static str> {
     v.extend_from_slice(superh::NAMES);
     #[cfg(feature = "k78")]
     v.extend_from_slice(k78::NAMES);
+    #[cfg(feature = "avr")]
+    v.extend_from_slice(avr::NAMES);
+    #[cfg(feature = "msp430")]
+    v.extend_from_slice(msp430::NAMES);
     v
 }
 

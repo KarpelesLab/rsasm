@@ -11,15 +11,20 @@
 //! [`crate::section::FieldEncoding::Scatter`] to weave its value through the
 //! instruction word; the scatter functions live in [`encode`].
 //!
+//! # Two encoders
+//!
+//! The general-purpose instruction set is written out family by family in
+//! [`insn`], where the interesting work is in the aliases. SIMD, floating
+//! point and SVE are thousands of forms that differ in a few opcode bits, and
+//! come from a table measured against llvm-mc; see the `table` module and
+//! `tools/tables/README.md`. A line goes to the table if only the table has
+//! its mnemonic, or if an operand is a register only a table form takes.
+//!
 //! # The `#` sigil
 //!
-//! A64 source conventionally writes immediates as `#imm`, and the operand
-//! parser accepts that. The GAS-dialect lexer, however, currently treats `#`
-//! as the start of a line comment for every architecture, so `add x0, x1, #1`
-//! reaches this backend as `add x0, x1,`. GNU as only makes `#` a comment
-//! at the start of a line on AArch64. Until the lexer learns that per
-//! architecture, write immediates bare — `add x0, x1, 1` — which both GNU as
-//! and llvm-mc accept too.
+//! A64 source conventionally writes immediates as `#imm`. `#` is a comment
+//! only in the first column (see `comments` below), so both `add x0, x1,
+//! #1` and the bare `add x0, x1, 1` that GNU as and llvm-mc also accept work.
 
 pub mod encode;
 pub mod insn;
@@ -27,6 +32,13 @@ pub mod operand;
 pub mod reg;
 pub mod reloc;
 pub mod sysreg;
+// Not public API: the generated tables and the table's matcher are
+// internals, and `sysreg_data`, `table_data` and `table_names` are generated
+// files.
+mod sysreg_data;
+pub(crate) mod table;
+mod table_data;
+mod table_names;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
@@ -186,6 +198,34 @@ impl Architecture for AArch64 {
             })
     }
 
+    /// `.ltorg` and `.pool` write the section's literal pool out here.
+    fn directive(
+        &self,
+        cx: &mut AsmCtx<'_>,
+        name: &str,
+        _cur: &mut crate::cursor::Cursor<'_>,
+    ) -> bool {
+        match name {
+            ".ltorg" | ".pool" => {
+                cx.requests.push(crate::arch::Request::FlushLiterals);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A64 code is `$x`, and the literal pools and data in a code section
+    /// are `$d`, as GNU as marks them.
+    fn code_mapping(&self, _state: &ArchState) -> Option<(&'static str, u64)> {
+        Some(("$x", 4))
+    }
+
+    /// GNU as's `aarch64_init_frag` marks an alignment fragment in a code
+    /// section as instructions, not as data.
+    fn align_padding_is_code(&self) -> bool {
+        true
+    }
+
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         let mut out = Vec::with_capacity(len as usize);
         // Padding to a boundary finer than four bytes cannot be instructions,
@@ -200,6 +240,30 @@ impl Architecture for AArch64 {
 
     fn assemble(&self, cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
         let mnemonic = cx.name(req.mnemonic).to_ascii_lowercase();
+        // A mnemonic only the table has is the table's. One the handwritten
+        // encoders also have is theirs until an operand is something only a
+        // table form takes: `add x0, x1, x2` is handwritten, `add v0.8b,
+        // v1.8b, v2.8b` and `add d0, d1, d2` are not, and `ldr d0, [x0]` is
+        // handwritten again, since loads and stores take the scalar SIMD
+        // registers themselves.
+        // The one SME instruction beyond `smstart`/`smstop`, whose `{za}` the
+        // operand grammar has no other use for.
+        if mnemonic == "zero" {
+            return insn::sme_zero(cx, req);
+        }
+        if table::knows(&mnemonic)
+            && (!insn::handwritten(&mnemonic)
+                || table::has_simd_operand(cx, req.operands, !insn::loads(&mnemonic)))
+        {
+            return table::assemble(cx, &mnemonic, req.mnemonic_span, req.operands);
+        }
+        if !insn::handwritten(&mnemonic) {
+            cx.error(
+                req.mnemonic_span,
+                format!("unknown instruction `{mnemonic}`"),
+            );
+            return None;
+        }
         let cur = req.cursor();
         let ops = operand::parse_list(cx, &cur)?;
         insn::assemble(cx, req, &mnemonic, &ops)
@@ -209,5 +273,5 @@ impl Architecture for AArch64 {
 /// True if `name` is a register, so the generic parser does not treat a
 /// register name as a symbol.
 pub fn is_register(name: &str) -> bool {
-    reg::is_register(name)
+    reg::is_register(name) || table::is_register(name)
 }

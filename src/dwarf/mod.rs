@@ -16,7 +16,7 @@
 //! are decided.
 
 pub mod cfi;
-mod emit;
+pub(crate) mod emit;
 mod info;
 pub mod line;
 mod md5;

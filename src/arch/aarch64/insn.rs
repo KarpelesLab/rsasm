@@ -9,10 +9,11 @@
 
 use super::encode::{const_in_range, field, logical_imm, word, word_fixup};
 use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp};
-use super::reg::{self, Arrangement, Reg, RegClass, VecReg};
+use super::reg::{self, Reg, RegClass};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
 use crate::expr::{ExprKind, ExprRef};
+use crate::lexer::{Punct, TokKind};
 use crate::section::{LinkValue, Variant};
 use crate::source::Span;
 
@@ -106,24 +107,6 @@ impl Insn<'_, '_> {
         }
     }
 
-    fn vec(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<VecReg> {
-        let op = self.op(i)?;
-        match op.kind {
-            OperandKind::Vec(v) => Some(v),
-            _ => {
-                cx.error(
-                    op.span,
-                    format!(
-                        "operand {} of `{}` must be a vector register",
-                        i + 1,
-                        self.mnemonic
-                    ),
-                );
-                None
-            }
-        }
-    }
-
     fn cond(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<u8> {
         let op = self.op(i)?;
         match op.cond() {
@@ -208,6 +191,211 @@ fn one_fixup(w: u32, e: ExprRef, k: crate::section::FixupKind, span: Span) -> Op
     Some(vec![word_fixup(w, e, k, span)])
 }
 
+/// A PC-relative target. Written as a number rather than a label, it is the
+/// offset from the instruction, not an address: `b #16` branches 16 bytes
+/// ahead wherever it is, to GNU as and llvm-mc alike. So a number goes
+/// straight into the field, range-checked as the fixup would have been.
+fn pcrel(
+    cx: &mut AsmCtx<'_>,
+    w: u32,
+    e: ExprRef,
+    k: crate::section::FixupKind,
+    span: Span,
+) -> Option<Vec<Variant>> {
+    let Some(v) = cx.constant(e).filter(|_| !names_symbol(cx, e)) else {
+        return one_fixup(w, e, k, span);
+    };
+    let crate::section::FieldEncoding::Scatter(place) = k.encoding else {
+        return one_fixup(w, e, k, span);
+    };
+    let bits = u32::from(k.value_bits);
+    let (lo, hi) = (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1);
+    if !(lo..=hi).contains(&v) {
+        cx.error(span, format!("offset {v} is out of range {lo}..={hi}"));
+        return None;
+    }
+    if v % i64::from(k.value_align) != 0 {
+        cx.error(
+            span,
+            format!("offset {v} is not a multiple of {}", k.value_align),
+        );
+        return None;
+    }
+    one(place(u64::from(w), v) as u32)
+}
+
+/// True for a mnemonic the encoders here handle, whatever else the
+/// generated table has under the same name: `add` is handwritten for the
+/// general-purpose registers and a table form for vectors. Keep in step with
+/// the dispatch in [`assemble`].
+pub(crate) fn handwritten(mnemonic: &str) -> bool {
+    mnemonic
+        .strip_prefix("b.")
+        .is_some_and(|c| reg::cond(c).is_some())
+        || mnemonic
+            .strip_prefix('b')
+            .is_some_and(|c| c.len() == 2 && reg::cond(c).is_some())
+        || matches!(
+            mnemonic,
+            "add"
+                | "adds"
+                | "sub"
+                | "subs"
+                | "cmp"
+                | "cmn"
+                | "neg"
+                | "negs"
+                | "adc"
+                | "adcs"
+                | "sbc"
+                | "sbcs"
+                | "ngc"
+                | "ngcs"
+                | "and"
+                | "ands"
+                | "orr"
+                | "eor"
+                | "bic"
+                | "bics"
+                | "orn"
+                | "eon"
+                | "tst"
+                | "mvn"
+                | "mov"
+                | "movz"
+                | "movn"
+                | "movk"
+                | "sbfm"
+                | "ubfm"
+                | "bfm"
+                | "sbfx"
+                | "ubfx"
+                | "bfxil"
+                | "sbfiz"
+                | "ubfiz"
+                | "bfi"
+                | "sxtb"
+                | "sxth"
+                | "sxtw"
+                | "uxtb"
+                | "uxth"
+                | "lsl"
+                | "lsr"
+                | "asr"
+                | "ror"
+                | "lslv"
+                | "lsrv"
+                | "asrv"
+                | "rorv"
+                | "extr"
+                | "mul"
+                | "mneg"
+                | "smull"
+                | "umull"
+                | "smnegl"
+                | "umnegl"
+                | "smulh"
+                | "umulh"
+                | "madd"
+                | "msub"
+                | "smaddl"
+                | "umaddl"
+                | "smsubl"
+                | "umsubl"
+                | "sdiv"
+                | "udiv"
+                | "rbit"
+                | "rev"
+                | "rev16"
+                | "rev32"
+                | "rev64"
+                | "clz"
+                | "cls"
+                | "csel"
+                | "csinc"
+                | "csinv"
+                | "csneg"
+                | "cset"
+                | "csetm"
+                | "cinc"
+                | "cinv"
+                | "cneg"
+                | "ccmp"
+                | "ccmn"
+                | "b"
+                | "bl"
+                | "cbz"
+                | "cbnz"
+                | "tbz"
+                | "tbnz"
+                | "br"
+                | "blr"
+                | "ret"
+                | "eret"
+                | "drps"
+                | "adr"
+                | "adrp"
+                | "hint"
+                | "dmb"
+                | "dsb"
+                | "isb"
+                | "clrex"
+                | "sys"
+                | "sysl"
+                | "svc"
+                | "hvc"
+                | "smc"
+                | "brk"
+                | "hlt"
+                | "dcps1"
+                | "dcps2"
+                | "dcps3"
+                | "mrs"
+                | "msr"
+                | "smstart"
+                | "smstop"
+                | "zero"
+        )
+        || loads(mnemonic)
+        // The system instructions and the aliases of `hint`, whose names are
+        // in the generated tables rather than written out here.
+        || sysreg::is_sys_ins(mnemonic)
+        || sysreg::is_hint(mnemonic)
+}
+
+/// True for the handwritten loads and stores, which take the scalar SIMD
+/// registers (`ldr d0, [x0]`) and leave only the SVE forms to the table.
+pub(crate) fn loads(mnemonic: &str) -> bool {
+    matches!(
+        mnemonic,
+        "ldr"
+            | "str"
+            | "ldrb"
+            | "strb"
+            | "ldrh"
+            | "strh"
+            | "ldrsb"
+            | "ldrsh"
+            | "ldrsw"
+            | "ldur"
+            | "stur"
+            | "ldurb"
+            | "sturb"
+            | "ldurh"
+            | "sturh"
+            | "ldursb"
+            | "ldursh"
+            | "ldursw"
+            | "prfm"
+            | "prfum"
+            | "ldp"
+            | "stp"
+            | "ldpsw"
+            | "ldnp"
+            | "stnp"
+    )
+}
+
 /// Entry point: resolves a mnemonic to a family and encodes it.
 pub fn assemble(
     cx: &mut AsmCtx<'_>,
@@ -288,14 +476,18 @@ pub fn assemble(
         | "ldursw" | "prfm" | "prfum" => ldst(cx, &i),
         "ldp" | "stp" | "ldpsw" | "ldnp" | "stnp" => ldst_pair(cx, &i),
 
-        "nop" | "yield" | "wfe" | "wfi" | "sev" | "sevl" | "hint" => hint(cx, &i),
+        "hint" => hint(cx, &i),
         "dmb" | "dsb" | "isb" | "clrex" => barrier(cx, &i),
         "svc" | "hvc" | "smc" | "brk" | "hlt" | "dcps1" | "dcps2" | "dcps3" => exception(cx, &i),
         "mrs" => mrs(cx, &i),
         "msr" => msr(cx, &i),
+        "sys" | "sysl" => sys_raw(cx, &i),
+        "smstart" | "smstop" => sme_mode(cx, &i),
 
-        "dup" => dup(cx, &i),
-        "fmov" => fmov(cx, &i),
+        // `dc civac, x0` and `esb` and their like: a name in the generated
+        // system tables is all these mnemonics are.
+        _ if sysreg::is_sys_ins(mnemonic) => sys_alias(cx, &i),
+        _ if sysreg::is_hint(mnemonic) => hint_alias(cx, &i),
 
         _ => {
             cx.error(
@@ -322,9 +514,6 @@ fn addsub_bits(mnemonic: &str) -> (u32, u32) {
 
 /// `add`/`adds`/`sub`/`subs` with three or four operands.
 fn addsub(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_arith(cx, i);
-    }
     i.arity(cx, &[3, 4]).then_some(())?;
     let rd = i.gpr_or_sp(cx, 0)?;
     let rn = i.gpr_or_sp(cx, 1)?;
@@ -656,10 +845,6 @@ fn logic_bits(mnemonic: &str) -> Option<(u32, u32)> {
 }
 
 fn logic(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    // The SIMD spellings share these mnemonics but take vector operands.
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_logic(cx, i);
-    }
     i.arity(cx, &[3, 4]).then_some(())?;
     // Only the immediate forms can write the stack pointer; the register forms
     // check again once they know which form they are.
@@ -763,9 +948,6 @@ fn tst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 /// `mvn`, which is `orn` from the zero register.
 fn mvn(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_logic(cx, i);
-    }
     i.arity(cx, &[2, 3]).then_some(())?;
     let rd = i.gpr(cx, 0)?;
     encode_logic(cx, i, 1, 1, rd, Reg::zero(rd.class), 1)
@@ -817,9 +999,6 @@ fn movw(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 /// the order GNU as and llvm-mc both use.
 fn mov(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[2]).then_some(())?;
-    if matches!(i.op(0).map(|o| &o.kind), Some(OperandKind::Vec(_))) {
-        return simd_logic(cx, i);
-    }
     let rd = i.gpr_or_sp(cx, 0)?;
     let src = i.op(1)?;
 
@@ -1334,13 +1513,14 @@ fn branch(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         (0x1400_0000, encode::fixup_b())
     };
-    one_fixup(base, e, kind, i.ops[0].span)
+    pcrel(cx, base, e, kind, i.ops[0].span)
 }
 
 fn branch_cond(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, cond: u8) -> Option<Vec<Variant>> {
     i.arity(cx, &[1]).then_some(())?;
     let e = i.expr(cx, 0)?;
-    one_fixup(
+    pcrel(
+        cx,
         0x5400_0000 | field(cond as u32, 0, 4),
         e,
         encode::fixup_b19(),
@@ -1357,7 +1537,8 @@ fn cbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         0x3500_0000
     };
-    one_fixup(
+    pcrel(
+        cx,
         field(rt.sf(), 31, 1) | base | field(rt.num as u32, 0, 5),
         e,
         encode::fixup_b19(),
@@ -1377,7 +1558,8 @@ fn tbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         0x3700_0000
     };
     // The bit number is split: its top bit doubles as the register-width bit.
-    one_fixup(
+    pcrel(
+        cx,
         field(bit >> 5, 31, 1) | base | field(bit & 31, 19, 5) | field(rt.num as u32, 0, 5),
         e,
         encode::fixup_b14(),
@@ -1436,6 +1618,9 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         0x1000_0000
     };
+    if i.mnemonic == "adr" {
+        return pcrel(cx, base | field(rd.num as u32, 0, 5), e, kind, target.span);
+    }
     one_fixup(base | field(rd.num as u32, 0, 5), e, kind, target.span)
 }
 
@@ -1538,7 +1723,12 @@ fn ldst_form(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, rt: Option<Reg>) -> Option<L
 
 fn ldst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[2]).then_some(())?;
-    // `ldr x0, label` is a PC-relative literal load, not an addressing mode.
+    // `ldr x0, =value` puts the value in a literal pool and loads it from
+    // there; `ldr x0, label` is a PC-relative literal load, not an
+    // addressing mode.
+    if let Some(OperandKind::Literal(e)) = i.op(1).map(|o| &o.kind) {
+        return pool_load(cx, i, *e);
+    }
     if i.mnemonic == "ldr" && i.op(1).is_some_and(|o| o.mem().is_none()) {
         return ldst_literal(cx, i);
     }
@@ -1682,10 +1872,69 @@ fn ldst_literal(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         }
     };
     let e = i.expr(cx, 1)?;
-    one_fixup(
+    pcrel(
+        cx,
         field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt.num as u32, 0, 5),
         e,
         encode::fixup_ld_lit(),
+        i.ops[1].span,
+    )
+}
+
+/// `ldr <rt>, =value`: the value goes in the section's literal pool and the
+/// instruction loads it from there.
+///
+/// GNU as, whose source this syntax comes from, always makes an entry, even
+/// for a value `movz` could hold; llvm-mc assembles `ldr x0, =1` as
+/// `mov x0, #1` instead. rsasm follows GNU as here, as it does for ARM: what
+/// a pool holds and where it goes is decided across instructions, and the
+/// source that uses pools was written for GNU as.
+fn pool_load(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, e: ExprRef) -> Option<Vec<Variant>> {
+    if !matches!(i.mnemonic, "ldr" | "ldrsw") {
+        cx.error(
+            i.ops[1].span,
+            format!(
+                "`{}` cannot load from a literal pool; only `ldr` and `ldrsw` can",
+                i.mnemonic
+            ),
+        );
+        return None;
+    }
+    let rt = i.any_reg(cx, 0)?;
+    // The entry is as wide as the register the load fills, and `ldrsw`
+    // sign-extends a word.
+    let (opc, v, size) = match (i.mnemonic, rt.class) {
+        ("ldrsw", RegClass::X) => (2, false, 4),
+        ("ldrsw", _) => {
+            cx.error(i.ops[0].span, "`ldrsw` writes a 64-bit register");
+            return None;
+        }
+        (_, RegClass::W) => (0, false, 4),
+        (_, RegClass::X) => (1, false, 8),
+        (_, RegClass::S) => (0, true, 4),
+        (_, RegClass::D) => (1, true, 8),
+        (_, RegClass::Q) => (2, true, 16),
+        _ => {
+            cx.error(
+                i.ops[0].span,
+                "this register cannot be loaded from a literal pool",
+            );
+            return None;
+        }
+    };
+    // A constant is kept as a number, so that two uses of the same value
+    // share an entry; anything else is an expression the entry relocates.
+    let value = match cx.constant(e) {
+        Some(n) => crate::arch::Literal::Const(n),
+        None => crate::arch::Literal::Expr(e),
+    };
+    let entry = cx.literal(value, size, i.ops[1].span);
+    let kind = encode::fixup_ld_lit()
+        .with_range_hint("the literal pool is too far away; put an `.ltorg` nearer");
+    one_fixup(
+        field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt.num as u32, 0, 5),
+        entry,
+        kind,
         i.ops[1].span,
     )
 }
@@ -1817,70 +2066,193 @@ fn ldst_pair(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 // ---- system ----------------------------------------------------------------
 
+/// `hint #n`, the instruction every no-operand alias in the generated table
+/// is one of; the named spellings go through [`hint_alias`].
 fn hint(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    let imm = match i.mnemonic {
-        "nop" => 0,
-        "yield" => 1,
-        "wfe" => 2,
-        "wfi" => 3,
-        "sev" => 4,
-        "sevl" => 5,
-        _ => {
-            i.arity(cx, &[1]).then_some(())?;
-            i.imm(cx, 0, 0, 127, "a hint number")? as u32
-        }
-    };
-    if i.mnemonic != "hint" {
-        i.arity(cx, &[0]).then_some(())?;
-    }
+    i.arity(cx, &[1]).then_some(())?;
+    let imm = i.imm(cx, 0, 0, 127, "a hint number")? as u32;
     one(0xd503_201f | field(imm, 5, 7))
 }
 
-/// Barrier options, in `CRm` order.
-fn barrier_option(name: &str) -> Option<u32> {
-    Some(match name {
-        "oshld" => 1,
-        "oshst" => 2,
-        "osh" => 3,
-        "nshld" => 5,
-        "nshst" => 6,
-        "nsh" => 7,
-        "ishld" => 9,
-        "ishst" => 10,
-        "ish" => 11,
-        "ld" => 13,
-        "st" => 14,
-        "sy" => 15,
-        _ => return None,
-    })
+/// The name of an operand written as a bare word, or as the one register
+/// that is a name here (`chkfeat x16`).
+fn option_name(cx: &mut AsmCtx<'_>, op: &Operand<'_>) -> Option<String> {
+    if let Some(n) = op.word() {
+        return Some(cx.name(n).to_ascii_lowercase());
+    }
+    op.reg().map(|r| r.name())
 }
 
+/// The aliases of `hint` and of the barriers: a mnemonic on its own (`esb`,
+/// `sb`, `paciasp`) or with one named operand (`psb csync`, `bti c`), whose
+/// word the generated table holds.
+fn hint_alias(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[0, 1]).then_some(())?;
+    let name = match i.op(0) {
+        None => String::new(),
+        Some(op) => match option_name(cx, op) {
+            Some(text) => text,
+            None => {
+                cx.error(op.span, format!("expected a `{}` operand", i.mnemonic));
+                return None;
+            }
+        },
+    };
+    match sysreg::hint(i.mnemonic, &name) {
+        Some(w) => one(w),
+        None => {
+            let options = sysreg::hint_options(i.mnemonic);
+            let span = i.op(0).map_or(i.span, |op| op.span);
+            cx.error(
+                span,
+                if options.is_empty() {
+                    format!("`{}` takes no operand", i.mnemonic)
+                } else if name.is_empty() {
+                    format!("`{}` takes {}", i.mnemonic, options.join(" or "))
+                } else {
+                    format!(
+                        "`{name}` is not an operand of `{}`; it takes {}",
+                        i.mnemonic,
+                        options.join(" or ")
+                    )
+                },
+            );
+            None
+        }
+    }
+}
+
+/// `dmb`, `dsb`, `isb` and `clrex`, whose option is a name in the table or
+/// the `CRm` number itself. `dsb` takes a fifth bit for the nXS variants,
+/// which have names of their own and only four values.
 fn barrier(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[0, 1]).then_some(())?;
+    if i.op(0).is_none_or(|op| option_name(cx, op).is_some()) {
+        return hint_alias(cx, i);
+    }
+    let nxs = i.mnemonic == "dsb";
+    let imm = i.imm(cx, 0, 0, if nxs { 31 } else { 15 }, "a barrier option")? as u32;
+    if imm > 15 {
+        // `dsb #16` and its three neighbours are the nXS barriers; nothing
+        // between them is a barrier at all.
+        let name = match imm {
+            16 => "oshnxs",
+            20 => "nshnxs",
+            24 => "ishnxs",
+            28 => "synxs",
+            _ => {
+                cx.error(
+                    i.ops[0].span,
+                    "the nXS barriers are `dsb` 16, 20, 24 and 28",
+                );
+                return None;
+            }
+        };
+        return one(sysreg::hint("dsb", name)?);
+    }
     let op2 = match i.mnemonic {
         "clrex" => 2,
         "dsb" => 4,
         "dmb" => 5,
         _ => 6,
     };
-    let crm = match i.op(0) {
-        // Omitting the option means the strongest one, full-system.
-        None => 15,
-        Some(op) => match op.word() {
-            Some(n) => {
-                let text = cx.name(n).to_ascii_lowercase();
-                match barrier_option(&text) {
-                    Some(c) => c,
-                    None => {
-                        cx.error(op.span, format!("`{text}` is not a barrier option"));
-                        return None;
-                    }
-                }
-            }
-            None => i.imm(cx, 0, 0, 15, "a barrier option")? as u32,
-        },
+    one(0xd503_301f | field(imm, 8, 4) | field(op2, 5, 3))
+}
+
+/// `dc`, `ic`, `at`, `tlbi` and the rest: a name for a `sys` word, which
+/// decides whether an address register follows it.
+fn sys_alias(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1, 2]).then_some(())?;
+    let op = i.op(0)?;
+    let Some(name) = op.word().map(|n| cx.name(n).to_ascii_lowercase()) else {
+        cx.error(op.span, format!("expected a `{}` operand name", i.mnemonic));
+        return None;
     };
-    one(0xd503_301f | field(crm, 8, 4) | field(op2, 5, 3))
+    let Some((bits, xt)) = sysreg::sys_ins(i.mnemonic, &name) else {
+        cx.error(
+            op.span,
+            format!("`{name}` is not an operand of `{}`", i.mnemonic),
+        );
+        return None;
+    };
+    let rt = match (i.op(1), xt) {
+        (Some(second), sysreg::Xt::None) => {
+            cx.error(
+                second.span,
+                format!("`{} {name}` takes no register", i.mnemonic),
+            );
+            return None;
+        }
+        (None, sysreg::Xt::Needs) => {
+            cx.error(
+                i.span,
+                format!("`{} {name}` needs an address register", i.mnemonic),
+            );
+            return None;
+        }
+        // A name that takes no register, or may have none, has `xzr` in the
+        // field, which is what GNU as writes there.
+        (None, _) => 31,
+        (Some(_), _) => {
+            let r = i.gpr(cx, 1)?;
+            if r.class != RegClass::X {
+                cx.error(
+                    i.ops[1].span,
+                    "a system instruction takes a 64-bit register",
+                );
+                return None;
+            }
+            u32::from(r.num)
+        }
+    };
+    one(bits | field(rt, 0, 5))
+}
+
+/// A `CRn`/`CRm` operand: `c0` through `c15`.
+fn creg(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, at: usize) -> Option<u32> {
+    let op = i.op(at)?;
+    let name = op.word().map(|n| cx.name(n).to_ascii_lowercase());
+    let number = name
+        .as_deref()
+        .and_then(|t| t.strip_prefix('c'))
+        // `c01` is not a name for `c1`, any more than `x01` is for `x1`.
+        .filter(|rest| *rest == "0" || !rest.starts_with('0'))
+        .and_then(|rest| rest.parse::<u32>().ok())
+        .filter(|n| *n < 16);
+    match number {
+        Some(n) => Some(n),
+        None => {
+            cx.error(op.span, "expected `c0` through `c15`");
+            None
+        }
+    }
+}
+
+/// `sys #op1, Cn, Cm, #op2{, Xt}` and `sysl Xt, #op1, Cn, Cm, #op2`: the
+/// system instruction with no name at all, which every `dc`, `ic`, `at` and
+/// `tlbi` is an alias of.
+fn sys_raw(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    let reading = i.mnemonic == "sysl";
+    i.arity(cx, if reading { &[5] } else { &[4, 5] })
+        .then_some(())?;
+    let at = usize::from(reading);
+    let op1 = i.imm(cx, at, 0, 7, "`op1`")? as u32;
+    let crn = creg(cx, i, at + 1)?;
+    let crm = creg(cx, i, at + 2)?;
+    let op2 = i.imm(cx, at + 3, 0, 7, "`op2`")? as u32;
+    let rt = match i.op(if reading { 0 } else { 4 }) {
+        None => 31,
+        Some(_) => {
+            let r = i.gpr(cx, if reading { 0 } else { 4 })?;
+            if r.class != RegClass::X {
+                cx.error(i.span, "a system instruction takes a 64-bit register");
+                return None;
+            }
+            u32::from(r.num)
+        }
+    };
+    let base = if reading { sysreg::SYSL } else { sysreg::SYS };
+    one(base | field(op1, 16, 3) | field(crn, 12, 4) | field(crm, 8, 4) | field(op2, 5, 3) | rt)
 }
 
 fn exception(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
@@ -1911,8 +2283,55 @@ fn mrs(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         cx.error(i.ops[0].span, "`mrs` writes a 64-bit register");
         return None;
     }
-    let enc = sysreg::operand(cx, i.op(1)?)?;
+    let enc = sysreg::register(cx, i.op(1)?, Some(false))?;
     one(0xd530_0000 | enc | field(rt.num as u32, 0, 5))
+}
+
+/// `smstart`/`smstop`: the `msr svcr…` writes that enter and leave SME's
+/// streaming mode (`sm`), enable its ZA storage (`za`), or with no operand,
+/// both. `CRm` holds which in its middle bits and start or stop in its low one.
+fn sme_mode(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[0, 1]).then_some(())?;
+    let which = match i.op(0) {
+        None => 0b11,
+        Some(op) => match op
+            .word()
+            .map(|n| cx.name(n).to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("sm") => 0b01,
+            Some("za") => 0b10,
+            _ => {
+                cx.error(
+                    op.span,
+                    format!("`{}` takes `sm`, `za` or nothing", i.mnemonic),
+                );
+                return None;
+            }
+        },
+    };
+    let start = u32::from(i.mnemonic == "smstart");
+    one(0xd503_407f | field(which << 1 | start, 8, 4))
+}
+
+/// `zero {za}`, which clears SME's ZA storage. The list is the whole
+/// operand: the older per-tile spellings and SME2's `zt0` are not taken.
+pub(crate) fn sme_zero(cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
+    let toks = req.operands;
+    let za = match toks {
+        [open, name, close] if open.is_punct(Punct::LBrace) && close.is_punct(Punct::RBrace) => {
+            matches!(name.kind, TokKind::Ident(n) if cx.name(n).eq_ignore_ascii_case("za"))
+        }
+        _ => false,
+    };
+    if !za {
+        let span = toks
+            .first()
+            .map_or(req.span, |t| t.span.to(toks[toks.len() - 1].span));
+        cx.error(span, "`zero` takes `{za}`");
+        return None;
+    }
+    one(0xc008_00ff)
 }
 
 fn msr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
@@ -1925,200 +2344,19 @@ fn msr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         && i.op(1).is_some_and(|o| o.reg().is_none())
     {
         let text = cx.name(n).to_ascii_lowercase();
-        if let Some((op1, op2)) = sysreg::pstate(&text) {
-            let imm = i.imm(cx, 1, 0, 15, "a PSTATE value")? as u32;
-            return one(0xd500_401f | field(op1, 16, 3) | field(imm, 8, 4) | field(op2, 5, 3));
+        if let Some((word, lsb, max)) = sysreg::pstate_field(&text) {
+            // The field decides how much of `CRm` the immediate is: a bit
+            // for the one-bit fields and for SME's mode switches, all four
+            // for `daifset` and `daifclr`.
+            let imm = i.imm(cx, 1, 0, max, "a PSTATE value")? as u32;
+            return one(word | imm << lsb);
         }
     }
-    let enc = sysreg::operand(cx, dst)?;
+    let enc = sysreg::register(cx, dst, Some(true))?;
     let rt = i.gpr(cx, 1)?;
     if rt.class != RegClass::X {
         cx.error(i.ops[1].span, "`msr` reads a 64-bit register");
         return None;
     }
     one(0xd510_0000 | enc | field(rt.num as u32, 0, 5))
-}
-
-// ---- a small slice of SIMD -------------------------------------------------
-
-/// `add`/`sub` on vectors, lane by lane.
-fn simd_arith(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[3]).then_some(())?;
-    let rd = i.vec(cx, 0)?;
-    let rn = i.vec(cx, 1)?;
-    let rm = i.vec(cx, 2)?;
-    let arr = same_arrangement(cx, i, &[rd, rn, rm])?;
-    if arr.lanes == 1 {
-        cx.error(i.span, "`1d` has no vector add or subtract");
-        return None;
-    }
-    let u = u32::from(i.mnemonic == "sub");
-    one(field(arr.q(), 30, 1)
-        | field(u, 29, 1)
-        | 0x0e20_8400
-        | field(arr.size(), 22, 2)
-        | field(rm.num as u32, 16, 5)
-        | field(rn.num as u32, 5, 5)
-        | field(rd.num as u32, 0, 5))
-}
-
-/// The bitwise vector group: `and`, `orr`, `eor`, `bic`, `orn`, and `mov`,
-/// which is `orr` with both sources the same.
-fn simd_logic(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    let two = matches!(i.mnemonic, "mov" | "mvn");
-    i.arity(cx, if two { &[2] } else { &[3] }).then_some(())?;
-    let rd = i.vec(cx, 0)?;
-    let rn = i.vec(cx, 1)?;
-    let rm = if two { rn } else { i.vec(cx, 2)? };
-    let arr = same_arrangement(cx, i, &[rd, rn, rm])?;
-    // These operate on raw bytes, so only `8b` and `16b` are spelled.
-    if arr.elem_bits != 8 || arr.lanes == 0 {
-        cx.error(
-            i.span,
-            "a bitwise vector operation is written with `8b` or `16b`",
-        );
-        return None;
-    }
-    let (u, opc2) = match i.mnemonic {
-        "and" => (0, 0),
-        "bic" => (0, 1),
-        "orr" | "mov" => (0, 2),
-        "orn" | "mvn" => (0, 3),
-        "eor" => (1, 0),
-        _ => {
-            cx.error(i.span, format!("`{}` has no vector form here", i.mnemonic));
-            return None;
-        }
-    };
-    one(field(arr.q(), 30, 1)
-        | field(u, 29, 1)
-        | 0x0e20_1c00
-        | field(opc2, 22, 2)
-        | field(rm.num as u32, 16, 5)
-        | field(rn.num as u32, 5, 5)
-        | field(rd.num as u32, 0, 5))
-}
-
-fn same_arrangement(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, regs: &[VecReg]) -> Option<Arrangement> {
-    let first = regs.first()?.arr;
-    if regs.iter().any(|r| r.arr != first) {
-        cx.error(
-            i.span,
-            "every vector operand must have the same arrangement",
-        );
-        return None;
-    }
-    Some(first)
-}
-
-/// `dup`, from a general-purpose register or from one lane of a vector.
-fn dup(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[2]).then_some(())?;
-    let rd = i.vec(cx, 0)?;
-    let arr = rd.arr;
-    if arr.lanes == 0 {
-        cx.error(i.ops[0].span, "`dup` writes a whole vector");
-        return None;
-    }
-    // `imm5` is a one-hot marker for the element width with the lane index
-    // stacked above it, which is why it is built by shifting rather than by a
-    // table.
-    let width_marker = match arr.elem_bits {
-        8 => 1,
-        16 => 2,
-        32 => 4,
-        _ => 8,
-    };
-    let src = i.op(1)?;
-    match src.kind {
-        OperandKind::VecElem(v, index) => {
-            let lanes = 128 / arr.elem_bits as u64;
-            if v.arr.elem_bits != arr.elem_bits || v.arr.lanes != 0 {
-                cx.error(
-                    src.span,
-                    "the source element must match the destination's lane width",
-                );
-                return None;
-            }
-            if index >= lanes {
-                cx.error(
-                    src.span,
-                    format!("lane index {index} is out of range 0..{lanes}"),
-                );
-                return None;
-            }
-            let imm5 = width_marker | (index as u32 * width_marker * 2);
-            one(field(arr.q(), 30, 1)
-                | 0x0e00_0400
-                | field(imm5, 16, 5)
-                | field(v.num as u32, 5, 5)
-                | field(rd.num as u32, 0, 5))
-        }
-        _ => {
-            let rn = i.gpr(cx, 1)?;
-            let want = if arr.elem_bits == 64 {
-                RegClass::X
-            } else {
-                RegClass::W
-            };
-            if rn.class != want {
-                cx.error(
-                    src.span,
-                    format!(
-                        "`dup` to `{}`-lanes reads a `{}` register",
-                        arr.elem_bits,
-                        want.letter()
-                    ),
-                );
-                return None;
-            }
-            one(field(arr.q(), 30, 1)
-                | 0x0e00_0c00
-                | field(width_marker, 16, 5)
-                | field(rn.num as u32, 5, 5)
-                | field(rd.num as u32, 0, 5))
-        }
-    }
-}
-
-/// `fmov` between two scalar FP registers, or between a GPR and the bits of
-/// one.
-fn fmov(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[2]).then_some(())?;
-    let rd = i.any_reg(cx, 0)?;
-    let rn = i.any_reg(cx, 1)?;
-    if rd.is_sp() || rn.is_sp() {
-        cx.error(i.span, "`fmov` cannot use the stack pointer");
-        return None;
-    }
-    // `type` is the FP width field: 0 for single, 1 for double.
-    let (sf, ftype, opcode) = match (rd.class, rn.class) {
-        (RegClass::S, RegClass::S) | (RegClass::D, RegClass::D) => {
-            let ftype = u32::from(rd.class == RegClass::D);
-            return one(0x1e20_4000
-                | field(ftype, 22, 2)
-                | field(rn.num as u32, 5, 5)
-                | field(rd.num as u32, 0, 5));
-        }
-        // Between a general register and an FP one, `fmov` copies raw bits,
-        // so the two widths must agree. The opcode's low bit gives the
-        // direction: 7 moves into the FP register, 6 out of it.
-        (RegClass::S, RegClass::W) => (0, 0, 7),
-        (RegClass::W, RegClass::S) => (0, 0, 6),
-        (RegClass::D, RegClass::X) => (1, 1, 7),
-        (RegClass::X, RegClass::D) => (1, 1, 6),
-        _ => {
-            cx.error(
-                i.span,
-                "`fmov` needs two `s`/`d` registers, or an FP and a general register of the same width",
-            );
-            return None;
-        }
-    };
-    one(field(sf, 31, 1)
-        | 0x1e20_0000
-        | field(ftype, 22, 2)
-        | field(opcode, 16, 5)
-        | field(rn.num as u32, 5, 5)
-        | field(rd.num as u32, 0, 5))
 }

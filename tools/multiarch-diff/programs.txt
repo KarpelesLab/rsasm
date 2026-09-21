@@ -246,3 +246,45 @@
         mvsw    %d0,%d1
         mov3ql  #-1,%d2
         fmoved  %fp0,%fp1
+=== AVR's `$` separates statements where x86's is an immediate, and `;` comments
+.arch x86-64
+        movl    $1, %eax ; movl $2, %ebx        # `;` separates on x86
+.arch avr
+        ldi     r16, 1 $ ldi r17, 2             ; `$` separates on AVR, `;` comments
+# a first-column comment
+        ret
+.arch x86-64
+        ret
+=== an AVR core with more instructions, between RL78 and SuperH
+.arch rl78
+        mov     a, #0FFH                        ; RL78 reads `0FFH`
+.arch avr5
+        ldi     r24, lo8(0x1234)
+        ldi     r25, hi8(0x1234)
+        movw    r30, r24
+        call    0x100
+.arch sh
+        mov     #1, r0                          ! SuperH
+        rts
+        nop
+=== x86-64 then MSP430: `;` comments, `{` separates statements, `#` is an immediate
+.arch x86-64
+        movl    $0x0ff, %eax    # an x86 comment
+.arch msp430
+        mov     #0FFh, r15      ; an MSP430 comment { not a statement
+        mov     #1, r14 { mov #2, r13
+# a first-column comment
+        jmp     $+4
+        ret
+.arch x86-64
+        ret
+=== MSP430X, RL78 and back: two readings of `0FFh` and of `;`
+.arch msp430x
+        movx.a  #0x12345, r12   ; an MSP430 comment
+        rpt     #4 { rrax.a r12
+.arch rl78
+        mov     a, #0FFH        ; an RL78 comment
+        ret
+.arch msp430x
+        mova    #010, r13
+        reta

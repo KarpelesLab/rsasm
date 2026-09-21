@@ -2,9 +2,11 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502, 8080 and 8051.
+AVR, MSP430, and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
-and llvm-mc answers differently; see [ARM](#arm).
+and llvm-mc answers differently; see [ARM](#arm). AArch64 is here for the
+same reason, its literal pools and its system instructions; see
+[AArch64](#aarch64).
 
 ```console
 $ tools/oracles/build.sh          # once: builds the pinned references
@@ -36,6 +38,9 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `rl78` | `rl78` | `rl78-elf-as` |
 | `rx` | `rx` | `rx-elf-as` (code is in section `P`) |
 | `sh` / `shl` | `sh` / `shl` | `sh-elf-as` / `sh-elf-as -little` |
+| `msp430` / `msp430x` | `msp430` / `msp430x` | `msp430-elf-as -mcpu=430` / `-mcpu=430x` |
+| `msp430xv2` | `msp430xv2` | `msp430-elf-as -mcpu=430xv2`, on `msp430.txt` |
+| `msp430-poly` / `msp430x-poly` | `msp430` / `msp430x` | the same with `-mP`, for the polymorphic branches |
 | `rl78-ccrl` | `rl78`, CC-RL syntax | `rl78-elf-as`, on the GNU half of each pair |
 | `rh850-ccrh` | `rh850`, CC-RH syntax | `v850-elf-as -mv850e3v5`, likewise |
 | `rx-ccrx` | `rx`, CC-RX syntax | `rx-elf-as`, likewise |
@@ -50,6 +55,10 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
 | `i8051-sdas` | `8051`, 8-bit syntax | `sdas8051`, linked by `sdld` into Intel HEX |
 | `i8051-hex` | `8051`, 8-bit syntax, `-f ihex` | `asl -cpu 8051`, converted by `p2hex`; the text is compared |
+| `avr` | `avr` | `avr-elf-as`, with no `-mmcu`: the AVR2 set |
+| `avr51` | `avr51` | `avr-elf-as -mmcu=avr51` |
+| `avrxmega` | `atxmega128a1u` | `avr-elf-as -mmcu=atxmega128a1u`, which has the read-modify-write instructions |
+| `avrtiny` | `avrtiny` | `avr-elf-as -mmcu=avrtiny` |
 
 The m68k keys named after a CPU hold corpora generated from GNU's opcode table
 by `tools/fuzz/m68k.py corpus --first`: every form of every instruction, once,
@@ -86,7 +95,18 @@ They leave out what rsasm deliberately writes differently:
 - A conditional branch on RX or V850 that is left to the linker: GNU as keeps
   it short, trusting the linker to reach; rsasm takes the longest form (see
   `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+- On MSP430, what the header of `msp430-relocs.txt` lists: the addend GNU as
+  gives the last `R_MSP430_SYM_DIFF` in a section, where `.section .data`
+  puts its `__crt0_movedata` among the undefined symbols, and a number
+  `.set` after its use, which GNU as relocates against the symbol.
+
+AVR objects are compared with their `e_flags` too (`canon.sh --flags`), which
+name the core and carry `EF_AVR_LINKRELAX_PREPARED`, and with `.avr.prop`,
+which is not allocated but is what the linker relaxes the code by. Their
+local symbols are not compared: GNU as names each label a relocation needs,
+`.L1^B1` for a `1:`, and rsasm names the same labels in its own way.
 | `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
+| `aarch64` | `aarch64`, and whole objects for the pools | `aarch64-elf-as` with every extension it names; see [AArch64](#aarch64) |
 
 ## ARM
 
@@ -126,6 +146,35 @@ relocates an ARM `bl` even to a label in the same section, and converts no
 `bl` to `blx` itself), and the size of a relaxable Thumb instruction (GNU as
 picks each afresh on every pass against the growth so far, and llvm-mc can
 widen one that GNU as keeps at 16 bits).
+
+## AArch64
+
+llvm-mc checks the AArch64 encodings in `tools/mc-diff`, including the SIMD
+and SVE table and the 3,037 system-instruction lines the two references
+agree on. Two things are GNU as's alone, and are here.
+
+**Literal pools.** `ldr x0, =0x123456789` puts the value in a pool and loads
+it from there, and where the pool goes is decided across a whole section, so
+`aarch64-relocs.txt` compares whole objects with `tools/mc-diff/canon.sh
+--full`: sections, bytes, relocations, `e_flags` and every symbol, the
+`$x`/`$d` mapping symbols among them. llvm-mc decides differently — it turns
+`ldr x0, =1` into `mov x0, #1`, and writes its entries in the order they were
+used, not grouped by width — and GNU as on AArch64, unlike its own ARM port,
+never substitutes a `mov` at all. rsasm follows GNU as. `tools/flat-diff`
+links the same programs and compares the images.
+
+**System instructions.** `aarch64.txt` holds a line for every operand name in
+GNU's tables that llvm-mc does not know or encodes differently: most of the
+newer system registers, the nXS TLB maintenance names, `plbi`, `stshh`.
+`tools/tables/aarch64-sys.py` generates it and the mc-diff half from the same
+run, so regenerate rather than edit. The CPU string in `run.sh` names every
+extension GNU as has a name for, since it refuses a system register for the
+CPU rather than reporting an unknown name; the generator builds the same
+string from GNU as's own list.
+
+Where the two references differ and GNU as is followed: `msr ctr_el0, x0`,
+writing a read-only register, is a warning in both GNU as and rsasm, and an
+error in llvm-mc.
 
 ## PowerPC
 

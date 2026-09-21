@@ -175,6 +175,10 @@ pub struct LexConfig {
     /// `@` may start or continue an identifier, as the CC-RL and CC-RH symbol
     /// rules allow (CC-RL §5.1.2 (3)(b), page 428; CC-RH §5.1.12, page 423).
     pub at_in_idents: bool,
+    /// `$` may continue an identifier, as GNU as's default character table
+    /// has it. AVR's port takes it out (`LEX_DOLLAR 0`), since there `$`
+    /// separates statements.
+    pub dollar_in_idents: bool,
     /// `AF'`, the Z80's alternate register pair, is a name: a quote straight
     /// after `AF` is its prime rather than the start of a character literal.
     pub primed_af: bool,
@@ -209,6 +213,7 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -228,6 +233,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -246,6 +252,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![('$', 16), ('%', 2), ('@', 8)],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -263,6 +270,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -286,6 +294,7 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -306,6 +315,7 @@ impl LexConfig {
                 octal_leading_zero: true,
                 number_prefixes: vec![],
                 at_in_idents: true,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -327,6 +337,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: false,
                 bit_dot: false,
                 equates: &[],
@@ -349,6 +360,7 @@ impl LexConfig {
                 octal_leading_zero: false,
                 number_prefixes: vec![('$', 16), ('%', 2)],
                 at_in_idents: false,
+                dollar_in_idents: true,
                 primed_af: true,
                 bit_dot: false,
                 equates: &[],
@@ -750,8 +762,11 @@ impl<'a> Lexer<'a> {
         }
 
         let at = self.config.at_in_idents;
+        let dollar = self.config.dollar_in_idents;
         let dots = !self.config.bit_dot;
-        let cont = |b: u8| (is_ident_cont(b) && (dots || b != b'.')) || (at && b == b'@');
+        let cont = |b: u8| {
+            (is_ident_cont(b) && (dots || b != b'.') && (dollar || b != b'$')) || (at && b == b'@')
+        };
         // A leading `.` introduces a directive name. Where `.` is the bit
         // separator it may only do so before a letter, so `20H.3` splits.
         let dot_starts = c == b'.'
@@ -1090,10 +1105,11 @@ impl<'a> Lexer<'a> {
     /// hex. NASM reads a `0b` prefix before it looks for a suffix and rejects
     /// the same text, so it keeps prefix-first order.
     fn suffixed_literal_ahead(&self) -> bool {
-        if !matches!(
+        let renesas = matches!(
             self.config.dialect,
             Dialect::Renesas | Dialect::CcRl | Dialect::CcRx | Dialect::EightBit
-        ) {
+        );
+        if !renesas && !self.config.radix_suffix {
             return false;
         }
         let mut p = self.pos;
@@ -1103,7 +1119,14 @@ impl<'a> Lexer<'a> {
             p += 1;
         }
         let run = &self.src[self.pos..p];
-        suffix_radix(run).is_some()
+        match suffix_radix(run) {
+            // GNU as ports built with suffix numbers (RL78, MSP430) look for an
+            // `h` before a `0b` prefix, so `0b1h` is 0xb1; a `0x` prefix still
+            // wins, and makes `0x1fh` an error.
+            Some(16) if !renesas => self.peek_at(1) | 0x20 == b'b',
+            Some(_) => renesas,
+            None => false,
+        }
     }
 
     fn lex_number(

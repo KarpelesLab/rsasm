@@ -11,7 +11,8 @@
 #   .rela.text 0x4 R_RISCV_CALL_PLT foo+0x0
 #
 # A section is listed if it is allocated and not empty, with its bytes unless
-# it is SHT_NOBITS. What a reference writes of its own accord is left out:
+# it is SHT_NOBITS, and so is AVR's `.avr.prop`, which is not allocated but is
+# what the linker relaxes the code by. What a reference writes of its own accord is left out:
 # the ABI and attribute sections (`.reginfo`, `.MIPS.abiflags`,
 # `.riscv.attributes`, `.ARM.attributes`, `.note.*`, ...), and `.text`,
 # `.data` and `.bss` while they are empty, which GNU as always creates.
@@ -26,13 +27,30 @@
 # for its whole objects, `e_flags` is
 # printed first, and the symbol list takes in every named local symbol but
 # section and file symbols, sorted: ARM's mapping symbols and Thumb function
-# bits are local, and are what that comparison is for.
+# bits are local, and are what that comparison is for. `--flags` prints
+# `e_flags` alone, for a target whose header says something (AVR's core and
+# relaxation flag) and whose local symbols do not.
+#
+# `--zero-relocated NAME=WIDTH` blanks the `WIDTH` bytes at each relocation in
+# section `NAME` before printing it. A field a relocation covers belongs to the
+# linker, and the references disagree about what they leave in it: GNU as for
+# AVR writes uninitialized memory into the addresses in `.avr.prop`, so the
+# same build differs from run to run and host to host.
 #
 # Plain POSIX awk: no strtonum, so hex is converted by hand.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 full=0
-[ "$1" = --full ] && { full=1; shift; }
+flags=0
+zero_name=
+zero_width=0
+[ "$1" = --full ] && { full=1; flags=1; shift; }
+[ "$1" = --flags ] && { flags=1; shift; }
+if [ "$1" = --zero-relocated ]; then
+  zero_name=${2%%=*}
+  zero_width=${2#*=}
+  shift 2
+fi
 obj=$1
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -44,7 +62,8 @@ llvm-readobj --sections "$obj" | ${AWK:-awk} '
     return v
   }
   function flush() {
-    if (name == "" || !alloc || size == 0) return
+    # `.avr.prop` is not loaded, but is what a linker relaxing AVR code reads.
+    if (name == "" || (!alloc && name != ".avr.prop") || size == 0) return
     if (name ~ /^\.(reginfo|pdr|comment|gnu\.attributes|riscv\.attributes|note)/ || name ~ /^\.(MIPS|ARM)\./) return
     printf "%s %s %s flags=%s size=0x%x align=%d\n", idx, name, type, flags, size, align
   }
@@ -65,10 +84,34 @@ sort -k2,2 "$tmp/sections" | while read -r idx name type flags size align; do
   echo "section $name $type $flags $size $align"
   [ "$type" = SHT_NOBITS ] && continue
   llvm-objcopy --dump-section "$name=$tmp/bytes" "$obj" "$tmp/copy" 2> /dev/null
-  printf '  %s\n' "$(xxd -p "$tmp/bytes" | tr -d '\n')"
+  hex=$(xxd -p "$tmp/bytes" | tr -d '\n')
+  if [ "$name" = "$zero_name" ]; then
+    hex=$(llvm-readobj --relocations "$obj" |
+      ${AWK:-awk} -v hex="$hex" -v want="$name" -v width="$zero_width" '
+        function hexval(h,   i, c, n, d) {
+          n = 0
+          sub(/^0[xX]/, "", h)
+          for (i = 1; i <= length(h); i++) {
+            c = tolower(substr(h, i, 1))
+            d = index("0123456789abcdef", c) - 1
+            if (d >= 0) n = n * 16 + d
+          }
+          return n
+        }
+        $1 == "Section" { insect = ($3 == want || $3 == ".rel" want || $3 == ".rela" want) }
+        insect && $1 ~ /^0x/ {
+          off = hexval($1) * 2
+          blank = ""
+          for (i = 0; i < width * 2; i++) blank = blank "0"
+          hex = substr(hex, 1, off) blank substr(hex, off + width * 2 + 1)
+        }
+        END { print hex }
+      ')
+  fi
+  printf '  %s\n' "$hex"
 done
 
-[ "$full" = 1 ] && llvm-readobj --file-headers "$obj" |
+[ "$flags" = 1 ] && llvm-readobj --file-headers "$obj" |
   ${AWK:-awk} '$1 == "Flags" { f = $3; gsub(/[()]/, "", f); print "flags " f; exit }'
 
 llvm-readobj --symbols "$obj" > "$tmp/syms"

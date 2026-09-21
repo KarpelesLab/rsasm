@@ -3,10 +3,12 @@
 # compiler.c: what GCC and Clang write for a small program with -g, which is
 # what line tables and frames are mostly made from in practice.
 #
-#   tools/dwarf-diff/compiler.sh
+#   tools/dwarf-diff/compiler.sh            # every target
+#   tools/dwarf-diff/compiler.sh avr5       # just these
 #
 # The committed corpora came from GCC 15.3 (x86-64 and i386, the targets
-# whose reference is GNU as) and Clang 22.1 (every target). Another version
+# whose reference is GNU as) and Clang 22.1 (every target; for AVR, the
+# ATmega328P of an Arduino Uno, an avr5 core). Another version
 # writes other code, which is fine: the harness compares rsasm with the
 # reference on whatever the corpus holds.
 #
@@ -22,7 +24,8 @@
 #   instruction each is an alias of;
 # - MIPS O32's `$`-prefixed private labels, renamed `.L`;
 # - `-fno-stack-protector`, since GNU as writes `%gs:20` in the short
-#   `moffs` form rsasm lacks.
+#   `moffs` form rsasm lacks;
+# - the `.cfi_*` directives for MSP430, whose GNU as has no CFI.
 #
 # Thumb is left out: Clang's Thumb-2 output uses encodings rsasm lacks.
 set -u
@@ -58,6 +61,8 @@ mipsel|-|--target=mipsel-linux-gnu -fno-pic -mno-abicalls
 mips64|-|--target=mips64-linux-gnuabi64 -march=mips64 -fno-pic -mno-abicalls
 sparc|-|--target=sparc-linux-gnu -mcpu=v8
 sparcv9|-|--target=sparcv9-linux-gnu
+avr5|-|--target=avr -mmcu=atmega328p
+msp430|-|--target=msp430-elf
 "
 
 clean() { # key; source on stdin
@@ -68,13 +73,19 @@ clean() { # key; source on stdin
     perl -pe 's/\b(ds[lr][la])(\s+)(\$\w+),\s*(\$\w+),\s*(3[2-9]|[4-5]\d|6[0-3])\s*$/"${1}32$2$3, $4, ".($5-32)."\n"/e' |
     if [ "$1" = mips ] || [ "$1" = mipsel ]; then
       perl -pe 's/\$(?!(?:zero|at|v[01]|a[0-7]|t[0-9]|s[0-8]|k[01]|gp|sp|fp|ra|f\d+|\d+)\b)([A-Za-z_][\w.]*)/.L$1/g'
+    elif [ "$1" = msp430 ]; then
+      grep -vE '^\s*\.cfi_'
     else
       cat
     fi
 }
 
+wanted="${*:-}"
 while IFS='|' read -r key gccflags clangflags; do
   [ -z "$key" ] && continue
+  if [ -n "$wanted" ]; then
+    case " $wanted " in *" $key "*) ;; *) continue ;; esac
+  fi
   out="$here/$key-compiler.txt"
   : > "$out"
   for opt in -O0 -O2; do

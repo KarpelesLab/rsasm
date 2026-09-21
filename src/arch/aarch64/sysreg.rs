@@ -1,59 +1,30 @@
-//! System registers for `mrs` and `msr`.
+//! System registers, PSTATE fields and the named operands of the system
+//! instructions.
 //!
 //! A system register is really five numbers — `op0:op1:CRn:CRm:op2` — and the
-//! architecture keeps adding names for combinations of them. Rather than carry
-//! the whole ever-growing list, this table holds the registers ordinary code
-//! touches and the generic `S<op0>_<op1>_C<n>_C<m>_<op2>` spelling reaches the
-//! rest, exactly as GNU as does.
+//! architecture keeps adding names for combinations of them; the same is true
+//! of the `dc`, `ic`, `at` and `tlbi` operands, which are names for a `sys`
+//! word. None of those names is written out here: `sysreg_data` holds them as
+//! GNU as's own tables spell them, with the encoding each one assembles to.
+//! The generic `S<op0>_<op1>_C<n>_C<m>_<op2>` spelling reaches a register
+//! with no name at all, exactly as GNU as does.
 
 use super::operand::Operand;
+use super::sysreg_data as data;
 use crate::arch::AsmCtx;
 
-/// `(name, op0, op1, CRn, CRm, op2)`.
-#[rustfmt::skip]
-static REGS: &[(&str, u32, u32, u32, u32, u32)] = &[
-    ("nzcv",         3, 3,  4, 2, 0),
-    ("daif",         3, 3,  4, 2, 1),
-    ("fpcr",         3, 3,  4, 4, 0),
-    ("fpsr",         3, 3,  4, 4, 1),
-    ("currentel",    3, 0,  4, 2, 2),
-    ("spsel",        3, 0,  4, 2, 0),
-    ("sp_el0",       3, 0,  4, 1, 0),
-    ("tpidr_el0",    3, 3, 13, 0, 2),
-    ("tpidrro_el0",  3, 3, 13, 0, 3),
-    ("tpidr_el1",    3, 0, 13, 0, 4),
-    ("ctr_el0",      3, 3,  0, 0, 1),
-    ("dczid_el0",    3, 3,  0, 0, 7),
-    ("midr_el1",     3, 0,  0, 0, 0),
-    ("mpidr_el1",    3, 0,  0, 0, 5),
-    ("cntfrq_el0",   3, 3, 14, 0, 0),
-    ("cntvct_el0",   3, 3, 14, 0, 2),
-    ("cntpct_el0",   3, 3, 14, 0, 1),
-    ("elr_el1",      3, 0,  4, 0, 1),
-    ("spsr_el1",     3, 0,  4, 0, 0),
-    ("sctlr_el1",    3, 0,  1, 0, 0),
-    ("vbar_el1",     3, 0, 12, 0, 0),
-    ("esr_el1",      3, 0,  5, 2, 0),
-    ("far_el1",      3, 0,  6, 0, 0),
-    ("ttbr0_el1",    3, 0,  2, 0, 0),
-    ("ttbr1_el1",    3, 0,  2, 0, 1),
-    ("tcr_el1",      3, 0,  2, 0, 2),
-    ("mair_el1",     3, 0, 10, 2, 0),
-];
-
 /// The `o0:op1:CRn:CRm:op2` bits of an `mrs`/`msr` word, already shifted into
-/// place. `op0` contributes only its low bit: the two high bits are fixed by
-/// the opcode.
-fn pack(op0: u32, op1: u32, crn: u32, crm: u32, op2: u32) -> u32 {
-    ((op0 & 1) << 19) | (op1 << 16) | (crn << 12) | (crm << 8) | (op2 << 5)
+/// place, and the restrictions the architecture puts on the register.
+pub(crate) fn lookup(name: &str) -> Option<(u32, u8)> {
+    match data::REGS.binary_search_by(|e| e.0.cmp(name)) {
+        Ok(i) => Some((data::REGS[i].1, data::REGS[i].2)),
+        Err(_) => generic(name).map(|bits| (bits, 0)),
+    }
 }
 
 /// Parses a named system register.
 pub fn by_name(name: &str) -> Option<u32> {
-    if let Some((_, op0, op1, crn, crm, op2)) = REGS.iter().find(|e| e.0 == name) {
-        return Some(pack(*op0, *op1, *crn, *crm, *op2));
-    }
-    generic(name)
+    lookup(name).map(|(bits, _)| bits)
 }
 
 /// The `S<op0>_<op1>_C<CRn>_C<CRm>_<op2>` escape hatch.
@@ -72,44 +43,125 @@ fn generic(name: &str) -> Option<u32> {
     if !(2..=3).contains(&op0) || op1 > 7 || crn > 15 || crm > 15 || op2 > 7 {
         return None;
     }
-    Some(pack(op0, op1, crn, crm, op2))
+    Some(((op0 & 1) << 19) | (op1 << 16) | (crn << 12) | (crm << 8) | (op2 << 5))
 }
 
 /// Reads a system-register operand, reporting a diagnostic if it is not one.
 pub fn operand(cx: &mut AsmCtx<'_>, op: &Operand<'_>) -> Option<u32> {
+    register(cx, op, None)
+}
+
+/// Reads a system-register operand for `mrs` (`writing` false) or `msr`
+/// (`writing` true), warning where GNU as warns: about a register the
+/// architecture says cannot be read or written that way, and about one whose
+/// name it may drop. Both assemblers still encode the word.
+pub(crate) fn register(
+    cx: &mut AsmCtx<'_>,
+    op: &Operand<'_>,
+    writing: Option<bool>,
+) -> Option<u32> {
     let Some(n) = op.word() else {
         cx.error(op.span, "expected a system register name");
         return None;
     };
     let text = cx.name(n).to_ascii_lowercase();
-    match by_name(&text) {
-        Some(e) => Some(e),
-        None => {
-            cx.error(
-                op.span,
-                format!(
-                    "unknown system register `{text}`; \
-                     write it as `s<op0>_<op1>_c<CRn>_c<CRm>_<op2>` if it has no name here"
-                ),
-            );
-            None
-        }
+    let Some((bits, flags)) = lookup(&text) else {
+        cx.error(
+            op.span,
+            format!(
+                "unknown system register `{text}`; \
+                 write it as `s<op0>_<op1>_c<CRn>_c<CRm>_<op2>` if it has no name here"
+            ),
+        );
+        return None;
+    };
+    let complaint = match writing {
+        Some(true) if flags & data::READ_ONLY != 0 => Some("cannot be written to"),
+        Some(false) if flags & data::WRITE_ONLY != 0 => Some("cannot be read from"),
+        _ if flags & data::DEPRECATED != 0 => Some("is deprecated"),
+        _ => None,
+    };
+    if let Some(what) = complaint {
+        cx.diags
+            .warning(op.span, format!("the system register `{text}` {what}"));
     }
+    Some(bits)
 }
 
-/// The `op1`/`op2` pair of a PSTATE field, which `msr` writes with an
-/// immediate rather than a register.
+/// A PSTATE field, which `msr` writes with an immediate rather than a
+/// register: the word of `msr <field>, #0`, the bit the immediate starts at
+/// and the largest value it may take.
+pub(crate) fn pstate_field(name: &str) -> Option<(u32, u32, i64)> {
+    data::PSTATE
+        .iter()
+        .find(|e| e.0 == name)
+        .map(|&(_, word, lsb, max)| (word, u32::from(lsb), i64::from(max)))
+}
+
+/// The `op1`/`op2` pair of a PSTATE field.
 pub fn pstate(name: &str) -> Option<(u32, u32)> {
-    Some(match name {
-        "spsel" => (0, 5),
-        "daifset" => (3, 6),
-        "daifclr" => (3, 7),
-        "uao" => (0, 3),
-        "pan" => (0, 4),
-        "dit" => (3, 2),
-        "ssbs" => (3, 1),
+    let (word, _, _) = pstate_field(name)?;
+    Some(((word >> 16) & 7, (word >> 5) & 7))
+}
+
+/// `sys #0, c0, c0, #0, x0` and `sysl x0, #0, c0, c0, #0`: the words every
+/// system instruction is written into, named operand or not.
+pub(crate) const SYS: u32 = data::SYS;
+pub(crate) const SYSL: u32 = data::SYSL;
+
+/// The register a system instruction's named operand takes.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(crate) enum Xt {
+    /// It takes none: `tlbi vmalle1is`.
+    None,
+    /// It must have one: `dc civac, x0`.
+    Needs,
+    /// It may have one: the TLB maintenance names that address a page.
+    Optional,
+}
+
+/// A named operand of `dc`, `ic`, `at`, `tlbi` and their friends: the
+/// `op1:CRn:CRm:op2` bits of the `sys` word it stands for.
+pub(crate) fn sys_ins(mnemonic: &str, name: &str) -> Option<(u32, Xt)> {
+    let i = data::SYS_INS
+        .binary_search_by(|e| (e.0, e.1).cmp(&(mnemonic, name)))
+        .ok()?;
+    let (_, _, bits, xt) = data::SYS_INS[i];
+    let takes = match xt {
+        data::NO_XT => Xt::None,
+        data::NEEDS_XT => Xt::Needs,
+        data::OPTIONAL_XT => Xt::Optional,
         _ => return None,
-    })
+    };
+    Some((bits, takes))
+}
+
+/// Whether this mnemonic takes one of those names at all.
+pub(crate) fn is_sys_ins(mnemonic: &str) -> bool {
+    data::SYS_INS.iter().any(|e| e.0 == mnemonic)
+}
+
+/// An alias of `hint` or of a barrier: a mnemonic on its own (`esb`, `sb`),
+/// or one with a single named operand (`psb csync`, `dsb ishst`, `bti c`).
+pub(crate) fn hint(mnemonic: &str, option: &str) -> Option<u32> {
+    let i = data::HINTS
+        .binary_search_by(|e| (e.0, e.1).cmp(&(mnemonic, option)))
+        .ok()?;
+    Some(data::HINTS[i].2)
+}
+
+/// Whether this mnemonic is one of those aliases.
+pub(crate) fn is_hint(mnemonic: &str) -> bool {
+    data::HINTS.iter().any(|e| e.0 == mnemonic)
+}
+
+/// The names this mnemonic accepts, for a diagnostic that lists them.
+pub(crate) fn hint_options(mnemonic: &str) -> Vec<&'static str> {
+    data::HINTS
+        .iter()
+        .filter(|e| e.0 == mnemonic && !e.1.is_empty())
+        .map(|e| e.1)
+        .collect()
 }
 
 #[cfg(test)]
@@ -123,5 +175,26 @@ mod tests {
         assert!(by_name("s3_3_c13_c0").is_none());
         assert!(by_name("s9_3_c13_c0_3").is_none());
         assert!(by_name("nosuchreg").is_none());
+    }
+
+    #[test]
+    fn the_generated_tables_are_sorted_and_looked_up_by_name() {
+        assert!(data::REGS.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(
+            data::SYS_INS
+                .windows(2)
+                .all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
+        );
+        assert!(
+            data::HINTS
+                .windows(2)
+                .all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
+        );
+        // A name from each table, found the way the encoders find it.
+        assert!(lookup("ctr_el0").is_some_and(|(_, f)| f & data::READ_ONLY != 0));
+        assert!(matches!(sys_ins("dc", "civac"), Some((_, Xt::Needs))));
+        assert!(matches!(sys_ins("ic", "ialluis"), Some((_, Xt::None))));
+        assert!(hint("psb", "csync").is_some());
+        assert!(hint("psb", "dsync").is_none());
     }
 }

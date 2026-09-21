@@ -2,14 +2,14 @@
 # Differential test against cross assemblers built by tools/oracles/build.sh.
 #
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
-# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, and the 8-bit Z80,
-# 6502, 8080 and 8051. Assembles a corpus with rsasm and with the reference, and
-# compares the code bytes. ARM and Thumb, which llvm-mc does assemble, are here
-# too, as whole objects, for what GNU as decides and llvm-mc decides
-# differently: literal pools, interworking and mapping symbols. So is PowerPC,
-# for its AltiVec, VSX and POWER10 instructions: llvm-mc checks them too, and
-# the two references accept different mnemonics and ranges, and only GNU as
-# writes the absolute 34-bit relocation.
+# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, AVR, MSP430, and the 8-bit
+# Z80, 6502, 8080 and 8051. Assembles a corpus with rsasm and with the
+# reference, and compares the code bytes. ARM and Thumb, which llvm-mc does
+# assemble, are here too, as whole objects, for what GNU as decides and
+# llvm-mc decides differently: literal pools, interworking and mapping
+# symbols. So is PowerPC, for its AltiVec, VSX and POWER10 instructions:
+# llvm-mc checks them too, and the two references accept different mnemonics
+# and ranges, and only GNU as writes the absolute 34-bit relocation.
 #
 #   tools/xas-diff/run.sh              # every target with a corpus
 #   tools/xas-diff/run.sh m68k rx      # just these
@@ -22,8 +22,18 @@
 # objects instead: every allocated section's header and bytes, the global,
 # weak and undefined symbols, and the relocations, as tools/mc-diff/canon.sh
 # prints them; for ARM and Thumb also `e_flags` and every local symbol, with
-# `canon.sh --full`. A snippet there named `refused: ...` matches when both
-# assemblers reject it.
+# `canon.sh --full`, and for AVR `e_flags`, with `canon.sh --flags`. A snippet
+# there named `refused: ...` matches when both assemblers reject it.
+#
+# AArch64 is here for its literal pools, which are GNU as's feature: where
+# the pool goes, what it shares and how its runs are aligned is decided across
+# instructions, and llvm-mc decides differently (it turns `ldr x0, =1` into
+# `mov x0, #1`, and writes its entries in the order they were used). Its
+# system instructions are here too: their operand names come from GNU's
+# tables, and most of the newer ones llvm-mc does not know. The CPU string
+# names every extension GNU as has a name for, since a system register is
+# refused for the CPU rather than unknown; tools/tables/aarch64-sys.py, which
+# generates the corpus, builds the same string from GNU as's own list.
 #
 # ARM is checked against GNU as for ARMv7-A, whose Thumb-2 no-ops and
 # interworking rules are what `-march=armv7ve` gives; without a `-march` GNU
@@ -72,6 +82,10 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # `rsasm -f ihex`. p2hex leaves reserved space and `ORG` gaps out of its
 # records where rsasm writes the zeros `-f bin` has, so those programs are
 # written without gaps.
+#
+# MSP430 is checked for each ISA GNU as's `-mcpu` selects. The polymorphic
+# branches (`jump`, `beq`, ...) need `-mP` there, which also leaves more to
+# the linker in data sections, so they have corpora of their own.
 #
 # vasm is only a secondary reference, run with `-no-opt -devpac`. By default it
 # is an optimizing assembler that rewrites instructions (`move.l #1,d0` becomes
@@ -125,11 +139,21 @@ i8080|i8080|8bit|asl -cpu 8080|p2bin
 i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
+aarch64|aarch64|gas|aarch64-elf-as -march=armv9.5-a+crc+crypto+fp+lse+lsfe+lse128+lsui+simd+pan+lor+ras+rdma+fp16+fp16fml+fprcvt+profile+sve+tme+fcma+jscvt+rcpc+rcpc2+dotprod+sha2+frintts+sb+predres+predres2+poe2+tev+aes+sm4+sha3+rng+ssbs+lscp+memtag+occmo+cmpbr+sve2+sve2-sm4+sve2-aes+sve2-sha3+sve2-bitperm+sme+sme-f64f64+sme-i16i64+sme2+bf16+i8mm+f32mm+f64mm+ls64+flagm+flagm2+pauth+xs+wfxt+mops+hbc+cssc+chk+gcs+the+rasv2+ite+d128+sve-b16b16+sve-bfscale+sme2p1+sve2p1+sve-f16f32mm+f8f32mm+f8f16mm+sve-aes+sve-aes2+ssve-aes+sve-bitperm+ssve-bitperm+rcpc3+cpa+faminmax+fp8+lut+brbe+sme-lutv2+fp8fma+fp8dot4+fp8dot2+ssve-fp8fma+ssve-fp8dot4+ssve-fp8dot2+sme-f8f32+sme-f8f16+sme-f16f16+sme-b16b16+pops+sve2p2+sme2p2+gcie+ssve-fexpa+sme-tmop+sme-mop4+mops-go+sve2p3+sme2p3+f16f32dot+f16f32mm+f16mm+sve-b16mm+mtetc+tlbid+sme-fa64|elf:.text
 arm|arm|gas|arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4|elf:.text
+msp430|msp430|gas|msp430-elf-as -mcpu=430|elf:.text
+msp430x|msp430x|gas|msp430-elf-as -mcpu=430x|elf:.text
+msp430xv2|msp430xv2|gas|msp430-elf-as -mcpu=430xv2|elf:.text|msp430
+msp430-poly|msp430|gas|msp430-elf-as -mcpu=430 -mP|elf:.text
+msp430x-poly|msp430x|gas|msp430-elf-as -mcpu=430x -mP|elf:.text|msp430-poly
 thumb|thumb|gas|arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4 -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
 powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
 powerpc|powerpc|gas|powerpc64-linux-gnu-as -a32 -mbig -mfuture|elf:.text
+avr|avr|gas|avr-elf-as|elf:.text
+avr51|avr51|gas|avr-elf-as -mmcu=avr51|elf:.text
+avrxmega|atxmega128a1u|gas|avr-elf-as -mmcu=atxmega128a1u|elf:.text
+avrtiny|avrtiny|gas|avr-elf-as -mmcu=avrtiny|elf:.text
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
@@ -261,8 +285,18 @@ compare_object() { # key arch dialect cmd name source
   # GNU as for RX renames `.text`, `.data` and `.bss` to Renesas's `P`, `D_1`
   # and `B_1`, which rsasm does not; asked to keep the usual names, it does.
   case "$1" in rx*) flags=-muse-conventional-section-names ;; esac
-  # ARM objects are compared whole, local symbols and `e_flags` included.
-  case "$1" in arm | thumb) full=--full ;; esac
+  # ARM and AArch64 objects are compared whole, local symbols — the mapping
+  # symbols among them — and `e_flags` included.
+  # AVR objects with their `e_flags`, which name the core and say the object
+  # is prepared for linker relaxation; their local symbols are the labels
+  # relocations name, which canon.sh already reads by section and offset.
+  # GNU as for AVR writes uninitialized bytes into the record addresses in
+  # `.avr.prop`, which differ from run to run; the linker takes those fields
+  # from the relocations, so they are blanked before the comparison.
+  case "$1" in
+    arm | thumb | aarch64) full=--full ;;
+    avr*) full="--flags --zero-relocated .avr.prop=4" ;;
+  esac
   d=$(mktemp -d)
   printf '%s\n' "$6" > "$d/in.s"
   if [ ! -x "$bin/$tool" ]; then
