@@ -26,10 +26,13 @@
 # assemblers reject it.
 #
 # ARM is checked against GNU as for ARMv7-A, whose Thumb-2 no-ops and
-# interworking rules are what `-march=armv7-a` gives; without it GNU as
-# assumes an ARMv4T-era CPU. Its snippets start with `.syntax unified`, GNU
-# as's default being the older divided Thumb syntax, and rsasm knowing only
-# the unified one.
+# interworking rules are what `-march=armv7ve` gives; without a `-march` GNU
+# as assumes an ARMv4T-era CPU. `armv7ve` is ARMv7-A with the security,
+# virtualization and divide extensions, which together are the whole set this
+# backend claims -- `smc`, `hvc`, `sdiv` and the banked `msr` need them. Its
+# snippets are assembled after `.syntax unified`, GNU as's default being the
+# older divided syntax, and rsasm knowing only the unified one; the
+# `-relocs` snippets say so themselves, since they are whole programs.
 #
 # A vendor syntax no reference assembler reads (CC-RL, CC-RH, CC-RX) is checked in
 # pairs instead: <key>-pairs.txt holds snippets separated by `=== <name>`, each
@@ -121,8 +124,8 @@ i8080|i8080|8bit|asl -cpu 8080|p2bin
 i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
-arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
-thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
+arm|arm|gas|arm-none-eabi-as -march=armv7ve|elf:.text
+thumb|thumb|gas|arm-none-eabi-as -march=armv7ve -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
 powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
 powerpc|powerpc|gas|powerpc64-linux-gnu-as -a32 -mbig -mfuture|elf:.text
@@ -143,6 +146,7 @@ fail=0
 # the 8051 note above.
 prelude() { # key
   case "$1" in
+    arm | thumb) printf '\t.syntax unified\n' ;;
     i8051 | i8051-hex) printf '\tinclude "stddef51.inc"\n' ;;
     i8051-sdas) printf '\t.area CSEG (ABS)\n' ;;
   esac
