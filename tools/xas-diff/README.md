@@ -42,6 +42,8 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `z80-gas` | `z80`, GNU syntax | `z80-elf-as`, on `z80.txt` |
 | `z80-vasm` | `z80`, 8-bit syntax | `vasmz80_oldstyle`, on `z80.txt` and its own programs |
 | `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
+| `powerpc64` / `powerpc64le` | `powerpc64` / `powerpc64le` | `powerpc64-linux-gnu-as -a64 -mfuture` with `-mbig` / `-mlittle`, both on `powerpc64.txt`; see [PowerPC](#powerpc) |
+| `powerpc` | `powerpc`, relocations only | `powerpc64-linux-gnu-as -a32 -mfuture` |
 | `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
 | `i8051-sdas` | `8051`, 8-bit syntax | `sdas8051`, linked by `sdld` into Intel HEX |
 | `i8051-hex` | `8051`, 8-bit syntax, `-f ihex` | `asl -cpu 8051`, converted by `p2hex`; the text is compared |
@@ -113,6 +115,42 @@ relocates an ARM `bl` even to a label in the same section, and converts no
 `bl` to `blx` itself), and the size of a relaxable Thumb instruction (GNU as
 picks each afresh on every pass against the growth so far, and llvm-mc can
 widen one that GNU as keeps at 16 bits).
+
+## PowerPC
+
+llvm-mc is the reference for PowerPC, in `tools/mc-diff`. GNU as is here as a
+second opinion on the AltiVec, VSX and POWER8-10 instructions, whose table
+rsasm derives from binutils' own, and for what only GNU as accepts. It runs
+with `-mfuture`, since a few VSX instructions both references know
+(`xvadduhm`, `lxvrl` and their relatives) are enabled only there.
+
+The two references disagree, and rsasm takes the wider of the two where the
+encoding is not in doubt:
+
+- **Mnemonics only GNU as knows:** `xxmr`, `xxlnot`, `pnop`, `fmrgew`,
+  `fmrgow`, and `vcfpsxws`, `vcfpuxws`, `vcsxwfp` and `vcuxwfp` (spellings of
+  `vctsxs`, `vctuxs`, `vcfsx` and `vcfux`); and the R operand of `pla` and
+  `psubi`.
+- **Ranges only GNU as accepts:** a negative byte in `xxspltib` or immediate in
+  `mtvsrbmi`, `subpcis` outside -32768 to 32767, and `xxgenpcv*m` modes 16-31.
+- **Mnemonics only llvm-mc knows** are not in the table: the POWER11
+  `xxaes*` and `xxgfmul128*` instructions, which GNU as 2.47 refuses short of
+  `-mfuture` and which llvm-mc encodes with the 192- and 256-bit key forms
+  swapped.
+- **Relocations.** Only GNU as writes `R_PPC64_D34`, for an absolute symbol in
+  a prefixed instruction; llvm-mc refuses it. A PC-relative prefixed
+  reference to a label in its own section is resolved by GNU as, which also
+  writes a relocation's addend into the field; llvm-mc leaves it to the
+  linker with the field zero, and rsasm follows llvm-mc, so
+  `powerpc64-relocs.txt` here holds only absolute references.
+- **Relocations in 32-bit code.** For a symbol in a DS- or DQ-form
+  displacement, llvm-mc writes the PowerPC64 relocation numbers, which
+  `R_PPC_*` does not define, and GNU as the plain `R_PPC_ADDR16` and
+  `R_PPC_ADDR16_LO`; rsasm follows GNU as, which `powerpc-relocs.txt` checks.
+  A 34-bit field cannot be relocated there at all.
+- **`@pcrel` with the R operand 0**, where the instruction would read a
+  PC-relative value as an offset from `rA`: GNU as writes it; llvm-mc refuses
+  it on `paddi` and mis-encodes it on a load with R left out; rsasm refuses it.
 
 ## Vendor syntax no reference reads
 

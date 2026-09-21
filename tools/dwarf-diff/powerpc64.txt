@@ -37,3 +37,21 @@ f:
 	li 3, 1
 	.loc 1 5 1
 	blr
+=== a prefixed instruction padded off a 64-byte boundary | -g
+	.text
+	.fill 15, 4, 0x60000000
+lab:
+	paddi 3, 4, 100, 0
+	b lab
+	.fill 14, 4, 0x60000000
+lab3:	pli 3, 2
+	xxlor 33, 34, 35
+	b lab3
+=== a .loc on a padded prefixed instruction
+	.file 1 "a.c"
+	.text
+	.fill 15, 4, 0x60000000
+	.loc 1 5
+	pli 3, 1
+	.loc 1 6
+	vaddubm 2, 3, 4

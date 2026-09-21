@@ -81,11 +81,11 @@
 //! errata options, `-mQ` assembly-time relaxation, and the `.profiler`,
 //! `.refsym` and `.cpu` directives.
 
-pub mod encode;
-pub mod insn;
-pub mod operand;
-pub mod reg;
-pub mod reloc;
+pub(crate) mod encode;
+pub(crate) mod insn;
+pub(crate) mod operand;
+pub(crate) mod reg;
+pub(crate) mod reloc;
 
 use crate::arch::{
     ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, SameSectionRef, Syntax,

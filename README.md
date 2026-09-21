@@ -57,7 +57,7 @@ assembler, not against rsasm's own idea of the manual. See
 | AArch64 | `aarch64` | llvm-mc | 480 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
-| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1062 |
+| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
 | m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 809 |
@@ -143,7 +143,13 @@ but 18 forms where both manuals show MAME to be wrong.
   pool entries; and the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - AArch64: most of NEON, SVE
-- PowerPC: AltiVec/VSX
+- PowerPC: POWER10's matrix-multiply accelerator (`xvi8ger4` and the other
+  MMA instructions), POWER11's `xxaes*` and `xxgfmul128*`, decimal floating
+  point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
+  branches, and the privileged, hypervisor, cache-hint and synchronisation
+  instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
+  like); relocation modifiers other than `@l`, `@h`, `@ha`, `@pcrel` and
+  `@got@pcrel` (`@toc@ha`, `@got`, `@higher`)
 - MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
   warnings and insertion, the silicon errata options, assembly-time
   relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
@@ -553,7 +559,7 @@ independent assembler, and compare the bytes:
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 4,175 of 4,175 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 7,230 of 7,230 match across eighteen target variants. For RISC-V
+  supports. 12,217 of 12,217 match across eighteen target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
@@ -562,14 +568,16 @@ independent assembler, and compare the bytes:
   sdas8051 for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL,
   CC-RH and CC-RX source paired with its GNU-syntax equivalent. For ARM and
   Thumb it compares whole objects, local and mapping symbols included,
-  against GNU as, the reference for literal pools and interworking.
-  `tools/oracles/build.sh` builds the references from checksum-pinned
-  sources. 13,807 of 13,807 match across twenty-eight variants.
+  against GNU as, the reference for literal pools and interworking; for
+  PowerPC's vector and POWER8–10 instructions it is GNU as's second opinion,
+  and the check on the forms only GNU as accepts. `tools/oracles/build.sh`
+  builds the references from checksum-pinned sources. 17,246 of 17,246
+  match across thirty-one variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 168 of 168 match across twenty-six variants.
+  distances between sections. 174 of 174 match across twenty-six variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries and as ELF objects, relocations and global
@@ -581,7 +589,7 @@ independent assembler, and compare the bytes:
   against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
-  Clang. 1,086 of 1,086 match across twenty-three target variants.
+  Clang. 1,090 of 1,090 match across twenty-three target variants.
 
 The x86 and MSP430 backends are also fuzzed: `tools/fuzz/x86.py` generates random
 instructions from a table of forms written from the Intel manual, in all three
@@ -595,6 +603,16 @@ difference but the deviations the backend documents. The 8051 is fuzzed with
 whole programs: `tools/fuzz/mcs51.py` assembles them with AS and sdas8051
 too, and 80,000 programs find no case where rsasm differs from the references
 outside the places this README describes. See `tools/fuzz/README.md`.
+
+PowerPC's AltiVec, VSX and POWER8–10 instructions are fuzzed the same way by
+`tools/fuzz/powerpc.py`, which draws its forms from the operand kinds in GNU
+binutils' opcode table and runs all three PowerPC targets. A run of 600,000
+instructions finds no case where rsasm differs from both references other
+than the two refusals it makes on purpose: a doubleword instruction in 32-bit
+code, and a register name from another bank (`%vs3` where a general-purpose
+register goes), which both read as its number. The instruction table behind
+them, `src/arch/powerpc/vector.rs`, is written from that same opcode table by
+`tools/tables/powerpc.py`, never by hand.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment

@@ -20,6 +20,11 @@ pub enum RegClass {
     /// `xer`. These stand for the SPR *number*, which is what `mfspr` and
     /// `mtspr` encode.
     Spr,
+    /// `v0`-`v31`, the AltiVec vector registers.
+    Vr,
+    /// `vs0`-`vs63`, the VSX registers. The upper half of the bank is the
+    /// AltiVec registers seen again: `vs32` is `v0`.
+    Vsr,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -47,12 +52,15 @@ pub fn lookup(name: &str) -> Option<Reg> {
         "toc" | "rtoc" => return named(RegClass::Gpr, 2),
         _ => {}
     }
-    // `fr` before `f`, and `cr` before nothing, so that the longer prefix wins.
+    // `fr` before `f`, `vs` before `v`, and `cr` before nothing, so that the
+    // longer prefix wins.
     for (prefix, class, max) in [
         ("fr", RegClass::Fpr, 31),
         ("cr", RegClass::Cr, 7),
+        ("vs", RegClass::Vsr, 63),
         ("r", RegClass::Gpr, 31),
         ("f", RegClass::Fpr, 31),
+        ("v", RegClass::Vr, 31),
     ] {
         if let Some(rest) = name.strip_prefix(prefix)
             && let Some(n) = decimal(rest)
@@ -89,6 +97,8 @@ pub fn describe(r: Reg) -> String {
         RegClass::Gpr => format!("r{}", r.num),
         RegClass::Fpr => format!("f{}", r.num),
         RegClass::Cr => format!("cr{}", r.num),
+        RegClass::Vr => format!("v{}", r.num),
+        RegClass::Vsr => format!("vs{}", r.num),
         RegClass::Spr => match r.num {
             SPR_XER => "xer".into(),
             SPR_LR => "lr".into(),
@@ -148,6 +158,25 @@ mod tests {
         assert_eq!(lookup("r007"), None);
         assert_eq!(lookup("r"), None);
         assert_eq!(lookup("rx"), None);
+    }
+
+    #[test]
+    fn vector_banks() {
+        assert_eq!(
+            lookup("v31").map(|r| (r.class, r.num)),
+            Some((RegClass::Vr, 31))
+        );
+        assert_eq!(
+            lookup("vs0").map(|r| (r.class, r.num)),
+            Some((RegClass::Vsr, 0))
+        );
+        // The VSX bank is twice as wide as the others.
+        assert_eq!(
+            lookup("vs63").map(|r| (r.class, r.num)),
+            Some((RegClass::Vsr, 63))
+        );
+        assert_eq!(lookup("vs64"), None);
+        assert_eq!(lookup("v32"), None);
     }
 
     #[test]
