@@ -117,12 +117,18 @@ struct Walk<'a, 'b, 'c> {
     at: usize,
     /// The operand read last, for `!` and for a register pair's second half.
     prev: Option<usize>,
+    /// Which registers each operand may hold, in written order; see
+    /// [`Form::regs`].
+    regs: &'static [u8],
     /// A shift written on the register just read, which the next `Op` must
     /// be the one that takes it.
     shift: Option<(Shift, u32)>,
     /// The `#lsb` of a bitfield instruction, which its `#width` is measured
     /// from.
     lsb: u32,
+    /// The second half of a register pair the source left out, which is
+    /// still one of the registers the instruction uses.
+    implied: Option<Reg>,
     /// Whether to report the first thing that does not fit.
     report: bool,
     failed: bool,
@@ -162,6 +168,27 @@ impl Walk<'_, '_, '_> {
         }
     }
 
+    /// Whether the register the operand about to be read holds is one this
+    /// form may put there.
+    fn allowed(&mut self, r: Reg) -> Option<()> {
+        let class = self.regs.get(self.at).copied().unwrap_or(255);
+        let bad = match class {
+            1 => r == reg::PC,
+            2 => r == reg::PC || r == reg::SP,
+            _ => false,
+        };
+        if bad {
+            let name = reg::name_of(r);
+            let what = if class == 2 {
+                "neither `pc` nor `sp`"
+            } else {
+                "anything but `pc`"
+            };
+            return self.fail(|| format!("`{name}` is not allowed here: {what}"));
+        }
+        Some(())
+    }
+
     /// A register operand, taking a shift written on it for the `Op` after.
     fn register(&mut self, bits: u8) -> Option<Reg> {
         let Some(op) = self.op().cloned() else {
@@ -191,6 +218,7 @@ impl Walk<'_, '_, '_> {
             let name = reg::name_of(r);
             return self.fail(|| format!("`{name}` is not one of r0-r7 here"));
         }
+        self.allowed(r)?;
         self.take();
         Some(r)
     }
@@ -244,6 +272,8 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
         word: form.word,
         at: 0,
         prev: None,
+        implied: None,
+        regs: form.regs,
         shift: None,
         lsb: 0,
         report,
@@ -268,9 +298,11 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
             w.fail(|| format!("`{text}` cannot set the flags"))?;
         }
         for op in form.ops {
-            step(&mut w, *op)?;
+            step(&mut w, form, *op)?;
         }
-        if w.shift.is_some() {
+        // A rotation by zero is no rotation, so a form with no place for
+        // one still takes it: `sxtb r5, r2, ror #0` is the 16-bit `sxtb`.
+        if !matches!(w.shift, None | Some((Shift::Ror, 0))) {
             w.fail(|| "this instruction cannot take a shift".into())?;
         }
         if !form
@@ -295,7 +327,7 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
     }
 }
 
-fn step(w: &mut Walk<'_, '_, '_>, op: Op) -> Option<()> {
+fn step(w: &mut Walk<'_, '_, '_>, form: &Form, op: Op) -> Option<()> {
     match op {
         Op::Reg(lsb, bits) => {
             let r = w.register(bits)?;
@@ -314,12 +346,18 @@ fn step(w: &mut Walk<'_, '_, '_>, op: Op) -> Option<()> {
             w.word |= u32::from(r) << lsb;
         }
         // The second half of a register pair carries no bits, and GNU as
-        // takes the spelling that leaves it out.
+        // takes the spelling that leaves it out. The first half has to be an
+        // even register, which is what makes the pair a pair.
         Op::Next => {
-            let want = w
-                .prev
-                .and_then(|i| w.ins.ops[i].reg())
-                .map(|r| r.wrapping_add(1));
+            let first = w.prev.and_then(|i| w.ins.ops[i].reg());
+            if let Some(r) = first
+                && (r % 2 != 0 || r == reg::LR)
+            {
+                return w
+                    .fail(|| "the first of the pair must be an even register below `lr`".into());
+            }
+            let want = first.map(|r| r.wrapping_add(1));
+            w.implied = want;
             if let Some(r) = w.op().and_then(|o| o.reg())
                 && Some(r) == want
             {
@@ -376,7 +414,9 @@ fn step(w: &mut Walk<'_, '_, '_>, op: Op) -> Option<()> {
                 w.word |= (n / 8) << lsb;
             }
         }
-        Op::SatShift(lsb, bits, asr, lsb2, bits2) => sat_shift(w, lsb, bits, asr, lsb2, bits2)?,
+        Op::SatShift(lsb, bits, asr, lsb2, bits2) => {
+            sat_shift(w, form, lsb, bits, asr, lsb2, bits2)?
+        }
         Op::Coproc(lsb) => {
             let name = w.word_operand()?;
             let Some(n) = name.strip_prefix('p').and_then(|d| d.parse::<u32>().ok()) else {
@@ -403,6 +443,31 @@ fn step(w: &mut Walk<'_, '_, '_>, op: Op) -> Option<()> {
             w.word |= n << lsb;
             w.take();
         }
+        Op::Distinct => {
+            let a = w.prev.and_then(|i| w.ins.ops[i].reg());
+            let b = w
+                .prev
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|i| w.ins.ops[i].reg());
+            if a.is_some() && a == b {
+                return w.fail(|| "the two registers must be different".into());
+            }
+        }
+        Op::FirstDistinct => {
+            let first = w.ins.ops.first().and_then(|o| o.reg());
+            let clash = w.ins.ops[1..]
+                .iter()
+                .filter_map(|o| match o.kind {
+                    OperandKind::Reg(r) => Some(r),
+                    OperandKind::Mem(m) => Some(m.base),
+                    _ => None,
+                })
+                .chain(w.implied)
+                .any(|r| Some(r) == first);
+            if clash {
+                return w.fail(|| "the status register must differ from the others".into());
+            }
+        }
         Op::ApsrNzcv => {
             let name = w.word_operand()?;
             if !name.eq_ignore_ascii_case("apsr_nzcv") {
@@ -411,17 +476,35 @@ fn step(w: &mut Walk<'_, '_, '_>, op: Op) -> Option<()> {
             w.take();
         }
         Op::Barrier => {
-            if w.at < w.ins.ops.len() {
-                let name = w.word_operand()?;
-                let Some(v) = barrier_option(&name) else {
-                    return w.fail(|| format!("`{name}` is not a barrier option"));
-                };
-                w.word |= v;
-                w.take();
-            } else {
+            if w.at >= w.ins.ops.len() {
                 // No option written is a full system barrier.
                 w.word |= 15;
+                return Some(());
             }
+            // `do_barrier`: an option, or the number one stands for.
+            let named = w.op().and_then(|o| o.word.clone());
+            let v = match named {
+                Some(name) => {
+                    let Some(v) = barrier_option(&name) else {
+                        return w.fail(|| format!("`{name}` is not a barrier option"));
+                    };
+                    // ISB has only the one named option, which its opcode
+                    // nibble says; a plain number is not checked.
+                    if w.word & 0xf0 == 0x60 && v != 15 {
+                        return w.fail(|| "`isb` takes only the `sy` option".into());
+                    }
+                    v
+                }
+                None => {
+                    let n = w.constant()?;
+                    if !(0..=15).contains(&n) {
+                        return w.fail(|| format!("barrier option {n} is out of range (0 to 15)"));
+                    }
+                    n as u32
+                }
+            };
+            w.word |= v;
+            w.take();
         }
         Op::Writeback(lsb) => {
             if w.prev.is_some_and(|i| w.ins.ops[i].writeback) {
@@ -485,6 +568,7 @@ fn base_register(w: &mut Walk<'_, '_, '_>) -> Option<Reg> {
     if !matches!(mem.offset, MemOffset::None) || mem.index != Index::Offset || op.writeback {
         return w.fail(|| "this instruction addresses `[rn]` with no offset".into());
     }
+    w.allowed(mem.base)?;
     w.take();
     Some(mem.base)
 }
@@ -493,6 +577,7 @@ fn base_register(w: &mut Walk<'_, '_, '_>) -> Option<Reg> {
 /// constant, with the kind in one bit where both are allowed.
 fn sat_shift(
     w: &mut Walk<'_, '_, '_>,
+    form: &Form,
     lsb: u8,
     bits: u8,
     asr: u8,
@@ -502,21 +587,42 @@ fn sat_shift(
     let Some((shift, n)) = w.pending_shift() else {
         return Some(());
     };
-    let is_asr = match shift {
-        Shift::Lsl if asr != 255 => false,
-        Shift::Asr if asr != 254 => true,
+    let asr_only = (64..128).contains(&asr);
+    let mut is_asr = match shift {
+        Shift::Lsl if !asr_only => false,
+        Shift::Asr if asr != 255 => true,
         _ => {
-            let want = match asr {
-                254 => "`lsl`",
-                255 => "`asr`",
-                _ => "`lsl` or `asr`",
+            let want = if asr_only {
+                "`asr`"
+            } else if asr == 255 {
+                "`lsl`"
+            } else {
+                "`lsl` or `asr`"
             };
             return w.fail(|| format!("the only shift here is {want}"));
         }
     };
-    // `asr #32` is written out but encoded as zero, as it is everywhere else
-    // in the instruction set.
-    let n = if is_asr && n == 32 { 0 } else { n };
+    // A shift of zero is `lsl` whatever the source named it, as it is
+    // everywhere else in the instruction set; where the form's own opcode
+    // says `asr`, that turns it into the `lsl` instruction.
+    if n == 0 {
+        is_asr = false;
+        // Only A32 rewrites the opcode: `md_apply_fix` clears the type bits
+        // of the shift relocation, which `do_t_pkhbt` has no equivalent of.
+        if asr_only && form.set == Set::Arm {
+            w.word &= !(1 << (asr - 64));
+        } else if asr_only {
+            is_asr = true;
+        }
+    }
+    // `asr #32` is written out and encoded as zero, except in the Thumb
+    // saturations, whose own encoder takes only 0 to 31.
+    let thirty_two = form.set == Set::Arm || asr >= 64;
+    let n = if is_asr && n == 32 && thirty_two {
+        0
+    } else {
+        n
+    };
     let total = u32::from(bits) + if lsb2 == 255 { 0 } else { u32::from(bits2) };
     if n >= 1 << total {
         return w.fail(|| format!("shift amount {n} is out of range"));
@@ -545,6 +651,7 @@ fn table_branch(w: &mut Walk<'_, '_, '_>, base: u8, index: u8, shift: u8) -> Opt
         add: true,
         shift: kind,
         amount,
+        ..
     } = mem.offset
     else {
         return w.fail(|| "expected an index register".into());
@@ -552,6 +659,15 @@ fn table_branch(w: &mut Walk<'_, '_, '_>, base: u8, index: u8, shift: u8) -> Opt
     if mem.index != Index::Offset || kind != Shift::Lsl || amount != u32::from(shift) {
         let want = if shift == 0 { "" } else { ", lsl #1" };
         return w.fail(|| format!("this instruction addresses `[rn, rm{want}]`"));
+    }
+    // `do_t_tb`: the table may be at the PC, but not on the stack, and the
+    // index is neither.
+    if mem.base == reg::SP {
+        return w.fail(|| "`sp` cannot hold the branch table".into());
+    }
+    if rm == reg::SP || rm == reg::PC {
+        let name = reg::name_of(rm);
+        return w.fail(|| format!("`{name}` cannot be the branch table index"));
     }
     w.word |= u32::from(mem.base) << base;
     w.word |= u32::from(rm) << index;
@@ -582,6 +698,7 @@ fn offset_mem(w: &mut Walk<'_, '_, '_>, base: u8, field: Field, scale: u8) -> Op
     if off < 0 || off > hi || off % scale != 0 {
         return w.fail(|| format!("offset {off} is out of range (0 to {hi} in steps of {scale})"));
     }
+    w.allowed(mem.base)?;
     w.word |= u32::from(mem.base) << base;
     place(&mut w.word, field, (off / scale) as u32);
     w.take();
@@ -599,6 +716,9 @@ fn coproc_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
         let what = op.describe();
         return w.fail(|| format!("expected a memory operand, found {what}"));
     };
+    if mem.base == reg::PC && mem.index != Index::Offset {
+        return w.fail(|| "a PC-relative address cannot write `pc` back".into());
+    }
     w.word |= u32::from(mem.base) << 16;
     if let MemOffset::Unindexed(v) = mem.offset {
         if !(0..=255).contains(&v) {

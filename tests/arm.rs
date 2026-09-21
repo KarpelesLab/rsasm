@@ -418,10 +418,12 @@ fn thumb_negative_immediates() {
     tenc("cmp r0, -1", "b0 f1 ff 3f");
     tenc("cmp r1, -2", "11 f1 02 0f");
     tenc("cmp r0, -300", "10 f5 96 7f");
-    tenc("add r0, r1, -1", "a1 f1 01 00");
-    tenc("adds r0, r1, -1", "48 1e");
+    // A value the twelve-bit encoding holds as written stays as written;
+    // only one it cannot becomes the other operation with the sign off.
+    tenc("add r0, r1, -1", "01 f1 ff 30");
+    tenc("adds r0, r1, -1", "11 f1 ff 30");
     tenc("subs r0, r1, -300", "11 f5 96 70");
-    tenc("add r0, -1", "a0 f1 01 00");
+    tenc("add r0, -1", "00 f1 ff 30");
     tenc("adds r0, -200", "c8 38");
     tenc("add r0, r1, -4095", "a1 f6 ff 70");
 }
@@ -552,7 +554,7 @@ fn a_thumb_branch_grows_when_the_target_is_out_of_reach() {
 /// exceeded.
 #[test]
 fn out_of_range_operands_are_diagnosed() {
-    let e = errors_for("arm", "mov r0, 0x101");
+    let e = errors_for("arm", "movs r0, 0x101");
     assert!(e.contains("not an ARM modified immediate"), "{e}");
     assert!(e.contains("rotated right by an even amount"), "{e}");
 
@@ -560,12 +562,11 @@ fn out_of_range_operands_are_diagnosed() {
     assert!(errors_for("arm", "ldrh r0, [r1, 300]").contains("-255 to 255"));
     assert!(errors_for("arm", "movw r0, 65536").contains("0 to 65535"));
     assert!(errors_for("arm", "add r0, r1, r2, lsl 33").contains("0 to 31"));
-    assert!(errors_for("arm", "mov r0, r1, ror 0").contains("write `rrx` instead"));
+    assert!(errors_for("arm", "mov r0, r1, lsr 33").contains("0 to 32"));
     assert!(errors_for("arm", "push {r3-r1}").contains("runs backwards"));
     assert!(errors_for("arm", "bogus r0").contains("unknown instruction"));
     assert!(errors_for("arm", "add r0").contains("takes 2 or 3 operand(s)"));
     assert!(errors_for("arm", "b 0x8000000").contains("out of range"));
-    assert!(errors_for("arm", "add r0, r1, 0x100000000").contains("does not fit in 32 bits"));
     assert!(errors_for("arm", "addeqs r0, r1, r2").contains("unknown instruction"));
     assert!(errors_for("arm", "bkpteq 1").contains("cannot be conditional"));
     assert!(errors_for("arm", "cmps r0, r1").contains("unknown instruction"));
@@ -579,11 +580,11 @@ fn out_of_range_operands_are_diagnosed() {
 #[test]
 fn thumb_restrictions_are_diagnosed() {
     assert!(errors_for("thumb", "addeq r0, r1, r2").contains("`it` block"));
-    assert!(errors_for("thumb", "push {sp}").contains("`sp` is not allowed"));
+    assert!(errors_for("thumb", "push {sp}").contains("base register"));
     assert!(errors_for("thumb", "ldm r0!, {r0, r1}").contains("base register"));
     assert!(errors_for("thumb", "movs r0, 0x101").contains("Thumb expandable immediate"));
     assert!(errors_for("thumb", "lsls r0, r1, 32").contains("0 to 31"));
-    assert!(errors_for("thumb", "mov r0, 0x100000000").contains("does not fit in 32 bits"));
+    assert!(errors_for("thumb", "orn sp, r1, r2").contains("not allowed here"));
     assert!(errors_for("thumb", "cmp r0, 0x101").contains("neither is its complement"));
     assert!(errors_for("thumb", "strd r0, r1, [r2, 7]").contains("steps of 4"));
     assert!(errors_for("thumb", "cbz r8, .").contains("only tests r0-r7"));

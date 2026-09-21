@@ -95,6 +95,9 @@ pub enum MemOffset {
         add: bool,
         shift: Shift,
         amount: u32,
+        /// Whether a shift was written at all. `[r0, r1, lsl #0]` shifts by
+        /// nothing and still has no 16-bit Thumb form.
+        shifted: bool,
     },
 }
 
@@ -475,7 +478,9 @@ impl Parser<'_, '_> {
         if let Some(rm) = self.eat_register(cur) {
             let mut shift = Shift::Lsl;
             let mut amount = 0u32;
+            let mut shifted = false;
             if cur.check_punct(Punct::Comma) && self.peek_shift(cur, 1).is_some() {
+                shifted = true;
                 cur.advance();
                 let s = self.peek_shift(cur, 0)?;
                 cur.advance();
@@ -507,6 +512,7 @@ impl Parser<'_, '_> {
                 add,
                 shift,
                 amount,
+                shifted,
             });
         }
         // Not a register after all; re-read the whole thing as an expression

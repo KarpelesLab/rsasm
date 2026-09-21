@@ -49,9 +49,11 @@ pub enum Op {
     Width(Field),
     /// An optional `, ror #8`, `#16` or `#24`, two bits at `lsb`.
     Rotate(u8),
-    /// An optional shift: `amount` bits at `lsb`, and a bit that says `asr`
-    /// rather than `lsl` -- 255 when only `asr` is allowed, 254 when only
-    /// `lsl` is. A second field holds an amount the first cannot.
+    /// An optional shift: `amount` bits at `lsb`, and which kinds it may
+    /// be -- under 32, the bit that means `asr` rather than `lsl`; 255,
+    /// `lsl` alone; 64 plus a bit, `asr` alone, that bit being the one a
+    /// shift of zero clears, since a zero shift is always `lsl`. A second
+    /// field holds an amount the first cannot.
     SatShift(u8, u8, u8, u8, u8),
     /// A coprocessor number, `p0` to `p15`.
     Coproc(u8),
@@ -61,6 +63,12 @@ pub enum Op {
     Barrier,
     /// `APSR_nzcv`, which `mrc` takes in place of a register.
     ApsrNzcv,
+    /// The two registers before it must be different, which is what the
+    /// disassembler's `u` marker means where GNU as makes it an error.
+    Distinct,
+    /// The first register the form reads must differ from every other one:
+    /// `do_strex`'s rule that the status register is none of the others.
+    FirstDistinct,
     /// `!` on the register before it, the bit at `lsb`.
     Writeback(u8),
     /// The `a`, `i` and `f` letters of `cpsie` and `cpsid`, the `f` bit at
@@ -91,15 +99,28 @@ pub struct Form {
     /// not has its condition field in `word`.
     pub cond: bool,
     pub ops: &'static [Op],
+    /// Which registers each operand may hold, in the order they are
+    /// written: 0 any, 1 not the PC, 2 neither the PC nor the stack
+    /// pointer, 255 not a register at all. Empty where GNU as's own table
+    /// says nothing.
+    pub regs: &'static [u8],
 }
 
-const fn f(name: &'static str, set: Set, word: u32, cond: bool, ops: &'static [Op]) -> Form {
+const fn f(
+    name: &'static str,
+    set: Set,
+    word: u32,
+    cond: bool,
+    ops: &'static [Op],
+    regs: &'static [u8],
+) -> Form {
     Form {
         name,
         set,
         word,
         cond,
         ops,
+        regs,
     }
 }
 
@@ -130,6 +151,7 @@ pub static FORMS: &[Form] = &[
             Op::Lsb(&[(6, 2), (12, 3)]),
             Op::Msb(&[(0, 5)]),
         ],
+        &[2, 255, 255],
     ),
     f(
         "bfc",
@@ -137,6 +159,7 @@ pub static FORMS: &[Form] = &[
         0x07c0001f,
         true,
         &[Op::Reg(12, 4), Op::Lsb(&[(7, 5)]), Op::Msb(&[(16, 5)])],
+        &[1, 255, 255],
     ),
     f(
         "bfi",
@@ -149,6 +172,7 @@ pub static FORMS: &[Form] = &[
             Op::Lsb(&[(6, 2), (12, 3)]),
             Op::Msb(&[(0, 5)]),
         ],
+        &[2, 2, 255, 255],
     ),
     f(
         "bfi",
@@ -161,6 +185,7 @@ pub static FORMS: &[Form] = &[
             Op::Lsb(&[(7, 5)]),
             Op::Msb(&[(16, 5)]),
         ],
+        &[1, 1, 255, 255],
     ),
     f(
         "bkpt",
@@ -168,6 +193,7 @@ pub static FORMS: &[Form] = &[
         0x0000be00,
         false,
         &[Op::Imm(&[(0, 8)], 1, 0)],
+        &[],
     ),
     f(
         "bkpt",
@@ -175,9 +201,10 @@ pub static FORMS: &[Form] = &[
         0xe1200070,
         false,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
+        &[],
     ),
-    f("bxj", Set::T32, 0xf3c08f00, true, &[Op::Reg(16, 4)]),
-    f("bxj", Set::Arm, 0x012fff20, true, &[Op::Reg(0, 4)]),
+    f("bxj", Set::T32, 0xf3c08f00, true, &[Op::Reg(16, 4)], &[2]),
+    f("bxj", Set::Arm, 0x012fff20, true, &[Op::Reg(0, 4)], &[0]),
     f(
         "cdp",
         Set::T32,
@@ -191,6 +218,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[],
     ),
     f(
         "cdp",
@@ -205,6 +233,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[],
     ),
     f(
         "cdp2",
@@ -219,12 +248,13 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[],
     ),
     f(
         "cdp2",
         Set::Arm,
         0xfe000000,
-        true,
+        false,
         &[
             Op::Coproc(8),
             Op::Imm(&[(20, 4)], 1, 0),
@@ -233,15 +263,17 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[],
     ),
-    f("clrex", Set::T32, 0xf3bf8f2f, true, &[]),
-    f("clrex", Set::Arm, 0xf57ff01f, false, &[]),
+    f("clrex", Set::T32, 0xf3bf8f2f, true, &[], &[]),
+    f("clrex", Set::Arm, 0xf57ff01f, false, &[], &[]),
     f(
         "clz",
         Set::T32,
         0xfab0f080,
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
+        &[2, 2],
     ),
     f(
         "clz",
@@ -249,6 +281,7 @@ pub static FORMS: &[Form] = &[
         0x016f0f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
+        &[1, 1],
     ),
     f(
         "cps",
@@ -256,6 +289,7 @@ pub static FORMS: &[Form] = &[
         0xf3af8100,
         false,
         &[Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "cps",
@@ -263,49 +297,97 @@ pub static FORMS: &[Form] = &[
         0xf1020000,
         false,
         &[Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
-    f("cpsid", Set::T16, 0x0000b670, false, &[Op::IntFlags(0)]),
-    f("cpsid", Set::T32, 0xf3af8600, false, &[Op::IntFlags(5)]),
+    f(
+        "cpsid",
+        Set::T16,
+        0x0000b670,
+        false,
+        &[Op::IntFlags(0)],
+        &[],
+    ),
+    f(
+        "cpsid",
+        Set::T32,
+        0xf3af8600,
+        false,
+        &[Op::IntFlags(5)],
+        &[],
+    ),
     f(
         "cpsid",
         Set::T32,
         0xf3af8700,
         false,
         &[Op::IntFlags(5), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
-    f("cpsid", Set::Arm, 0xf10c0000, false, &[Op::IntFlags(6)]),
+    f(
+        "cpsid",
+        Set::Arm,
+        0xf10c0000,
+        false,
+        &[Op::IntFlags(6)],
+        &[],
+    ),
     f(
         "cpsid",
         Set::Arm,
         0xf10e0000,
         false,
         &[Op::IntFlags(6), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
-    f("cpsie", Set::T16, 0x0000b660, false, &[Op::IntFlags(0)]),
-    f("cpsie", Set::T32, 0xf3af8400, false, &[Op::IntFlags(5)]),
+    f(
+        "cpsie",
+        Set::T16,
+        0x0000b660,
+        false,
+        &[Op::IntFlags(0)],
+        &[],
+    ),
+    f(
+        "cpsie",
+        Set::T32,
+        0xf3af8400,
+        false,
+        &[Op::IntFlags(5)],
+        &[],
+    ),
     f(
         "cpsie",
         Set::T32,
         0xf3af8500,
         false,
         &[Op::IntFlags(5), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
-    f("cpsie", Set::Arm, 0xf1080000, false, &[Op::IntFlags(6)]),
+    f(
+        "cpsie",
+        Set::Arm,
+        0xf1080000,
+        false,
+        &[Op::IntFlags(6)],
+        &[],
+    ),
     f(
         "cpsie",
         Set::Arm,
         0xf10a0000,
         false,
         &[Op::IntFlags(6), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
-    f("csdb", Set::T32, 0xf3af8014, false, &[]),
-    f("csdb", Set::Arm, 0xe320f014, false, &[]),
+    f("csdb", Set::T32, 0xf3af8014, false, &[], &[]),
+    f("csdb", Set::Arm, 0xe320f014, false, &[], &[]),
     f(
         "dbg",
         Set::T32,
         0xf3af80f0,
         true,
         &[Op::Imm(&[(0, 4)], 1, 0)],
+        &[],
     ),
     f(
         "dbg",
@@ -313,18 +395,20 @@ pub static FORMS: &[Form] = &[
         0x0320f0f0,
         true,
         &[Op::Imm(&[(0, 4)], 1, 0)],
+        &[],
     ),
-    f("dmb", Set::T32, 0xf3bf8f50, true, &[Op::Barrier]),
-    f("dmb", Set::Arm, 0xf57ff050, false, &[Op::Barrier]),
-    f("dsb", Set::T32, 0xf3bf8f40, true, &[Op::Barrier]),
-    f("dsb", Set::Arm, 0xf57ff040, false, &[Op::Barrier]),
-    f("eret", Set::Arm, 0x0160006e, true, &[]),
+    f("dmb", Set::T32, 0xf3bf8f50, true, &[Op::Barrier], &[]),
+    f("dmb", Set::Arm, 0xf57ff050, false, &[Op::Barrier], &[]),
+    f("dsb", Set::T32, 0xf3bf8f40, true, &[Op::Barrier], &[]),
+    f("dsb", Set::Arm, 0xf57ff040, false, &[Op::Barrier], &[]),
+    f("eret", Set::Arm, 0x0160006e, true, &[], &[]),
     f(
         "hlt",
         Set::Arm,
         0xe1000070,
         false,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
+        &[],
     ),
     f(
         "hvc",
@@ -332,6 +416,7 @@ pub static FORMS: &[Form] = &[
         0xf7e08000,
         true,
         &[Op::Imm(&[(0, 12), (16, 4)], 1, 0)],
+        &[],
     ),
     f(
         "hvc",
@@ -339,15 +424,17 @@ pub static FORMS: &[Form] = &[
         0x01400070,
         true,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
+        &[],
     ),
-    f("isb", Set::T32, 0xf3bf8f60, true, &[Op::Barrier]),
-    f("isb", Set::Arm, 0xf57ff060, false, &[Op::Barrier]),
+    f("isb", Set::T32, 0xf3bf8f60, true, &[Op::Barrier], &[]),
+    f("isb", Set::Arm, 0xf57ff060, false, &[Op::Barrier], &[]),
     f(
         "ldc",
         Set::T32,
         0xec100000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldc",
@@ -355,6 +442,7 @@ pub static FORMS: &[Form] = &[
         0x0c100000,
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldc2",
@@ -362,13 +450,15 @@ pub static FORMS: &[Form] = &[
         0xfc100000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldc2",
         Set::Arm,
         0xfc100000,
-        true,
+        false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldc2l",
@@ -376,13 +466,15 @@ pub static FORMS: &[Form] = &[
         0xfc500000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldc2l",
         Set::Arm,
         0xfc500000,
-        true,
+        false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldcl",
@@ -390,6 +482,7 @@ pub static FORMS: &[Form] = &[
         0xec500000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldcl",
@@ -397,6 +490,7 @@ pub static FORMS: &[Form] = &[
         0x0c500000,
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "ldrex",
@@ -404,6 +498,7 @@ pub static FORMS: &[Form] = &[
         0xe8500f00,
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
+        &[2, 1],
     ),
     f(
         "ldrex",
@@ -411,6 +506,7 @@ pub static FORMS: &[Form] = &[
         0xe8500f00,
         true,
         &[Op::Reg(12, 4), Op::OffMem(16, &[(0, 8)], 4)],
+        &[2, 1],
     ),
     f(
         "ldrex",
@@ -418,6 +514,7 @@ pub static FORMS: &[Form] = &[
         0x01900f9f,
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
+        &[1, 255],
     ),
     f(
         "ldrexb",
@@ -425,6 +522,7 @@ pub static FORMS: &[Form] = &[
         0xe8d00f4f,
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
+        &[2, 1],
     ),
     f(
         "ldrexb",
@@ -432,13 +530,15 @@ pub static FORMS: &[Form] = &[
         0x01d00f9f,
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
+        &[1, 1],
     ),
     f(
         "ldrexd",
         Set::T32,
         0xe8d0007f,
         true,
-        &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Base(16, 4)],
+        &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Distinct, Op::Base(16, 4)],
+        &[2, 2, 1],
     ),
     f(
         "ldrexd",
@@ -446,6 +546,7 @@ pub static FORMS: &[Form] = &[
         0x01b00f9f,
         true,
         &[Op::Reg(12, 4), Op::Next, Op::Base(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "ldrexh",
@@ -453,6 +554,7 @@ pub static FORMS: &[Form] = &[
         0xe8d00f5f,
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
+        &[2, 1],
     ),
     f(
         "ldrexh",
@@ -460,6 +562,7 @@ pub static FORMS: &[Form] = &[
         0x01f00f9f,
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
+        &[1, 1],
     ),
     f(
         "mcr",
@@ -474,6 +577,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 2, 255, 255, 255],
     ),
     f(
         "mcr",
@@ -488,6 +592,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 0, 255, 255, 255],
     ),
     f(
         "mcr2",
@@ -502,12 +607,13 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 2, 255, 255, 255],
     ),
     f(
         "mcr2",
         Set::Arm,
         0xfe000010,
-        true,
+        false,
         &[
             Op::Coproc(8),
             Op::Imm(&[(21, 3)], 1, 0),
@@ -516,6 +622,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 0, 255, 255, 255],
     ),
     f(
         "mcrr",
@@ -529,6 +636,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
             Op::CReg(0),
         ],
+        &[255, 255, 2, 2, 255],
     ),
     f(
         "mcrr",
@@ -542,6 +650,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
             Op::CReg(0),
         ],
+        &[255, 255, 1, 1, 255],
     ),
     f(
         "mcrr2",
@@ -555,12 +664,13 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
             Op::CReg(0),
         ],
+        &[255, 255, 2, 2, 255],
     ),
     f(
         "mcrr2",
         Set::Arm,
         0xfc400000,
-        true,
+        false,
         &[
             Op::Coproc(8),
             Op::Imm(&[(4, 4)], 1, 0),
@@ -568,6 +678,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
             Op::CReg(0),
         ],
+        &[255, 255, 1, 1, 255],
     ),
     f(
         "mrc",
@@ -582,6 +693,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 0, 255, 255, 255],
     ),
     f(
         "mrc",
@@ -596,6 +708,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[],
     ),
     f(
         "mrc",
@@ -610,6 +723,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 0, 255, 255, 255],
     ),
     f(
         "mrc",
@@ -624,6 +738,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[],
     ),
     f(
         "mrc2",
@@ -638,12 +753,13 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 2, 255, 255, 255],
     ),
     f(
         "mrc2",
         Set::Arm,
         0xfe100010,
-        true,
+        false,
         &[
             Op::Coproc(8),
             Op::Imm(&[(21, 3)], 1, 0),
@@ -652,6 +768,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
             Op::OptImm(&[(5, 3)]),
         ],
+        &[255, 255, 0, 255, 255, 255],
     ),
     f(
         "mrrc",
@@ -663,8 +780,10 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(4, 4)], 1, 0),
             Op::Reg(12, 4),
             Op::Reg(16, 4),
+            Op::Distinct,
             Op::CReg(0),
         ],
+        &[255, 255, 2, 2, 255],
     ),
     f(
         "mrrc",
@@ -676,8 +795,10 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(4, 4)], 1, 0),
             Op::Reg(12, 4),
             Op::Reg(16, 4),
+            Op::Distinct,
             Op::CReg(0),
         ],
+        &[255, 255, 1, 1, 255],
     ),
     f(
         "mrrc2",
@@ -689,25 +810,36 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(4, 4)], 1, 0),
             Op::Reg(12, 4),
             Op::Reg(16, 4),
+            Op::Distinct,
             Op::CReg(0),
         ],
+        &[255, 255, 2, 2, 255],
     ),
     f(
         "mrrc2",
         Set::Arm,
         0xfc500000,
-        true,
+        false,
         &[
             Op::Coproc(8),
             Op::Imm(&[(4, 4)], 1, 0),
             Op::Reg(12, 4),
             Op::Reg(16, 4),
+            Op::Distinct,
             Op::CReg(0),
         ],
+        &[255, 255, 1, 1, 255],
     ),
-    f("nop", Set::T16, 0x0000bf00, true, &[]),
-    f("nop", Set::T32, 0xf3af8000, true, &[]),
-    f("nop", Set::Arm, 0x0320f000, true, &[Op::Hint(&[(0, 8)])]),
+    f("nop", Set::T16, 0x0000bf00, true, &[], &[]),
+    f("nop", Set::T32, 0xf3af8000, true, &[], &[]),
+    f(
+        "nop",
+        Set::Arm,
+        0x0320f000,
+        true,
+        &[Op::Hint(&[(0, 8)])],
+        &[],
+    ),
     f(
         "pkhbt",
         Set::T32,
@@ -717,8 +849,9 @@ pub static FORMS: &[Form] = &[
             Op::Reg(8, 4),
             Op::Reg(16, 4),
             Op::Reg(0, 4),
-            Op::SatShift(6, 2, 254, 12, 3),
+            Op::SatShift(6, 2, 255, 12, 3),
         ],
+        &[2, 2, 2, 255],
     ),
     f(
         "pkhbt",
@@ -729,8 +862,9 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
             Op::Reg(16, 4),
             Op::Reg(0, 4),
-            Op::SatShift(7, 5, 254, 255, 0),
+            Op::SatShift(7, 5, 255, 255, 0),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "pkhtb",
@@ -738,6 +872,7 @@ pub static FORMS: &[Form] = &[
         0xeac00000,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[2, 2, 2],
     ),
     f(
         "pkhtb",
@@ -748,8 +883,9 @@ pub static FORMS: &[Form] = &[
             Op::Reg(8, 4),
             Op::Reg(16, 4),
             Op::Reg(0, 4),
-            Op::SatShift(6, 2, 255, 12, 3),
+            Op::SatShift(6, 2, 69, 12, 3),
         ],
+        &[2, 2, 2, 255],
     ),
     f(
         "pkhtb",
@@ -757,6 +893,7 @@ pub static FORMS: &[Form] = &[
         0x06800010,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "pkhtb",
@@ -767,17 +904,19 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
             Op::Reg(16, 4),
             Op::Reg(0, 4),
-            Op::SatShift(7, 5, 255, 255, 0),
+            Op::SatShift(7, 5, 70, 255, 0),
         ],
+        &[1, 1, 1, 255],
     ),
-    f("pssbb", Set::T32, 0xf3bf8f44, false, &[]),
-    f("pssbb", Set::Arm, 0xf57ff044, false, &[]),
+    f("pssbb", Set::T32, 0xf3bf8f44, false, &[], &[]),
+    f("pssbb", Set::Arm, 0xf57ff044, false, &[], &[]),
     f(
         "qadd",
         Set::T32,
         0xfa80f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qadd",
@@ -785,6 +924,7 @@ pub static FORMS: &[Form] = &[
         0x01000050,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qadd16",
@@ -792,6 +932,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qadd16",
@@ -799,6 +940,7 @@ pub static FORMS: &[Form] = &[
         0x06200f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qadd8",
@@ -806,6 +948,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qadd8",
@@ -813,6 +956,7 @@ pub static FORMS: &[Form] = &[
         0x06200f90,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qasx",
@@ -820,6 +964,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qasx",
@@ -827,6 +972,7 @@ pub static FORMS: &[Form] = &[
         0x06200f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qdadd",
@@ -834,6 +980,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f090,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qdadd",
@@ -841,6 +988,7 @@ pub static FORMS: &[Form] = &[
         0x01400050,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qdsub",
@@ -848,6 +996,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f0b0,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qdsub",
@@ -855,6 +1004,7 @@ pub static FORMS: &[Form] = &[
         0x01600050,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qsax",
@@ -862,6 +1012,7 @@ pub static FORMS: &[Form] = &[
         0xfae0f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qsax",
@@ -869,6 +1020,7 @@ pub static FORMS: &[Form] = &[
         0x06200f50,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qsub",
@@ -876,6 +1028,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f0a0,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qsub",
@@ -883,6 +1036,7 @@ pub static FORMS: &[Form] = &[
         0x01200050,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qsub16",
@@ -890,6 +1044,7 @@ pub static FORMS: &[Form] = &[
         0xfad0f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qsub16",
@@ -897,6 +1052,7 @@ pub static FORMS: &[Form] = &[
         0x06200f70,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "qsub8",
@@ -904,6 +1060,7 @@ pub static FORMS: &[Form] = &[
         0xfac0f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "qsub8",
@@ -911,6 +1068,7 @@ pub static FORMS: &[Form] = &[
         0x06200ff0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "rbit",
@@ -918,6 +1076,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f0a0,
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
+        &[2, 2],
     ),
     f(
         "rbit",
@@ -925,6 +1084,7 @@ pub static FORMS: &[Form] = &[
         0x06ff0f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
+        &[0, 0],
     ),
     f(
         "rev",
@@ -932,6 +1092,7 @@ pub static FORMS: &[Form] = &[
         0x0000ba00,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "rev",
@@ -939,6 +1100,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f080,
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
+        &[2, 2],
     ),
     f(
         "rev",
@@ -946,6 +1108,7 @@ pub static FORMS: &[Form] = &[
         0x06bf0f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
+        &[1, 1],
     ),
     f(
         "rev16",
@@ -953,6 +1116,7 @@ pub static FORMS: &[Form] = &[
         0x0000ba40,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "rev16",
@@ -960,6 +1124,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f090,
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
+        &[2, 2],
     ),
     f(
         "rev16",
@@ -967,6 +1132,7 @@ pub static FORMS: &[Form] = &[
         0x06bf0fb0,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
+        &[1, 1],
     ),
     f(
         "revsh",
@@ -974,6 +1140,7 @@ pub static FORMS: &[Form] = &[
         0x0000bac0,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "revsh",
@@ -981,6 +1148,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f0b0,
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
+        &[2, 2],
     ),
     f(
         "revsh",
@@ -988,6 +1156,7 @@ pub static FORMS: &[Form] = &[
         0x06ff0fb0,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
+        &[1, 1],
     ),
     f(
         "rfeda",
@@ -995,6 +1164,7 @@ pub static FORMS: &[Form] = &[
         0xf8100a00,
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
+        &[1],
     ),
     f(
         "rfedb",
@@ -1002,6 +1172,7 @@ pub static FORMS: &[Form] = &[
         0xe810c000,
         true,
         &[Op::Reg(16, 4), Op::Writeback(21)],
+        &[1],
     ),
     f(
         "rfedb",
@@ -1009,6 +1180,7 @@ pub static FORMS: &[Form] = &[
         0xf9100a00,
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
+        &[1],
     ),
     f(
         "rfeia",
@@ -1016,6 +1188,7 @@ pub static FORMS: &[Form] = &[
         0xe990c000,
         true,
         &[Op::Reg(16, 4), Op::Writeback(21)],
+        &[1],
     ),
     f(
         "rfeia",
@@ -1023,6 +1196,7 @@ pub static FORMS: &[Form] = &[
         0xf8900a00,
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
+        &[1],
     ),
     f(
         "rfeib",
@@ -1030,6 +1204,7 @@ pub static FORMS: &[Form] = &[
         0xf9900a00,
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
+        &[1],
     ),
     f(
         "sadd16",
@@ -1037,6 +1212,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "sadd16",
@@ -1044,6 +1220,7 @@ pub static FORMS: &[Form] = &[
         0x06100f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "sadd8",
@@ -1051,6 +1228,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "sadd8",
@@ -1058,6 +1236,7 @@ pub static FORMS: &[Form] = &[
         0x06100f90,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "sasx",
@@ -1065,6 +1244,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "sasx",
@@ -1072,6 +1252,7 @@ pub static FORMS: &[Form] = &[
         0x06100f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "sbfx",
@@ -1084,6 +1265,7 @@ pub static FORMS: &[Form] = &[
             Op::Lsb(&[(6, 2), (12, 3)]),
             Op::Width(&[(0, 5)]),
         ],
+        &[2, 2, 255, 255],
     ),
     f(
         "sbfx",
@@ -1093,9 +1275,10 @@ pub static FORMS: &[Form] = &[
         &[
             Op::Reg(12, 4),
             Op::Reg(0, 4),
-            Op::Imm(&[(7, 5)], 1, 0),
-            Op::Imm(&[(16, 5)], 1, 1),
+            Op::Lsb(&[(7, 5)]),
+            Op::Width(&[(16, 5)]),
         ],
+        &[0, 0, 255, 255],
     ),
     f(
         "sdiv",
@@ -1103,6 +1286,15 @@ pub static FORMS: &[Form] = &[
         0xfb90f0f0,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
+    ),
+    f(
+        "sdiv",
+        Set::T32,
+        0xfb90f0f0,
+        true,
+        &[Op::RegTwice(8, 16), Op::Reg(0, 4)],
+        &[2, 2],
     ),
     f(
         "sdiv",
@@ -1110,6 +1302,15 @@ pub static FORMS: &[Form] = &[
         0x0710f010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
+    ),
+    f(
+        "sdiv",
+        Set::Arm,
+        0x0710f010,
+        true,
+        &[Op::RegTwice(16, 0), Op::Reg(8, 4)],
+        &[1, 1],
     ),
     f(
         "sel",
@@ -1117,6 +1318,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "sel",
@@ -1124,18 +1326,20 @@ pub static FORMS: &[Form] = &[
         0x06800fb0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
-    f("setend", Set::T16, 0x0000b650, false, &[Op::Endian(3)]),
-    f("setend", Set::Arm, 0xf1010000, false, &[Op::Endian(9)]),
-    f("sev", Set::T16, 0x0000bf40, true, &[]),
-    f("sev", Set::T32, 0xf3af8004, true, &[]),
-    f("sev", Set::Arm, 0x0320f004, true, &[]),
+    f("setend", Set::T16, 0x0000b650, false, &[Op::Endian(3)], &[]),
+    f("setend", Set::Arm, 0xf1010000, false, &[Op::Endian(9)], &[]),
+    f("sev", Set::T16, 0x0000bf40, true, &[], &[]),
+    f("sev", Set::T32, 0xf3af8004, true, &[], &[]),
+    f("sev", Set::Arm, 0x0320f004, true, &[], &[]),
     f(
         "shadd16",
         Set::T32,
         0xfa90f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "shadd16",
@@ -1143,6 +1347,7 @@ pub static FORMS: &[Form] = &[
         0x06300f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "shadd8",
@@ -1150,6 +1355,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "shadd8",
@@ -1157,6 +1363,7 @@ pub static FORMS: &[Form] = &[
         0x06300f90,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "shasx",
@@ -1164,6 +1371,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "shasx",
@@ -1171,6 +1379,7 @@ pub static FORMS: &[Form] = &[
         0x06300f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "shsax",
@@ -1178,6 +1387,7 @@ pub static FORMS: &[Form] = &[
         0xfae0f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "shsax",
@@ -1185,6 +1395,7 @@ pub static FORMS: &[Form] = &[
         0x06300f50,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "shsub16",
@@ -1192,6 +1403,7 @@ pub static FORMS: &[Form] = &[
         0xfad0f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "shsub16",
@@ -1199,6 +1411,7 @@ pub static FORMS: &[Form] = &[
         0x06300f70,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "shsub8",
@@ -1206,6 +1419,7 @@ pub static FORMS: &[Form] = &[
         0xfac0f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "shsub8",
@@ -1213,6 +1427,7 @@ pub static FORMS: &[Form] = &[
         0x06300ff0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smc",
@@ -1220,6 +1435,7 @@ pub static FORMS: &[Form] = &[
         0xf7f08000,
         true,
         &[Op::Imm(&[(16, 4)], 1, 0)],
+        &[],
     ),
     f(
         "smc",
@@ -1227,6 +1443,7 @@ pub static FORMS: &[Form] = &[
         0x01600070,
         true,
         &[Op::Imm(&[(0, 4)], 1, 0)],
+        &[],
     ),
     f(
         "smlabb",
@@ -1234,6 +1451,7 @@ pub static FORMS: &[Form] = &[
         0xfb100000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlabb",
@@ -1241,6 +1459,7 @@ pub static FORMS: &[Form] = &[
         0x01000080,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlabt",
@@ -1248,6 +1467,7 @@ pub static FORMS: &[Form] = &[
         0xfb100010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlabt",
@@ -1255,6 +1475,7 @@ pub static FORMS: &[Form] = &[
         0x010000c0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlad",
@@ -1262,6 +1483,7 @@ pub static FORMS: &[Form] = &[
         0xfb200000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlad",
@@ -1269,6 +1491,7 @@ pub static FORMS: &[Form] = &[
         0x07000010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smladx",
@@ -1276,6 +1499,7 @@ pub static FORMS: &[Form] = &[
         0xfb200010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smladx",
@@ -1283,6 +1507,7 @@ pub static FORMS: &[Form] = &[
         0x07000030,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlalbb",
@@ -1290,6 +1515,7 @@ pub static FORMS: &[Form] = &[
         0xfbc00080,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlalbb",
@@ -1297,6 +1523,7 @@ pub static FORMS: &[Form] = &[
         0x01400080,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlalbt",
@@ -1304,6 +1531,7 @@ pub static FORMS: &[Form] = &[
         0xfbc00090,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlalbt",
@@ -1311,6 +1539,7 @@ pub static FORMS: &[Form] = &[
         0x014000c0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlald",
@@ -1318,6 +1547,7 @@ pub static FORMS: &[Form] = &[
         0xfbc000c0,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlald",
@@ -1325,6 +1555,7 @@ pub static FORMS: &[Form] = &[
         0x07400010,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlaldx",
@@ -1332,6 +1563,7 @@ pub static FORMS: &[Form] = &[
         0xfbc000d0,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlaldx",
@@ -1339,6 +1571,7 @@ pub static FORMS: &[Form] = &[
         0x07400030,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlaltb",
@@ -1346,6 +1579,7 @@ pub static FORMS: &[Form] = &[
         0xfbc000a0,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlaltb",
@@ -1353,6 +1587,7 @@ pub static FORMS: &[Form] = &[
         0x014000a0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlaltt",
@@ -1360,6 +1595,7 @@ pub static FORMS: &[Form] = &[
         0xfbc000b0,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlaltt",
@@ -1367,6 +1603,7 @@ pub static FORMS: &[Form] = &[
         0x014000e0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlatb",
@@ -1374,6 +1611,7 @@ pub static FORMS: &[Form] = &[
         0xfb100020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlatb",
@@ -1381,6 +1619,7 @@ pub static FORMS: &[Form] = &[
         0x010000a0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlatt",
@@ -1388,6 +1627,7 @@ pub static FORMS: &[Form] = &[
         0xfb100030,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlatt",
@@ -1395,6 +1635,7 @@ pub static FORMS: &[Form] = &[
         0x010000e0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlawb",
@@ -1402,6 +1643,7 @@ pub static FORMS: &[Form] = &[
         0xfb300000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlawb",
@@ -1409,6 +1651,7 @@ pub static FORMS: &[Form] = &[
         0x01200080,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlawt",
@@ -1416,6 +1659,7 @@ pub static FORMS: &[Form] = &[
         0xfb300010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlawt",
@@ -1423,6 +1667,7 @@ pub static FORMS: &[Form] = &[
         0x012000c0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlsd",
@@ -1430,6 +1675,7 @@ pub static FORMS: &[Form] = &[
         0xfb400000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlsd",
@@ -1437,6 +1683,7 @@ pub static FORMS: &[Form] = &[
         0x07000050,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlsdx",
@@ -1444,6 +1691,7 @@ pub static FORMS: &[Form] = &[
         0xfb400010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlsdx",
@@ -1451,6 +1699,7 @@ pub static FORMS: &[Form] = &[
         0x07000070,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlsld",
@@ -1458,6 +1707,7 @@ pub static FORMS: &[Form] = &[
         0xfbd000c0,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlsld",
@@ -1465,6 +1715,7 @@ pub static FORMS: &[Form] = &[
         0x07400050,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smlsldx",
@@ -1472,6 +1723,7 @@ pub static FORMS: &[Form] = &[
         0xfbd000d0,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smlsldx",
@@ -1479,6 +1731,7 @@ pub static FORMS: &[Form] = &[
         0x07400070,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smmla",
@@ -1486,6 +1739,7 @@ pub static FORMS: &[Form] = &[
         0xfb500000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smmla",
@@ -1493,6 +1747,7 @@ pub static FORMS: &[Form] = &[
         0x07500010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smmlar",
@@ -1500,6 +1755,7 @@ pub static FORMS: &[Form] = &[
         0xfb500010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smmlar",
@@ -1507,6 +1763,7 @@ pub static FORMS: &[Form] = &[
         0x07500030,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smmls",
@@ -1514,6 +1771,7 @@ pub static FORMS: &[Form] = &[
         0xfb600000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smmls",
@@ -1521,6 +1779,7 @@ pub static FORMS: &[Form] = &[
         0x075000d0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smmlsr",
@@ -1528,6 +1787,7 @@ pub static FORMS: &[Form] = &[
         0xfb600010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "smmlsr",
@@ -1535,6 +1795,7 @@ pub static FORMS: &[Form] = &[
         0x075000f0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "smmul",
@@ -1542,6 +1803,7 @@ pub static FORMS: &[Form] = &[
         0xfb50f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smmul",
@@ -1549,6 +1811,7 @@ pub static FORMS: &[Form] = &[
         0x0750f010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smmulr",
@@ -1556,6 +1819,7 @@ pub static FORMS: &[Form] = &[
         0xfb50f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smmulr",
@@ -1563,6 +1827,7 @@ pub static FORMS: &[Form] = &[
         0x0750f030,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smuad",
@@ -1570,6 +1835,7 @@ pub static FORMS: &[Form] = &[
         0xfb20f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smuad",
@@ -1577,6 +1843,7 @@ pub static FORMS: &[Form] = &[
         0x0700f010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smuadx",
@@ -1584,6 +1851,7 @@ pub static FORMS: &[Form] = &[
         0xfb20f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smuadx",
@@ -1591,6 +1859,7 @@ pub static FORMS: &[Form] = &[
         0x0700f030,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smulbb",
@@ -1598,6 +1867,7 @@ pub static FORMS: &[Form] = &[
         0xfb10f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smulbb",
@@ -1605,6 +1875,7 @@ pub static FORMS: &[Form] = &[
         0x01600080,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smulbt",
@@ -1612,6 +1883,7 @@ pub static FORMS: &[Form] = &[
         0xfb10f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smulbt",
@@ -1619,6 +1891,7 @@ pub static FORMS: &[Form] = &[
         0x016000c0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smultb",
@@ -1626,6 +1899,7 @@ pub static FORMS: &[Form] = &[
         0xfb10f020,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smultb",
@@ -1633,6 +1907,7 @@ pub static FORMS: &[Form] = &[
         0x016000a0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smultt",
@@ -1640,6 +1915,7 @@ pub static FORMS: &[Form] = &[
         0xfb10f030,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smultt",
@@ -1647,6 +1923,7 @@ pub static FORMS: &[Form] = &[
         0x016000e0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smulwb",
@@ -1654,6 +1931,7 @@ pub static FORMS: &[Form] = &[
         0xfb30f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smulwb",
@@ -1661,6 +1939,7 @@ pub static FORMS: &[Form] = &[
         0x012000a0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smulwt",
@@ -1668,6 +1947,7 @@ pub static FORMS: &[Form] = &[
         0xfb30f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smulwt",
@@ -1675,6 +1955,7 @@ pub static FORMS: &[Form] = &[
         0x012000e0,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smusd",
@@ -1682,6 +1963,7 @@ pub static FORMS: &[Form] = &[
         0xfb40f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smusd",
@@ -1689,6 +1971,7 @@ pub static FORMS: &[Form] = &[
         0x0700f050,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "smusdx",
@@ -1696,6 +1979,7 @@ pub static FORMS: &[Form] = &[
         0xfb40f010,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "smusdx",
@@ -1703,6 +1987,7 @@ pub static FORMS: &[Form] = &[
         0x0700f070,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "srsda",
@@ -1710,6 +1995,7 @@ pub static FORMS: &[Form] = &[
         0xf84d0500,
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "srsdb",
@@ -1717,6 +2003,7 @@ pub static FORMS: &[Form] = &[
         0xe800c000,
         true,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "srsdb",
@@ -1724,6 +2011,7 @@ pub static FORMS: &[Form] = &[
         0xf94d0500,
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "srsia",
@@ -1731,6 +2019,7 @@ pub static FORMS: &[Form] = &[
         0xe980c000,
         true,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "srsia",
@@ -1738,6 +2027,7 @@ pub static FORMS: &[Form] = &[
         0xf8cd0500,
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "srsib",
@@ -1745,6 +2035,7 @@ pub static FORMS: &[Form] = &[
         0xf9cd0500,
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
+        &[],
     ),
     f(
         "ssat",
@@ -1757,6 +2048,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
             Op::SatShift(6, 2, 21, 12, 3),
         ],
+        &[2, 255, 2, 255],
     ),
     f(
         "ssat",
@@ -1769,13 +2061,15 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::SatShift(7, 5, 6, 255, 0),
         ],
+        &[1, 255, 1, 255],
     ),
     f(
         "ssat16",
         Set::T32,
         0xf3200000,
         true,
-        &[Op::Reg(8, 4), Op::Imm(&[(0, 5)], 1, 1), Op::Reg(16, 4)],
+        &[Op::Reg(8, 4), Op::Imm(&[(0, 4)], 1, 1), Op::Reg(16, 4)],
+        &[2, 255, 2],
     ),
     f(
         "ssat16",
@@ -1783,6 +2077,7 @@ pub static FORMS: &[Form] = &[
         0x06a00f30,
         true,
         &[Op::Reg(12, 4), Op::Imm(&[(16, 4)], 1, 1), Op::Reg(0, 4)],
+        &[1, 255, 1],
     ),
     f(
         "ssax",
@@ -1790,6 +2085,7 @@ pub static FORMS: &[Form] = &[
         0xfae0f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "ssax",
@@ -1797,15 +2093,17 @@ pub static FORMS: &[Form] = &[
         0x06100f50,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
-    f("ssbb", Set::T32, 0xf3bf8f40, false, &[]),
-    f("ssbb", Set::Arm, 0xf57ff040, false, &[]),
+    f("ssbb", Set::T32, 0xf3bf8f40, false, &[], &[]),
+    f("ssbb", Set::Arm, 0xf57ff040, false, &[], &[]),
     f(
         "ssub16",
         Set::T32,
         0xfad0f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "ssub16",
@@ -1813,6 +2111,7 @@ pub static FORMS: &[Form] = &[
         0x06100f70,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "ssub8",
@@ -1820,6 +2119,7 @@ pub static FORMS: &[Form] = &[
         0xfac0f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "ssub8",
@@ -1827,6 +2127,7 @@ pub static FORMS: &[Form] = &[
         0x06100ff0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "stc",
@@ -1834,6 +2135,7 @@ pub static FORMS: &[Form] = &[
         0xec000000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stc",
@@ -1841,6 +2143,7 @@ pub static FORMS: &[Form] = &[
         0x0c000000,
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stc2",
@@ -1848,13 +2151,15 @@ pub static FORMS: &[Form] = &[
         0xfc000000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stc2",
         Set::Arm,
         0xfc000000,
-        true,
+        false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stc2l",
@@ -1862,13 +2167,15 @@ pub static FORMS: &[Form] = &[
         0xfc400000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stc2l",
         Set::Arm,
         0xfc400000,
-        true,
+        false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stcl",
@@ -1876,6 +2183,7 @@ pub static FORMS: &[Form] = &[
         0xec400000,
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "stcl",
@@ -1883,6 +2191,7 @@ pub static FORMS: &[Form] = &[
         0x0c400000,
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
+        &[],
     ),
     f(
         "strex",
@@ -1890,6 +2199,7 @@ pub static FORMS: &[Form] = &[
         0xe8400000,
         true,
         &[Op::Reg(8, 4), Op::Reg(12, 4), Op::Base(16, 4)],
+        &[2, 2, 1],
     ),
     f(
         "strex",
@@ -1897,27 +2207,46 @@ pub static FORMS: &[Form] = &[
         0xe8400000,
         true,
         &[Op::Reg(8, 4), Op::Reg(12, 4), Op::OffMem(16, &[(0, 8)], 4)],
+        &[2, 2, 1],
     ),
     f(
         "strex",
         Set::Arm,
         0x01800f90,
         true,
-        &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
+        &[
+            Op::Reg(12, 4),
+            Op::Reg(0, 4),
+            Op::Base(16, 4),
+            Op::FirstDistinct,
+        ],
+        &[1, 1, 255],
     ),
     f(
         "strexb",
         Set::T32,
         0xe8c00f40,
         true,
-        &[Op::Reg(0, 4), Op::Reg(12, 4), Op::Base(16, 4)],
+        &[
+            Op::Reg(0, 4),
+            Op::Reg(12, 4),
+            Op::Base(16, 4),
+            Op::FirstDistinct,
+        ],
+        &[2, 2, 1],
     ),
     f(
         "strexb",
         Set::Arm,
         0x01c00f90,
         true,
-        &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
+        &[
+            Op::Reg(12, 4),
+            Op::Reg(0, 4),
+            Op::Base(16, 4),
+            Op::FirstDistinct,
+        ],
+        &[1, 1, 255],
     ),
     f(
         "strexd",
@@ -1929,28 +2258,49 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
             Op::Reg(8, 4),
             Op::Base(16, 4),
+            Op::FirstDistinct,
         ],
+        &[2, 2, 2, 1],
     ),
     f(
         "strexd",
         Set::Arm,
         0x01a00f90,
         true,
-        &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Next, Op::Base(16, 4)],
+        &[
+            Op::Reg(12, 4),
+            Op::Reg(0, 4),
+            Op::Next,
+            Op::Base(16, 4),
+            Op::FirstDistinct,
+        ],
+        &[1, 1, 1, 1],
     ),
     f(
         "strexh",
         Set::T32,
         0xe8c00f50,
         true,
-        &[Op::Reg(0, 4), Op::Reg(12, 4), Op::Base(16, 4)],
+        &[
+            Op::Reg(0, 4),
+            Op::Reg(12, 4),
+            Op::Base(16, 4),
+            Op::FirstDistinct,
+        ],
+        &[2, 2, 1],
     ),
     f(
         "strexh",
         Set::Arm,
         0x01e00f90,
         true,
-        &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
+        &[
+            Op::Reg(12, 4),
+            Op::Reg(0, 4),
+            Op::Base(16, 4),
+            Op::FirstDistinct,
+        ],
+        &[1, 1, 255],
     ),
     f(
         "svc",
@@ -1958,6 +2308,7 @@ pub static FORMS: &[Form] = &[
         0x0000df00,
         true,
         &[Op::Imm(&[(0, 8)], 1, 0)],
+        &[],
     ),
     f(
         "svc",
@@ -1965,6 +2316,7 @@ pub static FORMS: &[Form] = &[
         0x0f000000,
         true,
         &[Op::Imm(&[(0, 24)], 1, 0)],
+        &[],
     ),
     f(
         "swp",
@@ -1972,6 +2324,7 @@ pub static FORMS: &[Form] = &[
         0x01000090,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "swpb",
@@ -1979,6 +2332,7 @@ pub static FORMS: &[Form] = &[
         0x01400090,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
+        &[1, 1, 1],
     ),
     f(
         "sxtab",
@@ -1986,6 +2340,7 @@ pub static FORMS: &[Form] = &[
         0xfa40f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 2, 255],
     ),
     f(
         "sxtab",
@@ -1998,6 +2353,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::Rotate(10),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "sxtab16",
@@ -2005,6 +2361,7 @@ pub static FORMS: &[Form] = &[
         0xfa20f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 2, 255],
     ),
     f(
         "sxtab16",
@@ -2017,6 +2374,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::Rotate(10),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "sxtah",
@@ -2024,6 +2382,7 @@ pub static FORMS: &[Form] = &[
         0xfa00f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 2, 255],
     ),
     f(
         "sxtah",
@@ -2036,6 +2395,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::Rotate(10),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "sxtb",
@@ -2043,6 +2403,7 @@ pub static FORMS: &[Form] = &[
         0x0000b240,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "sxtb",
@@ -2050,6 +2411,7 @@ pub static FORMS: &[Form] = &[
         0xfa4ff080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 255],
     ),
     f(
         "sxtb",
@@ -2057,6 +2419,7 @@ pub static FORMS: &[Form] = &[
         0x06af0070,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
+        &[1, 1, 255],
     ),
     f(
         "sxtb16",
@@ -2064,6 +2427,7 @@ pub static FORMS: &[Form] = &[
         0xfa2ff080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 255],
     ),
     f(
         "sxtb16",
@@ -2071,6 +2435,7 @@ pub static FORMS: &[Form] = &[
         0x068f0070,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
+        &[1, 1, 255],
     ),
     f(
         "sxth",
@@ -2078,6 +2443,7 @@ pub static FORMS: &[Form] = &[
         0x0000b200,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "sxth",
@@ -2085,6 +2451,7 @@ pub static FORMS: &[Form] = &[
         0xfa0ff080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 255],
     ),
     f(
         "sxth",
@@ -2092,15 +2459,31 @@ pub static FORMS: &[Form] = &[
         0x06bf0070,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
+        &[1, 1, 255],
     ),
-    f("tbb", Set::T32, 0xe8d0f000, true, &[Op::IdxMem(16, 0, 0)]),
-    f("tbh", Set::T32, 0xe8d0f010, true, &[Op::IdxMem(16, 0, 1)]),
+    f(
+        "tbb",
+        Set::T32,
+        0xe8d0f000,
+        true,
+        &[Op::IdxMem(16, 0, 0)],
+        &[],
+    ),
+    f(
+        "tbh",
+        Set::T32,
+        0xe8d0f010,
+        true,
+        &[Op::IdxMem(16, 0, 1)],
+        &[],
+    ),
     f(
         "uadd16",
         Set::T32,
         0xfa90f040,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uadd16",
@@ -2108,6 +2491,7 @@ pub static FORMS: &[Form] = &[
         0x06500f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uadd8",
@@ -2115,6 +2499,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f040,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uadd8",
@@ -2122,6 +2507,7 @@ pub static FORMS: &[Form] = &[
         0x06500f90,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uasx",
@@ -2129,6 +2515,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f040,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uasx",
@@ -2136,6 +2523,7 @@ pub static FORMS: &[Form] = &[
         0x06500f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "ubfx",
@@ -2148,6 +2536,7 @@ pub static FORMS: &[Form] = &[
             Op::Lsb(&[(6, 2), (12, 3)]),
             Op::Width(&[(0, 5)]),
         ],
+        &[2, 2, 255, 255],
     ),
     f(
         "ubfx",
@@ -2157,9 +2546,10 @@ pub static FORMS: &[Form] = &[
         &[
             Op::Reg(12, 4),
             Op::Reg(0, 4),
-            Op::Imm(&[(7, 5)], 1, 0),
-            Op::Imm(&[(16, 5)], 1, 1),
+            Op::Lsb(&[(7, 5)]),
+            Op::Width(&[(16, 5)]),
         ],
+        &[0, 0, 255, 255],
     ),
     f(
         "udf",
@@ -2167,6 +2557,7 @@ pub static FORMS: &[Form] = &[
         0x0000de00,
         true,
         &[Op::Imm(&[(0, 8)], 1, 0)],
+        &[],
     ),
     f(
         "udf",
@@ -2174,6 +2565,7 @@ pub static FORMS: &[Form] = &[
         0xf7f0a000,
         true,
         &[Op::Imm(&[(0, 12), (16, 4)], 1, 0)],
+        &[],
     ),
     f(
         "udf",
@@ -2181,6 +2573,7 @@ pub static FORMS: &[Form] = &[
         0xe7f000f0,
         false,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
+        &[],
     ),
     f(
         "udiv",
@@ -2188,6 +2581,15 @@ pub static FORMS: &[Form] = &[
         0xfbb0f0f0,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
+    ),
+    f(
+        "udiv",
+        Set::T32,
+        0xfbb0f0f0,
+        true,
+        &[Op::RegTwice(8, 16), Op::Reg(0, 4)],
+        &[2, 2],
     ),
     f(
         "udiv",
@@ -2195,6 +2597,15 @@ pub static FORMS: &[Form] = &[
         0x0730f010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
+    ),
+    f(
+        "udiv",
+        Set::Arm,
+        0x0730f010,
+        true,
+        &[Op::RegTwice(16, 0), Op::Reg(8, 4)],
+        &[1, 1],
     ),
     f(
         "uhadd16",
@@ -2202,6 +2613,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f060,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uhadd16",
@@ -2209,6 +2621,7 @@ pub static FORMS: &[Form] = &[
         0x06700f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uhadd8",
@@ -2216,6 +2629,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f060,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uhadd8",
@@ -2223,6 +2637,7 @@ pub static FORMS: &[Form] = &[
         0x06700f90,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uhasx",
@@ -2230,6 +2645,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f060,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uhasx",
@@ -2237,6 +2653,7 @@ pub static FORMS: &[Form] = &[
         0x06700f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uhsax",
@@ -2244,6 +2661,7 @@ pub static FORMS: &[Form] = &[
         0xfae0f060,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uhsax",
@@ -2251,6 +2669,7 @@ pub static FORMS: &[Form] = &[
         0x06700f50,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uhsub16",
@@ -2258,6 +2677,7 @@ pub static FORMS: &[Form] = &[
         0xfad0f060,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uhsub16",
@@ -2265,6 +2685,7 @@ pub static FORMS: &[Form] = &[
         0x06700f70,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uhsub8",
@@ -2272,6 +2693,7 @@ pub static FORMS: &[Form] = &[
         0xfac0f060,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uhsub8",
@@ -2279,6 +2701,7 @@ pub static FORMS: &[Form] = &[
         0x06700ff0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "umaal",
@@ -2286,6 +2709,7 @@ pub static FORMS: &[Form] = &[
         0xfbe00060,
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "umaal",
@@ -2293,12 +2717,14 @@ pub static FORMS: &[Form] = &[
         0x00400090,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "undefined (bcc, cond=0xE)",
         Set::T32,
         0xf3808000,
         false,
+        &[],
         &[],
     ),
     f(
@@ -2307,6 +2733,7 @@ pub static FORMS: &[Form] = &[
         0xf3c08000,
         false,
         &[],
+        &[],
     ),
     f(
         "uqadd16",
@@ -2314,6 +2741,7 @@ pub static FORMS: &[Form] = &[
         0xfa90f050,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uqadd16",
@@ -2321,6 +2749,7 @@ pub static FORMS: &[Form] = &[
         0x06600f10,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uqadd8",
@@ -2328,6 +2757,7 @@ pub static FORMS: &[Form] = &[
         0xfa80f050,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uqadd8",
@@ -2335,6 +2765,7 @@ pub static FORMS: &[Form] = &[
         0x06600f90,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uqasx",
@@ -2342,6 +2773,7 @@ pub static FORMS: &[Form] = &[
         0xfaa0f050,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uqasx",
@@ -2349,6 +2781,7 @@ pub static FORMS: &[Form] = &[
         0x06600f30,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uqsax",
@@ -2356,6 +2789,7 @@ pub static FORMS: &[Form] = &[
         0xfae0f050,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uqsax",
@@ -2363,6 +2797,7 @@ pub static FORMS: &[Form] = &[
         0x06600f50,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uqsub16",
@@ -2370,6 +2805,7 @@ pub static FORMS: &[Form] = &[
         0xfad0f050,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uqsub16",
@@ -2377,6 +2813,7 @@ pub static FORMS: &[Form] = &[
         0x06600f70,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uqsub8",
@@ -2384,6 +2821,7 @@ pub static FORMS: &[Form] = &[
         0xfac0f050,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "uqsub8",
@@ -2391,6 +2829,7 @@ pub static FORMS: &[Form] = &[
         0x06600ff0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "usad8",
@@ -2398,6 +2837,7 @@ pub static FORMS: &[Form] = &[
         0xfb70f000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "usad8",
@@ -2405,6 +2845,7 @@ pub static FORMS: &[Form] = &[
         0x0780f010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
+        &[1, 1, 1],
     ),
     f(
         "usada8",
@@ -2412,6 +2853,7 @@ pub static FORMS: &[Form] = &[
         0xfb700000,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
+        &[2, 2, 2, 2],
     ),
     f(
         "usada8",
@@ -2419,6 +2861,7 @@ pub static FORMS: &[Form] = &[
         0x07800010,
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
+        &[1, 1, 1, 1],
     ),
     f(
         "usat",
@@ -2431,6 +2874,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
             Op::SatShift(6, 2, 21, 12, 3),
         ],
+        &[2, 255, 2, 255],
     ),
     f(
         "usat",
@@ -2443,13 +2887,15 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::SatShift(7, 5, 6, 255, 0),
         ],
+        &[1, 255, 1, 255],
     ),
     f(
         "usat16",
         Set::T32,
         0xf3a00000,
         true,
-        &[Op::Reg(8, 4), Op::Imm(&[(0, 5)], 1, 0), Op::Reg(16, 4)],
+        &[Op::Reg(8, 4), Op::Imm(&[(0, 4)], 1, 0), Op::Reg(16, 4)],
+        &[2, 255, 2],
     ),
     f(
         "usat16",
@@ -2457,6 +2903,7 @@ pub static FORMS: &[Form] = &[
         0x06e00f30,
         true,
         &[Op::Reg(12, 4), Op::Imm(&[(16, 4)], 1, 0), Op::Reg(0, 4)],
+        &[1, 255, 1],
     ),
     f(
         "usax",
@@ -2464,6 +2911,7 @@ pub static FORMS: &[Form] = &[
         0xfae0f040,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "usax",
@@ -2471,6 +2919,7 @@ pub static FORMS: &[Form] = &[
         0x06500f50,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "usub16",
@@ -2478,6 +2927,7 @@ pub static FORMS: &[Form] = &[
         0xfad0f040,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "usub16",
@@ -2485,6 +2935,7 @@ pub static FORMS: &[Form] = &[
         0x06500f70,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "usub8",
@@ -2492,6 +2943,7 @@ pub static FORMS: &[Form] = &[
         0xfac0f040,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[2, 2, 2],
     ),
     f(
         "usub8",
@@ -2499,6 +2951,7 @@ pub static FORMS: &[Form] = &[
         0x06500ff0,
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
+        &[1, 1, 1],
     ),
     f(
         "uxtab",
@@ -2506,6 +2959,7 @@ pub static FORMS: &[Form] = &[
         0xfa50f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 2, 255],
     ),
     f(
         "uxtab",
@@ -2518,6 +2972,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::Rotate(10),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "uxtab16",
@@ -2525,6 +2980,7 @@ pub static FORMS: &[Form] = &[
         0xfa30f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 2, 255],
     ),
     f(
         "uxtab16",
@@ -2537,6 +2993,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::Rotate(10),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "uxtah",
@@ -2544,6 +3001,7 @@ pub static FORMS: &[Form] = &[
         0xfa10f080,
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 2, 255],
     ),
     f(
         "uxtah",
@@ -2556,6 +3014,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(0, 4),
             Op::Rotate(10),
         ],
+        &[1, 1, 1, 255],
     ),
     f(
         "uxtb",
@@ -2563,6 +3022,7 @@ pub static FORMS: &[Form] = &[
         0x0000b2c0,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "uxtb",
@@ -2570,6 +3030,7 @@ pub static FORMS: &[Form] = &[
         0xfa5ff080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 255],
     ),
     f(
         "uxtb",
@@ -2577,6 +3038,7 @@ pub static FORMS: &[Form] = &[
         0x06ef0070,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
+        &[1, 1, 255],
     ),
     f(
         "uxtb16",
@@ -2584,6 +3046,7 @@ pub static FORMS: &[Form] = &[
         0xfa3ff080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 255],
     ),
     f(
         "uxtb16",
@@ -2591,6 +3054,7 @@ pub static FORMS: &[Form] = &[
         0x06cf0070,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
+        &[1, 1, 255],
     ),
     f(
         "uxth",
@@ -2598,6 +3062,7 @@ pub static FORMS: &[Form] = &[
         0x0000b280,
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
+        &[2, 2],
     ),
     f(
         "uxth",
@@ -2605,6 +3070,7 @@ pub static FORMS: &[Form] = &[
         0xfa1ff080,
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
+        &[2, 2, 255],
     ),
     f(
         "uxth",
@@ -2612,14 +3078,15 @@ pub static FORMS: &[Form] = &[
         0x06ff0070,
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
+        &[1, 1, 255],
     ),
-    f("wfe", Set::T16, 0x0000bf20, true, &[]),
-    f("wfe", Set::T32, 0xf3af8002, true, &[]),
-    f("wfe", Set::Arm, 0x0320f002, true, &[]),
-    f("wfi", Set::T16, 0x0000bf30, true, &[]),
-    f("wfi", Set::T32, 0xf3af8003, true, &[]),
-    f("wfi", Set::Arm, 0x0320f003, true, &[]),
-    f("yield", Set::T16, 0x0000bf10, true, &[]),
-    f("yield", Set::T32, 0xf3af8001, true, &[]),
-    f("yield", Set::Arm, 0x0320f001, true, &[]),
+    f("wfe", Set::T16, 0x0000bf20, true, &[], &[]),
+    f("wfe", Set::T32, 0xf3af8002, true, &[], &[]),
+    f("wfe", Set::Arm, 0x0320f002, true, &[], &[]),
+    f("wfi", Set::T16, 0x0000bf30, true, &[], &[]),
+    f("wfi", Set::T32, 0xf3af8003, true, &[], &[]),
+    f("wfi", Set::Arm, 0x0320f003, true, &[], &[]),
+    f("yield", Set::T16, 0x0000bf10, true, &[], &[]),
+    f("yield", Set::T32, 0xf3af8001, true, &[], &[]),
+    f("yield", Set::Arm, 0x0320f001, true, &[], &[]),
 ];

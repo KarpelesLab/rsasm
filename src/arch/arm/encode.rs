@@ -79,13 +79,10 @@ pub fn imm_of(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<i64> {
 
 /// A 32-bit immediate, accepting either the signed or the unsigned reading
 /// (`-1` and `0xffffffff` are the same word).
+/// A 32-bit immediate. Both references take the low 32 bits of whatever the
+/// expression came to, so `-1`, `0xffffffff` and `0x1ffffffff` are one word.
 pub fn imm32(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<u32> {
-    let v = imm_of(cx, op)?;
-    if !(i32::MIN as i64..=u32::MAX as i64).contains(&v) {
-        cx.error(op.span, format!("immediate {v} does not fit in 32 bits"));
-        return None;
-    }
-    Some(v as u32)
+    Some(imm_of(cx, op)? as u32)
 }
 
 /// An unsigned immediate that must fit in `bits` bits.
@@ -112,6 +109,15 @@ pub fn imm_bits(cx: &mut AsmCtx<'_>, op: &Operand, bits: u32) -> Option<u32> {
 fn no_cond(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<()> {
     if ins.cond_written && ins.cond != AL {
         cx.error(ins.span, format!("`{}` cannot be conditional", ins.text));
+        return None;
+    }
+    Some(())
+}
+
+/// GNU as's `RRnpc` operand kind: a register that may not be the PC.
+pub fn no_pc(cx: &mut AsmCtx<'_>, span: Span, r: Reg) -> Option<()> {
+    if r == reg::PC {
+        cx.error(span, "`pc` is not allowed here");
         return None;
     }
     Some(())
@@ -217,12 +223,16 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 /// Builds the twelve-bit second operand and, for immediates that only encode
 /// with the complementary operation, the opcode that has to replace the one
 /// the source wrote.
+/// The opcode `operand2` returns where it found a constant only `movw` can
+/// hold; `data_processing` writes the instruction out itself.
+const MOVW_INSTEAD: u32 = 0xff;
+
 fn operand2(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, op: &Operand) -> Option<(u32, u32, u32)> {
     let base = ins.mnem.dp_opcode()?;
     match &op.kind {
         OperandKind::Reg(rm) => Some((base, 0, *rm as u32)),
         OperandKind::Shifted { rm, shift, amount } => {
-            Some((base, 0, shift_field(cx, op.span, *rm, *shift, *amount)?))
+            Some((base, 0, shift_field(*rm, *shift, *amount)))
         }
         OperandKind::Imm(_) => {
             let v = imm32(cx, op)?;
@@ -238,6 +248,11 @@ fn operand2(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, op: &Operand) -> Option<(u32, u
                 {
                     return Some((op, 1, field));
                 }
+            }
+            // `mov rd, #imm` reaches any 16-bit constant through `movw`,
+            // which has no flag-setting form.
+            if ins.mnem == Mnem::Mov && !ins.set_flags && v <= 0xffff {
+                return Some((MOVW_INSTEAD, (v >> 12) & 0xf, v & 0xfff));
             }
             cx.error(
                 op.span,
@@ -261,39 +276,38 @@ fn operand2(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, op: &Operand) -> Option<(u32, u
 
 /// The shifter field of a register operand: `shift_imm:type:0:Rm` or
 /// `Rs:0:type:1:Rm`.
-fn shift_field(
-    cx: &mut AsmCtx<'_>,
-    span: Span,
-    rm: Reg,
-    shift: Shift,
-    amount: ShiftAmt,
-) -> Option<u32> {
+fn shift_field(rm: Reg, shift: Shift, amount: ShiftAmt) -> u32 {
     let rm = rm as u32;
-    Some(match amount {
+    match amount {
         // `rrx` is `ror` by zero; a real `ror #0` has no encoding.
         ShiftAmt::None => (3 << 5) | rm,
         ShiftAmt::Reg(rs) => ((rs as u32) << 8) | (shift.code() << 5) | (1 << 4) | rm,
         ShiftAmt::Imm(n) => {
-            let n = match shift {
-                // `lsr #32` and `asr #32` are spelled with a zero amount,
-                // which is why `lsr #0` cannot mean "no shift".
-                Shift::Lsr | Shift::Asr if n == 32 => 0,
-                Shift::Lsr | Shift::Asr if n == 0 => {
-                    cx.error(
-                        span,
-                        format!("`{}` requires a shift of 1 to 32", shift.name()),
-                    );
-                    return None;
-                }
-                Shift::Ror if n == 0 => {
-                    cx.error(span, "`ror #0` is not encodable; write `rrx` instead");
-                    return None;
-                }
-                _ => n,
+            // `md_apply_fix`: a shift of zero is written as `lsl`, whichever
+            // kind the source names, and `lsr #32` and `asr #32` are spelled
+            // with a zero amount -- which is why `lsr #0` cannot mean 32.
+            let (kind, n) = match shift {
+                _ if n == 0 => (Shift::Lsl, 0),
+                Shift::Lsr | Shift::Asr if n == 32 => (shift, 0),
+                _ => (shift, n),
             };
-            (n << 7) | (shift.code() << 5) | rm
+            (n << 7) | (kind.code() << 5) | rm
         }
-    })
+    }
+}
+
+/// The two-operand spelling of a three-operand instruction leaves out the
+/// first source, not the shift: `add r0, r1, lsl #3` is what GNU as calls
+/// garbage following the instruction.
+pub fn no_shorthand_shift(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<()> {
+    if matches!(op.kind, OperandKind::Shifted { .. }) {
+        cx.error(
+            op.span,
+            "a shifted operand needs all three registers written out",
+        );
+        return None;
+    }
+    Some(())
 }
 
 fn data_processing(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
@@ -309,13 +323,22 @@ fn data_processing(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> 
         arity(cx, ins, &[2, 3])?;
         let rd = reg_of(cx, &ops[0])? as u32;
         if ops.len() == 2 {
-            // `add r0, r1` is shorthand for `add r0, r0, r1`.
+            // `add r0, r1` is shorthand for `add r0, r0, r1`. The shorthand
+            // has no room for a shift: the second operand fills the slot
+            // GNU as gives the first source.
+            no_shorthand_shift(cx, &ops[1])?;
             (rd, rd, &ops[1])
         } else {
             (rd, reg_of(cx, &ops[1])? as u32, &ops[2])
         }
     };
     let (opcode, i, field) = operand2(cx, ins, src)?;
+    if opcode == MOVW_INSTEAD {
+        return Some(one(word(
+            ins.cond,
+            0x0300_0000 | (i << 16) | (rd << 12) | field,
+        )));
+    }
     // The comparisons have no S bit of their own: they always set the flags.
     let s = if m.is_compare() || ins.set_flags {
         1
@@ -370,7 +393,7 @@ fn shift_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         };
         (rd, rm, amount)
     };
-    let field = shift_field(cx, ins.span, rm, shift, amount)?;
+    let field = shift_field(rm, shift, amount);
     let s = u32::from(ins.set_flags);
     Some(one(word(
         ins.cond,
@@ -391,6 +414,10 @@ fn index_bits(index: Index) -> (u32, u32) {
 
 fn memory_operand<'a>(cx: &mut AsmCtx<'_>, op: &'a Operand) -> Option<&'a Mem> {
     match &op.kind {
+        OperandKind::Mem(m) if m.base == reg::PC && m.index != Index::Offset => {
+            cx.error(m.span, "a PC-relative address cannot write `pc` back");
+            None
+        }
         OperandKind::Mem(m) => Some(m),
         _ => {
             cx.error(
@@ -514,6 +541,11 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return literal_load(cx, ins, rt, &ins.ops[1], e);
     }
     let mem = *memory_operand(cx, &ins.ops[1])?;
+    // Only a word transfer reaches the PC, and of the unprivileged ones
+    // only the store: GNU as gives `strt` the register kind that allows it.
+    if t.size != 4 || (t.translate && t.load) {
+        no_pc(cx, ins.ops[0].span, rt as Reg)?;
+    }
     let (p, w) = if t.translate {
         translate_bits(cx, &mem)?
     } else {
@@ -543,10 +575,11 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             add,
             shift,
             amount,
+            ..
         } => (
             1,
             u32::from(add),
-            shift_field(cx, mem.span, rm, shift, ShiftAmt::Imm(amount))?,
+            shift_field(rm, shift, ShiftAmt::Imm(amount)),
         ),
     };
     Some(one(word(
@@ -605,6 +638,7 @@ fn load_store_extra(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>>
             mem_at = 2;
         }
     }
+    no_pc(cx, ins.ops[0].span, rt as Reg)?;
     let mem = *memory_operand(cx, &ins.ops[mem_at])?;
     let (p, w) = if t.translate {
         translate_bits(cx, &mem)?
@@ -643,6 +677,7 @@ fn load_store_extra(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>>
             add,
             shift,
             amount,
+            ..
         } => {
             if amount != 0 || shift != Shift::Lsl {
                 cx.error(
@@ -707,10 +742,11 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             add,
             shift,
             amount,
+            ..
         } => (
             1,
             u32::from(add),
-            shift_field(cx, mem.span, rm, shift, ShiftAmt::Imm(amount))?,
+            shift_field(rm, shift, ShiftAmt::Imm(amount)),
         ),
         MemOffset::Unindexed(_) => {
             cx.error(mem.span, "only `ldc` and `stc` take `[rn], {option}`");
@@ -781,6 +817,7 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Mnem::Ldm(m) | Mnem::Stm(m) => {
             arity(cx, ins, &[2])?;
             let rn = reg_of(cx, &ins.ops[0])?;
+            no_pc(cx, ins.ops[0].span, rn)?;
             let (list, user) = register_list(cx, &ins.ops[1])?;
             (
                 rn,
@@ -1051,14 +1088,22 @@ pub fn thumb_function_address(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
 fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let ops = ins.ops;
     let s = u32::from(ins.set_flags);
+    for op in ops {
+        if let Some(r) = op.reg() {
+            no_pc(cx, op.span, r)?;
+        }
+    }
     let w = match ins.mnem {
         Mnem::Mul => {
-            arity(cx, ins, &[3])?;
-            let (rd, rn, rm) = (
-                reg_of(cx, &ops[0])? as u32,
-                reg_of(cx, &ops[1])? as u32,
-                reg_of(cx, &ops[2])? as u32,
-            );
+            // `mul rd, rn` multiplies the destination by the source.
+            arity(cx, ins, &[2, 3])?;
+            let rd = reg_of(cx, &ops[0])? as u32;
+            let rn = reg_of(cx, &ops[1])? as u32;
+            let rm = if ops.len() == 3 {
+                reg_of(cx, &ops[2])? as u32
+            } else {
+                rd
+            };
             (s << 20) | (rd << 16) | (rm << 8) | (9 << 4) | rn
         }
         Mnem::Mla | Mnem::Mls => {
@@ -1101,7 +1146,9 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     arity(cx, ins, &[2])?;
-    let rd = reg_of(cx, &ins.ops[0])? as u32;
+    let rd = reg_of(cx, &ins.ops[0])?;
+    no_pc(cx, ins.ops[0].span, rd)?;
+    let rd = rd as u32;
     let v = imm_bits(cx, &ins.ops[1], 16)?;
     let top = if ins.mnem == Mnem::Movw {
         0x0300_0000
@@ -1246,7 +1293,9 @@ pub fn psr_fields(cx: &mut AsmCtx<'_>, op: &Operand, spec: &str) -> Option<(u32,
 fn status_read(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     arity(cx, ins, &[2])?;
-    let rd = reg_of(cx, &ins.ops[0])? as u32;
+    let rd = reg_of(cx, &ins.ops[0])?;
+    no_pc(cx, ins.ops[0].span, rd)?;
+    let rd = rd as u32;
     let name = ins.ops[1].word.clone().unwrap_or_default();
     if let Some((r, m1, m)) = banked(&name) {
         return Some(one(word(

@@ -48,6 +48,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 BINUTILS = os.path.join(ORACLES, "src", "binutils-2.47")
 TABLE = os.path.join(ROOT, "src", "arch", "arm", "table.rs")
+TC_ARM = os.path.join(BINUTILS, "gas", "config", "tc-arm.c")
 
 # ============================================================================
 # Reading arm-dis.c
@@ -133,7 +134,51 @@ OVERRIDE = {
     # `nop`'s hint number has to be written in braces; the opcode fields of
     # `cdp` and `mcr`, which the disassembler prints the same way, do not.
     ("nop", "Arm"): (("Hint", ((0, 8),)),),
+    # The A32 bitfield extracts print the width as a plain field; it is the
+    # same `#lsb, #width` pair the Thumb rows spell with `%F`, and the width
+    # has to fit above the bit position.
+    ("sbfx", "Arm"): (("Reg", 12, 4), ("Reg", 0, 4), ("Lsb", ((7, 5),)),
+                      ("Width", ((16, 5),))),
+    ("ubfx", "Arm"): (("Reg", 12, 4), ("Reg", 0, 4), ("Lsb", ((7, 5),)),
+                      ("Width", ((16, 5),))),
+    # The halfword saturations take a four-bit position, which the T32 rows
+    # print out of the five-bit field their word-sized siblings use.
+    ("ssat16", "T32"): (("Reg", 8, 4), ("Imm", ((0, 4),), 1, 1), ("Reg", 16, 4)),
+    ("usat16", "T32"): (("Reg", 8, 4), ("Imm", ((0, 4),), 1, 0), ("Reg", 16, 4)),
 }
+# `pkhtb`'s shift is `asr` alone, and its type bit -- 6 in A32, hw2's 5 in
+# T32 -- is the one a shift of zero clears, which turns it into a `pkhbt`.
+OVERRIDE[("pkhtb", "Arm")] = (
+    ("Reg", 12, 4), ("Reg", 16, 4), ("Reg", 0, 4),
+    ("SatShift", 7, 5, 64 + 6, 255, 0),
+)
+OVERRIDE[("pkhtb", "T32")] = (
+    ("Reg", 8, 4), ("Reg", 16, 4), ("Reg", 0, 4),
+    ("SatShift", 6, 2, 64 + 5, 12, 3),
+)
+
+# `do_strex` refuses a status register that is also one of the transfer
+# registers or the base. The Thumb encoder makes that check for the byte,
+# halfword and doubleword forms only; `do_t_strex` has no such constraint.
+STREX = {
+    "strex": ("Arm",),
+    "strexb": ("Arm", "T32"),
+    "strexh": ("Arm", "T32"),
+    "strexd": ("Arm", "T32"),
+}
+
+# `do_t_ldrexd` moves into two registers, which have to differ.
+OVERRIDE[("ldrexd", "T32")] = (
+    ("Reg", 12, 4), ("Reg", 8, 4), ("Distinct",), ("Base", 16, 4),
+)
+
+# `mrrc` moves into two registers, which `do_mrrc` requires to differ.
+for _m in ("mrrc", "mrrc2"):
+    OVERRIDE[(_m, "*")] = (
+        ("Coproc", 8), ("Imm", ((4, 4),), 1, 0), ("Reg", 12, 4),
+        ("Reg", 16, 4), ("Distinct",), ("CReg", 0),
+    )
+
 # `srs` writes its base register as `sp`, or leaves it out.
 for _srs in ("srsia", "srsib", "srsda", "srsdb"):
     OVERRIDE[(_srs, "*")] = (("SpBase", 16, 21), ("Imm", ((0, 5),), 1, 0))
@@ -157,7 +202,18 @@ EXTRA = [
      (("Reg", 12, 4), ("Reg", 0, 4), ("Reg", 16, 4))),
     ("pkhtb", "T32", 0xEAC00000, True,
      (("Reg", 8, 4), ("Reg", 0, 4), ("Reg", 16, 4))),
+    # `sdiv rd, rm` divides the destination, which GNU as writes as the
+    # optional middle operand of `(RR, oRR, RR)`.
+    ("sdiv", "Arm", 0x0710F010, True, (("RegTwice", 16, 0), ("Reg", 8, 4))),
+    ("udiv", "Arm", 0x0730F010, True, (("RegTwice", 16, 0), ("Reg", 8, 4))),
+    ("sdiv", "T32", 0xFB90F0F0, True, (("RegTwice", 8, 16), ("Reg", 0, 4))),
+    ("udiv", "T32", 0xFBB0F0F0, True, (("RegTwice", 8, 16), ("Reg", 0, 4))),
 ]
+
+# Where an encoder checks a register GNU as's operand kind leaves open:
+# `do_div` refuses the PC in all three of its registers, which `RR` does not
+# say. The value is the least restrictive class the form's registers take.
+CLASS_FIX = {("sdiv", "Arm"): 1, ("udiv", "Arm"): 1}
 
 # ============================================================================
 # Taking a format string apart
@@ -390,7 +446,8 @@ def parse_ops(text, which, val=0, mask=0):
             # is allowed and the amount is all that is written.
             if mask & 0x30 == 0x30:
                 ops.append(("Reg", 0, 4))
-                ops.append(("SatShift", 6, 2, 255 if val & 0x20 else 254, 12, 3))
+                # The type bit is hw2's bit 5, which a zero shift clears.
+                ops.append(("SatShift", 6, 2, 64 + 5 if val & 0x20 else 255, 12, 3))
             else:
                 ops.append(("Shifted",))
         elif code == "A":
@@ -523,6 +580,77 @@ def parse_braced(text, i, ops, which):
 
 
 # ============================================================================
+# Reading gas's own table, for the registers each operand may hold
+# ============================================================================
+
+# `gas/config/tc-arm.c`'s `insns[]` names each operand's kind, which is where
+# the register restrictions live: `RRnpc` is any register but the PC, and
+# `RRnpcsp` -- gas's `BadReg` -- neither the PC nor the stack pointer. The
+# disassembler's table cannot say this, since an UNPREDICTABLE encoding still
+# has to print.
+GAS_CLASS = {
+    "RR": 0, "APSR_RR": 0,
+    "RRnpc": 1, "RRnpcb": 1, "RRw": 1, "RRnpctw": 1, "RRe": 1,
+    "RRnpc_npcsp": 1, "RRnpc_I0": 1,
+    "RRnpcsp": 2, "RRo": 2, "RRnpcsp_I32": 2,
+}
+# In Thumb, `do_t_*` puts nearly every register operand through
+# `reject_bad_reg`, which refuses the stack pointer as well as the PC, whatever
+# the table's own kind says. `rfe`'s base is the exception the table records
+# itself, and `RRw` keeps its meaning.
+THUMB_BAD = {"RR", "RRnpc", "RRnpcb", "RRnpcsp", "RRnpc_npcsp", "RRnpc_I0"}
+
+
+def read_insns(src):
+    """Mnemonic -> the operand kinds of its first row in `insns[]`."""
+    text = open(src).read()
+    start = text.index("static const struct asm_opcode insns[] =")
+    end = text.index("\n};", start)
+    body = re.sub(r"/\*.*?\*/", "", text[start:end], flags=re.S)
+    out = {}
+    row = re.compile(
+        r"^[ \t]*\w+\s*\(\s*\"?([\w.]+)\"?\s*,(?:[^()\n]|\n)*?"
+        r",\s*\d+\s*,\s*\(([^()]*)\)", re.M)
+    for m in row.finditer(body):
+        name = m.group(1)
+        kinds = [k.strip() for k in m.group(2).split(",") if k.strip()]
+        out.setdefault(name, kinds)
+    return out
+
+
+def reg_classes(name, ops, thumb, insns):
+    """One class per operand the form reads, in the order they are written."""
+    kinds = insns.get(name)
+    if kinds is None:
+        return None
+    reading = [o for o in ops
+               if o[0] not in ("Writeback", "Distinct", "FirstDistinct")]
+    # An operand GNU as marks optional may simply not be in the form: the
+    # 16-bit Thumb extends have no rotation to write, and `sdiv rd, rm`
+    # leaves out the middle register.
+    while len(kinds) > len(reading) and any(k.startswith("o") for k in kinds):
+        drop = max(i for i, k in enumerate(kinds) if k.startswith("o"))
+        kinds = kinds[:drop] + kinds[drop + 1:]
+    if len(kinds) != len(reading):
+        return None
+    out = []
+    least = CLASS_FIX.get((name, "T32" if thumb else "Arm"), 0)
+    for op, kind in zip(reading, kinds):
+        bare = kind[1:] if kind.startswith("o") and len(kind) > 1 else kind
+        if op[0] in ("Base", "OffMem"):
+            out.append(1 if thumb else GAS_CLASS.get(bare, 255))
+        elif op[0] in ("Reg", "RegTwice", "Next"):
+            if thumb and bare in THUMB_BAD:
+                out.append(2)
+            else:
+                out.append(max(least, GAS_CLASS.get(bare, 255)) if
+                           GAS_CLASS.get(bare, 255) != 255 else 255)
+        else:
+            out.append(255)
+    return out if any(c != 255 for c in out) else None
+
+
+# ============================================================================
 # Merging the rows that spell one instruction
 # ============================================================================
 
@@ -559,19 +687,18 @@ def merge(forms):
         if kinds == {"ror"}:
             ops.append(("Rotate", lo))
         elif kinds <= {"lsl", "asr"}:
-            # `ssat`, `usat`, `pkhbt` and `pkhtb`: an optional shift whose
-            # kind is one bit and whose amount is a field.
+            # `ssat`, `usat` and `pkhbt`: an optional shift whose kind is one
+            # bit and whose amount is a field. A group that allows only `asr`
+            # cannot say which bit means it, and `pkhtb`, the one instruction
+            # that has such a group, is written out in OVERRIDE instead.
             amt = [t[1] for t in trails if len(t) > 1 and t[1][0] == "Imm"]
             if not amt:
                 raise Unsupported("shift group %r" % (key,))
             f = amt[0][1]
-            asr = None
-            if "asr" in kinds and "lsl" in kinds:
-                asr = lo
-            elif "asr" in kinds:
-                asr = 255
-            ops.append(("SatShift", f[0][0], f[0][1], asr if asr is not None else 254,
-                        255, 0))
+            if kinds == {"asr"}:
+                raise Unsupported("`asr`-only shift group %r" % (key,))
+            asr = lo if "asr" in kinds else 255
+            ops.append(("SatShift", f[0][0], f[0][1], asr, 255, 0))
         else:
             raise Unsupported("shift group %r %r" % (key, kinds))
         out.append(dict(base, word=word, ops=tuple(ops)))
@@ -609,7 +736,7 @@ ALIASES = [
 ]
 
 
-def build(entries):
+def build(entries, insns):
     """The forms, and the audit trail: one line per row saying where it
     went."""
     forms, audit = [], []
@@ -638,19 +765,28 @@ def build(entries):
         for name, word, cond in mine:
             for which in SETS[e["set"]]:
                 w, has_cond = word, cond
+                # An A32 word with `1111` in the condition field is one of
+                # the unconditional instructions, whatever `%c` says: the
+                # disassembler prints the field, and GNU as refuses a
+                # condition on it.
+                if which == "Arm" and w >> 28 == 0xF:
+                    has_cond = False
                 if e["set"] == "cop" and which == "T32" and cond:
                     # Thumb has no condition field: a T32 coprocessor
                     # instruction is the A32 word with `al` left in it.
                     w, has_cond = word | 0xE000_0000, False
                 w |= WORD_FIX.get((name, which), 0)
+                use = OVERRIDE.get((name, which), OVERRIDE.get((name, "*"), ops))
                 forms.append(
                     {"name": name, "set": which, "word": w,
-                     "cond": has_cond, "ops": OVERRIDE.get(
-                         (name, which), OVERRIDE.get((name, "*"), ops))}
+                     "cond": has_cond, "ops": use}
                 )
         audit.append("%-4s %08x %-24s -> %s"
                      % (e["set"], e["val"], mnem,
                         " ".join(n for n, _, _ in mine)))
+    for form in forms:
+        if form["set"] in STREX.get(form["name"], ()):
+            form["ops"] = tuple(form["ops"]) + (("FirstDistinct",),)
     for name, which, word, cond, ops in EXTRA:
         forms.append({"name": name, "set": which, "word": word, "cond": cond,
                       "ops": ops})
@@ -664,6 +800,9 @@ def build(entries):
         out.append(f)
     order = {"T16": 0, "T32": 1, "Arm": 2}
     out.sort(key=lambda f: (f["name"], order[f["set"]], f["word"]))
+    for form in out:
+        form["regs"] = reg_classes(
+            form["name"], form["ops"], form["set"] != "Arm", insns)
     return out, audit
 
 
@@ -722,9 +861,11 @@ pub enum Op {
     Width(Field),
     /// An optional `, ror #8`, `#16` or `#24`, two bits at `lsb`.
     Rotate(u8),
-    /// An optional shift: `amount` bits at `lsb`, and a bit that says `asr`
-    /// rather than `lsl` -- 255 when only `asr` is allowed, 254 when only
-    /// `lsl` is. A second field holds an amount the first cannot.
+    /// An optional shift: `amount` bits at `lsb`, and which kinds it may
+    /// be -- under 32, the bit that means `asr` rather than `lsl`; 255,
+    /// `lsl` alone; 64 plus a bit, `asr` alone, that bit being the one a
+    /// shift of zero clears, since a zero shift is always `lsl`. A second
+    /// field holds an amount the first cannot.
     SatShift(u8, u8, u8, u8, u8),
     /// A coprocessor number, `p0` to `p15`.
     Coproc(u8),
@@ -734,6 +875,12 @@ pub enum Op {
     Barrier,
     /// `APSR_nzcv`, which `mrc` takes in place of a register.
     ApsrNzcv,
+    /// The two registers before it must be different, which is what the
+    /// disassembler's `u` marker means where GNU as makes it an error.
+    Distinct,
+    /// The first register the form reads must differ from every other one:
+    /// `do_strex`'s rule that the status register is none of the others.
+    FirstDistinct,
     /// `!` on the register before it, the bit at `lsb`.
     Writeback(u8),
     /// The `a`, `i` and `f` letters of `cpsie` and `cpsid`, the `f` bit at
@@ -764,10 +911,22 @@ pub struct Form {
     /// not has its condition field in `word`.
     pub cond: bool,
     pub ops: &'static [Op],
+    /// Which registers each operand may hold, in the order they are
+    /// written: 0 any, 1 not the PC, 2 neither the PC nor the stack
+    /// pointer, 255 not a register at all. Empty where GNU as's own table
+    /// says nothing.
+    pub regs: &'static [u8],
 }
 
-const fn f(name: &'static str, set: Set, word: u32, cond: bool, ops: &'static [Op]) -> Form {
-    Form { name, set, word, cond, ops }
+const fn f(
+    name: &'static str,
+    set: Set,
+    word: u32,
+    cond: bool,
+    ops: &'static [Op],
+    regs: &'static [u8],
+) -> Form {
+    Form { name, set, word, cond, ops, regs }
 }
 
 /// Mnemonics GNU as takes as another spelling of one in the table.
@@ -803,7 +962,7 @@ def rust_op(op):
         return "Op::SatShift(%d, %d, %d, %d, %d)" % op[1:]
     if k in ("Coproc", "CReg", "Writeback", "IntFlags", "Endian"):
         return "Op::%s(%d)" % (k, op[1])
-    if k in ("Barrier", "ApsrNzcv", "CoprocMem"):
+    if k in ("Barrier", "ApsrNzcv", "CoprocMem", "Distinct", "FirstDistinct"):
         return "Op::%s" % k
     if k == "IdxMem":
         return "Op::IdxMem(%d, %d, %d)" % (op[1], op[2], op[3])
@@ -823,10 +982,11 @@ def render(forms):
     out.append("pub static FORMS: &[Form] = &[\n")
     for form in forms:
         out.append(
-            '    f("%s", Set::%s, %#010x, %s, &[%s]),\n'
+            '    f("%s", Set::%s, %#010x, %s, &[%s], &[%s]),\n'
             % (form["name"], form["set"], form["word"],
                "true" if form["cond"] else "false",
-               ", ".join(rust_op(o) for o in form["ops"]))
+               ", ".join(rust_op(o) for o in form["ops"]),
+               ", ".join(str(c) for c in form["regs"] or ()))
         )
     out.append("];\n")
     text = "".join(out)
@@ -845,7 +1005,7 @@ def main():
     if cmd not in ("table", "check", "audit"):
         sys.exit(__doc__)
     entries = read_entries(os.path.join(BINUTILS, "opcodes", "arm-dis.c"))
-    forms, audit = build(entries)
+    forms, audit = build(entries, read_insns(TC_ARM))
     if cmd == "audit":
         for line in audit:
             print(line)
