@@ -39,6 +39,8 @@ pub const A_4S: u8 = 5;
 pub const A_1D: u8 = 6;
 pub const A_2D: u8 = 7;
 pub const A_1Q: u8 = 8;
+/// In the grammar, but no form in the table takes it today.
+#[allow(dead_code)]
 pub const A_2Q: u8 = 9;
 pub const A_4B: u8 = 10;
 pub const A_2H: u8 = 11;
@@ -78,7 +80,11 @@ const SHIFTS: [&str; 3] = ["lsl", "msl", "mul"];
 /// The extend or shift applied to an index inside an address.
 pub const X_UXTW: u8 = 0;
 pub const X_SXTW: u8 = 1;
+/// In the grammar, but no form in the table takes it today.
+#[allow(dead_code)]
 pub const X_UXTX: u8 = 2;
+/// In the grammar, but no form in the table takes it today.
+#[allow(dead_code)]
 pub const X_SXTX: u8 = 3;
 pub const X_LSL: u8 = 4;
 const EXTENDS: [&str; 5] = ["uxtw", "sxtw", "uxtx", "sxtx", "lsl"];
@@ -123,9 +129,13 @@ pub enum Kind {
     Shift(u8),
     /// `mul vl`, after an SVE offset.
     MulVl,
-    /// `[`, `]` and `]!` of an address.
+    /// `[`, `]` and `]!` of an address. Nothing in the table writes back —
+    /// the loads and stores that do are the handwritten ones — but the
+    /// grammar reads `]!`, so that it is an operand a form does not take
+    /// rather than a syntax error.
     Open,
     Close,
+    #[allow(dead_code)]
     CloseWb,
     /// An index extend with no amount: `uxtw`.
     Ext(u8),
@@ -211,39 +221,59 @@ pub struct Slot {
 /// for a number above the range, bit 1 for one below it.
 ///
 /// Both references read a number of an SVE element's width as the element's
-/// bits, so `mov z0.h, #0xfff0` is `mov z0.h, #-16`; the generator sets the
-/// width for each form llvm-mc was seen to do that for.
+/// bits, so `mov z0.h, #0xfff0` is `mov z0.h, #-16` and `mov z0.b, #-241` is
+/// `mov z0.b, #15`; the generator sets the width and the ways for each form
+/// llvm-mc was seen to do that for.
 #[derive(Copy, Clone, Debug)]
 pub struct Form(pub u16, pub u16, pub u32, pub u8, pub u8);
 
 // ---- operands -----------------------------------------------------------------
 
-/// One parsed operand, or one piece of an address.
+/// One parsed operand, or one piece of an address. The numbers are, in
+/// order, a register, then what qualifies it: an arrangement or element
+/// size, a count, a lane index.
 #[derive(Clone, Debug)]
 enum Atom {
+    /// `v0.16b`.
     Vec(u8, u8),
+    /// `v0.s[1]`.
     VecIdx(u8, u8, i64),
+    /// `v0.4b[1]`.
     VecIdxArr(u8, u8, i64),
+    /// `b0` … `q0`.
     Scalar(u8, u8),
-    /// Number, width, and whether 31 was spelled as the stack pointer.
+    /// `w0`/`x0`, and whether 31 was spelled as the stack pointer.
     Gpr(u8, u8, bool),
+    /// `z0`, or `z0.s`.
     Z(u8, u8),
+    /// `z0.s[1]`.
     ZIdx(u8, u8, i64),
+    /// `p0`, `p0.b`, `p0/m` or `p0/z`: number, element size, mode.
     P(u8, u8, u8),
-    /// First register, count, arrangement.
+    /// `{ v0.16b, v1.16b }`: first register, count, arrangement.
     VecList(u8, u8, u8),
+    /// `{ v0.b, v1.b }[3]`, with the index last.
     VecListIdx(u8, u8, u8, i64),
+    /// `{ z0.d, z1.d }`.
     ZList(u8, u8, u8),
+    /// `{ p0.d, p1.d }`.
     PList(u8, u8, u8),
     Imm(i64),
+    /// A number with a fraction, `#1.5`.
     Float(f64),
+    /// A bare name: a condition, an SVE pattern, a prefetch operation.
     Word(String),
+    /// `lsl #8`, `msl #16`, `mul #4`: which, and how much.
     Shift(u8, i64),
+    /// `mul vl`, after an SVE offset.
     MulVl,
+    /// `[`, `]` and `]!` of an address.
     Open,
     Close,
     CloseWb,
+    /// An index extend with no amount, `uxtw`.
     Ext(u8),
+    /// An index extend or shift with one, `sxtw #2`.
     ExtAmt(u8, i64),
 }
 
@@ -254,13 +284,16 @@ impl Atom {
             Atom::VecIdx(n, e, i) => format!("v{n}.{}[{i}]", ELEMS[*e as usize]),
             Atom::VecIdxArr(n, a, i) => format!("v{n}.{}[{i}]", ARRANGEMENTS[*a as usize]),
             Atom::Scalar(n, e) => format!("{}{n}", ELEMS[*e as usize]),
-            Atom::Gpr(n, c, sp) => match (n, c, sp) {
-                (31, 1, true) => "sp".into(),
-                (31, 0, true) => "wsp".into(),
-                (31, 1, false) => "xzr".into(),
-                (31, 0, false) => "wzr".into(),
-                _ => format!("{}{n}", if *c == G_X { 'x' } else { 'w' }),
-            },
+            Atom::Gpr(n, c, sp) => {
+                let x = *c == G_X;
+                match (*n == 31, *sp, x) {
+                    (true, true, true) => "sp".into(),
+                    (true, true, false) => "wsp".into(),
+                    (true, false, true) => "xzr".into(),
+                    (true, false, false) => "wzr".into(),
+                    _ => format!("{}{n}", if x { 'x' } else { 'w' }),
+                }
+            }
             Atom::Z(n, e) => z_name('z', *n, *e),
             Atom::ZIdx(n, e, i) => format!("{}[{i}]", z_name('z', *n, *e)),
             Atom::P(n, e, m) => {

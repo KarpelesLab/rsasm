@@ -16,9 +16,9 @@
 //! The general-purpose instruction set is written out family by family in
 //! [`insn`], where the interesting work is in the aliases. SIMD, floating
 //! point and SVE are thousands of forms that differ in a few opcode bits, and
-//! come from a table measured against llvm-mc; see [`table`]. A line goes to
-//! the table if only the table has its mnemonic, or if an operand is a
-//! register only a table form takes.
+//! come from a table measured against llvm-mc; see the `table` module and
+//! `tools/tables/README.md`. A line goes to the table if only the table has
+//! its mnemonic, or if an operand is a register only a table form takes.
 //!
 //! # The `#` sigil
 //!
@@ -32,7 +32,9 @@ pub mod operand;
 pub mod reg;
 pub mod reloc;
 pub mod sysreg;
-pub mod table;
+// Not public API: the generated table and its matcher are internals, and
+// `table_data` is a generated file.
+pub(crate) mod table;
 mod table_data;
 mod table_names;
 

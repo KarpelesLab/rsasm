@@ -228,7 +228,7 @@ fn pcrel(
 /// generated table has under the same name: `add` is handwritten for the
 /// general-purpose registers and a table form for vectors. Keep in step with
 /// the dispatch in [`assemble`].
-pub fn handwritten(mnemonic: &str) -> bool {
+pub(crate) fn handwritten(mnemonic: &str) -> bool {
     mnemonic
         .strip_prefix("b.")
         .is_some_and(|c| reg::cond(c).is_some())
@@ -365,7 +365,7 @@ pub fn handwritten(mnemonic: &str) -> bool {
 
 /// True for the handwritten loads and stores, which take the scalar SIMD
 /// registers (`ldr d0, [x0]`) and leave only the SVE forms to the table.
-pub fn loads(mnemonic: &str) -> bool {
+pub(crate) fn loads(mnemonic: &str) -> bool {
     matches!(
         mnemonic,
         "ldr"
@@ -2118,7 +2118,7 @@ fn sme_mode(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 /// `zero {za}`, which clears SME's ZA storage. The list is the whole
 /// operand: the older per-tile spellings and SME2's `zt0` are not taken.
-pub fn sme_zero(cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
+pub(crate) fn sme_zero(cx: &mut AsmCtx<'_>, req: &InsnRequest<'_>) -> Option<Vec<Variant>> {
     let toks = req.operands;
     let za = match toks {
         [open, name, close] if open.is_punct(Punct::LBrace) && close.is_punct(Punct::RBrace) => {

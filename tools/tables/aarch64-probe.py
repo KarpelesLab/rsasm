@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fits one line the way gen.py does and prints what it measured.
+"""Fits one line the way aarch64.py does and prints what it measured.
 
-    tools/aarch64-tables/probe.py 'scvtf s0, w1, #3'
+    tools/tables/aarch64-probe.py 'scvtf s0, w1, #3'
 """
 import os
 import random
@@ -10,7 +10,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import a64  # noqa: E402
-import gen  # noqa: E402
+import importlib  # noqa: E402
+
+gen = importlib.import_module("aarch64")  # the generator next to this file
 
 
 def main():

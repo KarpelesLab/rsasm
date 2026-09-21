@@ -54,10 +54,10 @@ assembler, not against rsasm's own idea of the manual. See
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 8100 |
-| AArch64 | `aarch64` | llvm-mc | 480 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2 | `aarch64` | llvm-mc, GNU as | 17356 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
-| PowerPC 32/64, both endians | `powerpc` `powerpc64` `powerpc64le` | llvm-mc | 1062 |
+| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
 | m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 809 |
@@ -69,13 +69,15 @@ assembler, not against rsasm's own idea of the manual. See
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
 | MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
 | Intel 8080, in Intel mnemonics | `i8080` | AS | 278 |
+| Intel 8051 (MCS-51), in Intel mnemonics | `8051` | AS, sdas8051 | 960 |
 
 The 8-bit targets are checked against the assemblers their source is written
 for: cc65's ca65 for the 6502, GNU as and vasm for the Z80, and the Macro
 Assembler AS for the 8080 — GNU as has no Intel mnemonics, and vasm's `RST`
-takes a Zilog address. Tests also walk each complete opcode space and assert
-that exactly the documented encodings exist. They are for flat binaries; ELF
-has no class for a 16-bit target. See [the 8-bit dialect](#the-8-bit-dialect).
+takes a Zilog address — and for the 8051, AS and SDCC's sdas8051. Tests also
+walk each complete opcode space and assert that exactly the documented
+encodings exist. They are for flat binaries, or Intel HEX; ELF has no class
+for a 16-bit target. See [the 8-bit dialect](#the-8-bit-dialect).
 The 78K0 has no freely available assembler: its table was extracted
 from NEC's instruction manual, checked against the byte counts in a second NEC
 manual, and cross-checked against MAME's disassembler, which agrees on all
@@ -94,7 +96,7 @@ but 18 forms where both manuals show MAME to be wrong.
 - several targets in one file, switched with `.arch`; see
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
-  and flat binaries
+  flat binaries, and flat images as Intel HEX (`-f ihex`)
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
@@ -134,8 +136,20 @@ but 18 forms where both manuals show MAME to be wrong.
   of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
   pool entries; and the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
-- AArch64: most of NEON, SVE
-- PowerPC: AltiVec/VSX
+- AArch64: SME beyond `smstart`, `smstop` and `zero {za}` — the ZA array and
+  its tiles, `zt0`, the multi-vector and strided register lists, predicates as
+  counters and `psel`; and the general-purpose instructions no SIMD mnemonic
+  shares, which have never been there: the atomics (`ldxr`, `casp`,
+  `ldadd`…), pointer authentication, memory tagging and `bti`. `movprfx` is
+  assembled but its sequence is not checked, where llvm-mc refuses an
+  instruction that does not use the prefixed register and GNU as warns
+- PowerPC: POWER10's matrix-multiply accelerator (`xvi8ger4` and the other
+  MMA instructions), POWER11's `xxaes*` and `xxgfmul128*`, decimal floating
+  point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
+  branches, and the privileged, hypervisor, cache-hint and synchronisation
+  instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
+  like); relocation modifiers other than `@l`, `@h`, `@ha`, `@pcrel` and
+  `@got@pcrel` (`@toc@ha`, `@got`, `@higher`)
 - RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
   as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
   `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
@@ -145,6 +159,10 @@ but 18 forms where both manuals show MAME to be wrong.
   the `ZEROPAGE` segment's zero-page addressing for labels defined in it
 - 8080: Intel's word operators (`AND`, `SHR`, `HIGH`, `MOD`), which AS does
   not read either
+- 8051: the 8052's timer 2 names and the extended parts (80C320, 80C390,
+  80251 and the rest); address spaces for `DATA`, `BIT`, `CODE` and the other
+  defining words, which define plain values; and ASM51's controls
+  (`$MOD51`, `$NOMOD51`), segments and relocatable output
 - Z80: the `DD CB d op,r` forms that also write a register, which vasm
   refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
   `.byte`, `.word` and `.space`, or the 8-bit dialect)
@@ -185,15 +203,15 @@ rsasm [options] <input.s>...
 
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default), elf32, elf64 or bin
+  -f, --format <fmt> output format: elf (default), elf32, elf64, bin or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
-                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080)
+                     ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
-      --base <addr>  base address for `bin` output
+      --base <addr>  base address for `bin` and `ihex` output
       --hex          print the output as hex instead of writing a file
   -g                 describe the assembly source in DWARF line information
       --gdwarf-<n>   the same, as DWARF version <n> (2 to 5); the version
@@ -202,8 +220,8 @@ rsasm [options] <input.s>...
 ```
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
-`riscv`, `powerpc`, `mips`, `sparc`, `retro`, `m68k`, `superh`, `rx`, `rl78`,
-`v850` and `k78`:
+`riscv`, `powerpc`, `mips`, `sparc`, `retro` (the Z80, 6502, 8080 and 8051),
+`m68k`, `superh`, `rx`, `rl78`, `v850` and `k78`:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -222,7 +240,7 @@ source is normally written in.
 | `ccrl` | `.DB "A",1`, `$IF`, `0x10` or `10H` (Renesas CC-RL) | — |
 | `ccrh` | `.dw #label`, `$IF`, `0x10` (Renesas CC-RH) | — |
 | `ccrx` | `.SECTION P,CODE`, `.LWORD 10H`, `#1:8` (Renesas CC-RX) | — |
-| `8bit` | `lda #$12`, `ld a,(ix+5)`, `MVI A,12H`, `DB 1`, `; comment` | 6502, Z80, 8080 |
+| `8bit` | `lda #$12`, `ld a,(ix+5)`, `MVI A,12H`, `SETB P1.3`, `DB 1`, `; comment` | 6502, Z80, 8080, 8051 |
 | `nasm` | `db 1`, `; comment`, `mov eax, [rel x]`, `%macro`, `0FFh` | — |
 
 ```console
@@ -249,9 +267,9 @@ vasm and GNU as `--mri`. Three rules in it catch people out:
 
 ### The 8-bit dialect
 
-`8bit` reads the source people have for the 6502, the Z80 and the 8080:
-ca65's for the 6502, Zilog's as GNU as and vasm read it, and Intel's as AS
-reads it. Their spellings are one language — `$12`, `12H`, `%1010` and
+`8bit` reads the source people have for the 6502, the Z80, the 8080 and the
+8051: ca65's for the 6502, Zilog's as GNU as and vasm read it, and Intel's as
+AS reads it. Their spellings are one language — `$12`, `12H`, `%1010` and
 `0x12` numbers, `$` and `*` for the location counter, `<`, `>` and `^` for
 the bytes of an address, `DB`/`DEFB`/`.byte`, `DW`/`DEFW`/`.word`,
 `DS`/`DEFS`/`.res`, `EQU`, `=`, `DEFL`/`SET`, `IF`/`ENDIF`, `MACRO`/`ENDM` or
@@ -289,6 +307,46 @@ $ rsasm -a z80 -f bin --hex hello.asm
   statement's address.
 - A comparison is 1 when true, as in ca65 and AS; GNU as and vasm give -1.
   The operators have C's precedence, where ca65 binds `&` as tightly as `*`.
+
+The 8051 adds what its source needs, with AS as the reference and SDCC's
+sdas8051 as the second:
+
+```console
+$ cat blink.asm
+LED     BIT     P1.0
+        ORG     30H
+MAIN:   MOV     TMOD,#01H
+LOOP:   CPL     LED
+        ACALL   DELAY
+        SJMP    LOOP
+DELAY:  DJNZ    R7,DELAY
+        RET
+$ rsasm -a 8051 -f ihex --hex blink.asm
+:0C003000758901B290113980FADFFE22C0
+:00000001FF
+```
+
+- **A bit is written `byte.bit`,** `P1.3` or `20H.5`, and the `.` splits the
+  whole operand as AS splits it, so `20H+1.3` is bit 3 of 21H. Only 20H to
+  2FH and the registers at a multiple of 8 have bits; AS warns about other
+  bytes, or for 30H to 3FH says nothing, and assembles a bit of some other
+  byte, where rsasm refuses them.
+- **The register and bit names are predefined,** as AS's `stddef51.inc`
+  defines them for the 8051, in upper and lower case, with its `USING` and
+  the `AR0`–`AR7` names; a label or `EQU` may take one over. `BIT`, `DATA`,
+  `IDATA`, `XDATA` and `CODE`, and AS's `SFR` and `SFRB`, define a name.
+- **`CY` is the carry flag wherever `C` could stand,** as in AS: `CPL CY` is
+  the one-byte `CPL C`, and `JB CY,$` tests bit D7H.
+- **`JMP` and `CALL` become the shortest jump that reaches,** `SJMP`, then
+  `AJMP` or `ACALL`, then `LJMP` or `LCALL`, with every size picked again on
+  each pass, as AS picks them.
+- **`AJMP` and `ACALL` reach the 2 KiB block of the address after them,**
+  which is where the CPU takes the block from. AS and sdas8051 test the
+  instruction's own address, and differ from rsasm, and the CPU, only for
+  one in the last two bytes of a block.
+- **`DW` is low byte first,** as in AS; sdas8051's `.dw` is high byte first.
+  A 16-bit instruction operand, `LJMP 1234H` or `MOV DPTR,#1234H`, is high
+  byte first in every assembler, as the CPU reads it.
 
 ### Renesas CC-RL, CC-RH and CC-RX
 
@@ -497,22 +555,25 @@ independent assembler, and compare the bytes:
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 4,175 of 4,175 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 7,230 of 7,230 match across eighteen target variants. For RISC-V
+  supports. 29,093 of 29,093 match across eighteen target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
   V850/RH850 and the Z80, vasm for Motorola syntax and for the Z80 and the
-  6502, cc65's ca65 for the 6502 and AS for the 8080, plus CC-RL, CC-RH and
+  6502, cc65's ca65 for the 6502, AS for the 8080 and AS and SDCC's sdas8051
+  for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
-  the reference for literal pools and interworking. `tools/oracles/build.sh`
-  builds the references from checksum-pinned sources. 7,294 of 7,294 match
-  across twenty variants.
+  the reference for literal pools and interworking; for PowerPC's vector and
+  POWER8–10 instructions it is GNU as's second opinion, and the check on the
+  forms only GNU as accepts. `tools/oracles/build.sh` builds the references
+  from checksum-pinned sources. 11,693 of 11,693 match across twenty-six
+  variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 120 of 120 match across twenty-four variants.
+  distances between sections. 126 of 126 match across twenty-four variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries and as ELF objects, relocations and global
@@ -524,7 +585,7 @@ independent assembler, and compare the bytes:
   against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
-  Clang. 1,005 of 1,005 match across twenty-one target variants.
+  Clang. 1,009 of 1,009 match across twenty-one target variants.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
 instructions from a table of forms written from the Intel manual, in all three
@@ -532,7 +593,41 @@ modes and both syntaxes, some of them deliberately invalid, and compares
 rsasm's bytes, relocations and accept/reject decision with GNU as's and
 llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
 from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. See `tools/fuzz/README.md`.
+case where rsasm differs from both. The 8051 is fuzzed with whole programs:
+`tools/fuzz/mcs51.py` assembles them with AS and sdas8051 too, and 80,000
+programs find no case where rsasm differs from the references outside the
+places this README describes. See `tools/fuzz/README.md`.
+
+AArch64's SIMD, floating-point and SVE table is derived from llvm-mc rather
+than written: `tools/tables/aarch64.py` disassembles random instruction words
+to find every form llvm-mc prints, measures where each operand's bits go by
+assembling the form with one operand changed at a time, and checks every form
+against llvm-mc before writing `src/arch/aarch64/table_data.rs` (5,631 forms) and
+the corpora that check it, `tools/mc-diff/aarch64-{simd,sve}-words.txt` (16,852
+lines, compared a batch at a time). `tools/tables/aarch64.py check` says
+whether they are still what llvm-mc gives. The backend is fuzzed by
+`tools/fuzz/aarch64.py`, whose cases are llvm-mc's or GNU objdump's
+disassembly of random words, a quarter of them mutated into likely-invalid
+ones; runs of 500,000 instructions find no case where rsasm differs from both
+references. Where the two disagree, rsasm follows llvm-mc for what an
+instruction means and GNU as for what is out of range: llvm-mc takes
+`ext v0.8b, v1.8b, v2.8b, #8` or `scvtf s0, w0, #33` and truncates them,
+where GNU as and rsasm refuse them. It also refuses the SVE spellings only
+llvm-mc reads — an unpredicated `and z0.s, z0.s, z1.s`, whose element size is
+always `.d`, and an immediate outside the element's signed range, such as
+`mov z0.h, #-65408` — and takes the ones only GNU as reads: `fcmp s0, 0` for
+`#0.0`, and a register list `{z0.h - z1.s}` of two element sizes is refused
+as llvm-mc refuses it. `smstart`, `smstop` and `zero {za}` are handwritten.
+
+PowerPC's AltiVec, VSX and POWER8–10 instructions are fuzzed the same way by
+`tools/fuzz/powerpc.py`, which draws its forms from the operand kinds in GNU
+binutils' opcode table and runs all three PowerPC targets. A run of 600,000
+instructions finds no case where rsasm differs from both references other
+than the two refusals it makes on purpose: a doubleword instruction in 32-bit
+code, and a register name from another bank (`%vs3` where a general-purpose
+register goes), which both read as its number. The instruction table behind
+them, `src/arch/powerpc/vector.rs`, is written from that same opcode table by
+`tools/tables/powerpc.py`, never by hand.
 
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment

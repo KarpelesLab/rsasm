@@ -90,6 +90,13 @@ pub enum BinOp {
     /// NASM's `<=>`: -1, 0 or 1 as the left side is less than, equal to or
     /// greater than the right, signed.
     Compare,
+    /// The `.` of a bit-addressing target: bit `b` of the byte at `a`, as
+    /// the single 8-bit address the MCS-51 bit instructions take. `20H.3` is
+    /// 03H and `P1.3` is 93H; see [`eval_bit_address`]. Only the backends
+    /// that ask for it see this operator, and it splits a whole operand
+    /// rather than binding by precedence, since it binds looser
+    /// than anything else can.
+    BitAddr,
 }
 
 impl BinOp {
@@ -110,6 +117,7 @@ impl BinOp {
                     Mul | Div | Rem | Shl | Shr | Shr32 | Sar32 => 5,
                     // NASM's operators, which no Renesas lexer produces.
                     DivU | RemU | Sar | LogicalXor | Compare => 5,
+                    BitAddr => 6,
                 }
             }
             // The NASM manual's §3.5, lowest first: comparisons bind looser
@@ -125,6 +133,7 @@ impl BinOp {
                 Shl | Shr | Sar | Shr32 | Sar32 => 8,
                 Add | Sub => 9,
                 Mul | Div | Rem | DivU | RemU => 10,
+                BitAddr => 11,
             },
             // CC-RX Table 5.11 (R20UT3248EJ0115 page 462), which has no
             // logical operators and puts the shifts below `+`.
@@ -135,6 +144,7 @@ impl BinOp {
                 Shl | Shr | Shr32 | Sar32 | Sar => 4,
                 Add | Sub => 5,
                 Mul | Div | Rem | DivU | RemU => 6,
+                BitAddr => 7,
             },
             _ => match self {
                 LogicalOr => 1,
@@ -145,6 +155,7 @@ impl BinOp {
                 Shl | Shr | Shr32 | Sar32 | Sar => 6,
                 Add | Sub => 7,
                 Mul | Div | Rem | DivU | RemU => 8,
+                BitAddr => 9,
             },
         }
     }
@@ -158,6 +169,7 @@ impl BinOp {
             Eq => "==", Ne => "!=", Lt => "<", Gt => ">", Le => "<=", Ge => ">=",
             LogicalAnd => "&&", LogicalOr => "||",
             DivU => "/", RemU => "%", Sar => ">>>", LogicalXor => "^^", Compare => "<=>",
+            BitAddr => ".",
         }
     }
 }
@@ -514,8 +526,40 @@ fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalE
         Ge => (a >= b) as i64,
         LogicalAnd => (a != 0 && b != 0) as i64,
         LogicalOr => (a != 0 || b != 0) as i64,
+        BitAddr => eval_bit_address(a, b, span)?,
     };
     Ok(Value::abs(v))
+}
+
+/// The MCS-51 bit address of bit `bit` of the byte at `base`.
+///
+/// The machine has two bit-addressable areas and numbers their bits in one
+/// 8-bit space: the 16 bytes of internal RAM at 20H to 2FH hold bits 00H to
+/// 7FH, and every SFR whose address is a multiple of 8 holds the eight bits
+/// at its own address. So `20H.3` is 03H and `P1.3`, P1 being 90H, is 93H.
+/// This is what the Macro Assembler AS computes for `A.B` on a byte that has
+/// bit addresses. A byte that has none is refused here, where AS warns about
+/// 40H to 7FH and 81H to FFH off a multiple of 8, and assembles a bit of some
+/// other byte, and says nothing about 30H to 3FH, whose "bits" it numbers 80H
+/// to FFH, over the SFRs' own.
+pub fn eval_bit_address(base: i64, bit: i64, span: Span) -> Result<i64, EvalError> {
+    if !(0..=7).contains(&bit) {
+        return Err(EvalError::new(
+            span,
+            format!("a bit number must be 0 to 7, not {bit}"),
+        ));
+    }
+    match base {
+        0x20..=0x2f => Ok((base - 0x20) * 8 + bit),
+        0x80..=0xff if base % 8 == 0 => Ok(base + bit),
+        _ => Err(EvalError::new(
+            span,
+            format!(
+                "{base:#x} is not bit addressable: only 20H to 2FH and the special \
+                 function registers at a multiple of 8 are"
+            ),
+        )),
+    }
 }
 
 /// Evaluates against a finished symbol table, without recording uses.
@@ -662,6 +706,10 @@ pub struct ExprParser<'a> {
     /// Decides operator precedence and the dialect's own operators, such as
     /// CC-RL's `HIGH` and `LOWW`.
     pub dialect: Dialect,
+    /// Whether `A.B` after a term is a bit address, as it is on the MCS-51;
+    /// see [`BinOp::BitAddr`]. Only a backend that has bit addressing asks
+    /// for it, so `.` keeps its usual meaning everywhere else.
+    pub bit_dot: bool,
     /// The string literals, where a quoted string can stand for a number: in
     /// NASM, `'ab'` is `0x6261`.
     pub strings: Option<&'a crate::lexer::LitPool>,
@@ -669,7 +717,18 @@ pub struct ExprParser<'a> {
 
 impl<'a> ExprParser<'a> {
     pub fn parse(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
-        let e = self.parse_bp(cur, 0)?;
+        let mut e = self.parse_bp(cur, 0)?;
+        // On a bit-addressing target a `.` splits the whole operand into a
+        // byte and a bit number, as AS splits an operand at its last `.`: so
+        // `20H+1.3` is bit 3 of 21H, and `P1.1+2` bit 3 of P1.
+        if self.bit_dot && cur.check_punct(Punct::Dot) {
+            cur.advance();
+            let bit = self.parse_bp(cur, 0)?;
+            let span = self.arena.span(e).to(self.arena.span(bit));
+            e = self
+                .arena
+                .alloc(ExprKind::Binary(BinOp::BitAddr, e, bit), span);
+        }
         if self.dialect == Dialect::Nasm {
             return self.nasm_wrt(cur, e);
         }
@@ -1116,6 +1175,7 @@ mod tests {
                 dollar_is_here: false,
                 star_is_here: false,
                 dialect: Dialect::Gas,
+                bit_dot: false,
                 strings: None,
             };
             p.parse(&mut cur)
