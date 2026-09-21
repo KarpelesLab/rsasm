@@ -7,6 +7,7 @@
 
 use crate::expr::ExprRef;
 use crate::intern::Name;
+use crate::reloc::RelocClass;
 use crate::source::Span;
 use crate::symbol::SymbolId;
 
@@ -237,6 +238,16 @@ pub struct FixupKind {
     /// does not tell the reader what to do about it: a literal load that
     /// does not reach its pool needs the pool moved, not the load.
     pub range_hint: Option<&'static str>,
+    /// What the relocation computes, for a writer that does not number
+    /// relocations the way [`FixupKind::reloc`] does; see [`RelocClass`].
+    ///
+    /// The default, [`RelocClass::Plain`], covers every field whose value is
+    /// the target itself, which is all an ELF object ever needs to be told
+    /// beyond the number. A backend names a class only where a format may
+    /// write the same width and `pcrel` differently: a branch, a GOT load, an
+    /// AArch64 page or page offset. Not API.
+    #[doc(hidden)]
+    pub class: RelocClass,
 }
 
 /// The symbol a relocation is written against.
@@ -286,7 +297,16 @@ impl FixupKind {
             relax_difference: false,
             accepts: None,
             range_hint: None,
+            class: RelocClass::Plain,
         }
+    }
+
+    /// Says what the relocation computes, for the writers that need more than
+    /// the ELF number; see [`RelocClass`]. Not API.
+    #[doc(hidden)]
+    pub fn with_class(mut self, class: RelocClass) -> FixupKind {
+        self.class = class;
+        self
     }
 
     /// Accepts only values `f` accepts, within the range; see
@@ -601,6 +621,10 @@ pub struct Section {
     ///
     /// [`Architecture::pads_as_last_instruction`]: crate::arch::Architecture::pads_as_last_instruction
     pub nop_state: Option<crate::arch::ArchState>,
+    /// Whether any instruction has been assembled into the section, which a
+    /// Mach-O section header records (`S_ATTR_SOME_INSTRUCTIONS`). Not API.
+    #[doc(hidden)]
+    pub has_instructions: bool,
 }
 
 impl Section {
@@ -623,6 +647,7 @@ impl Section {
             map_state: None,
             map_events: Vec::new(),
             nop_state: None,
+            has_instructions: false,
         }
     }
 

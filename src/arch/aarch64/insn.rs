@@ -1612,7 +1612,13 @@ fn ldst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             }
             let kind = match rop {
                 RelocOp::Lo12 => encode::fixup_lo12_ldst(form.scale),
-                RelocOp::GotLo12 if form.scale == 3 && !form.v => encode::fixup_got_lo12(),
+                RelocOp::GotLo12 if form.scale == 3 && !form.v => encode::fixup_got_lo12(3),
+                // Darwin loads a 32-bit slot too.
+                RelocOp::GotLo12
+                    if form.scale == 2 && !form.v && cx.find_modifier_for(*e).is_some() =>
+                {
+                    encode::fixup_got_lo12(2)
+                }
                 _ => {
                     cx.error(
                         mem.span,

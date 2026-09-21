@@ -98,6 +98,10 @@ but 18 forms where both manuals show MAME to be wrong.
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
   flat binaries, and flat images as Intel HEX (`-f ihex`)
+- Mach-O relocatable objects for x86-64 and arm64 (`-f macho`, or a Darwin
+  triple such as `-a arm64-apple-macos`), with Darwin's section, symbol and
+  data-in-code directives, byte for byte as llvm-mc writes them; see
+  [Mach-O objects](#mach-o-objects)
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
@@ -133,7 +137,11 @@ but 18 forms where both manuals show MAME to be wrong.
   string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
-- Mach-O and PE/COFF
+- PE/COFF
+- in Mach-O objects: 32-bit machines (i386, armv7), thread-local variables
+  (`@TLVP`, `@TLVPPAGE`), DWARF and call frame information (`-g`, `.loc` and
+  `.cfi_*` are refused, and with them compact unwind), indirect symbol tables
+  (`.indirect_symbol`), `LC_VERSION_MIN_*` and linker options
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
@@ -206,8 +214,11 @@ backend. Two such choices are worth knowing about:
 rsasm [options] <input.s>...
 
   -o <file>          write output to <file> (default: a.out)
-  -a, --arch <name>  target architecture (default: the host, if supported)
-  -f, --format <fmt> output format: elf (default), elf32, elf64, bin or ihex
+  -a, --arch <name>  target architecture (default: the host, if supported),
+                     or a target triple: `x86_64-apple-macos` also picks
+                     Mach-O output
+  -f, --format <fmt> output format: elf (default), elf32, elf64, macho, bin
+                     or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
@@ -551,9 +562,73 @@ Three differences remain:
 The producer named in the unit is `rsasm` and its version, or the value of
 `DEBUG_PRODUCER`, which llvm-mc also reads.
 
+## Mach-O objects
+
+`-f macho`, or a target triple for Darwin in `-a`, writes an `MH_OBJECT` for
+x86-64 or arm64:
+
+```console
+$ rsasm -a arm64-apple-macos -o hello.o hello.s
+```
+
+The source is Darwin's assembly, as llvm-mc reads it for those triples:
+
+- **Sections are segment and section pairs.** `.section __DATA,__data`, with
+  an optional type, `+`-joined attributes and stub size
+  (`.section __TEXT,__cstring,cstring_literals`), and the shorthands `.text`,
+  `.data`, `.bss`, `.const`, `.const_data`, `.cstring`, `.literal4`,
+  `.literal8`, `.literal16`, `.mod_init_func`, `.mod_term_func`,
+  `.non_lazy_symbol_pointer`, `.lazy_symbol_pointer`, `.tdata`, `.tlv` and
+  the rest of llvm-mc's list. `.zerofill`, `.lcomm` and `.comm` reserve
+  zero-filled space, and their alignment, like `.align`'s, is a power of two.
+  There is no `.rodata`.
+- **Symbols.** A label whose name starts with `L` is the assembler's own;
+  every other name, `l_.str` included, reaches the symbol table, with no
+  underscore added. `.globl`, `.private_extern`, `.weak_definition`,
+  `.weak_reference`, `.alt_entry`, `.no_dead_strip` and
+  `.subsections_via_symbols` say what the linker may do with them.
+- **Relocation modifiers** are Darwin's: `sym@GOTPCREL` on x86-64, and
+  `sym@PAGE`, `sym@PAGEOFF`, `sym@GOTPAGE`, `sym@GOTPAGEOFF` and `sym@GOT` on
+  arm64, where `:lo12:` is not accepted.
+- `.build_version` writes `LC_BUILD_VERSION`, and `.data_region` with
+  `.end_data_region` writes `LC_DATA_IN_CODE`. On arm64 `;` starts a comment.
+
+**What is left to the linker is decided by atoms, not by binding.** A Mach-O
+linker may move or drop the code from one linker-visible label to the next on
+its own, so a reference from one of these atoms into another is relocated
+however close the two are, even to a local symbol, and against the target's
+atom with the distance as the addend; one within an atom is resolved. On arm64
+llvm-mc resolves a branch to any label in the same section unless the file
+has `.subsections_via_symbols`, which is what promises the linker real atoms,
+and rsasm does the same. A difference of two labels is a `SUBTRACTOR` pair
+unless both are in one atom — or, as llvm-mc folds it while reading a data
+directive, a fixed distance apart there, already defined. Where Mach-O has no
+relocation for something ELF can express — `adr` or a conditional branch to
+another atom, a 32-bit absolute address on x86-64, a page reference without
+`@PAGE` — the reference is refused, as llvm-mc refuses it.
+
+`tools/macho-diff/run.sh` compares 1,573 cases against llvm-mc 22: single
+statements and whole programs in Clang's style of its own, and the
+`tools/mc-diff` corpora for both machines, every instruction of which has to
+come out the same in a Mach-O object. Every header and load command, section,
+symbol and relocation matches, and each of the 1,548 objects both assemblers
+write is identical byte for byte; the other 25 cases are refused by both.
+Three differences remain, and the corpora leave them out:
+
+- x86-64 instructions are encoded as GNU as encodes them, in either format, so
+  alignment padding in code uses GNU as's no-ops, and `addl $sym, %eax` is the
+  short `05` form where llvm-mc writes `81 c0`.
+- A negative addend on an arm64 branch or page reference is written as a
+  24-bit two's-complement `ARM64_RELOC_ADDEND`. llvm-mc 22 writes the addend
+  over the entry's type and length bits, which not even llvm-readobj can read
+  back.
+- A reference through the GOT on arm64 to a label some way into its atom is
+  refused, since a GOT relocation has no addend; llvm-mc accepts it,
+  relocating against the atom and writing the offset into the instruction.
+
 ## Verification
 
-Seven differential harnesses assemble the same source with rsasm and with an
+Eight differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
@@ -590,6 +665,11 @@ independent assembler, and compare the bytes:
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
   Clang. 1,090 of 1,090 match across twenty-three target variants.
+- `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
+  llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
+  and relocations as `llvm-readobj` reads them, over its own corpora and
+  those of `tools/mc-diff`. 1,573 of 1,573 match, and every object both write
+  is also identical byte for byte.
 
 The x86 and MSP430 backends are also fuzzed: `tools/fuzz/x86.py` generates random
 instructions from a table of forms written from the Intel manual, in all three
@@ -624,7 +704,7 @@ each binding — local, global, weak, hidden and the other visibilities, `.set`
 aliases either way round, `.globl` after use, another section, undefined —
 through branches, calls, PC-relative loads and data.
 
-All seven run in CI. The expected bytes in the hermetic tests under `tests/` were
+All eight run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
@@ -687,6 +767,13 @@ becomes a real entry in the source map, which turns out to be a feature — a
 diagnostic inside a macro points at the expanded line and names the macro it
 came from.
 
+**A relocation is described, not just numbered.** A backend picks the ELF
+relocation number for each field it leaves to the linker, and also says what
+the field computes — a branch, a load through the GOT, the page of an address
+(`RelocClass`) — which the ELF writer has no need of. Mach-O numbers the same
+meanings differently and splits some of them further, so its writer maps the
+description instead of second-guessing ELF's numbers.
+
 **A fragment that might change size carries every candidate.** An instruction
 whose branch could be short or long is encoded *both* ways at parse time; the
 layout pass picks an index into that list. Since the index only ever
@@ -734,6 +821,7 @@ $ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
 $ tools/nasm-diff/run.sh    # needs NASM from tools/oracles/build.sh
 $ tools/multiarch-diff/run.sh  # needs all of the above
 $ tools/dwarf-diff/run.sh   # needs llvm-mc and tools/oracles/build.sh
+$ tools/macho-diff/run.sh   # needs llvm-mc, llvm-readobj and llvm-objdump
 ```
 
 ## License
