@@ -23,6 +23,13 @@ pub const REL64: u32 = 44;
 pub const ADDR16_DS: u32 = 56;
 pub const ADDR16_LO_DS: u32 = 57;
 
+/// The 34-bit field of a POWER10 prefixed instruction: absolute, relative to
+/// the instruction (`@pcrel`), and the address of a GOT entry relative to the
+/// instruction (`@got@pcrel`).
+pub const D34: u32 = 128;
+pub const PCREL34: u32 = 132;
+pub const GOT_PCREL34: u32 = 133;
+
 /// The relocation for a `size`-byte data reference, or `None` where the ABI
 /// has none.
 pub fn data(size: u8, pcrel: bool, bits64: bool) -> Option<u32> {
