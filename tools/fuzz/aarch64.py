@@ -56,7 +56,8 @@ GAS = os.environ.get("GAS") or (
 OBJCOPY = GAS.replace("-as", "-objcopy")
 OBJDUMP = GAS.replace("-as", "-objdump")
 GAS_MARCH = "-march=armv9.5-a+sve2+sve2-aes+sve2-sha3+sve2-sm4+sve2-bitperm+crypto+sm4+sha3" \
-    "+dotprod+i8mm+fp16+fp16fml+bf16+rcpc+rcpc3+sme2+sve2p1+f64mm+f32mm+cssc+the+lut"
+    "+dotprod+i8mm+fp16+fp16fml+bf16+rcpc+rcpc3+sme2+sve2p1+f64mm+f32mm+cssc+the+lut" \
+    "+faminmax+fp8+fp8fma+fp8dot2+fp8dot4+sve-b16b16+sme2p1"
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +175,10 @@ def interesting(text, word=None):
             (mn == "adr" and "z" not in text):
         return False
     if re.search(r"\bza|zt0|vgx|\bpn\d", text):
+        return False
+    # SME2's multi-vector operands, which the backend leaves out: two or more
+    # register lists in one instruction.
+    if sum(1 for a in atoms if a.kind[0] in ("zlist", "vlist")) > 1:
         return False
     kinds = {a.kind[0] for a in atoms}
     # `ldr x0, #0x10` and friends are PC-relative: the offset printed is not

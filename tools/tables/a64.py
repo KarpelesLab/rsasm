@@ -16,11 +16,14 @@ LLVM_MC = os.environ.get("LLVM_MC", "llvm-mc")
 # Every extension llvm-mc 22 knows that this backend claims, so that a form is
 # left out of the table only because llvm-mc cannot encode it at all.
 MATTR = ",".join([
-    "+v9.5a", "+sve2", "+sve2-aes", "+sve2-sha3", "+sve2-sm4", "+sve2-bitperm",
-    "+crypto", "+dotprod", "+i8mm", "+fullfp16", "+bf16", "+lse", "+rcpc",
-    "+rand", "+memtag", "+pauth", "+fp16fml", "+flagm", "+sb", "+ssbs",
-    "+predres", "+tme", "+ls64", "+f64mm", "+f32mm", "+jsconv", "+complxnum",
-    "+rcpc3", "+cssc", "+the", "+d128", "+lut", "+sme", "+sme2",
+    "+v9.5a", "+sve2", "+sve2p1", "+sve2-aes", "+sve2-sha3", "+sve2-sm4",
+    "+sve2-bitperm", "+sve-aes2", "+sve-b16b16", "+sve-bfscale",
+    "+sve-f16f32mm", "+crypto", "+dotprod", "+i8mm", "+fullfp16", "+bf16",
+    "+lse", "+rcpc", "+rand", "+memtag", "+pauth", "+fp16fml", "+flagm",
+    "+sb", "+ssbs", "+predres", "+tme", "+ls64", "+f64mm", "+f32mm",
+    "+jsconv", "+complxnum", "+rcpc3", "+cssc", "+the", "+d128", "+lut",
+    "+faminmax", "+fp8", "+fp8fma", "+fp8dot2", "+fp8dot4", "+sme", "+sme2",
+    "+sme2p1",
 ])
 
 TRIPLE = "aarch64"
@@ -110,7 +113,8 @@ def _assemble_one(line):
 # kind and a fresh set of numbers back into text, so the fitter can ask
 # llvm-mc what changing one number does to the word.
 
-ARRANGEMENTS = ["8b", "16b", "4h", "8h", "2s", "4s", "1d", "2d", "1q", "2q", "4b", "2h"]
+ARRANGEMENTS = ["8b", "16b", "4h", "8h", "2s", "4s", "1d", "2d", "1q", "2q", "4b", "2h",
+                "2b"]
 ELEMS = ["b", "h", "s", "d", "q"]
 
 # Names whose encoded value the fitter measures rather than assumes.
@@ -215,6 +219,10 @@ def parse_operand(op, out):
     if m and m.group(2) in ARRANGEMENTS:
         out.append(Atom(("v", m.group(2)), (int(m.group(1)),)))
         return
+    m = re.fullmatch(r"v(\d+)\[(\d+)\]", op)
+    if m:
+        out.append(Atom(("vidx", ""), (int(m.group(1)), int(m.group(2)))))
+        return
     m = re.fullmatch(r"v(\d+)\.(\w+)\[(\d+)\]", op)
     if m:
         t = m.group(2)
@@ -229,9 +237,11 @@ def parse_operand(op, out):
     if m:
         out.append(Atom(("z", m.group(2) or ""), (int(m.group(1)),)))
         return
-    m = re.fullmatch(r"z(\d+)\.([bhsdq])\[(\d+)\]", op)
+    m = re.fullmatch(r"z(\d+)(?:\.([bhsdq]))?\[(\d+)\]", op)
     if m:
-        out.append(Atom(("zidx", m.group(2)), (int(m.group(1)), int(m.group(3)))))
+        # The lookup-table instructions index a register with no element
+        # size: `luti2 z0.h, { z1.h }, z2[7]`.
+        out.append(Atom(("zidx", m.group(2) or ""), (int(m.group(1)), int(m.group(3)))))
         return
     m = re.fullmatch(r"p(\d+)(?:\.([bhsdq]))?(?:/([mz]))?", op)
     if m:
@@ -372,11 +382,13 @@ def render_atom(a):
     if t == "v":
         return "v%d.%s" % (a.vals[0], k[1])
     if t in ("vidx", "vidxa"):
-        return "v%d.%s[%d]" % (a.vals[0], k[1], a.vals[1])
+        dot = "." if k[1] else ""
+        return "v%d%s%s[%d]" % (a.vals[0], dot, k[1], a.vals[1])
     if t == "z":
         return "z%d" % a.vals[0] + ("." + k[1] if k[1] else "")
     if t == "zidx":
-        return "z%d.%s[%d]" % (a.vals[0], k[1], a.vals[1])
+        dot = "." if k[1] else ""
+        return "z%d%s%s[%d]" % (a.vals[0], dot, k[1], a.vals[1])
     if t in ("p", "pm", "pz"):
         s = "p%d" % a.vals[0] + ("." + k[1] if k[1] else "")
         return s + ("/m" if t == "pm" else "/z" if t == "pz" else "")

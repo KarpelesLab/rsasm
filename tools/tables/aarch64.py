@@ -895,7 +895,10 @@ def measure_wrap(mn, atoms, slots, base, sp, rng):
             if sign > 0:
                 pool = list(range(lo, min(hi, -1) + 1, step))
             else:
-                pool = list(range(lo + ((-lo + step - 1) // step) * step, hi + 1, step))
+                # Not zero: `#0` less the element's size is the size itself
+                # negated, which is one past what a form takes either way.
+                pool = [v for v in range(lo + ((-lo + step - 1) // step) * step, hi + 1, step)
+                        if v > 0]
             if not pool:
                 continue
             for v in {pool[0], pool[-1], rng.choice(pool)}:
@@ -1304,7 +1307,8 @@ def check_form(mn, atoms, slots, base, sp_at_31, rng, rounds=10, earlier=()):
 
 ARR_CONST = {"8b": "A_8B", "16b": "A_16B", "4h": "A_4H", "8h": "A_8H",
              "2s": "A_2S", "4s": "A_4S", "1d": "A_1D", "2d": "A_2D",
-             "1q": "A_1Q", "2q": "A_2Q", "4b": "A_4B", "2h": "A_2H"}
+             "1q": "A_1Q", "2q": "A_2Q", "4b": "A_4B", "2h": "A_2H",
+             "2b": "A_2B"}
 ELEM_CONST = {"b": "E_B", "h": "E_H", "s": "E_S", "d": "E_D", "q": "E_Q",
               "": "E_NONE"}
 EXT_CONST = {"uxtw": "X_UXTW", "sxtw": "X_SXTW", "uxtx": "X_UXTX",
@@ -1591,7 +1595,7 @@ def wrapped(enc, v, wrap):
     if bits and r and r[0] < 0 and isinstance(v, int):
         if dirs & 1 and (1 << (bits - 1)) <= v < (1 << bits) and v > r[1]:
             return v - (1 << bits)
-        if dirs & 2 and -(1 << bits) <= v < -(1 << (bits - 1)) and v < r[0]:
+        if dirs & 2 and -(1 << bits) < v < -(1 << (bits - 1)) and v < r[0]:
             return v + (1 << bits)
     return v
 

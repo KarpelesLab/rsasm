@@ -3,7 +3,7 @@
 //! These instruction sets are thousands of forms that differ in a handful of
 //! opcode bits and in which lane arrangement or element size each register
 //! takes. Writing them out family by family would be writing out the ARM ARM;
-//! instead `tools/aarch64-tables/gen.py` asks llvm-mc. It disassembles random
+//! instead `tools/tables/aarch64.py` asks llvm-mc. It disassembles random
 //! words to find every form llvm-mc prints, assembles each one with a single
 //! operand changed at a time to measure where that operand's bits go, and
 //! writes the result to [`table_data`]: for each form, the operands it takes
@@ -44,8 +44,9 @@ pub const A_1Q: u8 = 8;
 pub const A_2Q: u8 = 9;
 pub const A_4B: u8 = 10;
 pub const A_2H: u8 = 11;
-const ARRANGEMENTS: [&str; 12] = [
-    "8b", "16b", "4h", "8h", "2s", "4s", "1d", "2d", "1q", "2q", "4b", "2h",
+pub const A_2B: u8 = 12;
+const ARRANGEMENTS: [&str; 13] = [
+    "8b", "16b", "4h", "8h", "2s", "4s", "1d", "2d", "1q", "2q", "4b", "2h", "2b",
 ];
 
 /// Element sizes, as a `.b`/`.h`/`.s`/`.d`/`.q` suffix or a scalar register
@@ -448,7 +449,8 @@ fn parse_operand(cx: &mut AsmCtx<'_>, toks: &[Token], out: &mut Vec<(Atom, Span)
             out.push((Atom::P(n, e, mode), span));
             return Some(());
         }
-        // `v0.s[1]`, `v0.4b[1]`, `z0.d[3]`.
+        // `v0.s[1]`, `v0.4b[1]`, `z0.d[3]`, and the lookup-table forms that
+        // index a register with no element size at all, `z0[7]`.
         if toks.len() == 4 && toks[1].is_punct(Punct::LBracket) && toks[3].is_punct(Punct::RBracket)
         {
             let index = match toks[2].kind {
@@ -459,14 +461,18 @@ fn parse_operand(cx: &mut AsmCtx<'_>, toks: &[Token], out: &mut Vec<(Atom, Span)
                 }
             };
             let (letter, rest) = word.split_at_checked(1).unwrap_or(("", ""));
-            if let Some((num, suffix)) = rest.split_once('.')
-                && let Some(n) = reg_number(num)
-            {
-                let atom = match letter {
-                    "v" => elem_code(suffix)
+            let (num, suffix) = match rest.split_once('.') {
+                Some((n, s)) => (n, Some(s)),
+                None => (rest, None),
+            };
+            if let Some(n) = reg_number(num) {
+                let atom = match (letter, suffix) {
+                    ("v", Some(s)) => elem_code(s)
                         .map(|e| Atom::VecIdx(n, e, index))
-                        .or_else(|| arrangement_code(suffix).map(|a| Atom::VecIdxArr(n, a, index))),
-                    "z" => elem_code(suffix).map(|e| Atom::ZIdx(n, e, index)),
+                        .or_else(|| arrangement_code(s).map(|a| Atom::VecIdxArr(n, a, index))),
+                    ("v", None) => Some(Atom::VecIdx(n, E_NONE, index)),
+                    ("z", Some(s)) => elem_code(s).map(|e| Atom::ZIdx(n, e, index)),
+                    ("z", None) => Some(Atom::ZIdx(n, E_NONE, index)),
                     _ => None,
                 };
                 if let Some(atom) = atom {
@@ -502,36 +508,67 @@ fn immediate(cx: &mut AsmCtx<'_>, toks: &[Token]) -> Option<Atom> {
     Some(Atom::Imm(constant(cx, toks, "an immediate")?))
 }
 
-/// A decimal number with a fraction. The lexer has no such token: `1.5`
-/// arrives as the integer `1` followed by the name `.5`.
+/// A decimal number with a fraction, and an exponent where there is one.
+///
+/// The lexer has no float token, so the pieces arrive as they were spelled:
+/// `1.5` is the integer `1` and the name `.5`, `1.5e3` is `1` and `.5e3`,
+/// and `2.0e+1`, whose exponent has a sign, is `2`, `.0e`, `+` and `1`. GNU
+/// objdump prints the last of those, so GNU as source has it.
 fn float(cx: &AsmCtx<'_>, toks: &[Token]) -> Option<f64> {
     let mut i = 0;
     if toks.first().is_some_and(|t| t.is_punct(Punct::Hash)) {
         i += 1;
     }
-    let mut negative = false;
+    let mut text = String::new();
     match toks.get(i) {
         Some(t) if t.is_punct(Punct::Minus) => {
-            negative = true;
+            text.push('-');
             i += 1;
         }
         Some(t) if t.is_punct(Punct::Plus) => i += 1,
         _ => {}
     }
-    let whole = match toks.get(i)?.kind {
-        TokKind::Int(v) => v,
-        _ => return None,
+    let TokKind::Int(whole) = toks.get(i)?.kind else {
+        return None;
     };
     let frac = ident(cx, toks.get(i + 1)?)?;
-    if i + 2 != toks.len()
-        || frac.len() < 2
-        || !frac.starts_with('.')
-        || !frac[1..].bytes().all(|b| b.is_ascii_digit())
+    i += 2;
+    let digits = frac.strip_prefix('.')?;
+    let (digits, open_exponent) = match digits.strip_suffix(['e', 'E']) {
+        Some(rest) => (rest, true),
+        None => (digits, false),
+    };
+    let (digits, exponent) = match digits.split_once(['e', 'E']) {
+        Some((d, e)) => (d, !e.is_empty() && e.bytes().all(|b| b.is_ascii_digit())),
+        None => (digits, false),
+    };
+    if digits.is_empty()
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+        || (open_exponent && exponent)
     {
         return None;
     }
-    let v: f64 = format!("{whole}{frac}").parse().ok()?;
-    Some(if negative { -v } else { v })
+    text.push_str(&format!("{whole}{frac}"));
+    if open_exponent {
+        // The sign and the digits of the exponent are tokens of their own.
+        match toks.get(i) {
+            Some(t) if t.is_punct(Punct::Minus) => {
+                text.push('-');
+                i += 1;
+            }
+            Some(t) if t.is_punct(Punct::Plus) => i += 1,
+            _ => {}
+        }
+        let TokKind::Int(exp) = toks.get(i)?.kind else {
+            return None;
+        };
+        text.push_str(&exp.to_string());
+        i += 1;
+    }
+    if i != toks.len() {
+        return None;
+    }
+    text.parse().ok()
 }
 
 /// An expression that has to be known now.
@@ -897,7 +934,7 @@ fn wrapped(enc: Enc, v: Option<Val>, wrap: u8, dirs: u8) -> Option<Val> {
     if dirs & 1 != 0 && x > max && (size / 2..size).contains(&x) {
         return Some(Val::Int(x - size));
     }
-    if dirs & 2 != 0 && x < min && (-size..-size / 2).contains(&x) {
+    if dirs & 2 != 0 && x < min && (-size + 1..-size / 2).contains(&x) {
         return Some(Val::Int(x + size));
     }
     v
