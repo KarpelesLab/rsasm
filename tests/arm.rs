@@ -579,14 +579,16 @@ fn out_of_range_operands_are_diagnosed() {
 #[test]
 fn thumb_restrictions_are_diagnosed() {
     assert!(errors_for("thumb", "addeq r0, r1, r2").contains("`it` block"));
-    assert!(errors_for("thumb", "push {r8}").contains("can only list r0-r7"));
-    assert!(errors_for("thumb", "ldr r0, [r1, 4]!").contains("pre- and post-indexed"));
+    assert!(errors_for("thumb", "push {sp}").contains("`sp` is not allowed"));
+    assert!(errors_for("thumb", "ldm r0!, {r0, r1}").contains("base register"));
     assert!(errors_for("thumb", "movs r0, 0x101").contains("Thumb expandable immediate"));
     assert!(errors_for("thumb", "lsls r0, r1, 32").contains("0 to 31"));
     assert!(errors_for("thumb", "mov r0, 0x100000000").contains("does not fit in 32 bits"));
-    assert!(errors_for("thumb", "cmp r0, 0x101").contains("neither is its negation"));
+    assert!(errors_for("thumb", "cmp r0, 0x101").contains("neither is its complement"));
+    assert!(errors_for("thumb", "strd r0, r1, [r2, 7]").contains("steps of 4"));
+    assert!(errors_for("thumb", "cbz r8, .").contains("only tests r0-r7"));
     // An offset past 32 bits must not wrap around into a small one.
-    assert!(errors_for("thumb", "ldr r0, [r1, 0x100000004]").contains("0 to 4095"));
+    assert!(errors_for("thumb", "ldr r0, [r1, 0x100000004]").contains("-255 to 255"));
     assert!(errors_for("thumb", "ldr r0, [r1, 124].n").contains("unexpected token"));
 }
 

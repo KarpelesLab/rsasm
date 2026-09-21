@@ -70,6 +70,10 @@ pub enum Mnem {
     Mov,
     Bic,
     Mvn,
+    /// `orr` with the second operand complemented, which only Thumb has.
+    Orn,
+    /// `rsb rd, rm, #0` under a shorter name.
+    Neg,
     // Shifts, which A32 encodes as forms of `mov`.
     Lsl,
     Lsr,
@@ -85,6 +89,23 @@ pub enum Mnem {
     Strh,
     Ldrsb,
     Ldrsh,
+    /// The doubleword transfers, which move a register pair.
+    Ldrd,
+    Strd,
+    /// The `t` suffix: a transfer made with user-mode privileges, which is
+    /// post-indexed whatever the source wrote.
+    Ldrt,
+    Strt,
+    Ldrbt,
+    Strbt,
+    Ldrht,
+    Strht,
+    Ldrsbt,
+    Ldrsht,
+    /// The preloads, which are loads into no register at all.
+    Pld,
+    Pldw,
+    Pli,
     Ldm(BlockMode),
     Stm(BlockMode),
     Push,
@@ -97,6 +118,9 @@ pub enum Mnem {
     Bl,
     Bx,
     Blx,
+    /// The Thumb compare-and-branch, which tests a register against zero.
+    Cbz,
+    Cbnz,
     // Multiplies.
     Mul,
     Mla,
@@ -105,9 +129,12 @@ pub enum Mnem {
     Umlal,
     Smull,
     Smlal,
-    // Move-wide.
+    // Move-wide, and the Thumb `add`/`sub` restricted to a plain twelve-bit
+    // immediate.
     Movw,
     Movt,
+    Addw,
+    Subw,
     // The status registers, whose operands are neither registers nor
     // immediates but field specifiers and banked register names.
     Mrs,
@@ -120,7 +147,56 @@ pub enum Mnem {
     Ext(u16),
 }
 
+/// What a core load or store moves, and how, which is all that separates
+/// the twenty spellings of one addressing mode.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Transfer {
+    pub load: bool,
+    /// How many bytes move: 1, 2, 4 or 8.
+    pub size: u8,
+    /// Whether a byte or halfword is sign-extended into the register.
+    pub signed: bool,
+    /// The `t` suffix: the transfer takes user-mode privileges, which makes
+    /// it post-indexed however the source wrote the address.
+    pub translate: bool,
+}
+
+const fn tr(load: bool, size: u8, signed: bool, translate: bool) -> Transfer {
+    Transfer {
+        load,
+        size,
+        signed,
+        translate,
+    }
+}
+
 impl Mnem {
+    /// The transfer a load or store makes, for the mnemonics that are one.
+    pub fn transfer(self) -> Option<Transfer> {
+        use Mnem::*;
+        Some(match self {
+            Ldr => tr(true, 4, false, false),
+            Str => tr(false, 4, false, false),
+            Ldrb => tr(true, 1, false, false),
+            Strb => tr(false, 1, false, false),
+            Ldrh => tr(true, 2, false, false),
+            Strh => tr(false, 2, false, false),
+            Ldrsb => tr(true, 1, true, false),
+            Ldrsh => tr(true, 2, true, false),
+            Ldrd => tr(true, 8, false, false),
+            Strd => tr(false, 8, false, false),
+            Ldrt => tr(true, 4, false, true),
+            Strt => tr(false, 4, false, true),
+            Ldrbt => tr(true, 1, false, true),
+            Strbt => tr(false, 1, false, true),
+            Ldrht => tr(true, 2, false, true),
+            Strht => tr(false, 2, false, true),
+            Ldrsbt => tr(true, 1, true, true),
+            Ldrsht => tr(true, 2, true, true),
+            _ => return None,
+        })
+    }
+
     /// The 4-bit A32 data-processing opcode, for the sixteen operations that
     /// have one.
     pub fn dp_opcode(self) -> Option<u32> {
@@ -174,6 +250,8 @@ impl Mnem {
             Bic => (And, false),
             Mov => (Mvn, false),
             Mvn => (Mov, false),
+            Orr => (Orn, false),
+            Orn => (Orr, false),
             Adc => (Sbc, false),
             Sbc => (Adc, false),
             _ => return None,
@@ -187,7 +265,7 @@ impl Mnem {
         self.dp_opcode().is_some() && !self.is_compare()
             || matches!(
                 self,
-                Lsl | Lsr | Asr | Ror | Rrx | Mul | Mla | Umull | Umlal | Smull | Smlal
+                Lsl | Lsr | Asr | Ror | Rrx | Orn | Neg | Mul | Mla | Umull | Umlal | Smull | Smlal
             )
     }
 }
@@ -207,12 +285,19 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("add", Add); add("adc", Adc); add("sbc", Sbc); add("rsc", Rsc);
         add("tst", Tst); add("teq", Teq); add("cmp", Cmp); add("cmn", Cmn);
         add("orr", Orr); add("mov", Mov); add("bic", Bic); add("mvn", Mvn);
+        add("orn", Orn); add("neg", Neg);
         add("lsl", Lsl); add("lsr", Lsr); add("asr", Asr); add("ror", Ror);
         add("rrx", Rrx);
         add("ldr", Ldr); add("str", Str);
         add("ldrb", Ldrb); add("strb", Strb);
         add("ldrh", Ldrh); add("strh", Strh);
         add("ldrsb", Ldrsb); add("ldrsh", Ldrsh);
+        add("ldrd", Ldrd); add("strd", Strd);
+        add("ldrt", Ldrt); add("strt", Strt);
+        add("ldrbt", Ldrbt); add("strbt", Strbt);
+        add("ldrht", Ldrht); add("strht", Strht);
+        add("ldrsbt", Ldrsbt); add("ldrsht", Ldrsht);
+        add("pld", Pld); add("pldw", Pldw); add("pli", Pli);
         // The stack-oriented spellings are the same instructions: a full
         // descending stack pushes with `stmdb` and pops with `ldmia`.
         add("ldm", Ldm(ia)); add("ldmia", Ldm(ia)); add("ldmfd", Ldm(ia));
@@ -226,10 +311,12 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("push", Push); add("pop", Pop);
         add("adr", Adr); add("adrl", Adrl);
         add("b", B); add("bl", Bl); add("bx", Bx); add("blx", Blx);
+        add("cbz", Cbz); add("cbnz", Cbnz);
         add("mul", Mul); add("mla", Mla); add("mls", Mls);
         add("umull", Umull); add("umlal", Umlal);
         add("smull", Smull); add("smlal", Smlal);
         add("movw", Movw); add("movt", Movt);
+        add("addw", Addw); add("subw", Subw);
         add("mrs", Mrs); add("msr", Msr);
 
         // Every `it` spelling: up to three more instructions, each `t` (the
