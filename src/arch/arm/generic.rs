@@ -672,6 +672,7 @@ fn step(w: &mut Walk<'_, '_, '_>, form: &Form, op: Op) -> Option<()> {
             w.take();
         }
         Op::Scalar => scalar(w)?,
+        Op::NeonStruct(kind, n, size) => neon_struct(w, kind, n, u32::from(size))?,
         Op::VfpTwice(kind, first, second) => {
             let v = w.vec_register(kind, first)?;
             let n = if v.kind == VecKind::Q { v.n * 2 } else { v.n };
@@ -900,6 +901,277 @@ fn coproc_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
     Some(())
 }
 
+/// Which list lengths and register strides each of the structure loads and
+/// stores has an encoding for, from `do_neon_ld_st_interleave`: indexed by
+/// the stride less one, then the list length less one, then `<n>` less one,
+/// and holding the four bits the instruction carries at bits 8-11. 255
+/// stands for a list the instruction has no encoding for.
+static INTERLEAVE: [u8; 32] = [
+    0x7, 255, 0xa, 255, 0x6, 255, 0x2, 255, // vld1 / vst1
+    255, 255, 0x8, 0x9, 255, 255, 0x3, 255, // vld2 / vst2
+    255, 255, 255, 255, 0x4, 0x5, 255, 255, // vld3 / vst3
+    255, 255, 255, 255, 255, 255, 0x0, 0x1, // vld4 / vst4
+];
+
+/// The register list of a structure transfer, as the first register, how
+/// many there are, whether they step by two, the lane they name and whether
+/// that lane is every one of them.
+struct StructList {
+    first: u8,
+    count: u8,
+    stride: u32,
+    lane: Option<u32>,
+    all: bool,
+}
+
+/// A structure transfer: `vld1` to `vld4` and `vst1` to `vst4`, whose
+/// register list, element size and alignment together say which of the three
+/// encodings it is and what goes in the fields.
+fn neon_struct(w: &mut Walk<'_, '_, '_>, kind: u8, n: u8, size: u32) -> Option<()> {
+    let Some(op) = w.op().cloned() else {
+        return w.fail(|| "expected a register list".into());
+    };
+    let OperandKind::VecList {
+        kind: VecKind::D,
+        first,
+        count,
+        lane,
+        spaced,
+        all,
+    } = op.kind
+    else {
+        let what = op.describe();
+        return w.fail(|| format!("expected a list of `d` registers, found {what}"));
+    };
+    let list = StructList {
+        first,
+        count,
+        stride: if spaced { 2 } else { 1 },
+        lane,
+        all,
+    };
+    w.take();
+    let Some(mem) = w.op().cloned() else {
+        return w.fail(|| "expected an address".into());
+    };
+    let OperandKind::Mem(mem) = mem.kind else {
+        let what = mem.describe();
+        return w.fail(|| format!("expected an address, found {what}"));
+    };
+    let logsize = size.trailing_zeros() - 3;
+    match kind {
+        0 => interleave(w, &list, n, size, logsize, mem.align)?,
+        1 => single_lane(w, &list, n, size, logsize, mem.align)?,
+        _ => copy_to_lanes(w, &list, n, size, logsize, mem.align)?,
+    }
+    if mem.base == 15 {
+        return w.fail(|| "the program counter is not a base register here".into());
+    }
+    w.word |= u32::from(list.first & 0xF) << 12;
+    w.word |= u32::from(list.first >> 4) << 22;
+    w.word |= u32::from(mem.base) << 16;
+    match mem.offset {
+        // `[rn], rm`: the base is stepped by a register after the transfer,
+        // and the two registers the field cannot hold mean the other two
+        // addressing modes.
+        MemOffset::Reg { rm, .. } if mem.index == Index::PostIndex => {
+            if rm == 13 || rm == 15 {
+                return w.fail(|| "this register cannot step the base here".into());
+            }
+            w.word |= u32::from(rm);
+        }
+        MemOffset::None if mem.index != Index::PostIndex => {
+            w.word |= if mem.index == Index::PreIndex {
+                0xD
+            } else {
+                0xF
+            };
+        }
+        _ => return w.fail(|| "this instruction takes `[rn]`, `[rn]!` or `[rn], rm`".into()),
+    }
+    w.take();
+    Some(())
+}
+
+/// `vld1.8 {d0-d3}, [r0]`: whole registers, one structure element to each
+/// in turn.
+fn interleave(
+    w: &mut Walk<'_, '_, '_>,
+    list: &StructList,
+    n: u8,
+    size: u32,
+    logsize: u32,
+    align: Option<u32>,
+) -> Option<()> {
+    if list.lane.is_some() || list.all {
+        return w.fail(|| "this form takes whole registers".into());
+    }
+    let alignbits = match align {
+        None => 0,
+        Some(64) => 1,
+        Some(128) if list.count == 2 || list.count == 4 => 2,
+        Some(256) if list.count == 4 => 3,
+        Some(_) => return w.fail(|| "bad alignment".into()),
+    };
+    if n > 1 && size == 64 {
+        return w.fail(|| "this instruction has no 64-bit elements".into());
+    }
+    let idx = (list.stride - 1) | (u32::from(list.count - 1) << 1) | (u32::from(n - 1) << 3);
+    let typebits = INTERLEAVE[idx as usize];
+    if typebits == 255 {
+        return w.fail(|| "bad list type for this instruction".into());
+    }
+    w.word |= alignbits << 4;
+    w.word |= logsize << 6;
+    w.word |= u32::from(typebits) << 8;
+    Some(())
+}
+
+/// The alignment a structure transfer may promise for this element size, as
+/// whether the encoding's alignment bit is set. The pairs are the ones
+/// `neon_alignment_bit` is called with.
+fn lane_align(
+    w: &mut Walk<'_, '_, '_>,
+    size: u32,
+    align: Option<u32>,
+    allowed: &[(u32, u32)],
+) -> Option<bool> {
+    let Some(align) = align else {
+        return Some(false);
+    };
+    if allowed.contains(&(size, align)) {
+        Some(true)
+    } else {
+        w.fail(|| "unsupported alignment for this instruction".into())
+    }
+}
+
+/// `vld2.16 {d0[1], d1[1]}, [r0]`: one element of each register.
+fn single_lane(
+    w: &mut Walk<'_, '_, '_>,
+    list: &StructList,
+    n: u8,
+    size: u32,
+    logsize: u32,
+    align: Option<u32>,
+) -> Option<()> {
+    let Some(lane) = list.lane else {
+        return w.fail(|| "this form takes one lane of each register".into());
+    };
+    if list.count != n {
+        return w.fail(|| format!("this instruction takes {n} registers"));
+    }
+    if lane >= 64 / size {
+        return w.fail(|| format!("lane {lane} is out of range for this element size"));
+    }
+    if n != 1 && list.stride == 2 && size == 8 {
+        return w.fail(|| "a stride of two needs elements wider than a byte".into());
+    }
+    let alignbits = match n {
+        1 => {
+            let on = lane_align(w, size, align, &[(16, 16), (32, 32)])?;
+            match (on, size) {
+                (true, 16) => 1,
+                (true, 32) => 3,
+                _ => 0,
+            }
+        }
+        2 => u32::from(lane_align(w, size, align, &[(8, 16), (16, 32), (32, 64)])?),
+        3 => {
+            if align.is_some() {
+                return w.fail(|| "this instruction takes no alignment".into());
+            }
+            0
+        }
+        _ => {
+            let on = lane_align(w, size, align, &[(8, 32), (16, 64), (32, 64), (32, 128)])?;
+            match (on, size) {
+                (true, 32) if align == Some(128) => 2,
+                (true, _) => 1,
+                (false, _) => 0,
+            }
+        }
+    };
+    w.word |= alignbits << 4;
+    if n != 1 && list.stride == 2 {
+        w.word |= 1 << (4 + logsize);
+    }
+    w.word |= lane << (logsize + 5);
+    w.word |= logsize << 10;
+    Some(())
+}
+
+/// `vld1.8 {d0[], d1[]}, [r0]`: one element copied over every lane, which
+/// only a load does.
+fn copy_to_lanes(
+    w: &mut Walk<'_, '_, '_>,
+    list: &StructList,
+    n: u8,
+    size: u32,
+    logsize: u32,
+    align: Option<u32>,
+) -> Option<()> {
+    if !list.all {
+        return w.fail(|| "this form copies one element over every lane".into());
+    }
+    let on = match n {
+        1 => {
+            if list.stride == 2 {
+                return w.fail(|| "these registers step by one".into());
+            }
+            let on = lane_align(w, size, align, &[(16, 16), (32, 32)])?;
+            match list.count {
+                1 => {}
+                2 => w.word |= 1 << 5,
+                _ => return w.fail(|| "bad list length".into()),
+            }
+            w.word |= logsize << 6;
+            on
+        }
+        2 => {
+            let on = lane_align(w, size, align, &[(8, 16), (16, 32), (32, 64)])?;
+            if list.count != 2 {
+                return w.fail(|| "bad list length".into());
+            }
+            if list.stride == 2 {
+                w.word |= 1 << 5;
+            }
+            w.word |= logsize << 6;
+            on
+        }
+        3 => {
+            if align.is_some() {
+                return w.fail(|| "this instruction takes no alignment".into());
+            }
+            if list.count != 3 {
+                return w.fail(|| "bad list length".into());
+            }
+            if list.stride == 2 {
+                w.word |= 1 << 5;
+            }
+            w.word |= logsize << 6;
+            false
+        }
+        _ => {
+            let on = lane_align(w, size, align, &[(8, 32), (16, 64), (32, 64), (32, 128)])?;
+            if list.count != 4 {
+                return w.fail(|| "bad list length".into());
+            }
+            if list.stride == 2 {
+                w.word |= 1 << 5;
+            }
+            if size == 32 && align == Some(128) {
+                w.word |= 3 << 6;
+            } else {
+                w.word |= logsize << 6;
+            }
+            on
+        }
+    };
+    w.word |= u32::from(on) << 4;
+    Some(())
+}
+
 /// Whether every byte of `imm` is all ones or all zeroes, which is the one
 /// pattern a 64-bit `vmov` immediate can hold.
 fn bits_same_in_bytes(imm: u32) -> bool {
@@ -1116,6 +1388,7 @@ fn tbl_list(w: &mut Walk<'_, '_, '_>, first: Field, count: Field) -> Option<()> 
         count: n,
         lane: None,
         spaced: false,
+        all: false,
     } = op.kind
     else {
         let what = op.describe();
@@ -1167,6 +1440,7 @@ fn vfp_list(w: &mut Walk<'_, '_, '_>, kind: u8, first: Field, count: Field) -> O
         count: n,
         lane: None,
         spaced: false,
+        all: false,
     } = op.kind
     else {
         let what = op.describe();

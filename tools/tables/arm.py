@@ -1033,6 +1033,34 @@ for _which, _base in (("Arm", 0xF2800010), ("T32", 0xEF800010)):
                   (("Vfp", 3, VD), ("VfpTwice", 3, VN, VM))))
 
 
+# The structure transfers, `vld1` to `vld4` and `vst1` to `vst4`. Each has
+# three encodings -- a run of whole registers, one element of each register,
+# and one element copied over every lane -- which GNU as picks by the shape
+# of the register list. The base words are the ones gas's own table carries
+# (`NEON_ENC_TAB`); `super::generic` fills in the list length, the register
+# stride, the element size, the lane and the alignment the way
+# `do_neon_ldx_stx` does.
+for _which, _top in (("Arm", 0xF4000000), ("T32", 0xF9000000)):
+    for _n in (1, 2, 3, 4):
+        for _load in (True, False):
+            _stem = "%s%d" % ("vld" if _load else "vst", _n)
+            for _size in (8, 16, 32, 64):
+                _name = "%s.%d" % (_stem, _size)
+                EXTRA.append((_name, _which,
+                              _top | (0x00200000 if _load else 0), False,
+                              (("NeonStruct", 0, _n, _size),)))
+                if _size == 64:
+                    continue
+                EXTRA.append((_name, _which,
+                              _top | (0x00A00000 if _load else 0x00800000)
+                              | ((_n - 1) << 8), False,
+                              (("NeonStruct", 1, _n, _size),)))
+                if _load:
+                    EXTRA.append((_name, _which,
+                                  _top | 0x00A00C00 | ((_n - 1) << 8), False,
+                                  (("NeonStruct", 2, _n, _size),)))
+
+
 def build(entries, insns):
     """The forms, and the audit trail: one line per row saying where it
     went."""
@@ -1265,6 +1293,11 @@ pub enum Op {
     /// `vmov`, 1 `vmvn`, 2 `vorr`, 3 `vbic`, 4 `vand`, 5 `vorn`) and the
     /// element size in bits.
     NeonImm(u8, u8),
+    /// A structure transfer's register list and address together: which of
+    /// the three encodings this form is (0 whole registers, 1 one element
+    /// of each, 2 one element over every lane), how many registers the
+    /// structure has, and the element size in bits.
+    NeonStruct(u8, u8, u8),
     /// The literal `#0.0` that `vcmp` compares against.
     Zero,
     /// A named system register: `fpscr` and its neighbours.
@@ -1335,6 +1368,8 @@ def rust_op(op):
         return "Op::SatShift(%d, %d, %d, %d, %d)" % op[1:]
     if k in ("Coproc", "CReg", "Writeback", "IntFlags", "Endian"):
         return "Op::%s(%d)" % (k, op[1])
+    if k == "NeonStruct":
+        return "Op::NeonStruct(%d, %d, %d)" % (op[1], op[2], op[3])
     if k == "NeonImm":
         return "Op::NeonImm(%d, %d)" % (op[1], op[2])
     if k == "VfpTwice":

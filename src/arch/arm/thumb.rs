@@ -1906,6 +1906,7 @@ fn single_transfer(
             MemOffset::Imm(off)
         },
         index,
+        align: None,
         span: ins.span,
     };
     let t = Transfer {

@@ -47,6 +47,9 @@ pub struct VecReg {
     /// `d0[1]`: which element of the register, which only a scalar operand
     /// or a structure transfer takes.
     pub lane: Option<u32>,
+    /// `d0[]`: every element of it at once, which a structure load writes
+    /// one element over.
+    pub all: bool,
 }
 
 /// The vector register a name spells, if it is one.
@@ -152,6 +155,9 @@ pub struct Mem {
     pub base: Reg,
     pub offset: MemOffset,
     pub index: Index,
+    /// `[r0:64]`: the alignment a NEON structure transfer may promise, in
+    /// bits.
+    pub align: Option<u32>,
     pub span: Span,
 }
 
@@ -182,13 +188,15 @@ pub enum OperandKind {
     Vec(VecReg),
     /// `{d0-d3}`, `{s0, s1}` or `{d0[2], d1[2]}`: a run of vector registers,
     /// held as the first of them and how many there are. `spaced` is the
-    /// `{d0, d2}` the structure transfers take, whose registers step by two.
+    /// `{d0, d2}` the structure transfers take, whose registers step by two,
+    /// and `all` the `{d0[]}` one of them writes an element over.
     VecList {
         kind: VecKind,
         first: u8,
         count: u8,
         lane: Option<u32>,
         spaced: bool,
+        all: bool,
     },
 }
 
@@ -352,6 +360,16 @@ impl Parser<'_, '_> {
         let mut lane = None;
         if cur.check_punct(Punct::LBracket) {
             let span = cur.advance().span;
+            // `d0[]` is every lane of the register at once, which is how a
+            // structure load spells the element it copies over them.
+            if cur.eat_punct(Punct::RBracket).is_some() {
+                return Some(Some(VecReg {
+                    kind,
+                    n,
+                    lane: None,
+                    all: true,
+                }));
+            }
             let e = self.cx.expr_parser().parse(cur)?;
             let Some(v) = self.cx.constant(e) else {
                 self.cx
@@ -370,7 +388,12 @@ impl Parser<'_, '_> {
             }
             lane = Some(v as u32);
         }
-        Some(Some(VecReg { kind, n, lane }))
+        Some(Some(VecReg {
+            kind,
+            n,
+            lane,
+            all: false,
+        }))
     }
 
     fn eat_register(&mut self, cur: &mut Cursor<'_>) -> Option<Reg> {
@@ -551,7 +574,7 @@ impl Parser<'_, '_> {
                 self.cx.error(span, "expected a register in the list");
                 return None;
             };
-            if next.kind != first.kind || next.lane != first.lane {
+            if next.kind != first.kind || next.lane != first.lane || next.all != first.all {
                 self.cx
                     .error(span, "a vector register list holds one kind of register");
                 return None;
@@ -580,6 +603,7 @@ impl Parser<'_, '_> {
                 count,
                 lane: first.lane,
                 spaced: step == 2,
+                all: first.all,
             },
             span: start.to(cur.nth(0).span),
             word: None,
@@ -595,8 +619,23 @@ impl Parser<'_, '_> {
             return None;
         };
 
+        // `[r0:64]`, `[r0 :64]` and `[r0, :64]` all promise an alignment,
+        // which only the NEON structure transfers take.
+        let mut align = None;
         let mut offset = MemOffset::None;
-        if cur.eat_punct(Punct::Comma).is_some() {
+        let colon = cur.check_punct(Punct::Colon)
+            || (cur.check_punct(Punct::Comma) && cur.nth(1).kind == TokKind::Punct(Punct::Colon));
+        if colon {
+            cur.eat_punct(Punct::Comma);
+            let span = cur.advance().span;
+            let e = self.cx.expr_parser().parse(cur)?;
+            let Some(v) = self.cx.constant(e) else {
+                self.cx
+                    .error(span, "an alignment must be a constant expression");
+                return None;
+            };
+            align = Some(v.clamp(0, u32::MAX.into()) as u32);
+        } else if cur.eat_punct(Punct::Comma).is_some() {
             offset = self.parse_mem_offset(cur)?;
         }
         if cur.eat_punct(Punct::RBracket).is_none() {
@@ -641,6 +680,7 @@ impl Parser<'_, '_> {
                 base,
                 offset,
                 index,
+                align,
                 span: start.to(cur.nth(0).span),
             }),
             span: start.to(cur.nth(0).span),
