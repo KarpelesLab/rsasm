@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/KarpelesLab/rsasm/compare/v0.1.2...v0.1.3) - 2026-09-21
+
+### Other
+
+- Merge the v0.1.2 release commit
+- Assemble bic, bics, orn and eon with an immediate
+
 ## [0.1.2](https://github.com/KarpelesLab/rsasm/compare/v0.1.1...v0.1.2) - 2026-09-21
 
 ### Other
