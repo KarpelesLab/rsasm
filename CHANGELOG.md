@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The public API is now a small, documented surface: `Assembler` and the
+  methods that drive it, `Options` and its `with_*` builders, `output::Format`
+  and the writers' `build`, `arch::lookup` with the `Architecture` trait,
+  `section::SectionId`, the diagnostics types and `lexer::Dialect`. The
+  backends, the lexer internals, the expression arena, the interner, the
+  parser, the macro engine, the layout and the relocation classes are no
+  longer reachable, or are marked `Not API.` and hidden from the docs.
+- `Options` is `#[non_exhaustive]` and its fields are private; build it with
+  `Options::new()` and `with_relocatable`, `with_base_addr`,
+  `with_include_path`, `with_dialect`, `with_syntax`, `with_dwarf_version`,
+  `with_debug_source` and `with_format`, and read it back with the matching
+  getters.
+- The public enums and structs that will keep growing are `#[non_exhaustive]`,
+  so matching on `Format`, `Dialect`, `SectionKind`, `Severity` and the rest
+  needs a wildcard arm outside the crate.
+
 ## [0.1.1](https://github.com/KarpelesLab/rsasm/compare/v0.1.0...v0.1.1) - 2026-09-14
 
 ### Other

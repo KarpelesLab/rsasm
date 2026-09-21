@@ -48,6 +48,7 @@ pub struct Imm {
 pub struct Mem {
     pub base: Reg,
     pub off: Option<Imm>,
+    #[allow(dead_code)]
     pub span: Span,
 }
 
@@ -79,6 +80,7 @@ impl<'t> Operands<'t> {
         self.pieces.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.pieces.is_empty()
     }

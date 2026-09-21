@@ -19,9 +19,9 @@
 //! `lda #$12` and `lda (ptr),y` as cc65's ca65 reads them, `ld a,(ix+5)` and
 //! `ex af,af'` as GNU as and vasm read Zilog source, `MVI A,12H` and `MOV
 //! A,#12H` as the Macro Assembler AS reads Intel's. That dialect's
-//! directives and the rules where
-//! those assemblers disagree are described in [`crate::dialect`]; each
-//! backend was checked against its reference in `tools/xas-diff`.
+//! directives and the rules where those assemblers disagree are described
+//! in the crate's `dialect` module; each backend was checked against its
+//! reference in `tools/xas-diff`.
 //!
 //! In the GNU dialect the Z80 is lexed as GNU as for the Z80 lexes it: `;`
 //! comments, `$12` and `12H` numbers. There is no GNU as for the other two,

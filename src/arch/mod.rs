@@ -4,6 +4,12 @@
 //! in behind cargo features and looked up by name, so a single source file can
 //! switch between them with `.arch` and emit, say, x86 and ARM code into
 //! different sections of the same object.
+//!
+//! [`lookup`] and [`available`] are how a caller names one. The backends
+//! themselves — their opcode tables, operand parsers, encoders and relocation
+//! numbers — are the crate's own and are not API; [`Architecture`] is the
+//! documented seam between the core and one, and some of the types in its
+//! signatures are internal too.
 
 use crate::cursor::Cursor;
 use crate::diag::DiagBag;
@@ -14,57 +20,51 @@ use crate::section::{FragKind, SectionId, Variant};
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId, SymbolTable, SymbolValue};
 
-#[cfg(feature = "x86")]
-pub mod x86;
-
+// Backend internals — the opcode tables, the operand parsers, the encoders
+// and the relocation numbers — are the crate's own, not API anyone depends
+// on, so every backend module is crate-visible and only the `lookup` and
+// `NAMES` below reach into it.
 #[cfg(feature = "aarch64")]
-pub mod aarch64;
-
+pub(crate) mod aarch64;
 #[cfg(feature = "arm")]
-pub mod arm;
-
-#[cfg(feature = "riscv")]
-pub mod riscv;
-
-#[cfg(feature = "powerpc")]
-pub mod powerpc;
-
-#[cfg(feature = "mips")]
-pub mod mips;
-
-#[cfg(feature = "sparc")]
-pub mod sparc;
-
-#[cfg(feature = "retro")]
-pub mod retro;
-
-#[cfg(feature = "m68k")]
-pub mod m68k;
-
-#[cfg(feature = "v850")]
-pub mod v850;
-
-#[cfg(feature = "rl78")]
-pub mod rl78;
-
-#[cfg(feature = "rx")]
-pub mod rx;
-
-#[cfg(feature = "superh")]
-pub mod superh;
-
-#[cfg(feature = "k78")]
-pub mod k78;
-
-// Backend internals — the opcode table, the operand parser, the relocation
-// numbers — are the crate's own, not API anyone depends on, so the module is
-// crate-visible and only `lookup` and `NAMES` are used from here.
+pub(crate) mod arm;
 #[cfg(feature = "avr")]
 pub(crate) mod avr;
+#[cfg(feature = "m68k")]
+pub(crate) mod m68k;
+#[cfg(feature = "mips")]
+pub(crate) mod mips;
 #[cfg(feature = "msp430")]
 pub(crate) mod msp430;
+#[cfg(feature = "powerpc")]
+pub(crate) mod powerpc;
+#[cfg(feature = "riscv")]
+pub(crate) mod riscv;
+#[cfg(feature = "rl78")]
+pub(crate) mod rl78;
+#[cfg(feature = "rx")]
+pub(crate) mod rx;
+#[cfg(feature = "sparc")]
+pub(crate) mod sparc;
+#[cfg(feature = "superh")]
+pub(crate) mod superh;
+#[cfg(feature = "v850")]
+pub(crate) mod v850;
+#[cfg(feature = "x86")]
+pub(crate) mod x86;
+
+// Not API. These two are reached from the integration tests, which are their
+// own crates, so `pub(crate)` is not enough for them; they are no more part
+// of the supported surface than the backends above.
+#[cfg(feature = "k78")]
+#[doc(hidden)]
+pub mod k78;
+#[cfg(feature = "retro")]
+#[doc(hidden)]
+pub mod retro;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Endian {
     Little,
     Big,
@@ -105,11 +105,13 @@ impl Endian {
 
 /// A bit of [`ArchState::features`] set by NASM's `default rel`: a memory
 /// operand with no register in it is RIP-relative. Only x86 reads it.
+#[doc(hidden)]
 pub const FEATURE_DEFAULT_REL: u64 = 1 << 63;
 
 /// Operand syntax flavour. Distinct from the [`crate::lexer::Dialect`]: GAS can
 /// assemble Intel-syntax operands via `.intel_syntax`, keeping `#` comments.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Syntax {
     /// `mov %rbx, %rax` — source first, sigils on registers and immediates.
     Att,
@@ -124,6 +126,7 @@ pub enum Syntax {
 /// write immediates as `#1`, so on those targets `#` can only be a comment at
 /// the start of a line.
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub struct CommentSyntax {
     /// Start a comment anywhere on a line.
     pub anywhere: &'static [&'static str],
@@ -142,6 +145,7 @@ impl CommentSyntax {
 /// What a relocation modifier makes of a value in a flat binary; see
 /// [`Architecture::flat_modifier`].
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub enum FlatModifier {
     /// The value itself. `call foo@PLT` in an image with no PLT calls `foo`.
     Plain,
@@ -169,6 +173,7 @@ pub enum FlatModifier {
 /// itself because sections belong to the core. Queued on
 /// [`AsmCtx::requests`] and carried out once the statement is assembled.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Request {
     /// Pads to a multiple of `align` bytes with zeros, even in code: GNU as's
     /// `frag_align (n, 0, 0)`, which ARM's `.arm` and literal pools use.
@@ -193,6 +198,7 @@ pub enum Request {
 
 /// One use of a literal pool entry.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct LiteralRequest {
     /// The label the instruction refers to, defined where the entry lands.
     pub label: Name,
@@ -204,6 +210,7 @@ pub struct LiteralRequest {
 
 /// A literal pool entry's value.
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub enum Literal {
     /// A number, as it was when the instruction was read.
     Const(i64),
@@ -214,6 +221,7 @@ pub enum Literal {
 /// A PC-relative reference to a symbol defined in the fixup's own section,
 /// as [`Architecture::defers_to_linker`] is asked about it.
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub struct SameSectionRef<'a> {
     /// The binding of the symbol as written: `alias` in `call alias` after
     /// `.set alias, target`, not `target`.
@@ -231,6 +239,7 @@ pub struct SameSectionRef<'a> {
 /// differently, the one listed last here wins for the whole file, since each
 /// is a refinement of the ones before it.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[non_exhaustive]
 pub enum Relaxation {
     /// Every size is chosen at once from the previous pass's addresses, and
     /// only grows. Layout starts each instruction at its smallest candidate,
@@ -268,6 +277,7 @@ pub enum Relaxation {
 /// shared, while `.code64`, `.arch` extensions and similar directives still
 /// have somewhere to record what they changed.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ArchState {
     /// Operating mode width in bits (x86: 16, 32 or 64).
     pub bits: u8,
@@ -289,6 +299,7 @@ pub struct ArchState {
 /// What a PC-relative reference's target is, for
 /// [`Architecture::interwork`].
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub struct InterworkTarget {
     /// The bits [`Architecture::label_flags`] gave the target's label.
     pub flags: u8,
@@ -308,6 +319,7 @@ pub struct InterworkTarget {
 /// What a branch becomes once its target is known; see
 /// [`Architecture::interwork`].
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub enum Interwork {
     /// Resolved, or relocated, as written.
     AsWritten,
@@ -324,6 +336,7 @@ pub enum Interwork {
 }
 
 /// One instruction to assemble, as the generic parser saw it.
+#[non_exhaustive]
 pub struct InsnRequest<'t> {
     pub mnemonic: Name,
     pub mnemonic_span: Span,
@@ -342,6 +355,7 @@ impl InsnRequest<'_> {
 }
 
 /// The slice of assembler state a backend may touch.
+#[non_exhaustive]
 pub struct AsmCtx<'a> {
     pub interner: &'a mut Interner,
     pub exprs: &'a mut ExprArena,
@@ -569,6 +583,7 @@ pub(crate) fn fixed_distance(
 /// An alignment or `.org` in a code section, as the layout finally placed
 /// it; see [`Architecture::layout_records`].
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub struct LayoutPlace {
     pub kind: PlaceKind,
     pub section: SectionId,
@@ -580,6 +595,7 @@ pub struct LayoutPlace {
 
 /// What made a [`LayoutPlace`].
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub enum PlaceKind {
     /// `.align` or one of its relatives, or the padding that rounds a
     /// section up to its alignment, which is a power of two: this is the
@@ -593,6 +609,7 @@ pub enum PlaceKind {
 /// A section of records about the finished layout; see
 /// [`Architecture::layout_records`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct LayoutRecords {
     pub name: &'static str,
     pub bytes: Vec<u8>,
@@ -604,6 +621,7 @@ pub struct LayoutRecords {
 
 /// See [`Architecture::modifier_symbols`].
 #[derive(Copy, Clone, Default, Debug)]
+#[non_exhaustive]
 pub struct ModifierSymbols {
     /// The name of a symbol to add, undefined, to the object.
     pub needs: Option<&'static str>,
@@ -1094,7 +1112,7 @@ pub trait Architecture {
 
     /// Whether an instruction's operands refer to the instruction's own
     /// address without spelling it `.`, so that [`Architecture::assemble`]
-    /// may build [`ExprKind::Here`](crate::expr::ExprKind::Here) nodes for
+    /// may build `ExprKind::Here` nodes for
     /// it. SuperH's `@(8,pc)` means `. + 8`.
     fn operands_use_location(&self, _interner: &Interner, _operands: &[Token]) -> bool {
         false
@@ -1162,7 +1180,7 @@ pub trait Architecture {
     }
 
     /// Whether `A.B` in an expression selects a bit of the byte at `A`, as it
-    /// does on the MCS-51; see [`crate::expr::BinOp::BitAddr`]. Off
+    /// does on the MCS-51; see `expr::BinOp::BitAddr`. Off
     /// everywhere else, so `.` keeps its usual meaning.
     fn bit_addressing(&self) -> bool {
         false

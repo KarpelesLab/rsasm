@@ -33,6 +33,7 @@ pub enum Arg {
     IncM,
     /// `@-rn` / `@-rm`.
     DecN,
+    #[allow(dead_code)]
     DecM,
     /// `@(r0,rn)` / `@(r0,rm)`.
     R0IdxN,
@@ -429,6 +430,7 @@ pub fn lookup(name: &str) -> impl Iterator<Item = &'static Entry> + '_ {
     TABLE.iter().filter(move |e| e.name == name)
 }
 
+#[allow(dead_code)]
 pub fn exists(name: &str) -> bool {
     lookup(name).next().is_some()
 }

@@ -232,6 +232,7 @@ impl Architecture for PowerPc {
 }
 
 /// True if `name` is a register in this architecture.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     reg::is_register(name)
 }

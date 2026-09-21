@@ -126,6 +126,7 @@ impl Abi {
         }
     }
 
+    #[allow(dead_code)]
     pub fn got32(self) -> u32 {
         match self {
             Abi::X86_64 => x86_64::GOT32,

@@ -521,6 +521,7 @@ fn set_mode(cx: &mut AsmCtx<'_>, thumb: bool) {
 
 /// True if `name` is an ARM register, for callers that need to avoid treating
 /// register names as symbols.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     reg::is_register(name)
 }

@@ -190,8 +190,10 @@ pub struct Mem {
 #[derive(Clone, Debug)]
 pub enum OperandKind {
     Reg(Reg),
+    #[allow(dead_code)]
     Vec(VecReg),
     /// A vector element: `v0.s[2]`.
+    #[allow(dead_code)]
     VecElem(VecReg, u64),
     Imm(ExprRef),
     /// `ldr x0, =expr`: the value goes in a literal pool and the

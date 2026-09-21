@@ -56,6 +56,7 @@ impl Reg {
     /// `xmm16`-`xmm31` answer true as well, but REX cannot reach them: only
     /// EVEX has the fourth and fifth bits. The encoder rejects them before it
     /// gets as far as building a REX byte.
+    #[allow(dead_code)]
     pub fn needs_rex_ext(&self) -> bool {
         self.num >= 8
     }
@@ -308,6 +309,7 @@ pub fn name_of(r: Reg) -> &'static str {
 }
 
 /// True if `name` is a register in this architecture.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     lookup(name).is_some()
 }

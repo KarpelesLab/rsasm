@@ -1655,11 +1655,13 @@ fn reloc_moffs_modifier(abi: reloc::Abi, name: &str, size: u8) -> Option<u32> {
 
 /// True if `name` is a register, used by the generic parser to avoid treating
 /// register names as symbols.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     reg::is_register(name)
 }
 
 /// Convenience for tests and for the `--print-encoding` debug output.
+#[allow(dead_code)]
 pub fn describe_span(span: Span) -> String {
     format!("{span:?}")
 }

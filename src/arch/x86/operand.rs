@@ -133,6 +133,7 @@ pub enum OperandKind {
     Imm(ExprRef),
     Mem(Mem),
     /// A branch target given as a plain label or expression.
+    #[allow(dead_code)]
     Rel(ExprRef),
     /// `jmp *%rax` / `jmp rax`: an indirect branch through a register or
     /// memory operand.

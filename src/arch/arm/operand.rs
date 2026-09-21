@@ -125,6 +125,8 @@ pub enum ShiftAmt {
 }
 
 /// How a load or store updates its base register.
+// The names are the manual's, `pre-indexed` and `post-indexed`.
+#[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Index {
     /// `[rn, off]`: the base is unchanged.

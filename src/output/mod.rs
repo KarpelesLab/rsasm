@@ -7,6 +7,7 @@ pub mod macho;
 pub mod raw;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Format {
     /// ELF relocatable object.
     Elf,
@@ -63,6 +64,7 @@ impl Format {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OutputError {
     Unsupported(String),
     Io(std::io::Error),

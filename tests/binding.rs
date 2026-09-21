@@ -165,10 +165,7 @@ fn m68k_leaves_only_weak_symbols_to_the_linker() {
     // and relocates data referring to one against the section.
     let mut asm = Assembler::new(
         rsasm::arch::lookup("m68k").unwrap(),
-        rsasm::assembler::Options {
-            dialect: rsasm::lexer::Dialect::Gas,
-            ..Default::default()
-        },
+        rsasm::assembler::Options::new().with_dialect(rsasm::lexer::Dialect::Gas),
     );
     asm.assemble_str(
         "test.s",

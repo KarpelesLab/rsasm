@@ -170,11 +170,13 @@ pub struct Arrangement {
 
 impl Arrangement {
     /// The `Q` bit: 1 for the 128-bit arrangements.
+    #[allow(dead_code)]
     pub fn q(self) -> u32 {
         u32::from(self.elem_bits as u32 * self.lanes as u32 == 128)
     }
 
     /// The two-bit `size` field shared by most SIMD data-processing encodings.
+    #[allow(dead_code)]
     pub fn size(self) -> u32 {
         match self.elem_bits {
             8 => 0,
@@ -243,6 +245,7 @@ pub fn cond_name(code: u8) -> &'static str {
 }
 
 /// True if `name` is any register spelling this backend knows.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     lookup(name).is_some() || vector(name).is_some()
 }

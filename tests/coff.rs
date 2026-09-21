@@ -14,11 +14,7 @@ use rsasm::lexer::Dialect;
 use rsasm::output::{self, Format};
 
 fn assemble(arch: &str, dialect: Dialect, format: Format, src: &str) -> Assembler {
-    let options = Options {
-        format,
-        dialect,
-        ..Options::default()
-    };
+    let options = Options::new().with_format(format).with_dialect(dialect);
     let mut asm = Assembler::new(arch::lookup(arch).expect("backend"), options);
     asm.assemble_str("in.s", src);
     asm.finish();

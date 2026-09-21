@@ -1122,7 +1122,7 @@ fn malformed_input_never_panics() {
     for archname in ["6502", "z80", "i8080"] {
         for line in lines {
             let a = arch::lookup(archname).expect("backend is compiled in");
-            let mut asm = Assembler::new(a, Options::default());
+            let mut asm = Assembler::new(a, Options::new());
             asm.assemble_str("fuzz.s", line);
             asm.finish();
             // Reaching here at all is the assertion.
@@ -1176,10 +1176,7 @@ fn word(s: &str) -> &str {
 /// than the start of a comment.
 fn nasm_6502(src: &str) -> Vec<u8> {
     let a = arch::lookup("6502").expect("backend is compiled in");
-    let options = Options {
-        dialect: Dialect::Nasm,
-        ..Options::default()
-    };
+    let options = Options::new().with_dialect(Dialect::Nasm);
     let mut asm = Assembler::new(a, options);
     asm.assemble_str("t.s", src);
     asm.finish();

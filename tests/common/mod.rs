@@ -37,7 +37,7 @@ pub fn errors_for(arch: &str, src: &str) -> String {
 /// Assembles `src` and hands the finished assembler back for inspection.
 pub fn assemble_for(arch: &str, src: &str) -> Assembler {
     let arch = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
-    let mut asm = Assembler::new(arch, Options::default());
+    let mut asm = Assembler::new(arch, Options::new());
     asm.assemble_str("test.s", src);
     asm.finish();
     asm
@@ -46,11 +46,7 @@ pub fn assemble_for(arch: &str, src: &str) -> Assembler {
 /// Assembles `src` for flat binary output based at `base`.
 pub fn assemble_flat_for(arch: &str, src: &str, base: u64) -> Assembler {
     let arch = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
-    let options = Options {
-        relocatable: false,
-        base_addr: base,
-        ..Options::default()
-    };
+    let options = Options::new().with_relocatable(false).with_base_addr(base);
     let mut asm = Assembler::new(arch, options);
     asm.assemble_str("test.s", src);
     asm.finish();
@@ -101,10 +97,7 @@ pub fn assemble_flat(src: &str, base: u64) -> Assembler {
 // ---- dialects ---------------------------------------------------------------
 
 fn dialect_options(dialect: rsasm::lexer::Dialect) -> Options {
-    Options {
-        dialect,
-        ..Options::default()
-    }
+    Options::new().with_dialect(dialect)
 }
 
 /// Assembles `src` for `arch` in `dialect`.
@@ -124,11 +117,9 @@ pub fn assemble_flat_dialect(
     base: u64,
 ) -> Assembler {
     let a = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
-    let options = Options {
-        relocatable: false,
-        base_addr: base,
-        ..dialect_options(dialect)
-    };
+    let options = dialect_options(dialect)
+        .with_relocatable(false)
+        .with_base_addr(base);
     let mut asm = Assembler::new(a, options);
     asm.assemble_str("test.s", src);
     asm.finish();

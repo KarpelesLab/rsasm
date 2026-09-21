@@ -27,6 +27,8 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
 }
 
 /// The Intel HEX records for `image` loaded at `start`.
+/// Not API.
+#[doc(hidden)]
 pub fn encode(start: u64, image: &[u8]) -> Result<Vec<u8>, OutputError> {
     let end = start + image.len() as u64;
     if end > 1 << 32 {

@@ -54,6 +54,12 @@ struct Args {
     format_given: bool,
 }
 
+/// Applies a builder method to the options in place, since [`Options`]'s
+/// builders take and return the whole value.
+fn edit(o: &mut Options, f: impl FnOnce(Options) -> Options) {
+    *o = f(std::mem::take(o));
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let parsed = match parse_args(&args) {
@@ -80,7 +86,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         output: PathBuf::from("a.out"),
         arch: None,
         format: Format::Elf,
-        options: Options::default(),
+        options: Options::new(),
         defines: Vec::new(),
         hex: false,
         color: std::io::IsTerminal::is_terminal(&std::io::stderr()),
@@ -123,25 +129,27 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             }
             "-s" | "--syntax" => {
                 let v = next(&mut i, arg)?;
-                a.options.syntax = Some(match v.as_str() {
+                let syntax = match v.as_str() {
                     "att" | "at&t" => arch::Syntax::Att,
                     "intel" => arch::Syntax::Intel,
                     _ => return Err(format!("unknown syntax `{v}`")),
-                });
+                };
+                edit(&mut a.options, |o| o.with_syntax(syntax));
             }
             "-d" | "--dialect" => {
                 let v = next(&mut i, arg)?;
-                a.options.dialect = Dialect::from_name(&v).ok_or_else(|| {
+                let dialect = Dialect::from_name(&v).ok_or_else(|| {
                     format!(
                         "unknown dialect `{v}`; expected gas, nasm, motorola, renesas, ccrl, ccrh or ccrx"
                     )
                 })?;
+                edit(&mut a.options, |o| o.with_dialect(dialect));
                 a.dialect_given = true;
             }
-            "-I" => a
-                .options
-                .include_paths
-                .push(PathBuf::from(next(&mut i, "-I")?)),
+            "-I" => {
+                let dir = PathBuf::from(next(&mut i, "-I")?);
+                edit(&mut a.options, |o| o.with_include_path(dir));
+            }
             "-D" => {
                 let v = next(&mut i, "-D")?;
                 match v.split_once('=') {
@@ -153,18 +161,22 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                 let v = next(&mut i, "--base")?;
                 let n =
                     parse_int(&v).ok_or_else(|| format!("`--base` needs a number, got `{v}`"))?;
-                a.options.base_addr = n;
-                a.options.relocatable = false;
+                edit(&mut a.options, |o| {
+                    o.with_base_addr(n).with_relocatable(false)
+                });
             }
             "--hex" => a.hex = true,
-            "-g" | "--gen-debug" => a.options.debug_source = true,
+            "-g" | "--gen-debug" => edit(&mut a.options, |o| o.with_debug_source(true)),
             "--gdwarf-2" | "--gdwarf-3" | "--gdwarf-4" | "--gdwarf-5" => {
-                a.options.debug_source = true;
-                a.options.dwarf_version = arg[arg.len() - 1..].parse().ok();
+                edit(&mut a.options, |o| o.with_debug_source(true));
+                if let Ok(v) = arg[arg.len() - 1..].parse() {
+                    edit(&mut a.options, |o| o.with_dwarf_version(v));
+                }
             }
             "--no-color" => a.color = false,
             _ if arg.starts_with("-I") && arg.len() > 2 => {
-                a.options.include_paths.push(PathBuf::from(&arg[2..]))
+                let dir = PathBuf::from(&arg[2..]);
+                edit(&mut a.options, |o| o.with_include_path(dir));
             }
             _ if arg.starts_with('-') && arg.len() > 1 => {
                 return Err(format!("unknown option `{arg}`"));
@@ -190,14 +202,14 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         a.arch = Some(cpu.to_string());
     }
     if a.format == Format::MachO {
-        a.options.format = Format::MachO;
+        edit(&mut a.options, |o| o.with_format(Format::MachO));
     }
-    if a.format == Format::Coff && a.options.debug_source {
+    if a.format == Format::Coff && a.options.debug_source() {
         return Err("`-g` writes DWARF, which rsasm does not write into COFF objects yet".into());
     }
     // Flat output has no relocations to defer to a linker.
     if a.format.is_flat() {
-        a.options.relocatable = false;
+        edit(&mut a.options, |o| o.with_relocatable(false));
     }
     Ok(Some(a))
 }
@@ -220,7 +232,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
         })?,
         // NASM's defaults: a flat binary starts in 16-bit mode. And an ELF
         // class, however the source is written, names the x86 machine.
-        None => match (args.options.dialect, args.format, args.elf_bits) {
+        None => match (args.options.dialect(), args.format, args.elf_bits) {
             (Dialect::Nasm, Format::Binary | Format::IntelHex, _) => arch::lookup("i8086"),
             // `-f elf32`, `-f win32` and their 64-bit spellings name the x86
             // machine as well as the format, as they do in NASM.
@@ -232,10 +244,9 @@ fn run(args: Args) -> Result<ExitCode, String> {
         .ok_or_else(|| "this build has no architecture backends enabled".to_string())?,
     };
 
-    let mut options = args.options.clone();
-    options.format = args.format;
+    let mut options = args.options.clone().with_format(args.format);
     if !args.dialect_given {
-        options.dialect = arch.default_dialect();
+        options = options.with_dialect(arch.default_dialect());
     }
     let mut asm = Assembler::new(arch, options);
 
@@ -245,7 +256,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
         let mut src = String::new();
         for (k, v) in &args.defines {
             // NASM's `-D` defines a single-line macro.
-            if asm.options.dialect == Dialect::Nasm {
+            if asm.options.dialect() == Dialect::Nasm {
                 src.push_str(&format!("%define {k} {v}\n"));
             } else {
                 src.push_str(&format!(".set {k}, {v}\n"));
@@ -277,6 +288,9 @@ fn run(args: Args) -> Result<ExitCode, String> {
         Format::MachO => output::macho::build(&asm).map_err(|e| e.to_string())?,
         Format::Binary => output::raw::build(&asm).map_err(|e| e.to_string())?,
         Format::IntelHex => output::ihex::build(&asm).map_err(|e| e.to_string())?,
+        // `Format` is `#[non_exhaustive]`, so a writer this build does not
+        // know about needs an arm; `--format` cannot name one.
+        _ => return Err(format!("no writer for {:?} output", args.format)),
     };
 
     // Intel HEX is already text; `--hex` prints it as it is.

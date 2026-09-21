@@ -19,8 +19,7 @@
 //! 128 + 128 bits numbered in one 8-bit space, and `SETB`, `CLR`, `CPL`,
 //! `MOV C,`, `JB`, `JNB` and `JBC` take a number in it. Source writes such an
 //! address either directly or as `P1.3`, which is the dialect's
-//! [`BinOp::BitAddr`](crate::expr::BinOp::BitAddr) operator and is computed
-//! wherever an expression is.
+//! `BinOp::BitAddr` operator and is computed wherever an expression is.
 //!
 //! **Paged jumps.** `AJMP` and `ACALL` hold 11 bits of target and take the
 //! top five from the PC *after* the instruction, so the target has to be in
@@ -54,7 +53,7 @@
 //!   block after it, as on the CPU; see `Enc::addr11`;
 //! - a bit of a byte that has no bit addresses (`30H.1`, `SBUF.1`) is refused,
 //!   where AS assembles a bit of some other byte; see
-//!   [`crate::expr::eval_bit_address`];
+//!   `expr::eval_bit_address`;
 //! - `SETB A` is refused, where AS assembles `DA A`.
 
 use super::common::{self, Enc};

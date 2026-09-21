@@ -381,6 +381,7 @@ fn register(name: &str) -> Option<Atom> {
 
 /// True for a register name only this grammar knows: vector, SVE and
 /// predicate registers.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     matches!(
         register(name),

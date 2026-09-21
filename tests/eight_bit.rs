@@ -28,11 +28,9 @@ struct Case {
 /// default dialect, as a flat image at address 0.
 fn assemble(archname: &str, src: &str) -> Assembler {
     let a = arch::lookup(archname).expect("backend is compiled in");
-    let options = Options {
-        dialect: a.default_dialect(),
-        relocatable: false,
-        ..Options::default()
-    };
+    let options = Options::new()
+        .with_dialect(a.default_dialect())
+        .with_relocatable(false);
     let mut asm = Assembler::new(a, options);
     asm.assemble_str("test.s", src);
     asm.finish();

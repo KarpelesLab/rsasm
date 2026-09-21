@@ -51,6 +51,7 @@ pub const BLO: u32 = 0x47;
 /// `lo(sym)` in a field whose bit 0 is part of the opcode.
 pub const WLO_1: u32 = 0x4c;
 /// 32-bit PC-relative displacement.
+#[allow(dead_code)]
 pub const PC32: u32 = 0x58;
 /// `loop`'s 16-bit backward displacement.
 pub const PC16U: u32 = 0x5f;

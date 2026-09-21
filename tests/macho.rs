@@ -18,10 +18,7 @@ use rsasm::output::{self, Format};
 #[allow(dead_code)]
 fn macho_for(arch: &str, src: &str) -> Result<Vec<u8>, String> {
     let a = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
-    let options = Options {
-        format: Format::MachO,
-        ..Options::default()
-    };
+    let options = Options::new().with_format(Format::MachO);
     let mut asm = Assembler::new(a, options);
     asm.assemble_str("test.s", src);
     if !asm.finish() || asm.diags.has_errors() {
