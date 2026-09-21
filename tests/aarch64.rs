@@ -3,7 +3,9 @@
 //! Every expected byte string here was produced by `tools/mc-diff/run.sh
 //! aarch64` agreeing with llvm-mc 22, or by a one-off comparison against it
 //! for cases too large for the corpus (the branch-range boundaries). The
-//! relocation types were compared against llvm-mc's and GNU as's objects.
+//! system instructions and the literal pools are GNU as's, from
+//! `tools/xas-diff/run.sh aarch64` and `tools/flat-diff/run.sh aarch64-gas`;
+//! the relocation types were compared against llvm-mc's and GNU as's objects.
 //!
 //! Immediates in the general-purpose tests are written without `#`, which
 //! both references accept; the SIMD and SVE tests write it.
@@ -1402,4 +1404,172 @@ fn simd_diagnostics_name_the_operand_and_its_limit() {
     rejects("tbl v0.16b, {v1.16b, v3.16b}, v2.16b", &["consecutive"]);
     rejects("ld1 {v0.16b, v1.8b}, [x0]", &["same kind"]);
     rejects("frobnicate v0.8b", &["unknown instruction `frobnicate`"]);
+}
+
+/// `dc`, `ic`, `at`, `tlbi` and the rest are names for a `sys` word; the
+/// name decides whether an address register follows it. Every name comes
+/// from GNU as's tables through `tools/tables/aarch64-sys.py`.
+#[test]
+fn system_instructions() {
+    check(&[
+        ("dc civac, x0", "20 7e 0b d5"),
+        ("dc cvau, x3", "23 7b 0b d5"),
+        ("dc zva, x30", "3e 74 0b d5"),
+        ("dc isw, x1", "41 76 08 d5"),
+        ("ic ialluis", "1f 71 08 d5"),
+        ("ic iallu", "1f 75 08 d5"),
+        ("ic ivau, x2", "22 75 0b d5"),
+        ("at s1e0r, x0", "40 78 08 d5"),
+        ("at s1e1w, x1", "21 78 08 d5"),
+        ("at s12e1r, x4", "84 78 0c d5"),
+        ("at s1e3a, x5", "45 79 0e d5"),
+        // A TLB maintenance name that addresses nothing takes no register,
+        // one that addresses a page needs one, and the names that maintain a
+        // whole regime take one or not.
+        ("tlbi alle3", "1f 87 0e d5"),
+        ("tlbi vae1, x3", "23 87 08 d5"),
+        ("tlbi ipas2e1is, x7", "27 80 0c d5"),
+        ("tlbi vmalle1is", "1f 83 08 d5"),
+        ("tlbi vmalle1is, x0", "00 83 08 d5"),
+        // The nXS variants, which do not wait for the extended-set
+        // translations, are separate names.
+        ("tlbi rvae1nxs, x9", "29 96 08 d5"),
+        ("tlbi vmalle1isnxs", "1f 93 08 d5"),
+        ("cfp rctx, x0", "80 73 0b d5"),
+        ("dvp rctx, x1", "a1 73 0b d5"),
+        ("cpp rctx, x2", "e2 73 0b d5"),
+        ("cosp rctx, x3", "c3 73 0b d5"),
+        // The instruction all of those are aliases of. Its register is
+        // `xzr` when it is left out.
+        ("sys #0, c7, c8, #0, x5", "05 78 08 d5"),
+        ("sys #3, c7, c4, #1", "3f 74 0b d5"),
+        ("sys #7, c15, c15, #7, x30", "fe ff 0f d5"),
+        ("sysl x7, #3, c7, c4, #1", "27 74 2b d5"),
+        ("sysl x0, #0, c0, c0, #0", "00 00 28 d5"),
+    ]);
+}
+
+/// `mrs` and `msr` know every register name GNU as has, reach the rest
+/// through the generic spelling, and write a PSTATE field with an immediate
+/// of the width that field has.
+#[test]
+fn system_registers_and_pstate_fields() {
+    check(&[
+        ("mrs x0, nzcv", "00 42 3b d5"),
+        ("mrs x1, ctr_el0", "21 00 3b d5"),
+        ("mrs x2, midr_el1", "02 00 38 d5"),
+        ("mrs x3, sctlr_el1", "03 10 38 d5"),
+        ("mrs x5, zcr_el1", "05 12 38 d5"),
+        ("mrs x4, s3_3_c13_c0_3", "64 d0 3b d5"),
+        ("msr nzcv, x0", "00 42 1b d5"),
+        ("msr sctlr_el1, x1", "01 10 18 d5"),
+        ("msr s3_0_c15_c1_0, x2", "02 f1 18 d5"),
+        ("msr daifset, #3", "df 43 03 d5"),
+        ("msr daifclr, #15", "ff 4f 03 d5"),
+        ("msr spsel, #1", "bf 41 00 d5"),
+        ("msr pan, #0", "9f 40 00 d5"),
+        ("msr dit, #1", "5f 41 03 d5"),
+        ("msr allint, #1", "1f 41 01 d5"),
+        // SME's mode switches are PSTATE fields too: this is `smstart sm`.
+        ("msr svcrsm, #1", "7f 43 03 d5"),
+        ("msr svcrsmza, #1", "7f 47 03 d5"),
+    ]);
+}
+
+/// The barriers and the aliases of `hint`, with a name or with the number
+/// the name stands for.
+#[test]
+fn barriers_and_hints() {
+    check(&[
+        ("nop", "1f 20 03 d5"),
+        ("yield", "3f 20 03 d5"),
+        ("wfe", "5f 20 03 d5"),
+        ("sevl", "bf 20 03 d5"),
+        ("hint #7", "ff 20 03 d5"),
+        ("xpaclri", "ff 20 03 d5"),
+        ("hint #127", "ff 2f 03 d5"),
+        ("esb", "1f 22 03 d5"),
+        ("psb csync", "3f 22 03 d5"),
+        ("tsb csync", "5f 22 03 d5"),
+        ("gcsb dsync", "7f 22 03 d5"),
+        ("csdb", "9f 22 03 d5"),
+        ("clrbhb", "df 22 03 d5"),
+        ("dgh", "df 20 03 d5"),
+        ("sb", "ff 30 03 d5"),
+        ("paciaz", "1f 23 03 d5"),
+        ("paciasp", "3f 23 03 d5"),
+        ("pacia1716", "1f 21 03 d5"),
+        ("autibsp", "ff 23 03 d5"),
+        ("bti", "1f 24 03 d5"),
+        ("bti c", "5f 24 03 d5"),
+        ("bti jc", "df 24 03 d5"),
+        ("chkfeat x16", "1f 25 03 d5"),
+        ("stshh keep", "1f 26 03 d5"),
+        ("stshh strm", "3f 26 03 d5"),
+        ("ssbb", "9f 30 03 d5"),
+        ("pssbb", "9f 34 03 d5"),
+        ("dsb sy", "9f 3f 03 d5"),
+        ("dsb ishst", "9f 3a 03 d5"),
+        ("dsb oshld", "9f 31 03 d5"),
+        ("dsb #11", "9f 3b 03 d5"),
+        // `dsb` reaches the nXS barriers through a fifth bit, which only
+        // four values of set.
+        ("dsb nshnxs", "3f 36 03 d5"),
+        ("dsb synxs", "3f 3e 03 d5"),
+        ("dsb #24", "3f 3a 03 d5"),
+        ("dmb ish", "bf 3b 03 d5"),
+        ("dmb ld", "bf 3d 03 d5"),
+        ("dmb #0", "bf 30 03 d5"),
+        ("isb", "df 3f 03 d5"),
+        ("isb sy", "df 3f 03 d5"),
+        ("isb #0", "df 30 03 d5"),
+        ("clrex", "5f 3f 03 d5"),
+        ("clrex #3", "5f 33 03 d5"),
+    ]);
+}
+
+/// A literal pool is laid out across a whole section, so these are whole
+/// programs. GNU as groups the entries by width, aligns each run, shares an
+/// entry between loads of the same value and width, and writes what is left
+/// at the end of the section. Unlike its ARM port — and unlike llvm-mc — it
+/// never turns a load of a small constant into a `mov`.
+#[test]
+fn literal_pools() {
+    program(
+        " ldr x0, =0x123456789\n ldr w1, =0x12345678\n ldr x2, =0x123456789\n \
+         ldr s3, =0x3fc00000\n ldrsw x4, =-1\n ret\n",
+        "40 01 00 58 a1 00 00 18 02 01 00 58 83 00 00 1c 84 00 00 98 c0 03 5f d6 \
+         78 56 34 12 00 00 c0 3f ff ff ff ff 00 00 00 00 89 67 45 23 01 00 00 00",
+    );
+    program(
+        " ldr x0, =0x1111222233334444\n ldr w1, =0x55556666\n ret\n .ltorg\n \
+         ldr x2, =0x7777888899990000\n ret\n",
+        "80 00 00 58 41 00 00 18 c0 03 5f d6 66 66 55 55 44 44 33 33 22 22 11 11 \
+         42 00 00 58 c0 03 5f d6 00 00 99 99 88 88 77 77",
+    );
+}
+
+/// The system instructions refuse an unknown name, and the register the
+/// name does not allow.
+#[test]
+fn system_diagnostics_name_what_was_expected() {
+    rejects("dc nosuchop, x0", &["`nosuchop` is not an operand of `dc`"]);
+    rejects("dc civac", &["`dc civac` needs an address register"]);
+    rejects("ic ialluis, x0", &["`ic ialluis` takes no register"]);
+    rejects("dc civac, w0", &["64-bit register"]);
+    rejects("sys #8, c0, c0, #0", &["`op1`", "0..=7"]);
+    rejects("sys #0, c16, c0, #0", &["`c0` through `c15`"]);
+    rejects("sys #0, x0, c0, #0", &["`c0` through `c15`"]);
+    rejects("mrs x0, nosuchreg", &["unknown system register"]);
+    rejects("msr daifset, #16", &["a PSTATE value", "0..=15"]);
+    rejects("msr spsel, #2", &["a PSTATE value", "0..=1"]);
+    rejects("psb dsync", &["is not an operand of `psb`", "csync"]);
+    rejects("esb x0", &["`esb` takes no operand"]);
+    rejects("dsb #18", &["16, 20, 24 and 28"]);
+    rejects(
+        "ldr x0, =1\n .space 1024 * 1024\n .ltorg\n",
+        &["literal pool"],
+    );
+    rejects("str x0, =1", &["only `ldr` and `ldrsw`"]);
+    rejects("add x0, x1, =4", &["only `ldr` loads from"]);
 }

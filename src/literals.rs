@@ -11,8 +11,11 @@
 //! Where entries go follows GNU as, whose rules the source that uses pools
 //! was written against: one pool per section, collecting every literal since
 //! the last `.ltorg`; an entry shared by every use of the same number, or of
-//! the same symbol plus the same addend; the pool aligned to its entries'
-//! width with zeros, not no-ops; and at most 1024 entries.
+//! the same symbol plus the same addend; the entries of each width kept
+//! together, narrowest first, each run aligned to its width with zeros, not
+//! no-ops; and at most 1024 entries. The widths only matter on AArch64,
+//! where a pool holds four-, eight- and sixteen-byte entries; ARM's are all
+//! four bytes.
 
 use crate::arch::{Literal, LiteralRequest, Request};
 use crate::assembler::Assembler;
@@ -49,7 +52,11 @@ impl Assembler {
             match r {
                 Request::AlignZero(align) => {
                     if align > 1 {
-                        self.map_data_frag();
+                        if self.arch.align_padding_is_code() {
+                            self.map_code();
+                        } else {
+                            self.map_data_frag();
+                        }
                         self.cur_section().push(Fragment::new(
                             FragKind::Align {
                                 align,
@@ -135,19 +142,25 @@ impl Assembler {
         if entries.is_empty() {
             return;
         }
-        let align = entries.iter().map(|e| e.size as u64).max().unwrap_or(1);
-        // GNU as aligns the pool with zeros even in code, marks the padding
-        // as data, and marks the pool itself as data again.
-        self.run_requests(vec![Request::AlignZero(align)], span);
-        let s = self.cur_section();
-        s.align = s.align.max(align);
-        if let Some((_, _, data)) =
-            crate::mapping::mapping_names(self.arch.as_ref(), &self.arch_state)
-        {
-            self.map_transition(data, true);
-        }
+        // GNU as keeps a pool per entry width and writes them narrowest
+        // first, each aligned with zeros even in code, and marks the padding
+        // and the entries as data.
+        entries.sort_by_key(|e| e.size);
         let section = self.cur;
+        let mut written = 0u8;
         for e in entries {
+            if e.size != written {
+                written = e.size;
+                let align = u64::from(e.size);
+                self.run_requests(vec![Request::AlignZero(align)], span);
+                let s = self.cur_section();
+                s.align = s.align.max(align);
+                if let Some((_, _, data)) =
+                    crate::mapping::mapping_names(self.arch.as_ref(), &self.arch_state)
+                {
+                    self.map_transition(data, true);
+                }
+            }
             self.cur_section().seal();
             let frag = self.cur_section().next_frag_index();
             for label in e.labels {
@@ -159,7 +172,20 @@ impl Assembler {
             }
             match e.value {
                 Literal::Const(v) => {
-                    let bytes = self.arch.endian().bytes(v as u64, e.size as usize);
+                    let endian = self.arch.endian();
+                    let mut bytes = endian.bytes(v as u64, usize::from(e.size).min(8));
+                    if usize::from(e.size) > bytes.len() {
+                        // A sixteen-byte entry holds the value sign-extended,
+                        // as GNU as writes it: `ldr q0, =-1` is sixteen 0xff
+                        // bytes.
+                        let fill = vec![u8::from(v < 0) * 0xff; usize::from(e.size) - bytes.len()];
+                        match endian {
+                            crate::arch::Endian::Little => bytes.extend(fill),
+                            crate::arch::Endian::Big => {
+                                bytes.splice(0..0, fill);
+                            }
+                        }
+                    }
                     self.cur_section().emit_bytes(&bytes, e.span);
                 }
                 Literal::Expr(x) => self.emit_value(e.size, x, e.span),

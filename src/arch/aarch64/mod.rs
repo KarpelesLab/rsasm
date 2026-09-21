@@ -32,8 +32,10 @@ pub mod operand;
 pub mod reg;
 pub mod reloc;
 pub mod sysreg;
-// Not public API: the generated table and its matcher are internals, and
-// `table_data` is a generated file.
+// Not public API: the generated tables and the table's matcher are
+// internals, and `sysreg_data`, `table_data` and `table_names` are generated
+// files.
+mod sysreg_data;
 pub(crate) mod table;
 mod table_data;
 mod table_names;
@@ -167,6 +169,34 @@ impl Architecture for AArch64 {
                     .find_map(|p| numbered_register(name, p, 31))
                     .map(|n| 64 + n)
             })
+    }
+
+    /// `.ltorg` and `.pool` write the section's literal pool out here.
+    fn directive(
+        &self,
+        cx: &mut AsmCtx<'_>,
+        name: &str,
+        _cur: &mut crate::cursor::Cursor<'_>,
+    ) -> bool {
+        match name {
+            ".ltorg" | ".pool" => {
+                cx.requests.push(crate::arch::Request::FlushLiterals);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A64 code is `$x`, and the literal pools and data in a code section
+    /// are `$d`, as GNU as marks them.
+    fn code_mapping(&self, _state: &ArchState) -> Option<(&'static str, u64)> {
+        Some(("$x", 4))
+    }
+
+    /// GNU as's `aarch64_init_frag` marks an alignment fragment in a code
+    /// section as instructions, not as data.
+    fn align_padding_is_code(&self) -> bool {
+        true
     }
 
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
