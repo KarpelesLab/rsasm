@@ -25,6 +25,16 @@
 # `canon.sh --full`, and for AVR `e_flags`, with `canon.sh --flags`. A snippet
 # there named `refused: ...` matches when both assemblers reject it.
 #
+# AArch64 is here for its literal pools, which are GNU as's feature: where
+# the pool goes, what it shares and how its runs are aligned is decided across
+# instructions, and llvm-mc decides differently (it turns `ldr x0, =1` into
+# `mov x0, #1`, and writes its entries in the order they were used). Its
+# system instructions are here too: their operand names come from GNU's
+# tables, and most of the newer ones llvm-mc does not know. The CPU string
+# names every extension GNU as has a name for, since a system register is
+# refused for the CPU rather than unknown; tools/tables/aarch64-sys.py, which
+# generates the corpus, builds the same string from GNU as's own list.
+#
 # ARM is checked against GNU as for ARMv7-A, whose Thumb-2 no-ops and
 # interworking rules are what `-march=armv7-a` gives; without it GNU as
 # assumes an ARMv4T-era CPU. Its snippets start with `.syntax unified`, GNU
@@ -125,6 +135,7 @@ i8080|i8080|8bit|asl -cpu 8080|p2bin
 i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
+aarch64|aarch64|gas|aarch64-elf-as -march=armv9.5-a+crc+crypto+fp+lse+lsfe+lse128+lsui+simd+pan+lor+ras+rdma+fp16+fp16fml+fprcvt+profile+sve+tme+fcma+jscvt+rcpc+rcpc2+dotprod+sha2+frintts+sb+predres+predres2+poe2+tev+aes+sm4+sha3+rng+ssbs+lscp+memtag+occmo+cmpbr+sve2+sve2-sm4+sve2-aes+sve2-sha3+sve2-bitperm+sme+sme-f64f64+sme-i16i64+sme2+bf16+i8mm+f32mm+f64mm+ls64+flagm+flagm2+pauth+xs+wfxt+mops+hbc+cssc+chk+gcs+the+rasv2+ite+d128+sve-b16b16+sve-bfscale+sme2p1+sve2p1+sve-f16f32mm+f8f32mm+f8f16mm+sve-aes+sve-aes2+ssve-aes+sve-bitperm+ssve-bitperm+rcpc3+cpa+faminmax+fp8+lut+brbe+sme-lutv2+fp8fma+fp8dot4+fp8dot2+ssve-fp8fma+ssve-fp8dot4+ssve-fp8dot2+sme-f8f32+sme-f8f16+sme-f16f16+sme-b16b16+pops+sve2p2+sme2p2+gcie+ssve-fexpa+sme-tmop+sme-mop4+mops-go+sve2p3+sme2p3+f16f32dot+f16f32mm+f16mm+sve-b16mm+mtetc+tlbid+sme-fa64|elf:.text
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 msp430|msp430|gas|msp430-elf-as -mcpu=430|elf:.text
 msp430x|msp430x|gas|msp430-elf-as -mcpu=430x|elf:.text
@@ -269,7 +280,8 @@ compare_object() { # key arch dialect cmd name source
   # GNU as for RX renames `.text`, `.data` and `.bss` to Renesas's `P`, `D_1`
   # and `B_1`, which rsasm does not; asked to keep the usual names, it does.
   case "$1" in rx*) flags=-muse-conventional-section-names ;; esac
-  # ARM objects are compared whole, local symbols and `e_flags` included.
+  # ARM and AArch64 objects are compared whole, local symbols — the mapping
+  # symbols among them — and `e_flags` included.
   # AVR objects with their `e_flags`, which name the core and say the object
   # is prepared for linker relaxation; their local symbols are the labels
   # relocations name, which canon.sh already reads by section and offset.
@@ -277,7 +289,7 @@ compare_object() { # key arch dialect cmd name source
   # `.avr.prop`, which differ from run to run; the linker takes those fields
   # from the relocations, so they are blanked before the comparison.
   case "$1" in
-    arm | thumb) full=--full ;;
+    arm | thumb | aarch64) full=--full ;;
     avr*) full="--flags --zero-relocated .avr.prop=4" ;;
   esac
   d=$(mktemp -d)

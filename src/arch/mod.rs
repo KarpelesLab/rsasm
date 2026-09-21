@@ -1019,6 +1019,15 @@ pub trait Architecture {
         "$d"
     }
 
+    /// Whether alignment padding written as zeros in a code section counts
+    /// as code for the mapping symbols. GNU as decides this per target:
+    /// `aarch64_init_frag` marks such a fragment as instructions, where
+    /// `arm_init_frag` marks it as data. It shows between the runs of a
+    /// literal pool, which are aligned to each run's width.
+    fn align_padding_is_code(&self) -> bool {
+        false
+    }
+
     /// Bits to record on a label as it is defined, in the backend's own
     /// terms, from the state it is defined in: ARM marks a label in Thumb
     /// code, and the one a `.thumb_func` names. `name` is the label's, and

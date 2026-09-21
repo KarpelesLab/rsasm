@@ -146,3 +146,25 @@ f:
         add     x10, x10, :lo12:local
 local:
         nop
+
+=== a PC-relative number is an offset from the instruction, not an address
+        nop
+        nop
+        b       #16
+        bl      #-8
+        b.eq    #12
+        cbz     x0, #8
+        tbz     x1, #3, #20
+        ldr     x0, #16
+        ldr     s10, #196
+        adr     x0, #20
+
+=== movprfx, followed by the instruction it prefixes
+# llvm-mc refuses anything else after a movprfx, so it cannot be in the
+# one-line corpora.
+        movprfx z0, z1
+        add     z0.d, p0/m, z0.d, z2.d
+        movprfx z3.s, p1/m, z4.s
+        mul     z3.s, p1/m, z3.s, z5.s
+        movprfx z6.b, p2/z, z7.b
+        lsl     z6.b, p2/m, z6.b, #3

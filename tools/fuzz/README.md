@@ -118,6 +118,48 @@ seeds 6 and 7 find none.
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
 | `RSASM_ORACLES` | `target/oracles` under the repository root, for `msp430.py` |
 
+## AArch64
+
+`aarch64.py` fuzzes the AArch64 backend, SIMD, floating point and SVE above
+all, against llvm-mc and GNU as.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/aarch64.py fuzz --count 100000            # needs RSASM_ORACLES for GNU as
+$ tools/fuzz/aarch64.py fuzz --only '^(ld|st)[1-4]' --mutations 0.6 --seed 3
+$ tools/fuzz/aarch64.py fuzz --source gnu --count 50000  # GNU objdump's spellings
+$ tools/fuzz/aarch64.py check --no-gas tools/mc-diff/aarch64-sve-words.txt
+```
+
+There is no table of forms here. Cases are llvm-mc's own disassembly of
+random instruction words, weighted towards the AdvSIMD, floating-point and
+SVE encoding groups, so every form llvm-mc prints is reachable with operands
+of every value; the backend's table was measured from llvm-mc too, but by
+assembling, so the disassembler's view is an independent one. `--mutations`
+(default 0.25) is the fraction of cases then changed into likely-invalid ones:
+a number moved past its range, an arrangement or register width swapped, an
+operand dropped.
+
+Each line is assembled by all three a batch at a time: every AArch64
+instruction is one word, so a batch's output splits into lines, and a tool
+that refuses one line of a batch is run again without it. The classes are
+`rsasm` (the references agree and rsasm does not: the findings), `mc-only`
+and `gas-only` (the references disagree and rsasm follows that one), and
+`neither`. The AArch64 corpora follow llvm-mc, except that rsasm refuses the
+out-of-range immediates llvm-mc truncates (`ext v0.8b, v1.8b, v2.8b, #8`),
+as GNU as does. `--source gnu` takes the cases from GNU objdump's
+disassembly instead, which is how the spellings GNU as source is written in
+get tried. Lines for what the backend leaves out are dropped rather than
+counted: SME's ZA array and lookup tables, predicates as counters, and the
+multi-vector operands of SME2 (two register lists in one instruction).
+
+| Variable | Default |
+|---|---|
+| `RSASM` | `target/debug/rsasm` under the repository root |
+| `RSASM_ORACLES` | `target/oracles`, for `bin/aarch64-elf-as` and `-objdump` |
+| `GAS` | `$RSASM_ORACLES/bin/aarch64-elf-as` |
+| `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
+
 ## PowerPC
 
 `powerpc.py` generates random AltiVec, VSX, POWER8, POWER9 and POWER10

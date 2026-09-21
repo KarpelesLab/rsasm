@@ -13,7 +13,8 @@
 # optionally tools/mc-diff/<arch>-programs.txt, multi-line snippets separated
 # by `=== <name>` lines. Snippets in tools/mc-diff/<arch>-relocs.txt are
 # compared as whole objects: sections, symbols and relocations, as canon.sh
-# prints them.
+# prints them. Lines in tools/mc-diff/<arch>-*-words.txt are one instruction
+# of a fixed width each, and are assembled a few hundred at a time.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -32,7 +33,7 @@ i8086-intel|i386|i386||.code16\\n.intel_syntax noprefix
 x86-64-simd|x86-64|x86_64|
 x86-64-simd-intel|x86-64|x86_64||.intel_syntax noprefix
 i386-simd|i386|i386|
-aarch64|aarch64|aarch64|
+aarch64|aarch64|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
 arm|arm|armv7|
 thumb|thumb|thumbv7|
 riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c
@@ -135,6 +136,39 @@ compare_object() { # arch, rsasm_arch, triple, flags, header, name, source
   fi
 }
 
+# Compares a batch of one-instruction lines at once. A fixed-width
+# instruction set lets a batch that matches count as a match of every line in
+# it; only a batch that differs is gone through a line at a time, to say
+# which line it was.
+batch=()
+flush_batch() { # arch, rsasm_arch, triple, flags, header
+  [ ${#batch[@]} -eq 0 ] && return 0
+  local src m r l
+  src=$(with_header "$5" "$(printf '%s\n' "${batch[@]}")")
+  m=$(printf '%s\n' "$src" | mc "$3" "$4")
+  r=$(printf '%s\n' "$src" | "$hexdump" "$2" 2>&1)
+  if [ "$m" = "$r" ]; then
+    pass=$((pass + ${#batch[@]}))
+  else
+    for l in "${batch[@]}"; do
+      compare "$1" "$2" "$3" "$4" "$5" "$l" "$l"
+    done
+  fi
+  batch=()
+}
+
+words() { # file, arch, rsasm_arch, triple, flags, header
+  local file=$1 line
+  shift
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    batch+=("$line")
+    [ ${#batch[@]} -ge 200 ] && flush_batch "$@"
+  done < "$file"
+  flush_batch "$@"
+}
+
 # Runs `compare` or `compare_object` over each `=== name` snippet of a file.
 snippets() { # file, compare function, arch, rsasm_arch, triple, flags, header
   local file=$1 fn=$2 snippet="" name="" line
@@ -165,6 +199,10 @@ run_arch() { # arch, rsasm_arch, triple, flags, header
     done < "$lines"
   fi
 
+  local w
+  for w in "$here/$arch"-*-words.txt; do
+    [ -f "$w" ] && words "$w" "$arch" "$rs" "$triple" "$flags" "$header"
+  done
   [ -f "$progs" ] && snippets "$progs" compare "$arch" "$rs" "$triple" "$flags" "$header"
   [ -f "$objs" ] && snippets "$objs" compare_object "$arch" "$rs" "$triple" "$flags" "$header"
 

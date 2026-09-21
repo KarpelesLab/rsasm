@@ -4,7 +4,9 @@ For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
 AVR, MSP430, and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
-and llvm-mc answers differently; see [ARM](#arm).
+and llvm-mc answers differently; see [ARM](#arm). AArch64 is here for the
+same reason, its literal pools and its system instructions; see
+[AArch64](#aarch64).
 
 ```console
 $ tools/oracles/build.sh          # once: builds the pinned references
@@ -104,6 +106,7 @@ which is not allocated but is what the linker relaxes the code by. Their
 local symbols are not compared: GNU as names each label a relocation needs,
 `.L1^B1` for a `1:`, and rsasm names the same labels in its own way.
 | `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
+| `aarch64` | `aarch64`, and whole objects for the pools | `aarch64-elf-as` with every extension it names; see [AArch64](#aarch64) |
 
 ## ARM
 
@@ -143,6 +146,35 @@ relocates an ARM `bl` even to a label in the same section, and converts no
 `bl` to `blx` itself), and the size of a relaxable Thumb instruction (GNU as
 picks each afresh on every pass against the growth so far, and llvm-mc can
 widen one that GNU as keeps at 16 bits).
+
+## AArch64
+
+llvm-mc checks the AArch64 encodings in `tools/mc-diff`, including the SIMD
+and SVE table and the 3,037 system-instruction lines the two references
+agree on. Two things are GNU as's alone, and are here.
+
+**Literal pools.** `ldr x0, =0x123456789` puts the value in a pool and loads
+it from there, and where the pool goes is decided across a whole section, so
+`aarch64-relocs.txt` compares whole objects with `tools/mc-diff/canon.sh
+--full`: sections, bytes, relocations, `e_flags` and every symbol, the
+`$x`/`$d` mapping symbols among them. llvm-mc decides differently — it turns
+`ldr x0, =1` into `mov x0, #1`, and writes its entries in the order they were
+used, not grouped by width — and GNU as on AArch64, unlike its own ARM port,
+never substitutes a `mov` at all. rsasm follows GNU as. `tools/flat-diff`
+links the same programs and compares the images.
+
+**System instructions.** `aarch64.txt` holds a line for every operand name in
+GNU's tables that llvm-mc does not know or encodes differently: most of the
+newer system registers, the nXS TLB maintenance names, `plbi`, `stshh`.
+`tools/tables/aarch64-sys.py` generates it and the mc-diff half from the same
+run, so regenerate rather than edit. The CPU string in `run.sh` names every
+extension GNU as has a name for, since it refuses a system register for the
+CPU rather than reporting an unknown name; the generator builds the same
+string from GNU as's own list.
+
+Where the two references differ and GNU as is followed: `msr ctr_el0, x0`,
+writing a read-only register, is a warning in both GNU as and rsasm, and an
+error in llvm-mc.
 
 ## PowerPC
 

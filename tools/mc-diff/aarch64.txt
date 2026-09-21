@@ -1,8 +1,7 @@
 # AArch64 (A64) differential corpus.
 #
-# Immediates are written without the usual `#` sigil. Both assemblers accept
-# the bare form, and rsasm's GAS-dialect lexer currently treats `#` as the
-# start of a line comment (see the note in src/arch/aarch64/mod.rs).
+# Immediates are mostly written without the usual `#` sigil, which both
+# assemblers accept; the SIMD and SVE corpora (aarch64-*-words.txt) write it.
 
 # ---- add / subtract, immediate ----
 add x0, x1, 0
@@ -518,3 +517,31 @@ msr daif, x1
 dup v0.2d, v1.d[1]
 dup v0.8h, w3
 dup v0.4h, v2.h[7]
+
+# ---- SME: its mode switches and zeroing ZA ----
+smstart
+smstart sm
+smstart za
+smstop
+smstop sm
+smstop za
+zero {za}
+
+# ---- SIMD and SVE written as people write them ----
+# The aarch64-*-words.txt corpora spell every form as llvm-mc prints it;
+# these are the other spellings both references take.
+ld1d z0.d, p0/z, [x0]
+st1w z1.s, p2, [x3, x4, lsl #2]
+fmov d0, #1
+movi v0.16b, 0x12
+ld1 {v0.16b-v3.16b}, [x0], 64
+st1 { v0.8b }, [sp], #8
+ADD V0.8B, V1.8B, V2.8B
+FMOV Z3.D, #1.5
+mov z0.h, #0xfff0
+mov z0.h, #0xff00
+mov z0.b, #240
+mov z0.s, #0xffffff80
+and z0.b, z0.b, #-2
+dup z0.h, #0xff00
+movi v0.4s, #0x12, lsl 8

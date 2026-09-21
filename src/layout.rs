@@ -283,7 +283,7 @@ impl Assembler {
             // marks code; see `crate::mapping`. GNU as makes that padding
             // even for an alignment of one byte, so the mark is made too,
             // which is what marks data in a code section that has no code.
-            if let Some(names) = crate::mapping::mapping_names(arch, &nop_state)
+            if let Some(names) = self.mapping_names_for(&nop_state)
                 && exec
             {
                 self.map_align_with(SectionId(si as u32), names);

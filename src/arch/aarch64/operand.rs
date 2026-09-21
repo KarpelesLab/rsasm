@@ -194,6 +194,9 @@ pub enum OperandKind {
     /// A vector element: `v0.s[2]`.
     VecElem(VecReg, u64),
     Imm(ExprRef),
+    /// `ldr x0, =expr`: the value goes in a literal pool and the
+    /// instruction loads it from there.
+    Literal(ExprRef),
     /// An expression under a relocation operator: `:lo12:sym`.
     Reloc(RelocOp, ExprRef),
     Mem(Mem),
@@ -265,6 +268,13 @@ impl Operand<'_> {
             }
             // Register names are reserved, unlike condition and option names:
             // `b x0` is a mistake for `br x0`, not a branch to a label.
+            OperandKind::Literal(_) => {
+                cx.error(
+                    self.span,
+                    "`=` puts a value in a literal pool, which only `ldr` loads from",
+                );
+                return None;
+            }
             OperandKind::Reg(_)
             | OperandKind::Vec(_)
             | OperandKind::VecElem(..)
@@ -293,6 +303,7 @@ impl Operand<'_> {
             OperandKind::Reg(r) => format!("register `{}`", r.name()),
             OperandKind::Vec(_) | OperandKind::VecElem(..) => "a vector operand".into(),
             OperandKind::Imm(_) => "an immediate".into(),
+            OperandKind::Literal(_) => "a literal-pool value".into(),
             OperandKind::Reloc(op, _) => format!("a `{}` expression", op.name()),
             OperandKind::Mem(_) => "a memory operand".into(),
             OperandKind::Shift(s, _) => format!("a `{}` shift", s.name()),
@@ -339,6 +350,17 @@ fn ident_text(cx: &AsmCtx<'_>, t: &Token) -> Option<String> {
 fn parse_one<'t>(cx: &mut AsmCtx<'_>, toks: &'t [Token]) -> Option<Operand<'t>> {
     let span = span_of(toks);
     let mk = |kind| Some(Operand { kind, toks, span });
+
+    // `ldr x0, =0x12345678`: the value belongs in a literal pool.
+    if toks[0].is_punct(Punct::Eq) {
+        let mut cur = Cursor::new(&toks[1..]);
+        let e = cx.expr_parser().parse(&mut cur)?;
+        if !cur.at_end() {
+            cx.error(cur.peek().span, "unexpected token after a literal value");
+            return None;
+        }
+        return mk(OperandKind::Literal(e));
+    }
 
     if let Some(first) = toks.first()
         && let Some(word) = ident_text(cx, first)
