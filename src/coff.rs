@@ -14,7 +14,8 @@ use crate::assembler::Assembler;
 use crate::cursor::Cursor;
 use crate::expr::{ExprKind, ExprRef};
 use crate::lexer::{Punct, TokKind};
-use crate::output::coff::{self, reloc::pseudo};
+use crate::output::coff;
+use crate::reloc::RelocClass;
 use crate::section::{FixupKind, SectionId, SectionKind};
 use crate::source::Span;
 use crate::symbol::{Binding, SymbolId};
@@ -260,9 +261,9 @@ impl Assembler {
                 self.coff_def_field(name, cur, span)
             }
             ".linkonce" => self.coff_linkonce(cur, span),
-            ".rva" => self.coff_reloc_data(cur, span, pseudo::IMGREL, 4),
-            ".secrel32" => self.coff_reloc_data(cur, span, pseudo::SECREL, 4),
-            ".secidx" => self.coff_reloc_data(cur, span, pseudo::SECIDX, 2),
+            ".rva" => self.coff_reloc_data(cur, span, RelocClass::ImageRelative, 4),
+            ".secrel32" => self.coff_reloc_data(cur, span, RelocClass::SectionRelative, 4),
+            ".secidx" => self.coff_reloc_data(cur, span, RelocClass::SectionIndex, 2),
             // `.safeseh` lists an i386 handler in `.sxdata` by its symbol
             // table index, a field no relocation describes.
             ".safeseh" => {
@@ -364,13 +365,19 @@ impl Assembler {
     /// `.rva`, `.secrel32` and `.secidx`: a data field the linker fills in
     /// from something only it knows — where the image starts, or where a
     /// section ended up.
-    fn coff_reloc_data(&mut self, cur: &mut Cursor<'_>, span: Span, reloc: u32, size: u8) {
+    fn coff_reloc_data(&mut self, cur: &mut Cursor<'_>, span: Span, class: RelocClass, size: u8) {
         loop {
             let Some(e) = self.parse_expr(cur) else {
                 return;
             };
             self.bind_here_to_item(e);
-            let kind = FixupKind::data(size).with_reloc(reloc).linker_only();
+            // The ELF number is the plain absolute one for the width; what
+            // makes the field image- or section-relative is the class, which
+            // is what the COFF writer reads.
+            let kind = FixupKind::data(size)
+                .with_reloc(self.arch.data_reloc(size, false).unwrap_or(0))
+                .with_class(class)
+                .linker_only();
             if self.check_nobits(span) {
                 return;
             }
@@ -424,7 +431,7 @@ impl Assembler {
         off: u32,
         span: Span,
     ) -> bool {
-        let Some(ty) = coff::reloc::map(machine, r.kind) else {
+        let Some(ty) = coff::reloc::map(machine, r.desc.class, r.kind) else {
             self.diags.error(
                 span,
                 format!(
@@ -815,6 +822,10 @@ impl Assembler {
         }
         let xdata = self.coff_unwind_section(".xdata");
         let pdata = self.coff_unwind_section(".pdata");
+        // The image-relative fields of `.pdata` and of a handler's address
+        // are four-byte data fields; their class is what makes them
+        // image-relative. See `coff_reloc_data`.
+        let imgrel = self.target().data_reloc(4, false).unwrap_or(0);
         for p in &procs {
             let span = p.span;
             let info = self.unwind_info(p);
@@ -860,7 +871,10 @@ impl Assembler {
                 b.fixup(
                     4,
                     e,
-                    FixupKind::data(4).with_reloc(pseudo::IMGREL).linker_only(),
+                    FixupKind::data(4)
+                        .with_reloc(imgrel)
+                        .with_class(RelocClass::ImageRelative)
+                        .linker_only(),
                 );
             }
             self.push_blob(pdata, b, span);
@@ -872,6 +886,7 @@ impl Assembler {
     /// [`unwind_info_size`] for its length.
     fn unwind_info(&mut self, p: &Proc) -> crate::dwarf::emit::Blob {
         let mut b = crate::dwarf::emit::Blob::new(self.target().endian());
+        let imgrel = self.target().data_reloc(4, false).unwrap_or(0);
         let base = self.symbol_addr(p.begin).unwrap_or(0);
         let offset = |asm: &Assembler, s: SymbolId| -> u8 {
             (asm.symbol_addr(s).unwrap_or(0) - base).clamp(0, 255) as u8
@@ -906,23 +921,27 @@ impl Assembler {
             b.fixup(
                 4,
                 e,
-                FixupKind::data(4).with_reloc(pseudo::IMGREL).linker_only(),
+                FixupKind::data(4)
+                    .with_reloc(imgrel)
+                    .with_class(RelocClass::ImageRelative)
+                    .linker_only(),
             );
         }
         b
     }
 }
 
-/// The relocation a COFF-only `@` modifier names: `@IMGREL`, `@SECREL32`,
-/// and NASM's `wrt ..imagebase`.
+/// What a COFF-only `@` modifier makes of a reference: `@IMGREL`,
+/// `@SECREL32`, and NASM's `wrt ..imagebase`.
 ///
-/// These have no ELF number, so they are not the backends' to answer; the
-/// core asks here first when the output is COFF.
-pub(crate) fn modifier_reloc(name: &str) -> Option<u32> {
+/// These name something no psABI has, so they are not the backends' to
+/// answer with an ELF number; they name a [`RelocClass`] instead, which is
+/// how [`crate::reloc`] carries a meaning no format owns.
+pub(crate) fn modifier_class(name: &str) -> Option<RelocClass> {
     Some(match name {
-        "imgrel" | "imagebase" => pseudo::IMGREL,
-        "secrel" | "secrel32" => pseudo::SECREL,
-        "secidx" => pseudo::SECIDX,
+        "imgrel" | "imagebase" => RelocClass::ImageRelative,
+        "secrel" | "secrel32" => RelocClass::SectionRelative,
+        "secidx" => RelocClass::SectionIndex,
         _ => return None,
     })
 }

@@ -1251,7 +1251,7 @@ impl Assembler {
         // functions by their relocations, so llvm-mc keeps every one it can.
         if self.options.format.is_coff() {
             let describable = crate::output::coff::machine(self.target())
-                .and_then(|m| crate::output::coff::reloc::map(m, reloc))
+                .and_then(|m| crate::output::coff::reloc::map(m, kind.class, reloc))
                 .is_some();
             return (describable || relaxable) && crate::coff::is_function(self, target);
         }
@@ -1722,17 +1722,24 @@ impl Assembler {
         }
 
         // A modifier anywhere in the expression selects the relocation. The
-        // COFF-only ones (`@IMGREL`, `@SECREL32`) name relocations no psABI
-        // has, so they are the format's to answer rather than the backend's.
-        let coff = self.options.format.is_coff();
+        // COFF-only ones (`@IMGREL`, `@SECREL32`) name what the field holds
+        // rather than a relocation number, which no psABI has for them, so
+        // they come through as a class the COFF writer reads.
+        let coff_class = self
+            .options
+            .format
+            .is_coff()
+            .then(|| {
+                self.find_modifier(e)
+                    .and_then(|m| crate::coff::modifier_class(self.interner.get(m)))
+            })
+            .flatten();
         let reloc = self
             .find_modifier(e)
+            .filter(|_| coff_class.is_none())
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
-                match crate::coff::modifier_reloc(&name) {
-                    Some(r) if coff => Some(r),
-                    _ => self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind),
-                }
+                self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
             })
             .unwrap_or(kind.reloc);
         let place = if self.relocs_by_fragment.contains(&section) {
@@ -1772,13 +1779,17 @@ impl Assembler {
             self.relocation_symbol(t, kind, si, fi, names_symbol, &mut addend, &mut reloc)
         });
 
+        let mut desc = RelocDesc::of(kind);
+        if let Some(class) = coff_class {
+            desc.class = class;
+        }
         let mut relocs = vec![Relocation {
             section,
             offset: at,
             symbol,
             addend,
             kind: reloc,
-            desc: RelocDesc::of(kind),
+            desc,
         }];
         relocs.extend(subtrahend);
         relocs

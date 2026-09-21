@@ -1,18 +1,21 @@
-//! The relocation mapping layer: ELF numbers in, COFF numbers out.
+//! The relocation mapping layer: what a fixup means in, COFF numbers out.
 //!
 //! Backends choose relocations as ELF numbers ([`Architecture::data_reloc`],
 //! [`Architecture::modifier_reloc`], [`FixupKind::reloc`]), which is the one
-//! numbering every one of them already has. COFF needs its own, so the
-//! translation lives here rather than in the backends: nothing about x86 or
-//! AArch64 changes when an object comes out as PE/COFF, and the ELF writer
-//! never sees this file.
+//! numbering every one of them already has, and name in a
+//! [`RelocClass`](crate::reloc::RelocClass) whatever a number alone cannot
+//! say. COFF needs its own numbering, so the translation lives here rather
+//! than in the backends: nothing about x86 or AArch64 changes when an object
+//! comes out as PE/COFF, and the ELF writer never sees this file.
 //!
 //! Two things differ per relocation and both are answered here:
 //!
 //! - **Which number.** A COFF type is not always one-to-one with an ELF one:
 //!   `R_X86_64_PC32`, `PLT32` and `GOTPCREL` all become
 //!   `IMAGE_REL_AMD64_REL32`, since a Windows object has no PLT and no GOT
-//!   for the assembler to name.
+//!   for the assembler to name. The three things only COFF says — an
+//!   image-relative address, an offset within a section, a section index —
+//!   have no ELF number at all, and arrive as a class.
 //! - **Where "here" is.** COFF's PC-relative relocations on x86 and for
 //!   AArch64's `REL32` measure from the byte *after* the four-byte field,
 //!   while AArch64's branches and `adrp` measure from the instruction. ELF
@@ -25,25 +28,8 @@
 
 use super::{MACHINE_AMD64, MACHINE_ARM64, MACHINE_I386};
 use crate::arch::Endian;
+use crate::reloc::RelocClass;
 use crate::section::FixupKind;
-
-/// COFF-only relocations, in the space the backends' ELF numbers leave free.
-///
-/// `@IMGREL`, `.rva`, `.secrel32` and `.secidx` name relocations no psABI
-/// has, so there is no ELF number to carry them through the core. These
-/// stand in, out of reach of any real `R_*` value, and are only ever produced
-/// by the COFF-only directives and modifiers, which refuse to appear in any
-/// other output format.
-pub(crate) mod pseudo {
-    /// The address of the target relative to the image base: `@IMGREL`,
-    /// `.rva`, NASM's `wrt ..imagebase`.
-    pub(crate) const IMGREL: u32 = 0x8000_0001;
-    /// The offset of the target within its own section: `.secrel32`,
-    /// `@SECREL32`.
-    pub(crate) const SECREL: u32 = 0x8000_0002;
-    /// The one-based index of the target's section: `.secidx`.
-    pub(crate) const SECIDX: u32 = 0x8000_0003;
-}
 
 // ---- IMAGE_REL_AMD64_* ------------------------------------------------------
 const AMD64_ADDR64: u16 = 0x0001;
@@ -75,55 +61,61 @@ const ARM64_BRANCH19: u16 = 0x000f;
 const ARM64_BRANCH14: u16 = 0x0010;
 const ARM64_REL32: u16 = 0x0011;
 
-/// The COFF relocation an ELF-numbered one becomes, or `None` where COFF has
-/// none: a byte or word PC-relative field, or anything naming a GOT, a PLT
-/// entry or a thread-local block, which a Windows object cannot describe.
-pub(crate) fn map(machine: u16, elf: u32) -> Option<u16> {
+/// The COFF relocation a reference becomes, or `None` where COFF has none: a
+/// byte or word PC-relative field, or anything naming a GOT, a PLT entry or a
+/// thread-local block, which a Windows object cannot describe.
+///
+/// The three meanings only COFF has come through as a [`RelocClass`], which
+/// is where a format names what a relocation computes without a number; for
+/// everything else the backend's ELF number says it exactly, down to which
+/// AArch64 branch or `:lo12:` field this is, so that is what the rest of the
+/// table reads.
+pub(crate) fn map(machine: u16, class: RelocClass, elf: u32) -> Option<u16> {
     match machine {
-        MACHINE_AMD64 => Some(match elf {
-            pseudo::IMGREL => AMD64_ADDR32NB,
-            pseudo::SECREL => AMD64_SECREL,
-            pseudo::SECIDX => AMD64_SECTION,
+        MACHINE_AMD64 => Some(match (class, elf) {
+            (RelocClass::ImageRelative, _) => AMD64_ADDR32NB,
+            (RelocClass::SectionRelative, _) => AMD64_SECREL,
+            (RelocClass::SectionIndex, _) => AMD64_SECTION,
             // R_X86_64_64
-            1 => AMD64_ADDR64,
+            (_, 1) => AMD64_ADDR64,
             // R_X86_64_32 and _32S; the linker writes the same 32 bits, and
             // COFF has no separate sign-extending form.
-            10 | 11 => AMD64_ADDR32,
+            (_, 10 | 11) => AMD64_ADDR32,
             // R_X86_64_PC32, _PLT32 and _GOTPCREL: a call, a jump and a
             // RIP-relative load are all plain PC-relative references here.
-            2 | 4 | 9 => AMD64_REL32,
+            (_, 2 | 4 | 9) => AMD64_REL32,
             _ => return None,
         }),
-        MACHINE_I386 => Some(match elf {
-            pseudo::IMGREL => I386_DIR32NB,
-            pseudo::SECREL => I386_SECREL,
-            pseudo::SECIDX => I386_SECTION,
+        MACHINE_I386 => Some(match (class, elf) {
+            (RelocClass::ImageRelative, _) => I386_DIR32NB,
+            (RelocClass::SectionRelative, _) => I386_SECREL,
+            (RelocClass::SectionIndex, _) => I386_SECTION,
             // R_386_32; COFF's `DIR16` exists, but llvm-mc refuses a 16-bit
             // field, and so does this.
-            1 => I386_DIR32,
+            (_, 1) => I386_DIR32,
             // R_386_PC32 and _PLT32
-            2 | 4 => I386_REL32,
+            (_, 2 | 4) => I386_REL32,
             _ => return None,
         }),
-        MACHINE_ARM64 => Some(match elf {
-            pseudo::IMGREL => ARM64_ADDR32NB,
-            pseudo::SECREL => ARM64_SECREL,
-            pseudo::SECIDX => ARM64_SECTION,
+        MACHINE_ARM64 => Some(match (class, elf) {
+            (RelocClass::ImageRelative, _) => ARM64_ADDR32NB,
+            (RelocClass::SectionRelative, _) => ARM64_SECREL,
+            (RelocClass::SectionIndex, _) => ARM64_SECTION,
             // R_AARCH64_ABS64 / ABS32 / PREL32
-            257 => ARM64_ADDR64,
-            258 => ARM64_ADDR32,
-            261 => ARM64_REL32,
+            (_, 257) => ARM64_ADDR64,
+            (_, 258) => ARM64_ADDR32,
+            (_, 261) => ARM64_REL32,
             // R_AARCH64_ADR_PREL_LO21 (`adr`) and ADR_PREL_PG_HI21 (`adrp`)
-            274 => ARM64_REL21,
-            275 => ARM64_PAGEBASE_REL21,
+            (_, 274) => ARM64_REL21,
+            (_, 275) => ARM64_PAGEBASE_REL21,
             // R_AARCH64_ADD_ABS_LO12_NC and the `ldr`/`str` `:lo12:` forms,
             // which COFF distinguishes only as "add" and "load/store".
-            277 => ARM64_PAGEOFFSET_12A,
-            278 | 284 | 285 | 286 | 299 => ARM64_PAGEOFFSET_12L,
+            (_, 277) => ARM64_PAGEOFFSET_12A,
+            (_, 278 | 284 | 285 | 286 | 299) => ARM64_PAGEOFFSET_12L,
             // R_AARCH64_TSTBR14, CONDBR19, JUMP26, CALL26
-            279 => ARM64_BRANCH14,
-            280 => ARM64_BRANCH19,
-            282 | 283 => ARM64_BRANCH26,
+            (_, 279) => ARM64_BRANCH14,
+            (_, 280) => ARM64_BRANCH19,
+            (_, 282 | 283) => ARM64_BRANCH26,
             _ => return None,
         }),
         _ => None,
@@ -186,7 +178,10 @@ mod tests {
         // PC32, PLT32 and GOTPCREL: a Windows object has no PLT or GOT for
         // the assembler to name, so the three collapse into one.
         for elf in [2, 4, 9] {
-            assert_eq!(map(MACHINE_AMD64, elf), Some(AMD64_REL32));
+            assert_eq!(
+                map(MACHINE_AMD64, RelocClass::Plain, elf),
+                Some(AMD64_REL32)
+            );
         }
         assert_eq!(pc_base(MACHINE_AMD64, AMD64_REL32), 4);
     }
@@ -194,10 +189,10 @@ mod tests {
     #[test]
     fn a_field_coff_cannot_describe_has_no_mapping() {
         // R_X86_64_PC8 and PC16: COFF has no byte or word PC-relative type.
-        assert_eq!(map(MACHINE_AMD64, 15), None);
-        assert_eq!(map(MACHINE_AMD64, 13), None);
+        assert_eq!(map(MACHINE_AMD64, RelocClass::Plain, 15), None);
+        assert_eq!(map(MACHINE_AMD64, RelocClass::Plain, 13), None);
         // R_AARCH64_LD_PREL_LO19, the `ldr x0, label` literal load.
-        assert_eq!(map(MACHINE_ARM64, 273), None);
+        assert_eq!(map(MACHINE_ARM64, RelocClass::Plain, 273), None);
     }
 
     #[test]

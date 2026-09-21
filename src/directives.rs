@@ -502,14 +502,23 @@ impl Assembler {
         {
             let name = self.interner.get(m).to_string();
             // COFF's own modifiers (`@IMGREL`) are the format's, not the
-            // backend's; see `crate::coff::modifier_reloc`.
+            // backend's: they name what the field holds, not a relocation
+            // number; see `crate::coff::modifier_class`.
             let coff = self
                 .options
                 .format
                 .is_coff()
-                .then(|| crate::coff::modifier_reloc(&name))
+                .then(|| crate::coff::modifier_class(&name))
                 .flatten();
-            match coff.or_else(|| self.arch.modifier_reloc(&name, size, false)) {
+            if let Some(class) = coff {
+                let kind = crate::section::FixupKind::data(size)
+                    .with_reloc(reloc)
+                    .with_class(class);
+                let espan = self.exprs.span(e);
+                self.cur_section().emit_fixup(size, e, kind, espan);
+                return;
+            }
+            match self.arch.modifier_reloc(&name, size, false) {
                 Some(r) => reloc = r,
                 None => {
                     let espan = self.exprs.span(e);

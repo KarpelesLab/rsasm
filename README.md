@@ -601,11 +601,13 @@ What the source can say:
   of its instructions
 
 Backends choose relocations as ELF numbers, the one numbering all of them
-share; `src/output/coff/reloc.rs` translates them, and says where each COFF
-relocation measures its PC from, which is what the addend in the field has to
-make up for. Nothing in a backend knows COFF exists, and ELF output does not
-go through the translation. `@IMGREL`, `.rva`, `.secrel32` and `.secidx` name
-relocations no psABI has; they are refused outside COFF output.
+share, and name in a `reloc::RelocClass` what a number cannot say;
+`src/output/coff/reloc.rs` translates both into COFF's numbering, and says
+where each COFF relocation measures its PC from, which is what the addend in
+the field has to make up for. Nothing in a backend knows COFF exists, and ELF
+output does not go through the translation. `@IMGREL`, `.rva`, `.secrel32`
+and `.secidx` name something no psABI has a number for, so they travel as
+classes of their own; they are refused outside COFF output.
 
 llvm-mc is the reference: it writes COFF for all three machines, and it is
 the assembler of the LLVM Windows toolchains. GNU as for mingw agrees with it
