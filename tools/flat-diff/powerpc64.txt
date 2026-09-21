@@ -64,3 +64,33 @@ entry:
 	.quad entry
 	.long entry - .
 	.quad entry - .
+
+=== prefixed PC-relative references to another section
+	.text
+	.p2align 4
+	paddi 3, 0, msg@pcrel, 1
+	pld 4, msg@pcrel+8(0), 1
+	pstd 5, msg@pcrel(0), 1
+	plxv 33, msg@pcrel+16(0), 1
+	blr
+	.data
+	.p2align 4
+	.space 0x8010
+msg:	.quad 1, 2, 3, 4
+
+=== a prefixed PC-relative reference within its own section
+	.text
+	.p2align 4
+	paddi 3, 0, there@pcrel, 1
+	plwz 4, back@pcrel(0), 1
+	nop
+there:
+	blr
+back:	.long 7
+
+=== a prefixed instruction padded off a 64-byte boundary
+	.text
+	.p2align 6
+	.fill 15, 4, 0x60000000
+here:	paddi 3, 0, here@pcrel, 1
+	b here

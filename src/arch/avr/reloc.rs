@@ -20,7 +20,6 @@
 
 use crate::section::FixupKind;
 
-pub const R_AVR_NONE: u32 = 0;
 /// `.long sym`.
 pub const R_AVR_32: u32 = 1;
 /// A conditional branch: ±64 words from the instruction after it.
@@ -68,12 +67,10 @@ pub const R_AVR_8: u32 = 26;
 pub const R_AVR_8_LO8: u32 = 27;
 pub const R_AVR_8_HI8: u32 = 28;
 pub const R_AVR_8_HLO8: u32 = 29;
-/// A difference of two labels the linker may still change by relaxing the
-/// code between them. rsasm lays out the section itself and writes the
-/// number; see the module documentation of [`super`].
-pub const R_AVR_DIFF8: u32 = 30;
-pub const R_AVR_DIFF16: u32 = 31;
-pub const R_AVR_DIFF32: u32 = 32;
+// 30 to 32 are `R_AVR_DIFF8`, `DIFF16` and `DIFF32`, which GNU as adds to a
+// difference of two labels the linker may still change by relaxing the code
+// between them. rsasm lays out the section itself and writes the number; see
+// the module documentation of [`super`].
 /// The AVR-tiny `lds`/`sts` address, 0x40 to 0xbf.
 pub const R_AVR_LDS_STS_16: u32 = 33;
 /// The `in`/`out` I/O address, 0 to 63.

@@ -66,6 +66,24 @@ impl Assembler {
                     let s = self.cur_section();
                     s.align = s.align.max(align);
                 }
+                Request::AlignCode { align, max_skip } => {
+                    let state = self
+                        .cur_section()
+                        .nop_state
+                        .clone()
+                        .unwrap_or_else(|| self.arch_state.clone());
+                    self.map_code_align(&state);
+                    self.cur_section().push(Fragment::new(
+                        FragKind::Align {
+                            align,
+                            fill: Vec::new(),
+                            max_skip: Some(max_skip),
+                            pad: 0,
+                            nop_state: Some(state),
+                        },
+                        span,
+                    ));
+                }
                 Request::Literal(lit) => self.literal_pools.entry(self.cur).or_default().push(lit),
                 Request::FlushLiterals => self.flush_literals(span),
             }
