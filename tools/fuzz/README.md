@@ -1,8 +1,10 @@
 # Differential fuzzing
 
-Three fuzzers: one for x86, one for PowerPC's vector and POWER8-10
-instructions (see [PowerPC](#powerpc)), and one for whole 8051 programs (see
-[The 8051](#the-8051)).
+Four fuzzers: one for x86, one for PowerPC's vector and POWER8-10
+instructions (see [PowerPC](#powerpc)), one for whole 8051 programs (see
+[The 8051](#the-8051)) and one for whole AVR programs (see [AVR](#avr)).
+
+## x86
 
 `x86.py` generates random x86 instructions in 16-, 32- and 64-bit mode, in
 AT&T and Intel syntax, assembles them with GNU as, llvm-mc and rsasm, and
@@ -52,7 +54,7 @@ batch of 200; a batch with errors is reassembled without the rejected cases.
 16-bit mode is `.code16` in 32-bit ELF for all three tools. Runs are seeded
 (`--seed`) and spread over the CPUs (`--jobs`).
 
-## Reading the report
+### Reading the report
 
 - **rsasm**: GNU as and llvm-mc agree and rsasm does not. These are the
   findings. The exit status is 1 when there are any.
@@ -141,7 +143,7 @@ rsasm differs from both references and no split outside those.
 | `GAS` | `$RSASM_ORACLES/bin/powerpc64-linux-gnu-as` |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
 
-# The 8051
+## The 8051
 
 `mcs51.py` generates random whole 8051 programs from a table of forms written
 from Intel's MCS-51 instruction set — labels with forward and backward
@@ -206,3 +208,40 @@ What rsasm deliberately does differently from GNU as is not generated, since
 one refused line moves every later label in its batch; `deviates` and
 `mri_skips` in the script list each with its reason. A run of 400,000 cases
 over every CPU in both syntaxes, and 100,000 against vasm, finds nothing.
+## AVR
+
+`avr.py` generates whole random AVR programs and compares what `avr-elf-as`
+and rsasm make of them: labels in several sections, instructions from every
+row of GNU binutils' opcode table (`include/opcode/avr.h`) with operands of
+every shape, branches forward and back across `.skip`s that put some of them
+out of reach, the `lo8()` family of modifiers on numbers, labels and
+undefined symbols, data, alignment and `.org`, for one of twenty-one cores.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/avr.py fuzz --count 3000 --seed 1
+$ tools/fuzz/avr.py fuzz --core avrtiny --count 500 --mutations 0.5
+$ tools/fuzz/avr.py check --core avr5 prog.s
+```
+
+Both objects are read the way `tools/mc-diff/canon.sh` reads them, with
+`e_flags` and `.avr.prop` too; symbols are declared at the top of each
+program, so they come in the same order. A program with nothing undefined is
+also linked by `avr-elf-ld` at address 0 with its sections end to end (and
+`--no-stubs` for the cores with a 22-bit program counter) and compared with
+`rsasm -f bin`, which checks every displacement and every relocated value.
+`--mutations` (default 0.25) is the fraction of programs given one statement
+meant to be refused.
+
+A program is **agree** (the same object and image, or both refused),
+**rsasm** (a finding, shown after removing every statement it does not need),
+or **known**, where rsasm differs on purpose: it refuses an `ldi` constant
+below -255, an AVR-tiny `lds`/`sts` address outside 0x40-0xbf, a `call` past
+22 bits and `pm()` of an odd number, which GNU as keeps the low bits of with
+at most a warning, and assembles `lo8(gs())` of a number, on which GNU as
+stops with "unknown relocation type".
+
+| Variable | Default |
+|---|---|
+| `RSASM` | `target/debug/rsasm` under the repository root |
+| `RSASM_ORACLES` | `target/oracles`, with `avr-elf-as`, `avr-elf-ld` and `avr-elf-objcopy` in `bin` |

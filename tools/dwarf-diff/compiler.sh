@@ -3,10 +3,12 @@
 # compiler.c: what GCC and Clang write for a small program with -g, which is
 # what line tables and frames are mostly made from in practice.
 #
-#   tools/dwarf-diff/compiler.sh
+#   tools/dwarf-diff/compiler.sh            # every target
+#   tools/dwarf-diff/compiler.sh avr5       # just these
 #
 # The committed corpora came from GCC 15.3 (x86-64 and i386, the targets
-# whose reference is GNU as) and Clang 22.1 (every target). Another version
+# whose reference is GNU as) and Clang 22.1 (every target; for AVR, the
+# ATmega328P of an Arduino Uno, an avr5 core). Another version
 # writes other code, which is fine: the harness compares rsasm with the
 # reference on whatever the corpus holds.
 #
@@ -58,6 +60,7 @@ mipsel|-|--target=mipsel-linux-gnu -fno-pic -mno-abicalls
 mips64|-|--target=mips64-linux-gnuabi64 -march=mips64 -fno-pic -mno-abicalls
 sparc|-|--target=sparc-linux-gnu -mcpu=v8
 sparcv9|-|--target=sparcv9-linux-gnu
+avr5|-|--target=avr -mmcu=atmega328p
 "
 
 clean() { # key; source on stdin
@@ -73,8 +76,12 @@ clean() { # key; source on stdin
     fi
 }
 
+wanted="${*:-}"
 while IFS='|' read -r key gccflags clangflags; do
   [ -z "$key" ] && continue
+  if [ -n "$wanted" ]; then
+    case " $wanted " in *" $key "*) ;; *) continue ;; esac
+  fi
   out="$here/$key-compiler.txt"
   : > "$out"
   for opt in -O0 -O2; do

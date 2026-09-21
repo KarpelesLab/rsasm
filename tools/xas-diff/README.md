@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502, 8080 and 8051.
+AVR, and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm).
 
@@ -50,6 +50,10 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
 | `i8051-sdas` | `8051`, 8-bit syntax | `sdas8051`, linked by `sdld` into Intel HEX |
 | `i8051-hex` | `8051`, 8-bit syntax, `-f ihex` | `asl -cpu 8051`, converted by `p2hex`; the text is compared |
+| `avr` | `avr` | `avr-elf-as`, with no `-mmcu`: the AVR2 set |
+| `avr51` | `avr51` | `avr-elf-as -mmcu=avr51` |
+| `avrxmega` | `atxmega128a1u` | `avr-elf-as -mmcu=atxmega128a1u`, which has the read-modify-write instructions |
+| `avrtiny` | `avrtiny` | `avr-elf-as -mmcu=avrtiny` |
 
 The m68k keys named after a CPU hold corpora generated from GNU's opcode table
 by `tools/fuzz/m68k.py corpus --first`: every form of every instruction, once,
@@ -86,6 +90,12 @@ They leave out what rsasm deliberately writes differently:
 - A conditional branch on RX or V850 that is left to the linker: GNU as keeps
   it short, trusting the linker to reach; rsasm takes the longest form (see
   `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+
+AVR objects are compared with their `e_flags` too (`canon.sh --flags`), which
+name the core and carry `EF_AVR_LINKRELAX_PREPARED`, and with `.avr.prop`,
+which is not allocated but is what the linker relaxes the code by. Their
+local symbols are not compared: GNU as names each label a relocation needs,
+`.L1^B1` for a `1:`, and rsasm names the same labels in its own way.
 | `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
 
 ## ARM

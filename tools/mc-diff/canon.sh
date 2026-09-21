@@ -11,7 +11,8 @@
 #   .rela.text 0x4 R_RISCV_CALL_PLT foo+0x0
 #
 # A section is listed if it is allocated and not empty, with its bytes unless
-# it is SHT_NOBITS. What a reference writes of its own accord is left out:
+# it is SHT_NOBITS, and so is AVR's `.avr.prop`, which is not allocated but is
+# what the linker relaxes the code by. What a reference writes of its own accord is left out:
 # the ABI and attribute sections (`.reginfo`, `.MIPS.abiflags`,
 # `.riscv.attributes`, `.ARM.attributes`, `.note.*`, ...), and `.text`,
 # `.data` and `.bss` while they are empty, which GNU as always creates.
@@ -26,13 +27,17 @@
 # for its whole objects, `e_flags` is
 # printed first, and the symbol list takes in every named local symbol but
 # section and file symbols, sorted: ARM's mapping symbols and Thumb function
-# bits are local, and are what that comparison is for.
+# bits are local, and are what that comparison is for. `--flags` prints
+# `e_flags` alone, for a target whose header says something (AVR's core and
+# relaxation flag) and whose local symbols do not.
 #
 # Plain POSIX awk: no strtonum, so hex is converted by hand.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 full=0
-[ "$1" = --full ] && { full=1; shift; }
+flags=0
+[ "$1" = --full ] && { full=1; flags=1; shift; }
+[ "$1" = --flags ] && { flags=1; shift; }
 obj=$1
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -44,7 +49,8 @@ llvm-readobj --sections "$obj" | ${AWK:-awk} '
     return v
   }
   function flush() {
-    if (name == "" || !alloc || size == 0) return
+    # `.avr.prop` is not loaded, but is what a linker relaxing AVR code reads.
+    if (name == "" || (!alloc && name != ".avr.prop") || size == 0) return
     if (name ~ /^\.(reginfo|pdr|comment|gnu\.attributes|riscv\.attributes|note)/ || name ~ /^\.(MIPS|ARM)\./) return
     printf "%s %s %s flags=%s size=0x%x align=%d\n", idx, name, type, flags, size, align
   }
@@ -68,7 +74,7 @@ sort -k2,2 "$tmp/sections" | while read -r idx name type flags size align; do
   printf '  %s\n' "$(xxd -p "$tmp/bytes" | tr -d '\n')"
 done
 
-[ "$full" = 1 ] && llvm-readobj --file-headers "$obj" |
+[ "$flags" = 1 ] && llvm-readobj --file-headers "$obj" |
   ${AWK:-awk} '$1 == "Flags" { f = $3; gsub(/[()]/, "", f); print "flags " f; exit }'
 
 llvm-readobj --symbols "$obj" > "$tmp/syms"

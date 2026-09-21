@@ -63,6 +63,7 @@ impl Assembler {
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
         self.flush_all_literals();
+        self.bind_section_names();
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
@@ -84,8 +85,10 @@ impl Assembler {
         }
         // DWARF is written from the settled layout, into sections of its own
         // that nothing in the code refers to, so the layout of the code
-        // cannot change when it runs again to place them.
-        if self.emit_dwarf() && !self.settle_layout() {
+        // cannot change when it runs again to place them. So are a target's
+        // records of where the code was padded.
+        let dwarf = self.emit_dwarf();
+        if (self.emit_layout_records() || dwarf) && !self.settle_layout() {
             return false;
         }
 
@@ -100,6 +103,41 @@ impl Assembler {
         }
         self.materialize();
         !self.diags.has_errors()
+    }
+
+    /// Makes a name that no symbol is defined by, but a section is, stand for
+    /// that section: `.long .debug_abbrev` is a reference to the section
+    /// symbol, in GNU as and llvm-mc alike, however far ahead of the section
+    /// it is written. Clang's DWARF refers to its sections this way. A name
+    /// declared global or weak stays the linker's to find.
+    fn bind_section_names(&mut self) {
+        let sections: HashMap<Name, SectionId> =
+            self.sections.iter().map(|s| (s.name, s.id)).collect();
+        // A name only reaches the symbol table once something evaluates it,
+        // which for most references is after this; so the expressions are
+        // what say which section names are used.
+        let mut used: Vec<(Name, SectionId, Span)> = Vec::new();
+        for node in &self.exprs.nodes {
+            if let ExprKind::Sym(n) = node.kind
+                && let Some(&section) = sections.get(&n)
+                && !used.iter().any(|(m, ..)| *m == n)
+            {
+                used.push((n, section, node.span));
+            }
+        }
+        for (name, section, span) in used {
+            let id = self.symbols.intern(name, span);
+            let sym = self.symbols.get(id);
+            if sym.is_defined() || sym.binding != Binding::Local {
+                continue;
+            }
+            let sym = self.symbols.get_mut(id);
+            sym.value = SymbolValue::Label { section, frag: 0 };
+            sym.ty = crate::symbol::SymType::Section;
+            if self.section(section).sym.is_none() {
+                self.section_mut(section).sym = Some(id);
+            }
+        }
     }
 
     /// Runs layout to a fixed point. Returns false, after reporting it, if it
@@ -200,6 +238,82 @@ impl Assembler {
                 Span::DUMMY,
             ));
         }
+    }
+
+    /// Adds the section a target's assembler writes about where the settled
+    /// layout padded its code, if it writes one; see
+    /// [`Architecture::layout_records`](crate::arch::Architecture::layout_records).
+    /// Returns whether a section was added.
+    fn emit_layout_records(&mut self) -> bool {
+        use crate::arch::{LayoutPlace, PlaceKind};
+        if !self.options.relocatable {
+            return false;
+        }
+        let mut places = Vec::new();
+        for (si, s) in self.sections.iter().enumerate() {
+            if !(s.flags.exec && s.flags.alloc) {
+                continue;
+            }
+            for f in &s.frags {
+                let offset = f.offset + f.size();
+                let section = SectionId(si as u32);
+                let (kind, fill) = match &f.kind {
+                    FragKind::Align { align, fill, .. } if *align > 1 => (
+                        PlaceKind::Align(align.trailing_zeros()),
+                        fill.first().copied().unwrap_or(0),
+                    ),
+                    FragKind::Org { target, fill, .. } => {
+                        let addend = self.eval_ref(*target).map_or(0, |v| v.addend);
+                        (PlaceKind::Org(addend), *fill)
+                    }
+                    _ => continue,
+                };
+                places.push(LayoutPlace {
+                    kind,
+                    section,
+                    offset,
+                    fill,
+                });
+            }
+        }
+        let Some(records) = self.target().layout_records(&places) else {
+            return false;
+        };
+        let name = self.interner.intern(records.name);
+        let id = self.get_or_create_section(name, SectionKind::Progbits, Default::default(), 1);
+        self.section_mut(id).mark_arch(0);
+        let reloc = self.target().data_reloc(4, false).unwrap_or(0);
+        let kind = FixupKind::data(4).with_reloc(reloc);
+        let mut fixups = Vec::new();
+        for (at, index) in records.refs {
+            let place = places[index];
+            let sym = self.section_symbol(place.section);
+            let base = self.exprs.alloc(ExprKind::SymId(sym), Span::DUMMY);
+            let off = self.exprs.int(place.offset, Span::DUMMY);
+            let expr = self.exprs.alloc(
+                ExprKind::Binary(crate::expr::BinOp::Add, base, off),
+                Span::DUMMY,
+            );
+            fixups.push(crate::section::Fixup {
+                offset: at,
+                expr,
+                kind,
+                span: Span::DUMMY,
+            });
+        }
+        let s = self.section_mut(id);
+        s.seal();
+        s.push(Fragment::new(
+            FragKind::Bytes {
+                variants: vec![crate::section::Variant {
+                    bytes: records.bytes,
+                    fixups,
+                }],
+                chosen: 0,
+            },
+            Span::DUMMY,
+        ));
+        true
     }
 
     /// Walks every section assigning fragment offsets, recomputing the sizes
@@ -795,9 +909,12 @@ impl Assembler {
         }
         let mut addr = self.options.base_addr;
         for s in &mut self.sections {
+            // An empty section is not aligned: a linker drops it from the
+            // image, alignment and all, rather than pad for nothing.
+            let align = if s.size == 0 { 1 } else { s.align.max(1) };
             addr = match s.origin {
                 Some(origin) => origin,
-                None => addr.next_multiple_of(s.align.max(1)),
+                None => addr.next_multiple_of(align),
             };
             s.addr = addr;
             addr += s.size;
@@ -1009,11 +1126,13 @@ impl Assembler {
             | LinkValue::LinkerOnly(_) => {}
         }
         // A modifier on a plain reference (`.long foo@PLT`) only picks the
-        // relocation in an object; in a flat image it decides the value.
+        // relocation in an object; in a flat image it decides the value. One
+        // that takes part of the value (AVR's `lo8()`) does so as the field
+        // is written, whichever the output.
         if flat && let Some(m) = self.find_modifier(e) {
             let name = self.interner.get(m);
             match self.frag_arch(section.0 as usize, fi).0.flat_modifier(name) {
-                FlatModifier::Plain => {}
+                FlatModifier::Plain | FlatModifier::Field { .. } => {}
                 FlatModifier::PcRelative if kind.pcrel => {}
                 FlatModifier::PcRelative => {
                     let target = self.eval(e).ok().and_then(|v| self.resolve_value(v))?;
@@ -1202,7 +1321,7 @@ impl Assembler {
         let m = self.find_modifier(e)?;
         let name = self.interner.get(m);
         let arch = self.frag_arch(section.0 as usize, fi).0;
-        (arch.flat_modifier(name) == FlatModifier::LinkerOnly).then(|| {
+        matches!(arch.flat_modifier(name), FlatModifier::LinkerOnly).then(|| {
             format!("`@{name}` names something only a linker creates; a flat binary has none")
         })
     }
@@ -1331,17 +1450,31 @@ impl Assembler {
             {
                 return None;
             }
-            let target = self.resolve_value(v)?;
+            let mut target = self.resolve_value(v)?;
             let base = self.section(section).addr as i64;
             let mask = !(kind.pc_align.max(1) as i64 - 1);
+            // A plain number, on a target where it is an offset into the
+            // section rather than an address, is resolved in an object with
+            // no relocation, so a linker placing the section keeps the
+            // distance: a flat image measures it from the section's start
+            // too.
+            let offset = v.plus.is_none()
+                && v.minus.is_none()
+                && !self
+                    .frag_arch(section.0 as usize, fi)
+                    .0
+                    .pcrel_number_is_address();
+            if offset {
+                target += base;
+            }
             // A reference within its own section is one the assembler
             // resolves before any linker places the section, so the PC is
             // rounded from the section's start, as GNU as rounds it; that
             // differs only for a section a linker puts at an address that is
             // not itself a multiple of the rounding.
-            let here = if v
-                .plus
-                .is_some_and(|p| self.symbol_section(p) == Some(section))
+            let here = if offset
+                || v.plus
+                    .is_some_and(|p| self.symbol_section(p) == Some(section))
             {
                 base + ((at as i64 + kind.adjust as i64) & mask)
             } else {
