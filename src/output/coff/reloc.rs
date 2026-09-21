@@ -34,15 +34,15 @@ use crate::section::FixupKind;
 /// stand in, out of reach of any real `R_*` value, and are only ever produced
 /// by the COFF-only directives and modifiers, which refuse to appear in any
 /// other output format.
-pub mod pseudo {
+pub(crate) mod pseudo {
     /// The address of the target relative to the image base: `@IMGREL`,
     /// `.rva`, NASM's `wrt ..imagebase`.
-    pub const IMGREL: u32 = 0x8000_0001;
+    pub(crate) const IMGREL: u32 = 0x8000_0001;
     /// The offset of the target within its own section: `.secrel32`,
     /// `@SECREL32`.
-    pub const SECREL: u32 = 0x8000_0002;
+    pub(crate) const SECREL: u32 = 0x8000_0002;
     /// The one-based index of the target's section: `.secidx`.
-    pub const SECIDX: u32 = 0x8000_0003;
+    pub(crate) const SECIDX: u32 = 0x8000_0003;
 }
 
 // ---- IMAGE_REL_AMD64_* ------------------------------------------------------
@@ -78,7 +78,7 @@ const ARM64_REL32: u16 = 0x0011;
 /// The COFF relocation an ELF-numbered one becomes, or `None` where COFF has
 /// none: a byte or word PC-relative field, or anything naming a GOT, a PLT
 /// entry or a thread-local block, which a Windows object cannot describe.
-pub fn map(machine: u16, elf: u32) -> Option<u16> {
+pub(crate) fn map(machine: u16, elf: u32) -> Option<u16> {
     match machine {
         MACHINE_AMD64 => Some(match elf {
             pseudo::IMGREL => AMD64_ADDR32NB,
@@ -139,7 +139,7 @@ pub fn map(machine: u16, elf: u32) -> Option<u16> {
 ///
 /// Zero for everything absolute, and for the AArch64 branches and `adrp`,
 /// whose displacement is measured from the instruction itself.
-pub fn pc_base(machine: u16, coff: u16) -> i64 {
+pub(crate) fn pc_base(machine: u16, coff: u16) -> i64 {
     match (machine, coff) {
         (MACHINE_AMD64, AMD64_REL32) => 4,
         (MACHINE_I386, I386_REL32) => 4,
@@ -157,7 +157,7 @@ pub fn pc_base(machine: u16, coff: u16) -> i64 {
 /// its field holds a page count once resolved, but its addend is a plain byte
 /// offset that the linker adds to the symbol before taking the page, so it
 /// goes into the 21-bit immediate unshifted.
-pub fn write_addend(
+pub(crate) fn write_addend(
     machine: u16,
     coff: u16,
     kind: &FixupKind,
@@ -175,55 +175,6 @@ pub fn write_addend(
         return;
     }
     kind.write(endian, dst, addend);
-}
-
-/// The name of a COFF relocation, for diagnostics.
-pub fn name(machine: u16, coff: u16) -> String {
-    let s = match machine {
-        MACHINE_AMD64 => match coff {
-            AMD64_ADDR64 => "ADDR64",
-            AMD64_ADDR32 => "ADDR32",
-            AMD64_ADDR32NB => "ADDR32NB",
-            AMD64_REL32 => "REL32",
-            AMD64_SECTION => "SECTION",
-            AMD64_SECREL => "SECREL",
-            _ => "",
-        },
-        MACHINE_I386 => match coff {
-            I386_DIR32 => "DIR32",
-            I386_DIR32NB => "DIR32NB",
-            I386_SECTION => "SECTION",
-            I386_SECREL => "SECREL",
-            I386_REL32 => "REL32",
-            _ => "",
-        },
-        _ => match coff {
-            ARM64_ADDR32 => "ADDR32",
-            ARM64_ADDR32NB => "ADDR32NB",
-            ARM64_BRANCH26 => "BRANCH26",
-            ARM64_PAGEBASE_REL21 => "PAGEBASE_REL21",
-            ARM64_REL21 => "REL21",
-            ARM64_PAGEOFFSET_12A => "PAGEOFFSET_12A",
-            ARM64_PAGEOFFSET_12L => "PAGEOFFSET_12L",
-            ARM64_SECREL => "SECREL",
-            ARM64_SECTION => "SECTION",
-            ARM64_ADDR64 => "ADDR64",
-            ARM64_BRANCH19 => "BRANCH19",
-            ARM64_BRANCH14 => "BRANCH14",
-            ARM64_REL32 => "REL32",
-            _ => "",
-        },
-    };
-    let m = match machine {
-        MACHINE_AMD64 => "AMD64",
-        MACHINE_I386 => "I386",
-        _ => "ARM64",
-    };
-    if s.is_empty() {
-        format!("IMAGE_REL_{m}_{coff:#x}")
-    } else {
-        format!("IMAGE_REL_{m}_{s}")
-    }
 }
 
 #[cfg(test)]

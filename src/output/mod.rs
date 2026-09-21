@@ -38,7 +38,7 @@ impl Format {
 
     /// Whether the format keeps relocation addends in the bytes they
     /// relocate and names its sections and symbols COFF's way.
-    pub fn is_coff(self) -> bool {
+    pub(crate) fn is_coff(self) -> bool {
         self == Format::Coff
     }
 }

@@ -188,7 +188,7 @@ pub struct Assembler {
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
     /// What COFF output needs that ELF has no room for; see [`crate::coff`].
-    pub coff: crate::coff::State,
+    pub(crate) coff: crate::coff::State,
     /// The backends whose [`Architecture::prelude`] has been assembled.
     pub(crate) arch_preludes: Vec<&'static str>,
     /// Where each assembled prelude's text lies in the source map, as

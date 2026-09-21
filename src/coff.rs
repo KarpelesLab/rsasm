@@ -25,36 +25,36 @@ use std::collections::HashMap;
 ///
 /// [`SectionFlags`]: crate::section::SectionFlags
 #[derive(Copy, Clone, Debug)]
-pub struct SectionInfo {
+pub(crate) struct SectionInfo {
     /// Everything but the alignment bits, which come from the section's own
     /// alignment when it is written.
-    pub characteristics: u32,
-    pub comdat: Option<Comdat>,
+    pub(crate) characteristics: u32,
+    pub(crate) comdat: Option<Comdat>,
 }
 
 /// A section that the linker keeps one copy of.
 #[derive(Copy, Clone, Debug)]
-pub struct Comdat {
+pub(crate) struct Comdat {
     /// `IMAGE_COMDAT_SELECT_*`, in the section symbol's auxiliary record.
-    pub selection: u8,
+    pub(crate) selection: u8,
     /// The symbol the linker matches copies by; `None` for `.linkonce`,
     /// which uses the section's own symbol.
-    pub symbol: Option<SymbolId>,
+    pub(crate) symbol: Option<SymbolId>,
 }
 
 /// What `.def name; .scl n; .type t; .endef` recorded about a symbol.
 #[derive(Copy, Clone, Default, Debug)]
-pub struct Def {
-    pub storage_class: Option<u8>,
-    pub ty: Option<u16>,
+pub(crate) struct Def {
+    pub(crate) storage_class: Option<u8>,
+    pub(crate) ty: Option<u16>,
 }
 
 #[derive(Default)]
-pub struct State {
-    pub sections: HashMap<SectionId, SectionInfo>,
-    pub defs: HashMap<SymbolId, Def>,
+pub(crate) struct State {
+    pub(crate) sections: HashMap<SectionId, SectionInfo>,
+    pub(crate) defs: HashMap<SymbolId, Def>,
     /// The `.file` names, which become file symbols at the end of the table.
-    pub files: Vec<String>,
+    pub(crate) files: Vec<String>,
     /// The symbol an open `.def` is describing.
     def: Option<SymbolId>,
     /// Finished `.seh_proc` blocks, in the order they were read.
@@ -63,7 +63,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn in_def(&self) -> bool {
+    pub(crate) fn in_def(&self) -> bool {
         self.def.is_some()
     }
 }
@@ -124,7 +124,7 @@ fn unwind_info_size(p: &Proc) -> usize {
 }
 
 /// Whether `name` is one of the directives this module handles.
-pub fn is_directive(name: &str) -> bool {
+pub(crate) fn is_directive(name: &str) -> bool {
     matches!(
         name,
         ".def" | ".endef" | ".scl" | ".linkonce" | ".rva" | ".secrel32" | ".secidx" | ".safeseh"
@@ -133,7 +133,7 @@ pub fn is_directive(name: &str) -> bool {
 
 /// The fields that may appear between `.def` and `.endef`, where they mean
 /// something other than the ELF directive of the same name.
-pub fn is_def_field(name: &str) -> bool {
+pub(crate) fn is_def_field(name: &str) -> bool {
     matches!(
         name,
         ".scl" | ".type" | ".endef" | ".size" | ".dim" | ".tag" | ".val" | ".line"
@@ -181,7 +181,7 @@ fn seh_register(name: &str) -> Option<u8> {
 /// i386, where llvm-mc takes Microsoft's `L`: any local label whose name
 /// starts with a capital L, `Loop` too, and not `.Lfoo`. NASM keeps every
 /// label the source wrote.
-pub fn keeps_symbol(asm: &Assembler, id: SymbolId) -> bool {
+pub(crate) fn keeps_symbol(asm: &Assembler, id: SymbolId) -> bool {
     let sym = asm.symbols.get(id);
     let name = asm.interner.get(sym.name);
     if sym.local_number.is_some() || name.contains('\u{0}') {
@@ -205,7 +205,7 @@ pub fn keeps_symbol(asm: &Assembler, id: SymbolId) -> bool {
 
 /// The storage class a symbol is written with: what `.def` said, or the
 /// class its binding implies.
-pub fn storage_class(asm: &Assembler, id: SymbolId) -> u8 {
+pub(crate) fn storage_class(asm: &Assembler, id: SymbolId) -> u8 {
     if let Some(c) = asm.coff.defs.get(&id).and_then(|d| d.storage_class) {
         return c;
     }
@@ -221,13 +221,13 @@ pub fn storage_class(asm: &Assembler, id: SymbolId) -> u8 {
 ///
 /// `.type foo,@function` is ELF's spelling and says nothing here, which is
 /// also what llvm-mc makes of it.
-pub fn symbol_type(asm: &Assembler, id: SymbolId) -> u16 {
+pub(crate) fn symbol_type(asm: &Assembler, id: SymbolId) -> u16 {
     asm.coff.defs.get(&id).and_then(|d| d.ty).unwrap_or(0)
 }
 
 /// Whether `.def` gave the symbol the function type, `IMAGE_SYM_DTYPE_FUNCTION`
 /// in the high half of its type.
-pub fn is_function(asm: &Assembler, id: SymbolId) -> bool {
+pub(crate) fn is_function(asm: &Assembler, id: SymbolId) -> bool {
     symbol_type(asm, id) & 0xf0 == coff::SYM_TYPE_FUNCTION
 }
 
@@ -918,7 +918,7 @@ impl Assembler {
 ///
 /// These have no ELF number, so they are not the backends' to answer; the
 /// core asks here first when the output is COFF.
-pub fn modifier_reloc(name: &str) -> Option<u32> {
+pub(crate) fn modifier_reloc(name: &str) -> Option<u32> {
     Some(match name {
         "imgrel" | "imagebase" => pseudo::IMGREL,
         "secrel" | "secrel32" => pseudo::SECREL,
@@ -929,7 +929,7 @@ pub fn modifier_reloc(name: &str) -> Option<u32> {
 
 /// The core's view of a section with these characteristics: what decides
 /// whether padding is no-ops, and whether data may be emitted into it.
-pub fn section_flags(characteristics: u32) -> crate::section::SectionFlags {
+pub(crate) fn section_flags(characteristics: u32) -> crate::section::SectionFlags {
     crate::section::SectionFlags {
         alloc: characteristics & coff::SCN_LNK_REMOVE == 0,
         write: characteristics & coff::SCN_MEM_WRITE != 0,
@@ -998,6 +998,6 @@ pub(crate) fn parse_section_attributes(
 /// symbols tell apart — `.rdata` once per constant a compiler folds — are
 /// kept apart in the assembler under a name that adds the symbol after a NUL,
 /// which no source can spell.
-pub fn section_name(name: &str) -> &str {
+pub(crate) fn section_name(name: &str) -> &str {
     name.split('\u{0}').next().unwrap_or(name)
 }

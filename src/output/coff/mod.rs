@@ -11,7 +11,7 @@
 //! - **The addend lives in the bytes.** A COFF relocation is ten bytes with
 //!   nowhere to put one, so `call foo+4` writes the 4 into the displacement
 //!   field, as a `REL` psABI would. What "here" means differs per relocation
-//!   as well; [`reloc::pc_base`] carries that.
+//!   as well, which is what `reloc::pc_base` carries.
 //! - **Sections carry their own symbol.** Every section has a symbol with an
 //!   auxiliary record giving its length, relocation count and a checksum of
 //!   its bytes, which is also where a COMDAT's selection is recorded.
@@ -20,7 +20,7 @@
 //! empty, as llvm-mc writes them; anything else follows in the order the
 //! source named it.
 
-pub mod reloc;
+pub(crate) mod reloc;
 
 use super::OutputError;
 use crate::assembler::Assembler;
@@ -29,33 +29,33 @@ use crate::section::{SectionFlags, SectionId, SectionKind};
 use crate::symbol::{Binding, SymbolId, SymbolValue};
 use std::collections::HashMap;
 
-pub const MACHINE_I386: u16 = 0x14c;
-pub const MACHINE_AMD64: u16 = 0x8664;
-pub const MACHINE_ARM64: u16 = 0xaa64;
+pub(crate) const MACHINE_I386: u16 = 0x14c;
+pub(crate) const MACHINE_AMD64: u16 = 0x8664;
+pub(crate) const MACHINE_ARM64: u16 = 0xaa64;
 
 // Section characteristics (`IMAGE_SCN_*`).
-pub const SCN_CNT_CODE: u32 = 0x0000_0020;
-pub const SCN_CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
-pub const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x0000_0080;
-pub const SCN_LNK_INFO: u32 = 0x0000_0200;
-pub const SCN_LNK_REMOVE: u32 = 0x0000_0800;
-pub const SCN_LNK_COMDAT: u32 = 0x0000_1000;
-pub const SCN_ALIGN_MASK: u32 = 0x00f0_0000;
-pub const SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
-pub const SCN_MEM_SHARED: u32 = 0x1000_0000;
-pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
-pub const SCN_MEM_READ: u32 = 0x4000_0000;
-pub const SCN_MEM_WRITE: u32 = 0x8000_0000;
+pub(crate) const SCN_CNT_CODE: u32 = 0x0000_0020;
+pub(crate) const SCN_CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
+pub(crate) const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x0000_0080;
+pub(crate) const SCN_LNK_INFO: u32 = 0x0000_0200;
+pub(crate) const SCN_LNK_REMOVE: u32 = 0x0000_0800;
+pub(crate) const SCN_LNK_COMDAT: u32 = 0x0000_1000;
+pub(crate) const SCN_ALIGN_MASK: u32 = 0x00f0_0000;
+pub(crate) const SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
+pub(crate) const SCN_MEM_SHARED: u32 = 0x1000_0000;
+pub(crate) const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+pub(crate) const SCN_MEM_READ: u32 = 0x4000_0000;
+pub(crate) const SCN_MEM_WRITE: u32 = 0x8000_0000;
 
 // Storage classes (`IMAGE_SYM_CLASS_*`).
-pub const SYM_CLASS_EXTERNAL: u8 = 2;
-pub const SYM_CLASS_STATIC: u8 = 3;
-pub const SYM_CLASS_FILE: u8 = 103;
-pub const SYM_CLASS_WEAK_EXTERNAL: u8 = 105;
+pub(crate) const SYM_CLASS_EXTERNAL: u8 = 2;
+pub(crate) const SYM_CLASS_STATIC: u8 = 3;
+pub(crate) const SYM_CLASS_FILE: u8 = 103;
+pub(crate) const SYM_CLASS_WEAK_EXTERNAL: u8 = 105;
 
 /// `IMAGE_SYM_DTYPE_FUNCTION` in the high half of a symbol's type, which is
 /// what `.def foo; .type 32; .endef` records.
-pub const SYM_TYPE_FUNCTION: u16 = 0x20;
+pub(crate) const SYM_TYPE_FUNCTION: u16 = 0x20;
 
 const SYM_UNDEFINED: i16 = 0;
 const SYM_ABSOLUTE: i16 = -1;
@@ -74,7 +74,7 @@ const SECTION_HEADER_SIZE: u64 = 40;
 
 /// The COFF machine an architecture's objects are for, or `None` for a target
 /// Windows has never run on, which has no machine number to write.
-pub fn machine(arch: &dyn crate::arch::Architecture) -> Option<u16> {
+pub(crate) fn machine(arch: &dyn crate::arch::Architecture) -> Option<u16> {
     match arch.elf_machine() {
         3 => Some(MACHINE_I386),
         62 => Some(MACHINE_AMD64),
@@ -91,7 +91,7 @@ pub fn machine(arch: &dyn crate::arch::Architecture) -> Option<u16> {
 /// the multi-byte `nopw` forms up to ten, and `0x66` prefixes on the ten-byte
 /// one beyond that. For i386 its default Windows CPU has no `nopl`, so the
 /// padding is all one-byte `nop`s. Sixteen-bit code keeps the backend's.
-pub fn nop_fill(
+pub(crate) fn nop_fill(
     arch: &dyn crate::arch::Architecture,
     state: &crate::arch::ArchState,
     len: usize,
@@ -133,7 +133,7 @@ pub fn nop_fill(
 /// The alignment a section starts with, which llvm-mc gives by name: the
 /// three it creates itself are four-byte aligned, and a section the source
 /// names gets no alignment of its own until something in it asks.
-pub fn default_align(name: &str) -> u64 {
+pub(crate) fn default_align(name: &str) -> u64 {
     match name {
         ".text" | ".data" | ".bss" => 4,
         _ => 1,
@@ -147,7 +147,7 @@ pub fn default_align(name: &str) -> u64 {
 /// These are the sections LLVM's object file description creates up front,
 /// for its own code generation; each was checked by naming it with flags
 /// that would otherwise give different characteristics.
-pub fn preset_characteristics(name: &str) -> Option<u32> {
+pub(crate) fn preset_characteristics(name: &str) -> Option<u32> {
     const RDATA: u32 = SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ;
     const DEBUG: u32 = SCN_CNT_INITIALIZED_DATA | SCN_MEM_DISCARDABLE | SCN_MEM_READ;
     Some(match name {
@@ -195,7 +195,7 @@ pub fn preset_characteristics(name: &str) -> Option<u32> {
 /// The characteristics of a section the source never described with COFF
 /// flags: the three standard ones, whatever a dialect's own section
 /// directive made, and the DWARF sections.
-pub fn default_characteristics(name: &str, kind: SectionKind, flags: &SectionFlags) -> u32 {
+pub(crate) fn default_characteristics(name: &str, kind: SectionKind, flags: &SectionFlags) -> u32 {
     if let Some(v) = preset_characteristics(name) {
         return v;
     }
@@ -220,7 +220,7 @@ pub fn default_characteristics(name: &str, kind: SectionKind, flags: &SectionFla
 /// read but not write, a later `w` puts write back, and `y` takes read away
 /// for good. So they are collected as intentions first and turned into bits
 /// once, the way llvm-mc does it.
-pub fn parse_flags(name: &str, letters: &str) -> Result<u32, char> {
+pub(crate) fn parse_flags(name: &str, letters: &str) -> Result<u32, char> {
     #[derive(Default)]
     struct Want {
         alloc: bool,
