@@ -2,7 +2,7 @@
 # Differential test against cross assemblers built by tools/oracles/build.sh.
 #
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
-# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, AVR, and the 8-bit
+# GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, AVR, MSP430, and the 8-bit
 # Z80, 6502, 8080 and 8051. Assembles a corpus with rsasm and with the
 # reference, and compares the code bytes. ARM and Thumb, which llvm-mc does
 # assemble, are here too, as whole objects, for what GNU as decides and
@@ -69,6 +69,10 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # records where rsasm writes the zeros `-f bin` has, so those programs are
 # written without gaps.
 #
+# MSP430 is checked for each ISA GNU as's `-mcpu` selects. The polymorphic
+# branches (`jump`, `beq`, ...) need `-mP` there, which also leaves more to
+# the linker in data sections, so they have corpora of their own.
+#
 # vasm is only a secondary reference, run with `-no-opt -devpac`. By default it
 # is an optimizing assembler that rewrites instructions (`move.l #1,d0` becomes
 # `moveq #1,d0`) and deletes branches, which is not what rsasm or GNU as do;
@@ -122,6 +126,11 @@ i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
+msp430|msp430|gas|msp430-elf-as -mcpu=430|elf:.text
+msp430x|msp430x|gas|msp430-elf-as -mcpu=430x|elf:.text
+msp430xv2|msp430xv2|gas|msp430-elf-as -mcpu=430xv2|elf:.text|msp430
+msp430-poly|msp430|gas|msp430-elf-as -mcpu=430 -mP|elf:.text
+msp430x-poly|msp430x|gas|msp430-elf-as -mcpu=430x -mP|elf:.text|msp430-poly
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
 powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64

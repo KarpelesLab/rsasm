@@ -32,6 +32,9 @@ const SHT_REL: u32 = 9;
 const SHT_NOBITS: u32 = 8;
 const SHT_NOTE: u32 = 7;
 const SHT_MIPS_DWARF: u32 = 0x7000_001e;
+/// `SHT_LOPROC + 3`, the build attributes section of
+/// [`Architecture::elf_attributes`](crate::arch::Architecture::elf_attributes).
+const SHT_ATTRIBUTES: u32 = 0x7000_0003;
 const EM_MIPS: u16 = 8;
 
 const SHF_WRITE: u64 = 0x1;
@@ -276,6 +279,10 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // its standard macros make it the initial section; a data-only NASM
     // program still has an (empty) `.text` in its object.
     let nasm_text = asm.options.dialect == crate::lexer::Dialect::Nasm;
+    let attributes = {
+        let (arch, state) = asm.target_state();
+        arch.elf_attributes(state).map(|(name, _)| name)
+    };
     // A section with nothing in it but a label is written too, as both
     // references write it: the label needs a section to be in, and a
     // relocation against it one to name.
@@ -309,6 +316,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 {
                     SHT_MIPS_DWARF
                 }
+                SectionKind::Progbits if Some(name.as_str()) == attributes => SHT_ATTRIBUTES,
                 SectionKind::Progbits => SHT_PROGBITS,
             },
             flags: elf_flags(&s.flags),
@@ -538,6 +546,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     };
     ident[5] = if big_endian { ELFDATA2MSB } else { ELFDATA2LSB };
     ident[6] = EV_CURRENT;
+    ident[7] = asm.target().elf_osabi();
     hdr.out.extend_from_slice(&ident);
     hdr.u16(ET_REL);
     hdr.u16(asm.target().elf_machine());

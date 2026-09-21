@@ -61,6 +61,8 @@ pub mod k78;
 // crate-visible and only `lookup` and `NAMES` are used from here.
 #[cfg(feature = "avr")]
 pub(crate) mod avr;
+#[cfg(feature = "msp430")]
+pub(crate) mod msp430;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Endian {
@@ -817,6 +819,41 @@ pub trait Architecture {
         None
     }
 
+    /// Whether the subtrahend's relocation of a
+    /// [`difference_relocs`](Architecture::difference_relocs) pair comes
+    /// first. GNU as for MSP430 writes `R_MSP430_SYM_DIFF` before the value's
+    /// relocation; llvm-mc for RISC-V writes `ADD` before `SUB`.
+    fn difference_subtrahend_first(&self) -> bool {
+        false
+    }
+
+    /// The relocations, subtracting and then setting a value, that a
+    /// `.uleb128` of a difference of two labels in one section with
+    /// `symbols_in` flags is left to the linker as, where the target leaves
+    /// it at all. GNU as for MSP430 writes `R_MSP430_GNU_SUB_ULEB128` and
+    /// `R_MSP430_GNU_SET_ULEB128` for one whose labels are in code, which its
+    /// linker may relax; the value the file computes stays in the field.
+    fn uleb128_difference_relocs(
+        &self,
+        _symbols_in: &crate::section::SectionFlags,
+    ) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Whether a difference of two labels in one section, in a field of
+    /// `kind`, is still left to the linker as a
+    /// [`difference_relocs`](Architecture::difference_relocs) pair rather
+    /// than folded. `symbols_in` is the flags of the labels' section. GNU as
+    /// for MSP430 keeps every difference of labels in code as a pair, since
+    /// its linker may relax the code between them.
+    fn defers_difference(
+        &self,
+        _kind: &crate::section::FixupKind,
+        _symbols_in: &crate::section::SectionFlags,
+    ) -> bool {
+        false
+    }
+
     /// Whether a relocation against a global symbol defined in this object
     /// names the symbol's section plus an offset, as one against a local
     /// label does, rather than the symbol. GNU as for m68k does this for all
@@ -855,6 +892,37 @@ pub trait Architecture {
     /// `e_flags` for ELF output, given the state at the end of the source.
     fn elf_flags(&self, _state: &ArchState) -> u32 {
         0
+    }
+
+    /// `EI_OSABI` for ELF output. BFD writes `ELFOSABI_STANDALONE` for
+    /// MSP430; everything else here is `ELFOSABI_NONE`.
+    fn elf_osabi(&self) -> u8 {
+        0
+    }
+
+    /// The build attributes section GNU as adds to every object of its own
+    /// accord, as its name and contents, given the state at the end of the
+    /// source: MSP430's `.MSP430.attributes`, which records the instruction
+    /// set and memory model. It is written with the processor-specific
+    /// attributes type, `SHT_LOPROC + 3`, and no flags.
+    fn elf_attributes(&self, _state: &ArchState) -> Option<(&'static str, Vec<u8>)> {
+        None
+    }
+
+    /// Undefined symbols an object refers to because it has a section of
+    /// this name: GNU as for MSP430 adds `__crt0_movedata` for `.data` and
+    /// `__crt0_init_bss` for `.bss`, so that the C runtime's code for setting
+    /// each up is only linked in where some object needs it. Asked when a
+    /// `.section` directive names the section, and again at the end for each
+    /// section with contents.
+    fn section_symbols(&self, _name: &str) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Undefined symbols `.comm` and `.lcomm` refer to, for the same reason
+    /// as [`Architecture::section_symbols`].
+    fn common_symbols(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Whether a relocation of type `reloc` keeps its addend in the relocated
@@ -1155,6 +1223,10 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     if let Some(a) = avr::lookup(&lower) {
         return Some(a);
     }
+    #[cfg(feature = "msp430")]
+    if let Some(a) = msp430::lookup(&lower) {
+        return Some(a);
+    }
     let _ = lower;
     None
 }
@@ -1195,6 +1267,8 @@ pub fn available() -> Vec<&'static str> {
     v.extend_from_slice(k78::NAMES);
     #[cfg(feature = "avr")]
     v.extend_from_slice(avr::NAMES);
+    #[cfg(feature = "msp430")]
+    v.extend_from_slice(msp430::NAMES);
     v
 }
 
