@@ -2215,7 +2215,10 @@ pub const ALIASES: &[(&str, &str)] = &[
 
 /// GNU's number for each register name, from the `m68k_register`
 /// enum of `gas/config/m68k-parse.h`. The operand parser answers with
-/// these, and the encoders ask what a number means.
+/// these, and the encoders ask what a number means. The whole enum is
+/// written out, GNU's numbering included, so a name is there when a
+/// form starts using it; not every name has a use yet.
+#[allow(dead_code)]
 pub mod rid {
     pub const DATA0: u16 = 1;
     pub const DATA1: u16 = 2;

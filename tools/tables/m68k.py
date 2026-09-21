@@ -415,7 +415,10 @@ def render(src):
 
     out("/// GNU's number for each register name, from the `m68k_register`\n")
     out("/// enum of `gas/config/m68k-parse.h`. The operand parser answers with\n")
-    out("/// these, and the encoders ask what a number means.\n")
+    out("/// these, and the encoders ask what a number means. The whole enum is\n")
+    out("/// written out, GNU's numbering included, so a name is there when a\n")
+    out("/// form starts using it; not every name has a use yet.\n")
+    out("#[allow(dead_code)]\n")
     out("pub mod rid {\n")
     for name, num in sorted(regs.items(), key=lambda kv: kv[1]):
         out("    pub const %s: u16 = %d;\n" % (name, num))

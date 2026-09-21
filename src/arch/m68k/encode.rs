@@ -211,12 +211,12 @@ pub fn build(opcode: u16, parts: Vec<Part>) -> Vec<Variant> {
 /// What the encoder needs to know besides the operand.
 #[derive(Copy, Clone)]
 pub struct EaCtx {
-    pub cpu: Cpu,
+    pub(crate) cpu: Cpu,
     /// Width of an immediate operand.
     pub size: Sz,
     /// Or, for an FPU operand, its floating-point size, which an immediate
     /// takes instead.
-    pub float: Option<Float>,
+    pub(crate) float: Option<Float>,
 }
 
 fn fixup(offset: u32, e: ExprRef, kind: FixupKind, span: Span) -> Fixup {

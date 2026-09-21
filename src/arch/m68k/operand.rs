@@ -12,8 +12,8 @@
 //! Two things GNU as reads as separate operands arrive here attached to one:
 //! a `{...}` after an operand (a bit field's `{offset:width}`, or `fmove.p`'s
 //! k-factor `{#3}`), and the far side of a colon (`d1:d2`, `fp1:fp2`,
-//! `(a0):(a1)`). [`Operand::brace`] and [`Mode::Pair`]/[`Mode::Colon`] keep
-//! them, and [`super::generic`] spreads them back out.
+//! `(a0):(a1)`). `Operand::brace` and [`Mode::Pair`]/[`Mode::Colon`] keep
+//! them, and `generic` spreads them back out.
 
 use super::float;
 use super::reg::{self, Reg};
@@ -48,7 +48,7 @@ pub struct Index {
     /// 1, 2, 4 or 8.
     pub scale: u8,
     /// Whether the size was written rather than taken by default.
-    pub sized: bool,
+    pub(crate) sized: bool,
     pub span: Span,
 }
 
@@ -94,14 +94,14 @@ pub enum Mode {
     },
     Abs(Value),
     Imm(ExprRef, Span),
-    /// A floating-point immediate, `#1.5` or `#0r1.5`; see [`float`].
+    /// A floating-point immediate, `#1.5` or `#0r1.5`; see `float`.
     FImm(f64, Span),
     Sr,
     Ccr,
     Usp,
     /// Any other register that is not a general one: an FPU control register,
     /// an MMU register, a cache name or a `movec` register, by its number in
-    /// [`rid`].
+    /// `rid`.
     Ctl(u16),
     /// A register list, GNU as's way: bit 0 = `d0` through bit 15 = `a7`,
     /// bits 16-23 `fp0`-`fp7`, and 24-26 `fpiar`, `fpsr` and `fpcr`.
@@ -119,7 +119,7 @@ pub struct Operand {
     pub span: Span,
     /// What a trailing `{...}` held: two operands for `{offset:width}`, one
     /// for a k-factor, none without braces.
-    pub brace: Vec<Operand>,
+    pub(crate) brace: Vec<Operand>,
 }
 
 impl Operand {
@@ -155,7 +155,7 @@ impl Operand {
 }
 
 /// Parses the comma-separated operands of one instruction.
-pub fn parse_list(cx: &mut AsmCtx<'_>, cur: &Cursor<'_>) -> Option<Vec<Operand>> {
+pub(crate) fn parse_list(cx: &mut AsmCtx<'_>, cur: &Cursor<'_>) -> Option<Vec<Operand>> {
     if cur.at_end() {
         return Some(Vec::new());
     }

@@ -96,9 +96,9 @@ pub struct Def {
     pub kind: Kind,
     /// Suffixes accepted. A family with none still takes no suffix at all.
     pub sizes: u8,
-    /// The CPUs that have it, as [`super::table::feature`] bits, for a
-    /// spelling GNU's table does not name; see [`super::table::HAND_ARCH`].
-    pub arch: u32,
+    /// The CPUs that have it, as `table::feature` bits, for a
+    /// spelling GNU's table does not name; see `table::HAND_ARCH`.
+    pub(crate) arch: u32,
 }
 
 const fn d(kind: Kind, sizes: u8) -> Def {

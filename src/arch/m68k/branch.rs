@@ -128,7 +128,7 @@ fn far(cond: u8, target: ExprRef, span: Span) -> Variant {
 
 /// `Bcc`, `BRA` (`cond` 0) or `BSR` (`cond` 1). `constant` says the target
 /// is a number rather than a label.
-pub fn bcc(
+pub(crate) fn bcc(
     cond: u8,
     size: BranchSize,
     cpu: Cpu,
@@ -172,7 +172,7 @@ pub fn bcc(
 /// A number is the displacement's word alone, since no relaxation can place
 /// it. GNU as writes that word as zero and emits no relocation for it at all,
 /// leaving a branch to the next word; rsasm relocates it.
-pub fn dbcc(
+pub(crate) fn dbcc(
     cond: u8,
     reg: u8,
     cpu: Cpu,

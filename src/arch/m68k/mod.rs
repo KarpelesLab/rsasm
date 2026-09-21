@@ -5,7 +5,7 @@
 //! and the 683xx parts, Fido, and the ColdFire ISA levels and parts (`isac`,
 //! `5475`). `m68k` is the 68020 with a 68881 and a 68851, which is what GNU as
 //! assumes by default. Extensions follow a comma, as in GNU as:
-//! `.arch 68000,68881`. A CPU is a set of [`table::feature`] bits, and an
+//! `.arch 68000,68881`. A CPU is a set of `table::feature` bits, and an
 //! instruction or addressing mode it lacks is refused with a message naming
 //! what it needs.
 //!
@@ -15,25 +15,25 @@
 //! operands ([`operand`]) and encodes effective addresses ([`encode`]). The
 //! integer instructions of the 68000-68020 are encoded by hand ([`ops`],
 //! [`branch`]); everything else — the FPU, the MMUs, CAS, CALLM, MOVE16,
-//! CPU32 and ColdFire additions — by [`generic`], from a table generated out
-//! of GNU's own ([`table`]).
+//! CPU32 and ColdFire additions — by `generic`, from a table generated out
+//! of GNU's own (`table`).
 //!
 //! Everything here was checked against `m68k-elf-as` 2.47, in both its native
 //! and `--mri` modes, with vasm as a second opinion where the two differ. The
 //! differences that remain are deliberate and listed where they are decided:
 //! no instruction substitution ([`ops`]), Motorola's word-sized default index
-//! ([`operand`]), and extended-precision float immediates ([`float`]).
+//! ([`operand`]), and extended-precision float immediates (`float`).
 
 pub mod branch;
 pub mod encode;
-pub mod float;
-pub mod generic;
+pub(crate) mod float;
+pub(crate) mod generic;
 pub mod insn;
 pub mod operand;
 pub mod ops;
 pub mod reg;
 pub mod reloc;
-pub mod table;
+pub(crate) mod table;
 
 use crate::arch::{ArchState, Architecture, AsmCtx, CommentSyntax, Endian, InsnRequest, Syntax};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
@@ -43,14 +43,14 @@ use table::feature as f;
 pub const NAMES: &[&str] = &["m68k"];
 
 /// Every 68k CPU, as against ColdFire.
-pub const M68000UP: u32 = f::M68000 | M68010UP;
+pub(crate) const M68000UP: u32 = f::M68000 | M68010UP;
 /// The 68020 and the CPUs after it.
-pub const M68020UP: u32 = f::M68020 | f::M68030 | f::M68040 | f::M68060;
+pub(crate) const M68020UP: u32 = f::M68020 | f::M68030 | f::M68040 | f::M68060;
 /// The CPUs with a 32-bit `BRA`.
-pub const LONG_BRANCH: u32 = M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B;
+pub(crate) const LONG_BRANCH: u32 = M68020UP | f::CPU32 | f::FIDO_A | f::MCFISA_B;
 
 /// The CPUs with a 32-bit branch on condition `cond`, 0 being `bra`.
-pub fn long_branches(cond: u8) -> u32 {
+pub(crate) fn long_branches(cond: u8) -> u32 {
     if cond == 0 {
         LONG_BRANCH
     } else {
@@ -58,14 +58,14 @@ pub fn long_branches(cond: u8) -> u32 {
     }
 }
 /// The CPUs with the 68010's additions: `rtd`, `movec`, `move` from `ccr`.
-pub const M68010UP: u32 = f::M68010 | f::CPU32 | f::FIDO_A | M68020UP;
+pub(crate) const M68010UP: u32 = f::M68010 | f::CPU32 | f::FIDO_A | M68020UP;
 
 /// The CPU being assembled for.
 #[derive(Copy, Clone, Debug)]
-pub struct Cpu {
-    /// What it has, as [`table::feature`] bits.
+pub(crate) struct Cpu {
+    /// What it has, as `table::feature` bits.
     pub arch: u32,
-    /// The control registers `movec` reaches on it, by [`table::rid`] number.
+    /// The control registers `movec` reaches on it, by `table::rid` number.
     pub ctrl: &'static [u16],
     /// The name it was chosen by.
     pub name: &'static str,
@@ -130,7 +130,7 @@ impl Cpu {
 
 /// Names what an instruction needs, from the CPUs that have it, for "needs a
 /// 68020 or later"-style messages.
-pub fn describe_arch(arch: u32) -> String {
+pub(crate) fn describe_arch(arch: u32) -> String {
     let mut parts: Vec<String> = Vec::new();
     let chain = [
         (f::M68000, "68000"),

@@ -25,7 +25,7 @@ pub enum Reg {
     Fp(u8),
     /// The program counter, only meaningful as a base register.
     Pc,
-    /// Any other register, by its number in [`rid`].
+    /// Any other register, by its number in `rid`.
     Ctl(u16),
 }
 
@@ -135,7 +135,7 @@ pub fn lookup(name: &str, gnu: bool) -> Option<Reg> {
 }
 
 /// The name a control register is best known by, for messages.
-pub fn name_of(id: u16) -> &'static str {
+pub(crate) fn name_of(id: u16) -> &'static str {
     match id {
         rid::SR => "sr",
         rid::CCR => "ccr",
@@ -151,7 +151,7 @@ pub fn name_of(id: u16) -> &'static str {
 
 /// The 12-bit `MOVEC` code of a control register, if the CPU whose list of
 /// them is `ctrl` has it.
-pub fn movec(id: u16, ctrl: &[u16]) -> Option<u16> {
+pub(crate) fn movec(id: u16, ctrl: &[u16]) -> Option<u16> {
     use super::table::{RAMBAR, RAMBAR_ALT};
     // On the few CPUs that list `RAMBAR_ALT`, `rambar` means that one.
     let id = if id == RAMBAR && ctrl.contains(&RAMBAR_ALT) {

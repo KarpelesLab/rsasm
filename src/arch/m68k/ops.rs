@@ -30,7 +30,7 @@ use crate::source::Span;
 
 pub struct Asm<'c, 'a> {
     pub cx: &'c mut AsmCtx<'a>,
-    pub cpu: Cpu,
+    pub(crate) cpu: Cpu,
     /// The mnemonic as written, for messages.
     pub name: String,
     pub span: Span,
