@@ -167,30 +167,9 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         B | Bl | Bx | Blx => branch(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
-        Clz | Rev | Rev16 | Revsh | Uxtb | Uxth | Sxtb | Sxth => unary(cx, ins),
-        Nop => {
-            no_flags(cx, ins)?;
-            arity(cx, ins, &[0])?;
-            Some(one(word(ins.cond, NOP & 0x0fff_ffff)))
-        }
-        Svc => {
-            no_flags(cx, ins)?;
-            arity(cx, ins, &[1])?;
-            let v = imm_bits(cx, &ops[0], 24)?;
-            Some(one(word(ins.cond, 0x0f00_0000 | v)))
-        }
-        Bkpt => {
-            no_flags(cx, ins)?;
-            no_cond(cx, ins)?;
-            arity(cx, ins, &[1])?;
-            let v = imm_bits(cx, &ops[0], 16)?;
-            // `bkpt` is unconditional: the condition field is part of its
-            // encoding, not a predicate.
-            Some(one(0xe120_0070 | ((v & 0xfff0) << 4) | (v & 0xf)))
-        }
         Mrs => status_read(cx, ins),
         Msr => status_write(cx, ins),
-        Dmb | Dsb | Isb => barrier(cx, ins),
+        Ext(at) => super::generic::assemble(cx, ins, at),
         // ARM instructions carry their own conditions, so GNU as takes an
         // `it` in ARM code for source shared with Thumb, and emits nothing.
         It(_) => {
@@ -498,6 +477,10 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let b = u32::from(matches!(ins.mnem, Mnem::Ldrb | Mnem::Strb));
     let (i, u, field) = match mem.offset {
         MemOffset::None => (0, 1, 0),
+        MemOffset::Unindexed(_) => {
+            cx.error(mem.span, "only `ldc` and `stc` take `[rn], {option}`");
+            return None;
+        }
         MemOffset::Imm(v) => {
             let mag = v.unsigned_abs();
             if mag > 0xfff {
@@ -552,6 +535,10 @@ fn load_store_extra(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>>
     };
     let (i, u, field) = match mem.offset {
         MemOffset::None => (1, 1, 0),
+        MemOffset::Unindexed(_) => {
+            cx.error(mem.span, "only `ldc` and `stc` take `[rn], {option}`");
+            return None;
+        }
         MemOffset::Imm(v) => {
             let mag = v.unsigned_abs();
             if mag > 0xff {
@@ -969,24 +956,6 @@ fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     )))
 }
 
-fn unary(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
-    no_flags(cx, ins)?;
-    arity(cx, ins, &[2])?;
-    let rd = reg_of(cx, &ins.ops[0])? as u32;
-    let rm = reg_of(cx, &ins.ops[1])? as u32;
-    let base = match ins.mnem {
-        Mnem::Clz => 0x016f_0f10,
-        Mnem::Rev => 0x06bf_0f30,
-        Mnem::Rev16 => 0x06bf_0fb0,
-        Mnem::Revsh => 0x06ff_0fb0,
-        Mnem::Uxtb => 0x06ef_0070,
-        Mnem::Uxth => 0x06ff_0070,
-        Mnem::Sxtb => 0x06af_0070,
-        _ => 0x06bf_0070,
-    };
-    Some(one(word(ins.cond, base | (rd << 12) | rm)))
-}
-
 // ---- status registers and barriers -----------------------------------------
 
 fn status_read(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
@@ -1051,49 +1020,4 @@ fn status_write(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         ins.cond,
         0x0120_f000 | (u32::from(spsr) << 22) | (mask << 16) | rm,
     )))
-}
-
-/// The memory-barrier options, as their 4-bit encodings.
-pub fn barrier_option(name: &str) -> Option<u32> {
-    Some(match name {
-        "sy" => 15,
-        "st" => 14,
-        "ld" => 13,
-        "ish" => 11,
-        "ishst" => 10,
-        "ishld" => 9,
-        "nsh" | "un" => 7,
-        "nshst" | "unst" => 6,
-        "nshld" => 5,
-        "osh" => 3,
-        "oshst" => 2,
-        "oshld" => 1,
-        _ => return None,
-    })
-}
-
-fn barrier(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
-    no_flags(cx, ins)?;
-    no_cond(cx, ins)?;
-    arity(cx, ins, &[0, 1])?;
-    let option = match ins.ops.first() {
-        None => 15,
-        Some(op) => {
-            let name = op.word.clone().unwrap_or_default();
-            match barrier_option(&name) {
-                Some(v) => v,
-                None => {
-                    cx.error(op.span, "unknown barrier option");
-                    return None;
-                }
-            }
-        }
-    };
-    let sub = match ins.mnem {
-        Mnem::Dsb => 4,
-        Mnem::Dmb => 5,
-        _ => 6,
-    };
-    // The barriers are unconditional: `1111` occupies the condition field.
-    Some(one(0xf57f_f000 | (sub << 4) | option))
 }

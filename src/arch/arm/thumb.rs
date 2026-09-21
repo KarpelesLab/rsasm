@@ -239,30 +239,8 @@ fn encode_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Ldm(_) | Stm(_) => block_transfer(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
-        Clz => clz(cx, ins),
-        Rev | Rev16 | Revsh | Uxtb | Uxth | Sxtb | Sxth => unary(cx, ins),
-        Nop => {
-            unconditional(cx, ins)?;
-            encode::arity(cx, ins, &[0])?;
-            if want_narrow(ins) {
-                Some(narrow(NOP))
-            } else {
-                Some(wide(0xf3af, 0x8000))
-            }
-        }
-        Svc => {
-            unconditional(cx, ins)?;
-            encode::arity(cx, ins, &[1])?;
-            let v = encode::imm_bits(cx, &ins.ops[0], 8)?;
-            Some(narrow(0xdf00 | v as u16))
-        }
-        Bkpt => {
-            unconditional(cx, ins)?;
-            encode::arity(cx, ins, &[1])?;
-            let v = encode::imm_bits(cx, &ins.ops[0], 8)?;
-            Some(narrow(0xbe00 | v as u16))
-        }
-        Rsc | Teq | Mrs | Msr | Dmb | Dsb | Isb => {
+        Ext(at) => super::generic::assemble(cx, ins, at),
+        Rsc | Teq | Mrs | Msr => {
             cx.error(
                 ins.span,
                 format!("`{}` is not supported in Thumb by this backend", ins.text),
@@ -1076,6 +1054,7 @@ fn literal_load(
 fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {
     let base = mem.base;
     match mem.offset {
+        MemOffset::Unindexed(_) => None,
         MemOffset::None | MemOffset::Imm(_) => {
             let off = match mem.offset {
                 MemOffset::Imm(v) => v,
@@ -1278,37 +1257,4 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             ))
         }
     }
-}
-
-fn clz(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
-    unconditional(cx, ins)?;
-    encode::no_flags(cx, ins)?;
-    encode::arity(cx, ins, &[2])?;
-    let rd = encode::reg_of(cx, &ins.ops[0])?;
-    let rm = encode::reg_of(cx, &ins.ops[1])?;
-    Some(wide(
-        0xfab0 | rm as u16,
-        0xf080 | ((rd as u16) << 8) | rm as u16,
-    ))
-}
-
-fn unary(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
-    unconditional(cx, ins)?;
-    encode::no_flags(cx, ins)?;
-    encode::arity(cx, ins, &[2])?;
-    let rd = encode::reg_of(cx, &ins.ops[0])?;
-    let rm = encode::reg_of(cx, &ins.ops[1])?;
-    if !low(rd) || !low(rm) || !want_narrow(ins) {
-        return no_encoding(cx, ins);
-    }
-    let base: u16 = match ins.mnem {
-        Mnem::Rev => 0xba00,
-        Mnem::Rev16 => 0xba40,
-        Mnem::Revsh => 0xbac0,
-        Mnem::Sxth => 0xb200,
-        Mnem::Sxtb => 0xb240,
-        Mnem::Uxth => 0xb280,
-        _ => 0xb2c0,
-    };
-    Some(narrow(base | ((rm as u16) << 3) | rd as u16))
 }

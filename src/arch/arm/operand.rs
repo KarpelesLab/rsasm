@@ -87,6 +87,9 @@ pub enum MemOffset {
     None,
     /// A signed byte count; the sign becomes the U bit.
     Imm(i64),
+    /// `[rn], {imm}`: the unindexed form of `ldc` and `stc`, whose byte the
+    /// coprocessor reads and the core does not.
+    Unindexed(i64),
     Reg {
         rm: Reg,
         add: bool,
@@ -119,6 +122,8 @@ pub enum OperandKind {
     List(u16),
     /// `=expr`: a value for `ldr` to load from the literal pool.
     Literal(ExprRef),
+    /// `{expr}`: `nop`'s hint number and the coprocessor opcode of `cdp`.
+    Braced(ExprRef),
 }
 
 #[derive(Clone, Debug)]
@@ -157,6 +162,7 @@ impl Operand {
             OperandKind::Mem(_) => "a memory operand".into(),
             OperandKind::List(_) => "a register list".into(),
             OperandKind::Literal(_) => "a literal pool value".into(),
+            OperandKind::Braced(_) => "a value in braces".into(),
         }
     }
 }
@@ -317,6 +323,24 @@ impl Parser<'_, '_> {
             self.cx.error(start, "empty register list");
             return None;
         }
+        // `{5}` is not a register list at all: it is the hint number of
+        // `nop` and the coprocessor option of `cdp` and `ldc`.
+        if !matches!(cur.peek().kind, TokKind::Ident(n)
+            if reg::is_register(&self.cx.interner.get(n).to_ascii_lowercase()))
+        {
+            let e = self.cx.expr_parser().parse(cur)?;
+            if cur.eat_punct(Punct::RBrace).is_none() {
+                let span = cur.peek().span;
+                self.cx.error(span, "expected `}`");
+                return None;
+            }
+            return Some(Operand {
+                kind: OperandKind::Braced(e),
+                span: start.to(cur.nth(0).span),
+                word: None,
+                writeback: false,
+            });
+        }
         loop {
             let span = cur.peek().span;
             let Some(lo) = self.eat_register(cur) else {
@@ -393,8 +417,26 @@ impl Parser<'_, '_> {
             // after the transfer. A memory operand is always last, so there is
             // nothing else this comma could introduce.
             cur.advance();
-            offset = self.parse_mem_offset(cur)?;
-            Index::PostIndex
+            if cur.check_punct(Punct::LBrace) {
+                // `[rn], {8}`: `ldc`'s unindexed form, where the byte is the
+                // coprocessor's and the base is not changed.
+                let span = cur.peek().span;
+                let braced = self.parse_reglist(cur)?;
+                let OperandKind::Braced(e) = braced.kind else {
+                    self.cx.error(span, "expected a value in braces");
+                    return None;
+                };
+                let Some(v) = self.cx.constant(e) else {
+                    self.cx
+                        .error(span, "this option must be a constant expression");
+                    return None;
+                };
+                offset = MemOffset::Unindexed(v);
+                Index::Offset
+            } else {
+                offset = self.parse_mem_offset(cur)?;
+                Index::PostIndex
+            }
         } else {
             Index::Offset
         };

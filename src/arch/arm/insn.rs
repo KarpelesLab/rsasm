@@ -105,29 +105,19 @@ pub enum Mnem {
     Umlal,
     Smull,
     Smlal,
-    // Move-wide and the small unary operations.
+    // Move-wide.
     Movw,
     Movt,
-    Clz,
-    Rev,
-    Rev16,
-    Revsh,
-    Uxtb,
-    Uxth,
-    Sxtb,
-    Sxth,
-    // System and hints.
-    Nop,
-    Svc,
-    Bkpt,
+    // The status registers, whose operands are neither registers nor
+    // immediates but field specifiers and banked register names.
     Mrs,
     Msr,
-    Dmb,
-    Dsb,
-    Isb,
     /// `it`, `itt`, `ite` and so on: the letters after the first `t`, as the
     /// mask field for an even condition; see `thumb::it_block`.
     It(u8),
+    /// An instruction from the generated table, held as the index of its
+    /// first form in [`super::table::FORMS`]; see [`super::generic`].
+    Ext(u16),
 }
 
 impl Mnem {
@@ -240,12 +230,8 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("umull", Umull); add("umlal", Umlal);
         add("smull", Smull); add("smlal", Smlal);
         add("movw", Movw); add("movt", Movt);
-        add("clz", Clz); add("rev", Rev); add("rev16", Rev16); add("revsh", Revsh);
-        add("uxtb", Uxtb); add("uxth", Uxth); add("sxtb", Sxtb); add("sxth", Sxth);
-        add("nop", Nop); add("svc", Svc); add("swi", Svc);
-        add("bkpt", Bkpt);
         add("mrs", Mrs); add("msr", Msr);
-        add("dmb", Dmb); add("dsb", Dsb); add("isb", Isb);
+
         // Every `it` spelling: up to three more instructions, each `t` (the
         // condition, a clear bit) or `e` (its inverse, a set one), from the
         // top bit down, then a set bit that ends them.
@@ -257,6 +243,18 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("ittet", It(0x5)); add("ittee", It(0x7));
         add("itett", It(0x9)); add("itete", It(0xb));
         add("iteet", It(0xd)); add("iteee", It(0xf));
+        // Everything the generated table holds, under every spelling GNU as
+        // takes for it. A hand-written mnemonic always wins, so a name in
+        // both -- `rev` in Thumb, say -- keeps the encoder that knows the
+        // width rules.
+        for (i, f) in super::table::FORMS.iter().enumerate() {
+            m.entry(f.name).or_insert(Ext(i as u16));
+        }
+        for (spelling, real) in super::table::SPELLINGS {
+            if let Some(v) = m.get(real).copied() {
+                m.entry(*spelling).or_insert(v);
+            }
+        }
         m
     })
 }

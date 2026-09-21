@@ -11,11 +11,14 @@
 //! because that is what `.code 16` and `.code 32` already mean in ARM sources.
 
 pub mod encode;
+pub(crate) mod generic;
 pub mod imm;
 pub mod insn;
 pub mod operand;
 pub mod reg;
 pub mod reloc;
+#[doc(hidden)]
+pub mod table;
 pub mod thumb;
 
 use crate::arch::{
@@ -425,12 +428,13 @@ impl Architecture for Arm {
             p.parse_list(&mut cur)?
         };
         // `!` requests writeback, which only the block transfers' base
-        // register has; anywhere else it would be silently meaningless.
-        let is_block = matches!(r.mnem, Mnem::Ldm(_) | Mnem::Stm(_));
+        // register has, along with `srs` and `rfe` from the table; anywhere
+        // else it would be silently meaningless.
+        let takes_writeback = matches!(r.mnem, Mnem::Ldm(_) | Mnem::Stm(_) | Mnem::Ext(_));
         if let Some(op) = ops
             .iter()
             .enumerate()
-            .find_map(|(i, op)| (op.writeback && !(is_block && i == 0)).then_some(op))
+            .find_map(|(i, op)| (op.writeback && !(takes_writeback && i == 0)).then_some(op))
         {
             cx.error(
                 op.span,
