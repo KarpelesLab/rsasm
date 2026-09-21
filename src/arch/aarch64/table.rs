@@ -871,7 +871,7 @@ fn wrapped(enc: Enc, v: Option<Val>, wrap: u8, dirs: u8) -> Option<Val> {
 }
 
 /// Puts one number into the word, or says why it does not fit.
-fn apply(enc: Enc, v: Option<Val>, values: &[Option<Val>], word: u32) -> Result<u32, String> {
+fn apply(enc: Enc, v: Option<Val>, word: u32) -> Result<u32, String> {
     let range = |v: i64, min: i64, max: i64| {
         if v < min || v > max {
             Err(format!("must be {min}..={max}, but is {v}"))
@@ -935,18 +935,8 @@ fn apply(enc: Enc, v: Option<Val>, values: &[Option<Val>], word: u32) -> Result<
             let x = transform(xf, v.ok_or("expected an immediate")?)?;
             Ok(set_bits(word, bits, x))
         }
-        Enc::Tied(j) => {
-            let (Some(a), Some(b)) = (v.and_then(Val::int), values[j as usize].and_then(Val::int))
-            else {
-                return Ok(word);
-            };
-            if a != b {
-                return Err(format!(
-                    "must be the same register as the one it repeats ({b}), but is {a}"
-                ));
-            }
-            Ok(word)
-        }
+        // Checked by `encode`, which knows which operand is repeated.
+        Enc::Tied(_) => Ok(word),
         Enc::Choice { lsb, width, map } => {
             let v = int(v)?;
             match map.iter().find(|(x, _)| *x == v) {
@@ -978,17 +968,32 @@ fn apply(enc: Enc, v: Option<Val>, values: &[Option<Val>], word: u32) -> Result<
 fn encode(form: Form, shape: &[u16], atoms: &[(Atom, Span)]) -> Result<u32, (Span, String)> {
     let mut word = form.2;
     let mut values: Vec<Option<Val>> = Vec::with_capacity(atoms.len() * 2);
+    // Which operand each value came from, for a tie's diagnostic.
+    let mut owners: Vec<usize> = Vec::with_capacity(atoms.len() * 2);
     for (k, (&slot, (atom, span))) in shape.iter().zip(atoms).enumerate() {
         let slot = SLOTS[slot as usize];
         let (a, b) = fits(slot.kind, atom).unwrap_or((None, None));
-        for (enc, v) in [(slot.a, a), (slot.b, b)] {
+        for (which, enc, v) in [("", slot.a, a), (" index", slot.b, b)] {
             if matches!(enc, Enc::None) {
                 continue;
             }
+            if let Enc::Tied(j) = enc
+                && v.and_then(Val::int) != values[j as usize].and_then(Val::int)
+            {
+                return Err((
+                    *span,
+                    format!(
+                        "operand {} has to be the same register as operand {}",
+                        k + 1,
+                        owners[j as usize] + 1
+                    ),
+                ));
+            }
             let v = wrapped(enc, v, form.3, form.4);
-            word = apply(enc, v, &values, word)
-                .map_err(|why| (*span, format!("operand {}: {why}", k + 1)))?;
+            word = apply(enc, v, word)
+                .map_err(|why| (*span, format!("operand {}{which}: {why}", k + 1)))?;
             values.push(v);
+            owners.push(k);
         }
     }
     Ok(word)
@@ -1058,9 +1063,9 @@ pub fn assemble(
         }
         match encode(form, shape, &atoms) {
             Ok(w) => return Some(vec![word(w)]),
-            Err(e) => {
-                range_error.get_or_insert(e);
-            }
+            // The forms of a shape run narrowest first, so the last one to
+            // refuse a value is the most general, and says most about it.
+            Err(e) => range_error = Some(e),
         }
     }
     if let Some((span, why)) = range_error {
@@ -1141,4 +1146,55 @@ fn describe_shape(shape: &[u16]) -> String {
     }
     out.push('`');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forms_are_grouped_by_mnemonic_for_the_binary_search() {
+        assert!(MNEMONICS.windows(2).all(|w| w[0] < w[1]));
+        assert!(FORMS.windows(2).all(|w| w[0].0 <= w[1].0));
+        assert!(
+            FORMS
+                .iter()
+                .all(|f| (f.1 as usize) < SHAPES.len() && (f.0 as usize) < MNEMONICS.len())
+        );
+        assert!(
+            SHAPES
+                .iter()
+                .flat_map(|s| s.iter())
+                .all(|&i| (i as usize) < SLOTS.len())
+        );
+    }
+
+    /// A tie names a value the encoder has already seen.
+    #[test]
+    fn ties_point_backwards() {
+        for shape in SHAPES {
+            let mut seen = 0;
+            for &i in *shape {
+                let slot = SLOTS[i as usize];
+                for enc in [slot.a, slot.b] {
+                    match enc {
+                        Enc::None => continue,
+                        Enc::Tied(j) => assert!((j as usize) < seen, "{shape:?}"),
+                        _ => {}
+                    }
+                    seen += 1;
+                }
+            }
+        }
+    }
+
+    /// llvm-mc's `fmov s0, #1.0` is `1e2e1000`, `#-0.1875` has imm8 `0xc8`
+    /// (`fmov d31, #-0.1875` is `1e79101f`), and zero has no 8-bit form.
+    #[test]
+    fn the_floating_point_immediate() {
+        assert_eq!(fp_imm8(1.0), Some(0x70));
+        assert_eq!(fp_imm8(-0.1875), Some(0xc8));
+        assert_eq!(fp_imm8(0.0), None);
+        assert_eq!(fp_imm8(0.3), None);
+    }
 }

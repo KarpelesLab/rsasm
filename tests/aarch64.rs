@@ -1070,3 +1070,336 @@ fn word_is_four_bytes_on_aarch64() {
         "44 33 22 11"
     );
 }
+/// AdvSIMD data processing: same-width, widening and narrowing
+/// arithmetic, indexed elements, reductions and comparisons, scalar forms
+/// included.
+#[test]
+fn advsimd_data_processing() {
+    check(&[
+        ("add v0.4s, v1.4s, v2.4s", "20 84 a2 4e"),
+        ("sqadd v31.16b, v30.16b, v29.16b", "df 0f 3d 4e"),
+        ("uaddl v0.8h, v1.8b, v2.8b", "20 00 22 2e"),
+        ("uaddl2 v0.2d, v1.4s, v2.4s", "20 00 a2 6e"),
+        ("saddw v3.4s, v4.4s, v5.4h", "83 10 65 0e"),
+        ("pmull v0.8h, v1.8b, v2.8b", "20 e0 22 0e"),
+        ("pmull2 v0.1q, v1.2d, v2.2d", "20 e0 e2 4e"),
+        ("sqdmull v0.4s, v1.4h, v2.h[3]", "20 b0 72 0f"),
+        ("mla v0.4s, v1.4s, v2.s[1]", "20 00 a2 6f"),
+        ("fmla v0.2d, v1.2d, v2.d[1]", "20 18 c2 4f"),
+        ("addp d0, v1.2d", "20 b8 f1 5e"),
+        ("addv b0, v1.16b", "20 b8 31 4e"),
+        ("fmaxnmp h0, v1.2h", "20 c8 30 5e"),
+        ("saddlv h0, v1.16b", "20 38 30 4e"),
+        ("cnt v0.8b, v1.8b", "20 58 20 0e"),
+        ("rev64 v0.4s, v1.4s", "20 08 a0 4e"),
+        ("not v0.16b, v1.16b", "20 58 20 6e"),
+        ("mvn v0.8b, v1.8b", "20 58 20 2e"),
+        ("bsl v0.16b, v1.16b, v2.16b", "20 1c 62 6e"),
+        ("cmeq v0.2d, v1.2d, #0", "20 98 e0 4e"),
+        ("cmle v0.8b, v1.8b, v2.8b", "40 3c 21 0e"),
+        ("fcmlt v0.4s, v1.4s, #0.0", "20 e8 a0 4e"),
+        ("abs d0, d1", "20 b8 e0 5e"),
+        ("sqabs b0, b1", "20 78 20 5e"),
+        ("urecpe v0.4s, v1.4s", "20 c8 a1 4e"),
+        ("xtn v0.8b, v1.8h", "20 28 21 0e"),
+        ("uqxtn2 v0.4s, v1.2d", "20 48 a1 6e"),
+    ]);
+}
+
+/// Single lanes (`ins`, `umov`, `smov`, `dup`), table lookups, and the
+/// structure loads and stores, with both register-list spellings.
+#[test]
+fn vector_elements_lists_and_structures() {
+    check(&[
+        ("ins v0.b[15], w1", "20 1c 1f 4e"),
+        ("mov v0.d[1], x2", "40 1c 18 4e"),
+        ("ins v0.s[1], v1.s[3]", "20 64 0c 6e"),
+        ("umov w0, v1.b[7]", "20 3c 0f 0e"),
+        ("umov x0, v1.d[1]", "20 3c 18 4e"),
+        ("mov w0, v1.s[2]", "20 3c 14 0e"),
+        ("smov x0, v1.h[3]", "20 2c 0e 4e"),
+        ("dup v0.16b, v1.b[4]", "20 04 09 4e"),
+        ("dup v0.8h, w3", "60 0c 02 4e"),
+        ("mov b0, v1.b[3]", "20 04 07 5e"),
+        ("ext v0.16b, v1.16b, v2.16b, #15", "20 78 02 6e"),
+        ("tbl v0.8b, {v1.16b}, v2.8b", "20 00 02 0e"),
+        (
+            "tbx v0.16b, {v1.16b, v2.16b, v3.16b, v4.16b}, v5.16b",
+            "20 70 05 4e",
+        ),
+        ("tbl v0.16b, {v31.16b, v0.16b}, v1.16b", "e0 23 01 4e"),
+        ("zip1 v0.8b, v1.8b, v2.8b", "20 38 02 0e"),
+        ("uzp2 v0.2d, v1.2d, v2.2d", "20 58 c2 4e"),
+        ("trn1 v0.4s, v1.4s, v2.4s", "20 28 82 4e"),
+        ("ld1 {v0.16b-v3.16b}, [x0], #64", "00 20 df 4c"),
+        ("ld1 {v0.16b, v1.16b}, [x0], x2", "00 a0 c2 4c"),
+        ("st4 {v1.b, v2.b, v3.b, v4.b}[5], [sp], x8", "e1 37 a8 0d"),
+        ("ld2 {v0.4s, v1.4s}, [x1]", "20 88 40 4c"),
+        ("ld1r {v3.8h}, [x4], #2", "83 c4 df 4d"),
+        ("st1 {v7.2d}, [x0], #16", "07 7c 9f 4c"),
+    ]);
+}
+
+/// Shifts by immediate, whose field holds a count up from or down from the
+/// element width, and the fixed-point conversions that share them.
+#[test]
+fn shifts_count_from_the_element_width() {
+    check(&[
+        ("sshr v0.8b, v1.8b, #8", "20 04 08 0f"),
+        ("ushr d0, d1, #64", "20 04 40 7f"),
+        ("shl v0.4s, v1.4s, #31", "20 54 3f 4f"),
+        ("sqshlu v0.2d, v1.2d, #0", "20 64 40 6f"),
+        ("rshrn v0.8b, v1.8h, #1", "20 8c 0f 0f"),
+        ("uqrshrn2 v0.4s, v1.2d, #32", "20 9c 20 6f"),
+        ("sshll v0.2d, v1.2s, #31", "20 a4 3f 0f"),
+        ("sxtl v0.8h, v1.8b", "20 a4 08 0f"),
+        ("uxtl2 v0.2d, v1.4s", "20 a4 20 6f"),
+        ("sri v0.16b, v1.16b, #8", "20 44 08 6f"),
+        ("fcvtzs v0.4s, v1.4s, #32", "20 fc 20 4f"),
+        ("ucvtf d0, d1, #64", "20 e4 40 7f"),
+        ("scvtf s0, w1, #1", "20 fc 02 1e"),
+        ("fcvtzu x0, d1, #64", "20 00 59 9e"),
+    ]);
+}
+
+/// `movi` and friends with every shift and `msl` form, the byte-mask
+/// immediate, and floating-point vector immediates.
+#[test]
+fn simd_immediates() {
+    check(&[
+        ("movi v0.16b, #0xff", "e0 e7 07 4f"),
+        ("movi v0.4s, #0x12, lsl #24", "40 66 00 4f"),
+        ("movi v0.8h, #0x12, lsl #8", "40 a6 00 4f"),
+        ("movi v0.4s, #0xff, msl #16", "e0 d7 07 4f"),
+        ("mvni v0.2s, #0x80, msl #8", "00 c4 04 2f"),
+        ("orr v0.4h, #0xf0, lsl #8", "00 b6 07 0f"),
+        ("bic v0.4s, #0x1", "20 14 00 6f"),
+        ("movi v0.2d, #0xff00ff00ff00ff00", "40 e5 05 6f"),
+        ("movi d0, #0xffffffffffffffff", "e0 e7 07 2f"),
+        ("fmov v0.4s, #-2.5", "80 f4 04 4f"),
+        ("fmov v0.2d, #0.125", "00 f4 02 6f"),
+        ("fmov v0.4h, #31.0", "e0 ff 01 0f"),
+    ]);
+}
+
+/// Scalar floating point: the 8-bit immediate, comparisons, conditional
+/// select, rounding and conversions.
+#[test]
+fn scalar_floating_point() {
+    check(&[
+        ("fmov s0, #1.0", "00 10 2e 1e"),
+        ("fmov d31, #-0.1875", "1f 10 79 1e"),
+        ("fmov h0, #16", "00 10 e6 1e"),
+        ("fmov d0, x1", "20 00 67 9e"),
+        ("fmov x0, v1.d[1]", "20 00 ae 9e"),
+        ("fmov v0.d[1], x1", "20 00 af 9e"),
+        ("fmov s0, s1", "20 40 20 1e"),
+        ("fcmp s0, #0.0", "08 20 20 1e"),
+        ("fcmpe d0, d1", "10 20 61 1e"),
+        ("fccmp h0, h1, #15, ne", "0f 14 e1 1e"),
+        ("fccmpe s0, s1, #0, al", "10 e4 21 1e"),
+        ("fcsel d0, d1, d2, lt", "20 bc 62 1e"),
+        ("fabs h0, h1", "20 c0 e0 1e"),
+        ("fsqrt d0, d1", "20 c0 61 1e"),
+        ("frinta s0, s1", "20 40 26 1e"),
+        ("frint32x d0, d1", "20 c0 68 1e"),
+        ("frint64z s0, s1", "20 40 29 1e"),
+        ("fcvt d0, s1", "20 c0 22 1e"),
+        ("fcvt h0, d1", "20 c0 63 1e"),
+        ("fmadd d0, d1, d2, d3", "20 0c 42 1f"),
+        ("fnmul s0, s1, s2", "20 88 22 1e"),
+        ("fjcvtzs w0, d1", "20 00 7e 1e"),
+        ("fcvtns x0, h1", "20 00 e0 9e"),
+        ("ucvtf h0, x1, #16", "20 c0 c3 9e"),
+        ("fmax d0, d1, d2", "20 48 62 1e"),
+    ]);
+}
+
+/// AES, SHA-1, SHA-2, SHA-3 and SM3/SM4.
+#[test]
+fn cryptographic_extensions() {
+    check(&[
+        ("aese v0.16b, v1.16b", "20 48 28 4e"),
+        ("aesimc v0.16b, v1.16b", "20 78 28 4e"),
+        ("sha1c q0, s1, v2.4s", "20 00 02 5e"),
+        ("sha1p q2, s3, v4.4s", "62 10 04 5e"),
+        ("sha1h s0, s1", "20 08 28 5e"),
+        ("sha1su0 v0.4s, v1.4s, v2.4s", "20 30 02 5e"),
+        ("sha256h2 q0, q1, v2.4s", "20 50 02 5e"),
+        ("sha256su1 v0.4s, v1.4s, v2.4s", "20 60 02 5e"),
+        ("sha512h q0, q1, v2.2d", "20 80 62 ce"),
+        ("sha512su0 v0.2d, v1.2d", "20 80 c0 ce"),
+        ("eor3 v0.16b, v1.16b, v2.16b, v3.16b", "20 0c 02 ce"),
+        ("bcax v0.16b, v1.16b, v2.16b, v3.16b", "20 0c 22 ce"),
+        ("rax1 v0.2d, v1.2d, v2.2d", "20 8c 62 ce"),
+        ("xar v0.2d, v1.2d, v2.2d, #63", "20 fc 82 ce"),
+        ("sm3ss1 v0.4s, v1.4s, v2.4s, v3.4s", "20 0c 42 ce"),
+        ("sm3tt2b v0.4s, v1.4s, v2.s[3]", "20 bc 42 ce"),
+        ("sm4e v0.4s, v1.4s", "20 84 c0 ce"),
+        ("sm4ekey v0.4s, v1.4s, v2.4s", "20 c8 62 ce"),
+    ]);
+}
+
+/// The dot-product, i8mm, FP16 multiply-long and BFloat16 extensions.
+#[test]
+fn dot_product_and_matrix_multiply() {
+    check(&[
+        ("sdot v0.4s, v1.16b, v2.16b", "20 94 82 4e"),
+        ("udot v0.2s, v1.8b, v2.8b", "20 94 82 2e"),
+        ("usdot v0.4s, v1.16b, v2.16b", "20 9c 82 4e"),
+        ("sudot v0.4s, v1.16b, v2.4b[3]", "20 f8 22 4f"),
+        ("smmla v0.4s, v1.16b, v2.16b", "20 a4 82 4e"),
+        ("usmmla v0.4s, v1.16b, v2.16b", "20 ac 82 4e"),
+        ("fmlal v0.4s, v1.4h, v2.4h", "20 ec 22 4e"),
+        ("fmlsl2 v0.2s, v1.2h, v2.h[3]", "20 c0 b2 2f"),
+        ("bfdot v0.4s, v1.8h, v2.8h", "20 fc 42 6e"),
+        ("bfmmla v0.4s, v1.8h, v2.8h", "20 ec 42 6e"),
+    ]);
+}
+
+/// SVE and SVE2 data processing: predicated and destructive forms, the
+/// `dup`/`dupm` choice behind `mov`, element-width wrapping, patterns and
+/// multipliers, compares and SVE2's cryptography.
+#[test]
+fn sve_data_processing() {
+    check(&[
+        ("add z0.b, p0/m, z0.b, z1.b", "20 00 00 04"),
+        ("add z0.d, z1.d, z2.d", "20 00 e2 04"),
+        ("add z3.h, z3.h, #255", "e3 df 60 25"),
+        ("add z3.h, z3.h, #256", "23 e0 60 25"),
+        ("sub z0.s, z0.s, #1, lsl #8", "20 e0 a1 25"),
+        ("mov z0.d, z1.d", "20 30 61 04"),
+        ("mov z0.s, p1/m, z2.s", "40 c4 a0 05"),
+        ("mov z0.h, #-128", "00 d0 78 25"),
+        ("mov z0.h, #0xfff0", "00 de 78 25"),
+        ("mov z0.h, #0xff00", "e0 ff 78 25"),
+        ("mov z0.h, #0x7ff0", "40 65 c0 05"),
+        ("mov z31.d, #0xffffffff00000000", "ff 03 c3 05"),
+        ("and z0.b, z0.b, #0xf0", "60 26 80 05"),
+        ("eor z1.s, z1.s, #-2", "c1 fb 40 05"),
+        ("dupm z0.h, #0x3f00", "a0 44 c0 05"),
+        ("index z0.b, #-16, #15", "00 42 2f 04"),
+        ("index z0.d, x1, #1", "20 44 e1 04"),
+        ("ptrue p0.b", "e0 e3 18 25"),
+        ("ptrue p1.d, vl8", "01 e1 d8 25"),
+        ("ptrues p2.s, mul3", "c2 e3 99 25"),
+        ("whilelo p0.s, x0, x1", "00 1c a1 25"),
+        ("whilelt {p0.b, p1.b}, x0, x1", "10 54 21 25"),
+        ("cntd x0", "e0 e3 e0 04"),
+        ("cntb x1, pow2, mul #16", "01 e0 2f 04"),
+        ("incd x0, all, mul #4", "e0 e3 f3 04"),
+        ("sqdecw x0, w0, vl256", "a0 f9 a0 04"),
+        ("uqincp x0, p1.b", "20 8c 29 25"),
+        ("incd z0.d", "e0 c3 f0 04"),
+        ("dech z1.h, vl3, mul #2", "61 c4 71 04"),
+        ("fcmgt p0.h, p1/z, z2.h, z3.h", "50 44 43 65"),
+        ("fcmle p0.d, p1/z, z2.d, #0.0", "50 24 d1 65"),
+        ("fmul z0.d, p0/m, z0.d, #2.0", "20 80 da 65"),
+        ("fcpy z0.h, p0/m, #1.5", "00 cf 50 05"),
+        ("fmov z0.d, #0.125", "00 c8 f9 25"),
+        ("asr z0.d, p0/m, z0.d, #64", "00 80 80 04"),
+        ("lsr z0.b, z1.b, #1", "20 94 2f 04"),
+        ("cmpeq p0.b, p1/z, z2.b, #-16", "40 84 10 25"),
+        ("cmphi p0.d, p1/z, z2.d, #127", "50 c4 ff 24"),
+        ("bdep z0.d, z1.d, z2.d", "20 b4 c2 45"),
+        ("sm4e z0.s, z0.s, z1.s", "20 e0 23 45"),
+        ("rax1 z0.d, z1.d, z2.d", "20 f4 22 45"),
+        ("aesmc z0.b, z0.b", "00 e0 20 45"),
+        ("ext z0.b, z0.b, z1.b, #255", "20 1c 3f 05"),
+        ("ext z0.b, {z1.b, z2.b}, #0", "20 00 60 05"),
+        ("fadda d0, p0, d0, z1.d", "20 20 d8 65"),
+        ("clasta w0, p1, w0, z2.s", "40 a4 b0 05"),
+        ("rev z0.h, z1.h", "20 38 78 05"),
+        ("movs p0.b, p1.b", "20 44 c1 25"),
+        ("not p0.b, p1/z, p2.b", "40 46 01 25"),
+        ("brka p0.b, p1/z, p2.b", "40 44 10 25"),
+        ("cdot z0.s, z1.b, z2.b, #270", "20 1c 82 44"),
+        ("cmla z0.b, z1.b, z2.b, #90", "20 24 02 44"),
+    ]);
+}
+
+/// SVE loads, stores, gathers and scatters in every addressing form,
+/// with a lone register for a one-register list.
+#[test]
+fn sve_loads_stores_gathers_and_scatters() {
+    check(&[
+        ("ld1b z0.b, p0/z, [x0]", "00 a0 00 a4"),
+        ("ld1d {z0.d}, p0/z, [x0, #7, mul vl]", "00 a0 e7 a5"),
+        ("ld1d {z0.d}, p0/z, [x0, #-8, mul vl]", "00 a0 e8 a5"),
+        ("ld1w {z1.s}, p2/z, [x3, x4, lsl #2]", "61 48 44 a5"),
+        ("ldff1d {z0.d}, p0/z, [x1, z2.d, lsl #3]", "20 e0 e2 c5"),
+        ("ld1sw {z0.d}, p0/z, [x1, z2.d, sxtw #2]", "20 00 62 c5"),
+        ("ldff1b {z0.d}, p0/z, [z1.d, #31]", "20 e0 3f c4"),
+        ("st1h {z0.s}, p0, [x1, z2.s, uxtw #1]", "20 80 e2 e4"),
+        ("st1d {z0.d}, p0, [sp]", "e0 e3 e0 e5"),
+        ("ld2b {z0.b, z1.b}, p0/z, [x0, #-8, mul vl]", "00 e0 2c a4"),
+        (
+            "st4w {z31.s, z0.s, z1.s, z2.s}, p1, [x0, x1, lsl #2]",
+            "1f 64 61 e5",
+        ),
+        (
+            "ld3h {z1.h - z3.h}, p4/z, [sp, #-24, mul vl]",
+            "e1 f3 c8 a4",
+        ),
+        ("ldr z0, [x0, #-256, mul vl]", "00 40 a0 85"),
+        ("str p15, [sp, #255, mul vl]", "ef 1f 9f e5"),
+        ("prfb pldl1keep, p0, [x0, #-32, mul vl]", "00 00 e0 85"),
+        ("prfd pstl3strm, p1, [x2, z3.d, sxtw #3]", "4d 64 63 c4"),
+        ("adr z0.d, [z1.d, z2.d, lsl #3]", "20 ac e2 04"),
+        ("adr z0.s, [z1.s, z2.s]", "20 a0 a2 04"),
+    ]);
+}
+
+/// The SME instructions this backend has: its mode switches, and
+/// clearing ZA.
+#[test]
+fn sme_mode_switches_and_zeroing() {
+    check(&[
+        ("smstart", "7f 47 03 d5"),
+        ("smstart za", "7f 45 03 d5"),
+        ("smstop sm", "7f 42 03 d5"),
+        ("zero {za}", "ff 00 08 c0"),
+    ]);
+}
+
+/// Both references read a PC-relative operand written as a number as the
+/// offset from the instruction, not as an address.
+#[test]
+fn a_pc_relative_number_is_an_offset() {
+    program(
+        " nop\n nop\n b #16\n bl #-8\n b.eq #12\n cbz x0, #8\n tbz x1, #3, #20\n \
+         ldr x0, #16\n ldr s10, #196\n adr x0, #20\n",
+        "1f 20 03 d5 1f 20 03 d5 04 00 00 14 fe ff ff 97 60 00 00 54 40 00 00 b4 \
+         a1 00 18 36 80 00 00 58 2a 06 00 1c a0 00 00 10",
+    );
+}
+
+/// What the table refuses, it refuses with the operand and the limit, or
+/// with the forms the mnemonic does take.
+#[test]
+fn simd_diagnostics_name_the_operand_and_its_limit() {
+    rejects("sshr v0.8b, v1.8b, #9", &["operand 3", "1..=8", "9"]);
+    rejects("ins v0.s[4], w0", &["operand 1 index", "0..=3"]);
+    rejects("movi v0.4s, #0x12, lsl #7", &["one of 0, 8, 16, 24"]);
+    rejects("ld1d {z0.d}, p0/z, [x0, #8, mul vl]", &["-8..=7"]);
+    rejects(
+        "fcmla v0.4s, v1.4s, v2.4s, #45",
+        &["one of 0, 90, 180, 270"],
+    );
+    rejects("fmov d0, #0.3", &["not an 8-bit floating-point immediate"]);
+    rejects("and z0.b, z0.b, #0x5a", &["not a valid logical immediate"]);
+    rejects(
+        "add z0.b, p0/m, z1.b, z2.b",
+        &["operand 3 has to be the same register as operand 1"],
+    );
+    rejects(
+        "sqadd v0.8b, v1.16b, v2.8b",
+        &[
+            "does not take `v0.8b, v1.16b, v2.8b`",
+            "vN.16b, vN.16b, vN.16b",
+        ],
+    );
+    rejects("tbl v0.16b, {v1.16b, v3.16b}, v2.16b", &["consecutive"]);
+    rejects("ld1 {v0.16b, v1.8b}, [x0]", &["same kind"]);
+    rejects("frobnicate v0.8b", &["unknown instruction `frobnicate`"]);
+}

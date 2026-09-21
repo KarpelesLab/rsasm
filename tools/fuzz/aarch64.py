@@ -54,6 +54,7 @@ GAS = os.environ.get("GAS") or (
     os.path.join(ORACLES, "bin", "aarch64-elf-as")
     if os.path.exists(os.path.join(ORACLES, "bin", "aarch64-elf-as")) else "aarch64-elf-as")
 OBJCOPY = GAS.replace("-as", "-objcopy")
+OBJDUMP = GAS.replace("-as", "-objdump")
 GAS_MARCH = "-march=armv9.5-a+sve2+sve2-aes+sve2-sha3+sve2-sm4+sve2-bitperm+crypto+sm4+sha3" \
     "+dotprod+i8mm+fp16+fp16fml+bf16+rcpc+rcpc3+sme2+sve2p1+f64mm+f32mm+cssc+the+lut"
 
@@ -253,13 +254,33 @@ def drop_operand(text, rng):
     return text.split(None, 1)[0] + " " + ", ".join(parts)
 
 
-def gen_cases(seed, count, only, mutate):
+def gnu_disassemble(words):
+    """[(word, text)] as GNU objdump prints the words, for the spellings GNU
+    as source is written in: `{v0.16b-v3.16b}`, `#0x12`, `uxtl`."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "w.bin")
+        with open(path, "wb") as fh:
+            fh.write(b"".join(struct.pack("<I", w) for w in words))
+        p = subprocess.run([OBJDUMP, "-D", "-b", "binary", "-m", "aarch64", path],
+                           capture_output=True, text=True)
+    out = []
+    for line in p.stdout.splitlines():
+        m = re.match(r"^\s*[0-9a-f]+:\t([0-9a-f]{8}) \t(.*)$", line)
+        if not m or "undefined" in m.group(2) or ".inst" in m.group(2):
+            continue
+        text = re.split(r"\s+(?://|;)", m.group(2))[0]
+        out.append((int(m.group(1), 16), text))
+    return out
+
+
+def gen_cases(seed, count, only, mutate, source="llvm"):
     rng = random.Random(seed)
     a64.ensure_codes()
     pat = re.compile(only) if only else None
     out = []
+    decode = gnu_disassemble if source == "gnu" else a64.disassemble
     while len(out) < count:
-        for w, text in a64.disassemble(random_words(rng, 4096)):
+        for w, text in decode(random_words(rng, 4096)):
             text = text.split("//")[0].strip().replace("\t", " ")
             if not interesting(text, w):
                 continue
@@ -360,6 +381,8 @@ def main():
     f.add_argument("--seed", type=int, default=1)
     f.add_argument("--only", default=None, help="mnemonics matching this regex")
     f.add_argument("--mutations", type=float, default=0.25)
+    f.add_argument("--source", choices=("llvm", "gnu"), default="llvm",
+                   help="whose disassembler writes the cases")
     f.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     f.add_argument("--no-gas", action="store_true")
     f.add_argument("--limit", type=int, default=40)
@@ -376,7 +399,8 @@ def main():
         per = args.count // args.jobs + 1
         with multiprocessing.Pool(args.jobs) as pool:
             parts = pool.starmap(gen_cases, [(args.seed * 7919 + i, per, args.only,
-                                              args.mutations) for i in range(args.jobs)])
+                                              args.mutations, args.source)
+                                             for i in range(args.jobs)])
         cases = [c for part in parts for c in part][:args.count]
         lines = [c[0] for c in cases]
         tags = [c[1] for c in cases]
