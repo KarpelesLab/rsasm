@@ -893,12 +893,11 @@ fn encode_logic(
             | field(rd.num as u32, 0, 5));
     }
 
-    // The immediate forms have no inverted variant: `bic x0, x1, #m` is
-    // written as `and x0, x1, #~m` by the programmer, not by us.
-    if n != 0 {
-        cx.error(src.span, format!("`{}` has no immediate form", i.mnemonic));
-        return None;
-    }
+    // The inverted mnemonics have no immediate encoding of their own: with an
+    // immediate, `bic`, `bics`, `orn` and `eon` are `and`, `ands`, `orr` and
+    // `eor` of the complement, which is what both references assemble them to
+    // (GNU as takes only `bic` that way; llvm-mc takes all four).
+    let invert = n != 0;
     if i.ops.len() > at + 1 {
         cx.error(i.ops[at + 1].span, "too many operands");
         return None;
@@ -909,17 +908,30 @@ fn encode_logic(
         return None;
     };
     let bits = if rd.class == RegClass::X { 64 } else { 32 };
-    let masked = if bits == 32 {
+    let mut masked = if bits == 32 {
         v as u32 as u64
     } else {
         v as u64
     };
+    if invert {
+        masked = !masked;
+        if bits == 32 {
+            masked &= 0xffff_ffff;
+        }
+    }
     let Some((imm_n, immr, imms)) = logical_imm(masked, bits) else {
         cx.error(
             src.span,
-            format!(
-                "{v:#x} is not a valid logical immediate: the field holds only a repeating run of ones"
-            ),
+            if invert {
+                format!(
+                    "{v:#x} is not a valid `{}` immediate: its complement must be a repeating run of ones, which the field holds",
+                    i.mnemonic
+                )
+            } else {
+                format!(
+                    "{v:#x} is not a valid logical immediate: the field holds only a repeating run of ones"
+                )
+            },
         );
         return None;
     };

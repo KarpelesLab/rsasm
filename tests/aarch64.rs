@@ -131,6 +131,28 @@ fn logical_immediate() {
     ]);
 }
 
+/// `bic`, `bics`, `orn` and `eon` with an immediate, which are the plain
+/// mnemonic of the complement. Bytes from llvm-mc; GNU as writes the same
+/// for `bic`, the only one of the four it takes.
+#[test]
+fn inverted_logical_immediate() {
+    check(&[
+        ("bic x0, x1, 0xff", "20 dc 78 92"),
+        ("bic w0, w1, 1", "20 78 1f 12"),
+        ("bic sp, x1, 0xff", "3f dc 78 92"),
+        ("bics x0, x1, 0xff", "20 dc 78 f2"),
+        ("bics xzr, x1, 0xff", "3f dc 78 f2"),
+        ("orn x0, x1, 0xff", "20 dc 78 b2"),
+        ("orn w0, w1, 0xf", "20 6c 1c 32"),
+        ("eon x0, x1, 0xff", "20 dc 78 d2"),
+    ]);
+    // The complement has to be encodable: both references refuse these.
+    for src in ["bic x0, x1, 0", "bic w0, w1, 0xffffffff", "eon x0, x1, -1"] {
+        let e = errors_for("aarch64", src);
+        assert!(e.contains("complement"), "`{src}`: {e}");
+    }
+}
+
 /// Move-wide, and the `mov #imm` alias choosing between `movz`, `movn` and
 /// a logical immediate.
 #[test]
@@ -701,7 +723,9 @@ fn invalid_logical_immediates_are_explained() {
     }
     rejects("and x0, x1, 0", &["repeating run of ones"]);
     rejects("orr x0, x1, 0x123", &["not a valid logical immediate"]);
-    rejects("bic x0, x1, 1", &["no immediate form"]);
+    // `bic` takes an immediate whose complement is encodable, as both
+    // references do: this is `and x0, x1, 0xfffffffffffffffe`.
+    check(&[("bic x0, x1, 1", "20 f8 7f 92")]);
 }
 
 #[test]

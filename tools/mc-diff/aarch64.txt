@@ -110,6 +110,19 @@ tst w0, 0x80000000
 and x0, x1, 0xf00000000000000f
 orr sp, x0, 0xfff
 
+# The inverted mnemonics, which assemble to the plain one of the complement.
+# GNU as takes only `bic` this way; llvm-mc takes all four, so they are here.
+bic x0, x1, 0xff
+bic w0, w1, 1
+bic sp, x1, 0xff
+bics x0, x1, 0xff
+bics xzr, x1, 0xff
+bics w0, w1, 0xf0f0f0f0
+orn x0, x1, 0xff
+orn w0, w1, 0xf
+eon x0, x1, 0xff
+eon w0, w1, 0x3ffc
+
 # ---- move wide ----
 movz x0, 0
 movz x0, 1
