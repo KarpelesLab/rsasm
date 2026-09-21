@@ -34,6 +34,9 @@ pub mod mapping;
 pub(crate) mod nasm;
 pub mod output;
 pub mod parser;
+// Not API: the classes only describe a relocation between rsasm's own
+// modules, and the writers are what a caller uses.
+#[doc(hidden)]
 pub mod reloc;
 pub mod section;
 pub mod source;

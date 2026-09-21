@@ -59,8 +59,6 @@ impl Assembler {
         self.macho.sections.insert(
             id,
             SectionInfo {
-                segment: segment.to_string(),
-                section: section.to_string(),
                 ty,
                 attrs,
                 reserved2,

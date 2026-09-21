@@ -333,7 +333,9 @@ pub struct AsmCtx<'a> {
     /// The source dialect, which decides operand spelling as much as lexing:
     /// the same m68k register is `%d0` to GNU as and `d0` in Motorola source.
     pub dialect: crate::lexer::Dialect,
-    /// The object format being written, for [`AsmCtx::fixed_distance`].
+    /// The object format being written, for
+    /// [`AsmCtx::fixed_label_distance`]. Not API.
+    #[doc(hidden)]
     pub format: crate::output::Format,
     /// [`Architecture::bit_addressing`] for the active backend, which decides
     /// whether `P1.3` in an expression is a bit address.
@@ -481,6 +483,7 @@ impl AsmCtx<'_> {
     /// order the label was defined in ([`crate::symbol::Symbol::def_order`]),
     /// or `u32::MAX` for `.`, since of several labels at one place only those
     /// after a linker-visible one are in its atom.
+    #[doc(hidden)]
     pub fn fixed_label_distance(
         &self,
         from: (SectionId, u32, u32),
@@ -600,6 +603,7 @@ pub trait Architecture {
     /// relocation of a fixup of `kind`, for a writer that does not number
     /// relocations as ELF does; see [`crate::reloc`]. `None`, the default,
     /// refuses the modifier there.
+    #[doc(hidden)]
     fn modifier_class(
         &self,
         _name: &str,

@@ -243,7 +243,8 @@ pub struct FixupKind {
     /// the target itself, which is all an ELF object ever needs to be told
     /// beyond the number. A backend names a class only where a format may
     /// write the same width and `pcrel` differently: a branch, a GOT load, an
-    /// AArch64 page or page offset.
+    /// AArch64 page or page offset. Not API.
+    #[doc(hidden)]
     pub class: RelocClass,
 }
 
@@ -299,7 +300,8 @@ impl FixupKind {
     }
 
     /// Says what the relocation computes, for the writers that need more than
-    /// the ELF number; see [`RelocClass`].
+    /// the ELF number; see [`RelocClass`]. Not API.
+    #[doc(hidden)]
     pub fn with_class(mut self, class: RelocClass) -> FixupKind {
         self.class = class;
         self
@@ -618,7 +620,8 @@ pub struct Section {
     /// [`Architecture::pads_as_last_instruction`]: crate::arch::Architecture::pads_as_last_instruction
     pub nop_state: Option<crate::arch::ArchState>,
     /// Whether any instruction has been assembled into the section, which a
-    /// Mach-O section header records (`S_ATTR_SOME_INSTRUCTIONS`).
+    /// Mach-O section header records (`S_ATTR_SOME_INSTRUCTIONS`). Not API.
+    #[doc(hidden)]
     pub has_instructions: bool,
 }
 

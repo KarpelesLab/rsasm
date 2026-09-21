@@ -23,8 +23,8 @@
 //!   that crosses from one atom into another therefore cannot be resolved
 //!   here, however close the two are and whether or not the target is global;
 //!   it is relocated against the target's atom, with the distance from the
-//!   atom carried as the addend. That is [`Atoms`], and it is why a Mach-O
-//!   object has relocations where an ELF one has none.
+//!   atom carried as the addend. That is what the `Atoms` table below is for,
+//!   and it is why a Mach-O object has relocations where an ELF one has none.
 //!
 //! What is written: one `LC_SEGMENT_64` with every section; `LC_BUILD_VERSION`
 //! where the source gave `.build_version`, and `LC_DATA_IN_CODE` where it
@@ -73,35 +73,35 @@ const NLIST_64_SIZE: u64 = 16;
 const RELOCATION_SIZE: u64 = 8;
 
 // Section types (the low byte of `flags`).
-pub const S_REGULAR: u32 = 0x0;
-pub const S_ZEROFILL: u32 = 0x1;
-pub const S_CSTRING_LITERALS: u32 = 0x2;
-pub const S_4BYTE_LITERALS: u32 = 0x3;
-pub const S_8BYTE_LITERALS: u32 = 0x4;
-pub const S_LITERAL_POINTERS: u32 = 0x5;
-pub const S_NON_LAZY_SYMBOL_POINTERS: u32 = 0x6;
-pub const S_LAZY_SYMBOL_POINTERS: u32 = 0x7;
-pub const S_SYMBOL_STUBS: u32 = 0x8;
-pub const S_MOD_INIT_FUNC_POINTERS: u32 = 0x9;
-pub const S_MOD_TERM_FUNC_POINTERS: u32 = 0xa;
-pub const S_COALESCED: u32 = 0xb;
-pub const S_GB_ZEROFILL: u32 = 0xc;
-pub const S_INTERPOSING: u32 = 0xd;
-pub const S_16BYTE_LITERALS: u32 = 0xe;
-pub const S_THREAD_LOCAL_REGULAR: u32 = 0x11;
-pub const S_THREAD_LOCAL_ZEROFILL: u32 = 0x12;
-pub const S_THREAD_LOCAL_VARIABLES: u32 = 0x13;
-pub const S_THREAD_LOCAL_VARIABLE_POINTERS: u32 = 0x14;
-pub const S_THREAD_LOCAL_INIT_FUNCTION_POINTERS: u32 = 0x15;
+pub(crate) const S_REGULAR: u32 = 0x0;
+pub(crate) const S_ZEROFILL: u32 = 0x1;
+pub(crate) const S_CSTRING_LITERALS: u32 = 0x2;
+pub(crate) const S_4BYTE_LITERALS: u32 = 0x3;
+pub(crate) const S_8BYTE_LITERALS: u32 = 0x4;
+pub(crate) const S_LITERAL_POINTERS: u32 = 0x5;
+pub(crate) const S_NON_LAZY_SYMBOL_POINTERS: u32 = 0x6;
+pub(crate) const S_LAZY_SYMBOL_POINTERS: u32 = 0x7;
+pub(crate) const S_SYMBOL_STUBS: u32 = 0x8;
+pub(crate) const S_MOD_INIT_FUNC_POINTERS: u32 = 0x9;
+pub(crate) const S_MOD_TERM_FUNC_POINTERS: u32 = 0xa;
+pub(crate) const S_COALESCED: u32 = 0xb;
+pub(crate) const S_GB_ZEROFILL: u32 = 0xc;
+pub(crate) const S_INTERPOSING: u32 = 0xd;
+pub(crate) const S_16BYTE_LITERALS: u32 = 0xe;
+pub(crate) const S_THREAD_LOCAL_REGULAR: u32 = 0x11;
+pub(crate) const S_THREAD_LOCAL_ZEROFILL: u32 = 0x12;
+pub(crate) const S_THREAD_LOCAL_VARIABLES: u32 = 0x13;
+pub(crate) const S_THREAD_LOCAL_VARIABLE_POINTERS: u32 = 0x14;
+pub(crate) const S_THREAD_LOCAL_INIT_FUNCTION_POINTERS: u32 = 0x15;
 
-pub const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
-pub const S_ATTR_NO_TOC: u32 = 0x4000_0000;
-pub const S_ATTR_STRIP_STATIC_SYMS: u32 = 0x2000_0000;
-pub const S_ATTR_NO_DEAD_STRIP: u32 = 0x1000_0000;
-pub const S_ATTR_LIVE_SUPPORT: u32 = 0x0800_0000;
-pub const S_ATTR_SELF_MODIFYING_CODE: u32 = 0x0400_0000;
-pub const S_ATTR_DEBUG: u32 = 0x0200_0000;
-pub const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
+pub(crate) const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
+pub(crate) const S_ATTR_NO_TOC: u32 = 0x4000_0000;
+pub(crate) const S_ATTR_STRIP_STATIC_SYMS: u32 = 0x2000_0000;
+pub(crate) const S_ATTR_NO_DEAD_STRIP: u32 = 0x1000_0000;
+pub(crate) const S_ATTR_LIVE_SUPPORT: u32 = 0x0800_0000;
+pub(crate) const S_ATTR_SELF_MODIFYING_CODE: u32 = 0x0400_0000;
+pub(crate) const S_ATTR_DEBUG: u32 = 0x0200_0000;
+pub(crate) const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 
 // `n_type`.
 const N_UNDF: u8 = 0x0;
@@ -112,46 +112,46 @@ const N_TYPE: u8 = 0xe;
 const N_PEXT: u8 = 0x10;
 
 // `n_desc` bits.
-pub const N_NO_DEAD_STRIP: u16 = 0x0020;
-pub const N_WEAK_REF: u16 = 0x0040;
-pub const N_WEAK_DEF: u16 = 0x0080;
-pub const N_ALT_ENTRY: u16 = 0x0200;
+pub(crate) const N_NO_DEAD_STRIP: u16 = 0x0020;
+pub(crate) const N_WEAK_REF: u16 = 0x0040;
+pub(crate) const N_WEAK_DEF: u16 = 0x0080;
+pub(crate) const N_ALT_ENTRY: u16 = 0x0200;
 
 // Relocation types, per machine.
 mod x86_64_reloc {
-    pub const UNSIGNED: u8 = 0;
-    pub const SIGNED: u8 = 1;
-    pub const BRANCH: u8 = 2;
-    pub const GOT_LOAD: u8 = 3;
-    pub const GOT: u8 = 4;
-    pub const SUBTRACTOR: u8 = 5;
-    pub const SIGNED_1: u8 = 6;
-    pub const SIGNED_2: u8 = 7;
-    pub const SIGNED_4: u8 = 8;
+    pub(crate) const UNSIGNED: u8 = 0;
+    pub(crate) const SIGNED: u8 = 1;
+    pub(crate) const BRANCH: u8 = 2;
+    pub(crate) const GOT_LOAD: u8 = 3;
+    pub(crate) const GOT: u8 = 4;
+    pub(crate) const SUBTRACTOR: u8 = 5;
+    pub(crate) const SIGNED_1: u8 = 6;
+    pub(crate) const SIGNED_2: u8 = 7;
+    pub(crate) const SIGNED_4: u8 = 8;
 }
 
 mod arm64_reloc {
-    pub const UNSIGNED: u8 = 0;
-    pub const SUBTRACTOR: u8 = 1;
-    pub const BRANCH26: u8 = 2;
-    pub const PAGE21: u8 = 3;
-    pub const PAGEOFF12: u8 = 4;
-    pub const GOT_LOAD_PAGE21: u8 = 5;
-    pub const GOT_LOAD_PAGEOFF12: u8 = 6;
-    pub const POINTER_TO_GOT: u8 = 7;
-    pub const ADDEND: u8 = 10;
+    pub(crate) const UNSIGNED: u8 = 0;
+    pub(crate) const SUBTRACTOR: u8 = 1;
+    pub(crate) const BRANCH26: u8 = 2;
+    pub(crate) const PAGE21: u8 = 3;
+    pub(crate) const PAGEOFF12: u8 = 4;
+    pub(crate) const GOT_LOAD_PAGE21: u8 = 5;
+    pub(crate) const GOT_LOAD_PAGEOFF12: u8 = 6;
+    pub(crate) const POINTER_TO_GOT: u8 = 7;
+    pub(crate) const ADDEND: u8 = 10;
 }
 
 /// The machines this writer can produce objects for.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum Cpu {
+pub(crate) enum Cpu {
     X86_64,
     Arm64,
 }
 
 impl Cpu {
     /// The Mach-O machine an architecture backend targets, if it has one.
-    pub fn for_arch(arch: &dyn crate::arch::Architecture) -> Option<Cpu> {
+    pub(crate) fn for_arch(arch: &dyn crate::arch::Architecture) -> Option<Cpu> {
         match arch.elf_machine() {
             62 => Some(Cpu::X86_64),
             183 => Some(Cpu::Arm64),
@@ -189,22 +189,21 @@ impl Cpu {
 
 /// The Mach-O platform of a `.build_version`.
 #[derive(Copy, Clone, Debug)]
-pub struct BuildVersion {
-    pub platform: u32,
+pub(crate) struct BuildVersion {
+    pub(crate) platform: u32,
     /// Packed `xxxx.yy.zz`, as Mach-O stores versions.
-    pub minos: u32,
-    pub sdk: u32,
+    pub(crate) minos: u32,
+    pub(crate) sdk: u32,
 }
 
-/// What one section is in Mach-O's terms, as its directive declared it.
+/// What one section is in Mach-O's terms, as its directive declared it. Its
+/// name holds the segment and section names; see [`split_name`].
 #[derive(Clone, Debug)]
-pub struct SectionInfo {
-    pub segment: String,
-    pub section: String,
+pub(crate) struct SectionInfo {
     /// The section type, the low byte of `flags`.
-    pub ty: u32,
+    pub(crate) ty: u32,
     /// `S_ATTR_*` bits.
-    pub attrs: u32,
+    pub(crate) attrs: u32,
     /// The stub size of a `symbol_stubs` section.
     pub reserved2: u32,
 }
@@ -212,37 +211,37 @@ pub struct SectionInfo {
 /// A stretch of data in code, from `.data_region` to `.end_data_region`,
 /// which `LC_DATA_IN_CODE` tells a disassembler not to decode.
 #[derive(Clone, Debug)]
-pub struct DataRegion {
+pub(crate) struct DataRegion {
     /// `DICE_KIND_*`: data, or a jump table of 8, 16 or 32-bit entries.
-    pub kind: u16,
-    pub start: SymbolId,
-    pub end: Option<SymbolId>,
-    pub span: crate::source::Span,
+    pub(crate) kind: u16,
+    pub(crate) start: SymbolId,
+    pub(crate) end: Option<SymbolId>,
+    pub(crate) span: crate::source::Span,
 }
 
 /// Everything the source told the assembler that only Mach-O output cares
 /// about.
 #[derive(Default)]
-pub struct State {
-    pub subsections_via_symbols: bool,
-    pub build_version: Option<BuildVersion>,
-    pub sections: HashMap<SectionId, SectionInfo>,
+pub(crate) struct State {
+    pub(crate) subsections_via_symbols: bool,
+    pub(crate) build_version: Option<BuildVersion>,
+    pub(crate) sections: HashMap<SectionId, SectionInfo>,
     /// `n_desc` bits from `.weak_definition`, `.weak_reference`,
     /// `.alt_entry` and `.no_dead_strip`.
-    pub symbol_desc: HashMap<SymbolId, u16>,
+    pub(crate) symbol_desc: HashMap<SymbolId, u16>,
     /// The symbols `.set` or `.equ` defined, as opposed to `=`.
-    pub set_constants: HashSet<SymbolId>,
+    pub(crate) set_constants: HashSet<SymbolId>,
     /// The data regions, in the order they were opened.
-    pub data_regions: Vec<DataRegion>,
+    pub(crate) data_regions: Vec<DataRegion>,
     /// How many symbols there were when each section was created, which is
     /// where its arm64 section label goes among them.
-    pub section_marks: HashMap<SectionId, u32>,
+    pub(crate) section_marks: HashMap<SectionId, u32>,
     /// Where every atom starts, once the source has been read; see [`Atoms`].
-    pub atoms: Atoms,
+    pub(crate) atoms: Atoms,
 }
 
 impl State {
-    pub fn desc(&self, id: SymbolId) -> u16 {
+    pub(crate) fn desc(&self, id: SymbolId) -> u16 {
         self.symbol_desc.get(&id).copied().unwrap_or(0)
     }
 }
@@ -259,7 +258,7 @@ impl State {
 /// linker-visible label still ends the atom before it, as it does in llvm-mc,
 /// which starts a fragment at every linker-visible label.
 #[derive(Default)]
-pub struct Atoms {
+pub(crate) struct Atoms {
     /// Per section, `(fragment, definition order, symbol)`, in that order.
     starts: HashMap<SectionId, Vec<(u32, u32, SymbolId)>>,
 }
@@ -267,7 +266,7 @@ pub struct Atoms {
 impl Atoms {
     /// The symbol whose atom covers fragment `frag` of `section`, if any.
     /// Every label at that fragment counts as before it.
-    pub fn at(&self, section: SectionId, frag: u32) -> Option<SymbolId> {
+    pub(crate) fn at(&self, section: SectionId, frag: u32) -> Option<SymbolId> {
         self.before(section, frag, u32::MAX)
     }
 
@@ -279,7 +278,7 @@ impl Atoms {
     }
 
     /// The atom a symbol belongs to: itself when it is linker-visible.
-    pub fn of(&self, asm: &Assembler, id: SymbolId) -> Option<SymbolId> {
+    pub(crate) fn of(&self, asm: &Assembler, id: SymbolId) -> Option<SymbolId> {
         let sym = asm.symbols.get(id);
         if !is_temporary(asm.interner.get(sym.name)) {
             return sym.is_defined().then_some(id);
@@ -295,7 +294,7 @@ impl Atoms {
 
 /// Collects the atom starts of every section. Called once the source has been
 /// read, before layout resolves anything.
-pub fn atoms(asm: &Assembler) -> Atoms {
+pub(crate) fn atoms(asm: &Assembler) -> Atoms {
     let mut starts: HashMap<SectionId, Vec<(u32, u32, SymbolId)>> = HashMap::new();
     for (id, sym) in asm.symbols.iter() {
         let SymbolValue::Label { section, frag } = sym.value else {
@@ -318,7 +317,7 @@ pub fn atoms(asm: &Assembler) -> Atoms {
 /// Whether a symbol is assembler-local, which in Mach-O is decided by the
 /// name alone: Darwin's private label prefix is `L`. rsasm's own made-up
 /// labels carry a NUL, which no source can spell, and are local too.
-pub fn is_temporary(name: &str) -> bool {
+pub(crate) fn is_temporary(name: &str) -> bool {
     name.starts_with('L') || name.contains('\u{0}')
 }
 
@@ -327,7 +326,7 @@ pub fn is_temporary(name: &str) -> bool {
 /// A literal section is not: its contents are cut up and merged by the linker
 /// item by item, so a reference into one has to name the label it refers to
 /// rather than a position. This is `MCAsmInfoDarwin::isSectionAtomizableBySymbols`.
-pub fn atomizable(asm: &Assembler, section: SectionId) -> bool {
+pub(crate) fn atomizable(asm: &Assembler, section: SectionId) -> bool {
     let Some(info) = asm.macho.sections.get(&section) else {
         return true;
     };
@@ -357,7 +356,12 @@ pub fn atomizable(asm: &Assembler, section: SectionId) -> bool {
 /// a reference to an assembler-local label anywhere in the section, and one
 /// to any label unless the file has `.subsections_via_symbols`, which is
 /// what tells the linker it may really take the atoms apart.
-pub fn defers_to_linker(asm: &Assembler, target: SymbolId, section: SectionId, frag: u32) -> bool {
+pub(crate) fn defers_to_linker(
+    asm: &Assembler,
+    target: SymbolId,
+    section: SectionId,
+    frag: u32,
+) -> bool {
     let Some(cpu) = Cpu::for_arch(asm.target()) else {
         return false;
     };
@@ -380,14 +384,14 @@ pub fn defers_to_linker(asm: &Assembler, target: SymbolId, section: SectionId, f
 /// Only within an atom, on every machine; a difference that was a fixed
 /// distance where the source wrote it was folded then, before there were
 /// atoms (see `Assembler::macho_fixed_difference`).
-pub fn folds_difference(asm: &Assembler, plus: SymbolId, minus: SymbolId) -> bool {
+pub(crate) fn folds_difference(asm: &Assembler, plus: SymbolId, minus: SymbolId) -> bool {
     asm.macho.atoms.of(asm, plus) == asm.macho.atoms.of(asm, minus)
 }
 
 /// The relocation type a fixup's description maps to, or `None` where the
 /// machine has none — which is how `adr x0, sym` and a conditional branch to
 /// another atom are refused, as llvm-mc refuses them.
-pub fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
+pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
     let d = &r.desc;
     match cpu {
         Cpu::X86_64 => Some(match d.class {
@@ -485,20 +489,20 @@ fn field_bias(r: &Relocation) -> i64 {
 
 /// A section a shorthand directive such as `.cstring` switches to.
 #[derive(Copy, Clone, Debug)]
-pub struct Shorthand {
-    pub segment: &'static str,
-    pub section: &'static str,
-    pub ty: u32,
-    pub attrs: u32,
+pub(crate) struct Shorthand {
+    pub(crate) segment: &'static str,
+    pub(crate) section: &'static str,
+    pub(crate) ty: u32,
+    pub(crate) attrs: u32,
     /// The alignment the directive gives the section, in bytes.
-    pub align: u64,
+    pub(crate) align: u64,
     pub reserved2: u32,
 }
 
 /// The section a shorthand directive names, as Darwin's assembler defines
 /// them: the pair, its type and attributes, and for the literal and pointer
 /// sections an alignment of their element size.
-pub fn shorthand(name: &str) -> Option<Shorthand> {
+pub(crate) fn shorthand(name: &str) -> Option<Shorthand> {
     let (segment, section, ty, attrs, align, reserved2) = match name {
         ".text" => (
             "__TEXT",
@@ -568,7 +572,7 @@ pub fn shorthand(name: &str) -> Option<Shorthand> {
 }
 
 /// The section type a `.section` directive's third argument names.
-pub fn section_type(name: &str) -> Option<u32> {
+pub(crate) fn section_type(name: &str) -> Option<u32> {
     Some(match name {
         "regular" => S_REGULAR,
         "cstring_literals" => S_CSTRING_LITERALS,
@@ -595,7 +599,7 @@ pub fn section_type(name: &str) -> Option<u32> {
 }
 
 /// The `S_ATTR_*` bit a `.section` attribute name asks for.
-pub fn section_attribute(name: &str) -> Option<u32> {
+pub(crate) fn section_attribute(name: &str) -> Option<u32> {
     Some(match name {
         "none" => 0,
         "pure_instructions" => S_ATTR_PURE_INSTRUCTIONS,
@@ -611,7 +615,7 @@ pub fn section_attribute(name: &str) -> Option<u32> {
 
 /// The type and attributes of a section llvm-mc knows before it reads any
 /// source, which it keeps whatever a `.section` directive naming it says.
-pub fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
+pub(crate) fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
     Some(match (segment, section) {
         ("__TEXT", "__text") => (S_REGULAR, S_ATTR_PURE_INSTRUCTIONS),
         ("__TEXT", "__cstring") => (S_CSTRING_LITERALS, 0),
@@ -639,7 +643,7 @@ pub fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
 /// at or before `to` (in either order), so that the two positions are in
 /// different atoms. Positions are `(section, fragment, definition order)`;
 /// see [`Atoms`].
-pub fn atom_starts_between(
+pub(crate) fn atom_starts_between(
     interner: &crate::intern::Interner,
     symbols: &crate::symbol::SymbolTable,
     from: (SectionId, u32, u32),
@@ -659,7 +663,7 @@ pub fn atom_starts_between(
 /// Splits a section's rsasm name back into its Mach-O pair. In Mach-O output
 /// every section is named `SEGMENT,SECTION`, which is what the directives
 /// store, so this only has to fail on a name from somewhere else.
-pub fn split_name(name: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_name(name: &str) -> Option<(&str, &str)> {
     name.split_once(',')
 }
 

@@ -31,7 +31,8 @@ pub struct Relocation {
     pub kind: u32,
     /// The same relocation described in terms no format owns, which is what
     /// a writer that numbers relocations differently reads; see
-    /// [`crate::reloc`].
+    /// [`crate::reloc`]. Not API.
+    #[doc(hidden)]
     pub desc: RelocDesc,
 }
 
@@ -195,7 +196,7 @@ pub struct Assembler {
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
     /// What the source said that only a Mach-O object records.
-    pub macho: crate::output::macho::State,
+    pub(crate) macho: crate::output::macho::State,
     /// The backends whose [`Architecture::prelude`] has been assembled.
     pub(crate) arch_preludes: Vec<&'static str>,
     /// Where each assembled prelude's text lies in the source map, as
