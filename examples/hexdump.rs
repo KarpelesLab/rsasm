@@ -38,10 +38,12 @@ fn main() {
     );
     asm.assemble_str("<stdin>", &src);
     let ok = asm.finish();
-    if !ok || asm.diags.has_errors() {
+    if !ok || asm.diags().has_errors() {
         print!(
             "RSASM-ERROR: {}",
-            asm.diags.render(&asm.sm, false).replace('\n', " | ")
+            asm.diags()
+                .render(asm.source_map(), false)
+                .replace('\n', " | ")
         );
         println!();
         std::process::exit(1);
