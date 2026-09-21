@@ -14,10 +14,12 @@ out of a binutils source tree and writes the Rust table.  The encoder that
 reads it (src/arch/m68k/generic.rs) follows tc-m68k.c's own reading of the
 `args` strings, which include/opcode/m68k.h documents.
 
-    tools/m68k-opc/gen.py [<binutils source tree>] > src/arch/m68k/table.rs
+    tools/tables/m68k.py table     # rewrite src/arch/m68k/table.rs
+    tools/tables/m68k.py check     # exit 1 if it is out of date
 
-The default tree is the one tools/oracles/build.sh unpacks.  Forms for the
-ColdFire MAC and EMAC units are left out; rsasm does not implement them.
+The tree is the one tools/oracles/build.sh unpacks (RSASM_ORACLES, default
+target/oracles).  Forms for the ColdFire MAC and EMAC units are left out;
+rsasm does not implement them.
 """
 
 import os
@@ -25,9 +27,11 @@ import re
 import subprocess
 import sys
 
-DEFAULT_SRC = os.environ.get(
-    "RSASM_ORACLES", os.path.join(os.path.dirname(__file__), "../../target/oracles")
-)
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
+BINUTILS = os.path.join(ORACLES, "src", "binutils-2.47")
+TABLE = os.path.join(ROOT, "src", "arch", "m68k", "table.rs")
 
 # include/opcode/m68k.h.
 ARCH_BITS = {
@@ -279,8 +283,7 @@ def rust_string(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(DEFAULT_SRC, "src/binutils-2.47")
+def render(src):
     forms, aliases = opcodes(src)
     regs = registers(src)
     ctrl, cpu_tables = cpus(src)
@@ -310,7 +313,7 @@ def main():
     out = chunks.append
     out("//! The 680x0 instruction table, generated from GNU binutils 2.47.\n")
     out("//!\n")
-    out("//! Do not edit: `tools/m68k-opc/gen.py` writes this file from\n")
+    out("//! Do not edit: `tools/tables/m68k.py table` writes this file from\n")
     out("//! `opcodes/m68k-opc.c`, `gas/config/m68k-parse.h` and\n")
     out("//! `gas/config/tc-m68k.c`. [`super::generic`] reads it, following\n")
     out("//! `tc-m68k.c`'s own reading of the `args` strings that\n")
@@ -468,8 +471,24 @@ def main():
             input=text, capture_output=True, text=True, check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as e:
-        sys.stderr.write("rustfmt failed (%s); the output is unformatted\n" % e)
-    sys.stdout.write(text)
+        sys.exit("rustfmt failed (%s)" % e)
+    return text
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd not in ("table", "check"):
+        sys.exit(__doc__)
+    text = render(BINUTILS)
+    stale = open(TABLE).read() != text
+    if cmd == "check":
+        if stale:
+            print("out of date: %s" % os.path.relpath(TABLE, ROOT))
+        sys.exit(1 if stale else 0)
+    if stale:
+        with open(TABLE, "w") as f:
+            f.write(text)
+    print("rewrote %d file(s)" % stale, file=sys.stderr)
 
 
 if __name__ == "__main__":

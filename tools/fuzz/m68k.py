@@ -2,7 +2,7 @@
 """Differential fuzzer for rsasm's m68k backend.
 
 Random instructions are generated from GNU's own opcode table, read out of the
-binutils source tree (opcodes/m68k-opc.c, with tools/m68k-opc/gen.py) rather
+binutils source tree (opcodes/m68k-opc.c, with tools/tables/m68k.py) rather
 than from rsasm's copy of it, for one CPU at a time and in GNU or Motorola
 syntax. They are assembled by GNU as 2.47 (`--mri` for Motorola syntax) and by
 rsasm, and the bytes, relocations and accept/reject decisions compared.
@@ -57,6 +57,7 @@ RSASM_ORACLES (default target/oracles; GNU as and vasm are in its bin/).
 
 import argparse
 import collections
+import importlib.util
 import os
 import random
 import re
@@ -73,8 +74,13 @@ BIN = os.path.join(ORACLES, "bin")
 RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
 BINUTILS = os.path.join(ORACLES, "src", "binutils-2.47")
 
-sys.path.insert(0, os.path.join(ROOT, "tools", "m68k-opc"))
-import gen  # noqa: E402
+# The table generator, tools/tables/m68k.py, loaded by path: this script
+# has the same name.
+_spec = importlib.util.spec_from_file_location(
+    "m68k_table", os.path.join(ROOT, "tools", "tables", "m68k.py")
+)
+gen = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gen)
 
 A = gen.ARCH_BITS
 WIDE = A["m68020up"] | A["cpu32"] | A["fido_a"]

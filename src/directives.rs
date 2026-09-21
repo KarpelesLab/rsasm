@@ -293,6 +293,7 @@ impl Assembler {
             ..
         } = self;
         let dialect = options.dialect;
+        let bit_dot = arch.bit_addressing();
         let mut cx = crate::arch::AsmCtx {
             interner,
             exprs,
@@ -301,6 +302,7 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            bit_dot,
             sections,
             section: *section,
             relaxable: false,

@@ -1,4 +1,4 @@
-//! Encoding and operand-parsing helpers shared by the three 8-bit backends.
+//! Encoding and operand-parsing helpers shared by the 8-bit backends.
 
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
@@ -50,6 +50,12 @@ impl Enc {
     /// An 8-bit operand: an immediate, or a zero-page / port address.
     pub fn imm8(&mut self, e: ExprRef, span: Span) {
         self.field(1, e, FixupKind::data(1), span);
+    }
+
+    /// An 8-bit address with no negative spelling: an MCS-51 direct or bit
+    /// address, where `-1` is refused rather than read as FFH.
+    pub fn addr8(&mut self, e: ExprRef, span: Span) {
+        self.field(1, e, FixupKind::data(1).with_limits(0, 0xff), span);
     }
 
     /// A signed 8-bit displacement, as in `(IX+d)`.

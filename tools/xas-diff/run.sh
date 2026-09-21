@@ -3,10 +3,13 @@
 #
 # For targets neither llvm-mc nor the host's GNU as can assemble: m68k (in
 # GNU and Motorola syntax), V850/RH850, RL78, RX, SuperH, and the 8-bit Z80,
-# 6502 and 8080. Assembles a corpus with rsasm and with the reference, and
+# 6502, 8080 and 8051. Assembles a corpus with rsasm and with the reference, and
 # compares the code bytes. ARM and Thumb, which llvm-mc does assemble, are here
 # too, as whole objects, for what GNU as decides and llvm-mc decides
-# differently: literal pools, interworking and mapping symbols.
+# differently: literal pools, interworking and mapping symbols. So is PowerPC,
+# for its AltiVec, VSX and POWER10 instructions: llvm-mc checks them too, and
+# the two references accept different mnemonics and ranges, and only GNU as
+# writes the absolute 34-bit relocation.
 #
 #   tools/xas-diff/run.sh              # every target with a corpus
 #   tools/xas-diff/run.sh m68k rx      # just these
@@ -48,8 +51,23 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # references need a second tool to make one: `linked:<ld>` links the object at
 # address 0 and takes `.text`, which resolves the absolute addresses an
 # unlinked object leaves as relocations; `ld65` lays a ca65 object out with
-# ld65; `p2bin` converts AS's code file. rsasm assembles a flat binary for all
-# three, so a leading `org` is the image's load address on both sides.
+# ld65; `p2bin` converts AS's code file; `sdld` links an sdas object into
+# Intel HEX and takes the image from that. rsasm assembles a flat binary for
+# all of them, so a leading `org` is the image's load address on both sides.
+#
+# The 8051 has two references, which read different source. AS reads the
+# Intel syntax the 8-bit dialect does, but predefines no register names, so
+# every i8051 snippet is assembled after AS's own `stddef51.inc`, the header
+# rsasm's names were taken from. sdas8051 has asxxxx's directives, `0x`
+# numbers and `.` for the location counter, and needs an absolute area before
+# an `.org`, so its snippets are in a corpus of their own written in the
+# spelling the two share. A snippet is not compared with the prelude: rsasm
+# sees only the snippet.
+#
+# `p2hex` compares Intel HEX text instead of an image: AS's p2hex against
+# `rsasm -f ihex`. p2hex leaves reserved space and `ORG` gaps out of its
+# records where rsasm writes the zeros `-f bin` has, so those programs are
+# written without gaps.
 #
 # vasm is only a secondary reference, run with `-no-opt -devpac`. By default it
 # is an optimizing assembler that rewrites instructions (`move.l #1,d0` becomes
@@ -100,8 +118,14 @@ z80|z80|8bit|z80-elf-as|linked:z80-elf-ld
 z80-gas|z80|gas|z80-elf-as|linked:z80-elf-ld|z80
 z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
+i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
+i8051-sdas|8051|8bit|sdas8051 -o|sdld
+i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
 arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
 thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
+powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
+powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
+powerpc|powerpc|gas|powerpc64-linux-gnu-as -a32 -mbig -mfuture|elf:.text
 "
 
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
@@ -114,6 +138,15 @@ rsasm="$root/target/debug/rsasm"
 
 pass=0
 fail=0
+
+# Source a reference needs ahead of every snippet that rsasm does not; see
+# the 8051 note above.
+prelude() { # key
+  case "$1" in
+    i8051 | i8051-hex) printf '\tinclude "stddef51.inc"\n' ;;
+    i8051-sdas) printf '\t.area CSEG (ABS)\n' ;;
+  esac
+}
 
 reference() { # command, extraction; source on stdin
   local cmd=$1 extract=$2 d tool
@@ -139,6 +172,24 @@ reference() { # command, extraction; source on stdin
         "$bin/p2bin" -q -l 0 in.p out.bin >> log 2>&1) || grep -q 'error' "$d/log"; then
         echo "REF-ERROR: $(grep -m2 -iE 'error' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
       fi ;;
+    p2hex)
+      if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -q -o in.p in.s > log 2>&1 &&
+        "$bin/p2hex" -q in.p out.hex >> log 2>&1) || grep -q 'error' "$d/log"; then
+        echo "REF-ERROR: $(grep -m2 -iE 'error' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
+      fi
+      tr -d '\r' < "$d/out.hex" | tr '\n' ' ' | sed 's/ $//'
+      echo
+      rm -rf "$d"
+      return ;;
+    sdld)
+      # sdas8051 truncates an operand that does not fit without a word, and
+      # leaves a branch that does not reach to sdld, which warns and may still
+      # write the file; either message is a refusal.
+      if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} in.s > log 2>&1 &&
+        "$bin/sdld" -i out.ihx in.rel >> log 2>&1) || grep -qE 'Error|Warning' "$d/log"; then
+        echo "REF-ERROR: $(grep -m2 -E 'Error|Warning' "$d/log" | tr '\n' ' ')"; rm -rf "$d"; return
+      fi
+      llvm-objcopy -I ihex -O binary "$d/out.ihx" "$d/out.bin" 2>/dev/null ;;
     linked:*)
       if ! (cd "$d" && "$bin/$tool" ${cmd#"$tool"} -o in.o in.s > log 2>&1 &&
         "$bin/${extract#linked:}" -e 0 -Ttext=0 -o out.elf in.o >> log 2>&1); then
@@ -160,12 +211,29 @@ reference() { # command, extraction; source on stdin
   rm -rf "$d"
 }
 
+rsasm_ihex() { # arch dialect source: rsasm's Intel HEX, one line
+  local d
+  d=$(mktemp -d)
+  printf '%s\n' "$3" > "$d/in.s"
+  if "$rsasm" -a "$1" -d "$2" -f ihex -o "$d/out.hex" "$d/in.s" > "$d/log" 2>&1; then
+    tr '\n' ' ' < "$d/out.hex" | sed 's/ $//'
+    echo
+  else
+    echo "RSASM-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"
+  fi
+  rm -rf "$d"
+}
+
 compare() { # key arch dialect cmd extract name source [reference-source]
   local r m gnu="${8-$7}" format=bin
-  m=$(printf '%s\n' "$gnu" | reference "$4" "$5")
+  m=$({ prelude "$1"; printf '%s\n' "$gnu"; } | reference "$4" "$5")
   # Everything but an unlinked ELF object is compared as a flat image.
   [ "${5%%:*}" = elf ] && format=elf
-  r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "$format" 2>&1)
+  if [ "$5" = p2hex ]; then
+    r=$(rsasm_ihex "$2" "$3" "$7")
+  else
+    r=$(printf '%s\n' "$7" | "$hexdump" "$2" "$3" "$format" 2>&1)
+  fi
   # A reference that fails is never a match: a pair whose GNU half does not
   # assemble proves nothing about the vendor half.
   if [ "$m" = "$r" ] && [ "${m#REF-}" = "$m" ]; then

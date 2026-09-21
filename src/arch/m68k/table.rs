@@ -1,6 +1,6 @@
 //! The 680x0 instruction table, generated from GNU binutils 2.47.
 //!
-//! Do not edit: `tools/m68k-opc/gen.py` writes this file from
+//! Do not edit: `tools/tables/m68k.py table` writes this file from
 //! `opcodes/m68k-opc.c`, `gas/config/m68k-parse.h` and
 //! `gas/config/tc-m68k.c`. [`super::generic`] reads it, following
 //! `tc-m68k.c`'s own reading of the `args` strings that
