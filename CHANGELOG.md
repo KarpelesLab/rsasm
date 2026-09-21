@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/KarpelesLab/rsasm/compare/v0.1.1...v0.1.2) - 2026-09-21
+
+### Other
+
+- Have the hexdump example read diagnostics through the accessors
+- Cut the public API down to the surface that is actually supported
+- keep the vector operand types out of the public API
+- Document the ARM vector instructions and how their table is derived
+- Merge master into the ARM vector work
+- corpora and tests for the vector instructions
+- fuzz the vector instructions, and what that turned up
+- the NEON structure loads and stores
+- the VFP and NEON data-processing instructions
+- corpora and tests for the rest of the instruction set
+- fuzz both instruction sets against GNU as and llvm-mc
+- the user-mode and exception-return block transfers
+- the Thumb-2 forms, ldrd/strd, the preloads, cbz and banked msr
+- derive the instruction table from GNU's own
+- Merge the x86 AVX-512 subsets, VEX extensions and AVX10
+- Merge the 680x0 FPU, MMU and ColdFire instruction sets
+- keep the new tables and CPU model out of the crate's public API
+- Merge master: the Intel 8051 backend and PowerPC's vector instructions
+- note the ColdFire check in generic's module docs
+- the rest of the 680x0 family
+- check the hand-written encoders' output against GNU's ColdFire forms
+- m68k fuzzer: vasm mode with GNU as as tie-breaker; READMEs for the fuzzer and xas-diff keys
+- tests for the FPU, MMU, CPU models, float formats, e_flags and relaxation
+- keep FPU and MMU addresses absolute, as the integer instructions do
+- e_flags as GNU as writes them, PC-relative stand-ins only within a section, .arch in multiarch-diff
+- hand-written corpora for the FPU, MMU, relaxation and .arch
+- corpora covering every form of GNU's table, one key per CPU model
+- fuzz against GNU as; emulate far DBcc, jump to numbers, ColdFire index rules
+- generate GNU's opcode table and encode the rest of the 680x0 family from it
+
 ### Changed
 
 - The public API is now a small, documented surface: `Assembler` and the
