@@ -5,7 +5,7 @@
 //! decide which of the last two is the r/m operand, so that either can be
 //! memory: with `W0` the third operand is r/m and the fourth rides in the top
 //! nibble of an immediate byte, with `W1` the other way round. Where both are
-//! registers both encodings are valid; see [`four`] for which is assembled.
+//! registers both encodings are valid; see `four` for which is assembled.
 //! The shifts and rotates make the same choice between r/m and `vvvv`.
 //!
 //! FMA4 is the same idea in the ordinary VEX `0F 3A` map, and `vpermil2ps`

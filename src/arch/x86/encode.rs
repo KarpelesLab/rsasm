@@ -26,12 +26,12 @@ pub struct Prefixes {
     pub data: bool,
     pub addr: bool,
     /// A `{vex}`, `{vex3}` or `{evex}` pseudo-prefix.
-    pub encoding: Option<EncodingPrefix>,
+    pub(crate) encoding: Option<EncodingPrefix>,
 }
 
 /// The encoding a pseudo-prefix asks for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EncodingPrefix {
+pub(crate) enum EncodingPrefix {
     /// `{vex}` (or `{vex2}`): VEX, in whichever length fits.
     Vex,
     /// `{vex3}`: VEX in its three-byte form even where two bytes would do.

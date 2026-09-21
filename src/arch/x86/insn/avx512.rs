@@ -26,7 +26,7 @@ fn leak(s: String) -> &'static str {
 }
 
 /// An EVEX row, written with legacy opcode bytes like the VEX rows are.
-pub fn ev(ops: Vec<Op>, pfx: u8, esc: &[u8], vlen: u16, w: bool, tuple: Tuple) -> Def {
+pub(crate) fn ev(ops: Vec<Op>, pfx: u8, esc: &[u8], vlen: u16, w: bool, tuple: Tuple) -> Def {
     let (map, op) = split_escape(esc);
     d(ops, &[op], ModRm::Reg, if w { 64 } else { 0 })
         .pfx(pfx)
@@ -34,29 +34,29 @@ pub fn ev(ops: Vec<Op>, pfx: u8, esc: &[u8], vlen: u16, w: bool, tuple: Tuple) -
         .evex(vlen, tuple)
 }
 
-pub const ALL: [u16; 3] = [128, 256, 512];
+pub(crate) const ALL: [u16; 3] = [128, 256, 512];
 
 /// Half the register class, for the widening and narrowing conversions.
-pub fn half(vlen: u16) -> Vk {
+pub(crate) fn half(vlen: u16) -> Vk {
     match vlen {
         512 => Vk::Ymm,
         _ => Vk::Xmm,
     }
 }
 
-pub fn nds(k: Vk) -> Vec<Op> {
+pub(crate) fn nds(k: Vk) -> Vec<Op> {
     vec![Op::V(k), Op::Nds(k), Op::Vm(k, 0)]
 }
 
-pub fn rm(k: Vk) -> Vec<Op> {
+pub(crate) fn rm(k: Vk) -> Vec<Op> {
     vec![Op::V(k), Op::Vm(k, 0)]
 }
 
-pub fn mr(k: Vk) -> Vec<Op> {
+pub(crate) fn mr(k: Vk) -> Vec<Op> {
     vec![Op::Vm(k, 0), Op::V(k)]
 }
 
-pub fn with_imm(mut ops: Vec<Op>) -> Vec<Op> {
+pub(crate) fn with_imm(mut ops: Vec<Op>) -> Vec<Op> {
     ops.push(Op::Imm(1));
     ops
 }
@@ -64,7 +64,7 @@ pub fn with_imm(mut ops: Vec<Op>) -> Vec<Op> {
 /// Rounding control only exists where the register holds a full 512-bit
 /// vector or a single scalar; a 128- or 256-bit packed form has no spare
 /// `L'L` to put the mode in.
-pub fn rounding_flag(def: Def, flag: u32, vlen: u16) -> Def {
+pub(crate) fn rounding_flag(def: Def, flag: u32, vlen: u16) -> Def {
     if vlen == 512 { def.flags(flag) } else { def }
 }
 

@@ -10,21 +10,21 @@
 //! integer instruction set several times over.
 
 pub mod avx;
-pub mod avx10;
+pub(crate) mod avx10;
 pub mod avx512;
-pub mod avx512x;
+pub(crate) mod avx512x;
 pub mod base;
-pub mod bmi;
-pub mod cmpalias;
-pub mod fma;
-pub mod fp16;
-pub mod lenalias;
+pub(crate) mod bmi;
+pub(crate) mod cmpalias;
+pub(crate) mod fma;
+pub(crate) mod fp16;
+pub(crate) mod lenalias;
 pub mod mmx;
 pub mod sse;
-pub mod sys;
-pub mod vexext;
+pub(crate) mod sys;
+pub(crate) mod vexext;
 pub mod x87;
-pub mod xop;
+pub(crate) mod xop;
 
 use super::reg::{Reg, RegClass};
 use std::collections::HashMap;
@@ -244,11 +244,11 @@ pub const R_IN_RM: u32 = 1 << 17;
 /// complex multiplications read their operands in pairs of elements and
 /// would overwrite one half before reading the other; GNU as refuses the
 /// overlap, where llvm-mc assembles it, and rsasm follows GNU as.
-pub const DISTINCT_DEST: u32 = 1 << 18;
+pub(crate) const DISTINCT_DEST: u32 = 1 << 18;
 /// The memory operand is always written with a SIB byte, and so cannot be
 /// RIP-relative: AMX's tile loads and stores take their stride from the
 /// index register, and have no encoding without one.
-pub const SIBMEM: u32 = 1 << 19;
+pub(crate) const SIBMEM: u32 = 1 << 19;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -468,7 +468,7 @@ impl Def {
     /// The `N` of the `{1toN}` this row's memory operand broadcasts with, or
     /// `None` if it cannot broadcast: the element count of the memory the
     /// full-width form would read.
-    pub fn broadcast_count(&self) -> Option<u32> {
+    pub(crate) fn broadcast_count(&self) -> Option<u32> {
         if !self.tuple.broadcastable() {
             return None;
         }
