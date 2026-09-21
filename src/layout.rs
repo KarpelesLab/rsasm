@@ -1867,7 +1867,9 @@ impl Assembler {
                     FragKind::Align {
                         fill, nop_state, ..
                     } => {
-                        if fill.is_empty() && exec {
+                        // No-ops in code, and wherever an instruction asked
+                        // for them, which a data section can hold too.
+                        if fill.is_empty() && (exec || nop_state.is_some()) {
                             let (arch, state) = self.frag_arch(si, fi);
                             let state = nop_state.as_ref().unwrap_or(state);
                             // A COFF object follows llvm-mc, whose no-ops are

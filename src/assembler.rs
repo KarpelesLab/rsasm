@@ -135,6 +135,8 @@ pub struct Assembler {
     lex_epoch: u64,
     /// The anonymous label standing in for `.` in the current statement.
     pub(crate) here_sym: Option<SymbolId>,
+    /// The labels written on the current statement's own line.
+    stmt_labels: Vec<SymbolId>,
     cond: Vec<Cond>,
     /// Guards against runaway `.include` recursion.
     include_depth: u32,
@@ -225,6 +227,7 @@ impl Assembler {
             options,
             lex_epoch: 0,
             here_sym: None,
+            stmt_labels: Vec::new(),
             cond: Vec::new(),
             include_depth: 0,
             macros: HashMap::new(),
@@ -404,7 +407,7 @@ impl Assembler {
         id
     }
 
-    pub(crate) fn define_label(&mut self, label: &LabelDef) {
+    pub(crate) fn define_label(&mut self, label: &LabelDef) -> Option<SymbolId> {
         let (id, span) = match *label {
             LabelDef::Named(name, span) => {
                 let id = self.symbols.intern(name, span);
@@ -422,7 +425,7 @@ impl Assembler {
                 Diagnostic::error(span, format!("symbol `{name}` is already defined"))
                     .with_note(prev, "previous definition is here"),
             );
-            return;
+            return None;
         }
         self.cur_section().seal();
         let frag = self.cur_section().next_frag_index();
@@ -444,6 +447,7 @@ impl Assembler {
             let name = self.interner.get(name).to_string();
             self.dwarf_source_label(&name, span);
         }
+        Some(id)
     }
 
     /// The name to show for a symbol in diagnostics.
@@ -1348,8 +1352,11 @@ impl Assembler {
             return;
         }
 
+        self.stmt_labels.clear();
         for l in &stmt.labels {
-            self.define_label(l);
+            if let Some(id) = self.define_label(l) {
+                self.stmt_labels.push(id);
+            }
         }
 
         // `.` refers to where the statement starts, so the anonymous label
@@ -1749,7 +1756,7 @@ impl Assembler {
         mnemonic_span: Span,
         span: Span,
     ) {
-        let Some((variants, relaxable, requests)) =
+        let Some((variants, relaxable, mut requests)) =
             self.assemble_instruction(operands, mnemonic, mnemonic_span, span)
         else {
             return;
@@ -1761,6 +1768,16 @@ impl Assembler {
         }
         if self.check_nobits(span) {
             return;
+        }
+        // Padding the instruction asked to be placed in front of it.
+        let (before, after): (Vec<_>, Vec<_>) = requests
+            .drain(..)
+            .partition(|r| matches!(r, crate::arch::Request::AlignCode { .. }));
+        requests = after;
+        if !before.is_empty() {
+            let at = self.cur_section().next_frag_index();
+            self.run_requests(before, span);
+            self.reattach_labels(at);
         }
         self.map_code();
         if self.dwarf.line.pending || self.dwarf.line.source.on {
@@ -1777,6 +1794,32 @@ impl Assembler {
             self.cur_section().nop_state = Some(state);
         }
         self.run_requests(requests, span);
+    }
+
+    /// Moves the labels written on the current statement's line, and its `.`,
+    /// from fragment `from` past the padding just pushed there. Padding an
+    /// instruction asks for goes between it and a label on its own line, as
+    /// GNU as and llvm-mc both place it; a label on a line of its own stays
+    /// in front of the padding.
+    fn reattach_labels(&mut self, from: u32) {
+        let section = self.cur;
+        self.cur_section().seal();
+        let to = self.cur_section().next_frag_index();
+        let ids: Vec<SymbolId> = self
+            .stmt_labels
+            .iter()
+            .copied()
+            .chain(self.here_sym)
+            .collect();
+        for id in ids {
+            let sym = self.symbols.get_mut(id);
+            if let SymbolValue::Label { section: s, frag } = sym.value
+                && s == section
+                && frag == from
+            {
+                sym.value = SymbolValue::Label { section, frag: to };
+            }
+        }
     }
 
     /// The candidate encodings of an instruction, and whether its fragment
