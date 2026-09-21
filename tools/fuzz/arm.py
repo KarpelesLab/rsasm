@@ -65,10 +65,12 @@ DIS = os.path.join(ORACLES, "src", "binutils-2.47", "opcodes", "arm-dis.c")
 # `-march=armv7ve` is ARMv7-A with the security, virtualization and divide
 # extensions, which is the whole set this backend claims; llvm-mc needs the
 # same features named one at a time.
-MC_ATTRS = "+v7,+sec,+virtualization,+hwdiv,+hwdiv-arm,+dsp,+mp"
+MC_ATTRS = ("+v7,+sec,+virtualization,+hwdiv,+hwdiv-arm,+dsp,+mp,"
+            "+neon,+vfp4,+fp16")
+FPU = "-mfpu=neon-vfpv4"
 TARGETS = {
-    "arm": (["-march=armv7ve"], "armv7", "arm", False),
-    "thumb": (["-march=armv7ve", "-mthumb"], "thumbv7", "thumb", True),
+    "arm": (["-march=armv7ve", FPU], "armv7", "arm", False),
+    "thumb": (["-march=armv7ve", FPU, "-mthumb"], "thumbv7", "thumb", True),
 }
 PRELUDE = ".syntax unified\n"
 
@@ -80,6 +82,10 @@ FEATURES = {
     "ARM_EXT_V6T2", "ARM_EXT_V6Z", "ARM_EXT_V7", "ARM_EXT_DIV",
     "ARM_EXT_ADIV", "ARM_EXT_MP", "ARM_EXT_SEC", "ARM_EXT_VIRT",
     "ARM_EXT2_V6T2_V8M",
+    # The floating-point unit and NEON, up to VFPv4: `-mfpu=neon-vfpv4`.
+    "FPU_VFP_EXT_V1xD", "FPU_VFP_EXT_V1", "FPU_VFP_EXT_V2", "FPU_VFP_EXT_V3",
+    "FPU_VFP_EXT_V3xD", "FPU_VFP_EXT_FMA", "FPU_VFP_EXT_FP16",
+    "FPU_NEON_EXT_V1", "FPU_NEON_EXT_FMA",
 }
 
 # Mnemonics whose syntax SHAPES spells out, so the rows for them are skipped.
@@ -104,6 +110,8 @@ TABLES = [
     ("static const struct opcode16 thumb_opcodes[] =", "t16"),
     ("static const struct opcode32 thumb32_opcodes[] =", "t32"),
     ("static const struct sopcode32 generic_coprocessor_opcodes[] =", "cop"),
+    ("static const struct sopcode32 coprocessor_opcodes[] =", "vfp"),
+    ("static const struct opcode32 neon_opcodes[] =", "neon"),
 ]
 ENTRY = re.compile(
     r"\{\s*(?:ANY\s*,\s*)?(ARM_FEATURE\w*\s*\([^)]*\)|[A-Za-z_0-9]+)\s*,\s*"
@@ -111,6 +119,8 @@ ENTRY = re.compile(
     r'((?:"(?:[^"\\]|\\.)*"\s*)+)\}'
 )
 FIELD = re.compile(r"%(\d+)(?:-(\d+))?(.)")
+# `%12-15,22D`: a value the encoding holds in several pieces.
+MULTI = re.compile(r"%(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)+)(.)")
 
 
 class Unsupported(Exception):
@@ -128,7 +138,7 @@ def read_rows(path):
         body = re.sub(r"/\*.*?\*/", "", "\n".join(lines[i + 1:j]), flags=re.S)
         for m in ENTRY.finditer(body):
             fmt = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(4)))
-            feats = set(re.findall(r"ARM_EXT\w*", m.group(1)))
+            feats = set(re.findall(r"(?:ARM_EXT|ARM_CEXT|FPU_)\w*", m.group(1)))
             if feats and not (feats & FEATURES):
                 continue
             out.append((which, fmt))
@@ -150,6 +160,19 @@ def expand_mnemonic(mnem):
             continue
         if mnem[i + 1] in "CptwI":
             raise Unsupported("mnemonic %r" % mnem)
+        if mnem[i:i + 2] == "%u":
+            # The NEON rows that cannot be conditional in ARM state; all of
+            # them are out of scope anyway.
+            raise Unsupported("mnemonic %r" % mnem)
+        m = MULTI.match(mnem, i)
+        if m and m.group(2) == "?":
+            pieces = [p.split("-") for p in m.group(1).split(",")]
+            bits = sum(1 if len(q) == 1 else abs(int(q[0]) - int(q[1])) + 1
+                       for q in pieces)
+            i = m.end()
+            letters, i = mnem[i:i + (1 << bits)], i + (1 << bits)
+            out = [n + ch for ch in set(letters) for n in out]
+            continue
         m = FIELD.match(mnem, i)
         if not m:
             raise Unsupported("mnemonic %r" % mnem)
@@ -165,6 +188,15 @@ def expand_mnemonic(mnem):
             out = [n + ch for ch in set(letters) for n in out]
         elif code == "c":
             cond = True
+        elif code in "STU":
+            # The element width the field picks, written into the mnemonic:
+            # `S` counts from 8 bits, `T` from 16 and `U` from 32, and the
+            # limit digit says which of the values are legal.
+            base = 8 << "STU".index(code)
+            limit = int(mnem[i], 16)
+            i += 1
+            out = [n + str(base << v)
+                   for v in range(limit >> 2, (limit & 3) + 1) for n in out]
         else:
             raise Unsupported("mnemonic %r" % mnem)
     return sorted({n.replace(".w", "").replace(".n", "").strip() for n in out}), cond
@@ -216,8 +248,33 @@ def parse_syntax(text, which):
             return Slot("imm", 0, (1 << bits) - 1)
         return None
 
+    # The coprocessor table's own names for a vector register: a single, a
+    # double, a list of either, and the `%y4` pair written out as both.
+    VFP = {"y0": "vfps", "y1": "vfps", "y2": "vfps", "y4": "vfpspair",
+           "z0": "vfpd", "z1": "vfpd", "z2": "vfpd",
+           "y3": "slist", "z3": "dlist"}
+
     while i < n:
         ch = text[i]
+        if text[i:i + 2] == "%y" or text[i:i + 2] == "%z":
+            code, i = text[i + 1:i + 3], i + 3
+            if code not in VFP:
+                raise Unsupported("register %%%s" % code)
+            kind = VFP[code]
+            m = re.compile(r"\[%\{I:%([\d,-]+)d%\}\]").match(text, i)
+            if m:
+                i = m.end()
+                kind = "vfpdlane"
+            slots.append(Slot(kind))
+            out.append("{}")
+            continue
+        m = MULTI.match(text, i)
+        if m and m.group(2) in "DQRr":
+            i = m.end()
+            slots.append(Slot({"D": "vfpd", "Q": "vfpq", "R": "vfpr",
+                               "r": "reg"}[m.group(2)]))
+            out.append("{}")
+            continue
         if ch in ", []{}":
             out.append(ch)
             i += 1
@@ -231,6 +288,29 @@ def parse_syntax(text, which):
             end = text.index("%}", i)
             body, i = text[i + 4:end], end + 2
             if kind == "I":
+                if body == "#0.0":
+                    # This assembler's lexer has no floating-point literal,
+                    # so the zero `vcmp` compares against is written `#0`.
+                    out.append("#0")
+                    continue
+                if re.fullmatch(r"#%[\d,-]+E", body):
+                    # A VFP floating-point immediate, which needs a literal
+                    # this assembler does not read.
+                    raise Unsupported("a floating-point immediate")
+                if re.fullmatch(r"#%[\d,-]+k", body):
+                    slots.append(Slot("vfpfix"))
+                    out.append("#{}")
+                    continue
+                m = re.fullmatch(r"#%(\d+)-(\d+)e", body)
+                if m:
+                    lo, hi = int(m.group(1)), int(m.group(2))
+                    slots.append(Slot("imm", 1, 1 << (abs(hi - lo) + 1)))
+                    out.append("#{}")
+                    continue
+                if re.fullmatch(r"#%\d+-\d+[STU][0-9a-f]", body):
+                    slots.append(Slot("sizeimm"))
+                    out.append("#{}")
+                    continue
                 if body == "#%e":
                     slots.append(Slot("imm", 0, 0xFFFF))
                     out.append("#{}")
@@ -264,6 +344,25 @@ def parse_syntax(text, which):
             if kind == "R":
                 if body == "APSR_nzcv":
                     out.append("APSR_nzcv")
+                    continue
+                if re.fullmatch(r"[a-z][a-z0-9_]*", body):
+                    # A named system register: `fpscr` and its neighbours.
+                    out.append(body)
+                    continue
+                m = re.fullmatch(r"s%([\d,-]+)d", body)
+                if m:
+                    slots.append(Slot("vfps"))
+                    out.append("{}")
+                    continue
+                m = re.fullmatch(r"d%([\d,-]+)d", body)
+                if m:
+                    slots.append(Slot("vfpd"))
+                    out.append("{}")
+                    continue
+                m = re.fullmatch(r"(?:d%[\d,-]+d|%[\d,-]+D)\[%([\d,-]+)d\]", body)
+                if m:
+                    slots.append(Slot("vfpdlane"))
+                    out.append("{}")
                     continue
                 m = re.fullmatch(r"cr%(\d+)-(\d+)d", body)
                 if m:
@@ -336,6 +435,22 @@ def parse_syntax(text, which):
         elif code == "s" and which == "t32":
             slots.append(Slot("satshift"))
             out.append("{}")
+        elif code == "A" and which == "vfp":
+            slots.append(Slot("vfpmem"))
+            out.append("{}")
+        elif code == "D" and which == "neon":
+            slots.append(Slot("scalar"))
+            out.append("{}")
+        elif code == "F" and which == "neon":
+            slots.append(Slot("tbllist"))
+            out.append("{}")
+        elif code == "B" and which == "vfp":
+            slots.append(Slot("dlist"))
+            out.append("{}")
+        elif code in "ABCE" and which == "neon":
+            # The modified immediate and the structure transfers, whose
+            # syntax SHAPES spells out.
+            raise Unsupported("code %%%s" % code)
         elif code == "A":
             slots.append(Slot("coprocmem"))
             out.append("{}")
@@ -355,7 +470,8 @@ class Form:
 
 
 SETS = {"arm": ("arm",), "t16": ("thumb",), "t32": ("thumb",),
-        "cop": ("arm", "thumb")}
+        "cop": ("arm", "thumb"), "vfp": ("arm", "thumb"),
+        "neon": ("arm", "thumb")}
 
 
 def table_forms():
@@ -391,6 +507,15 @@ def table_forms():
 # Each shape is (mnemonics, takes a condition, template, slot kinds, targets).
 # `S` in a mnemonic is the flag-setting suffix the generator adds at random.
 DP = "and eor sub rsb add adc sbc orr bic"
+NEON_IMM_MOVE = " ".join("%s.i%d" % (m, s) for m in ("vmov", "vmvn")
+                         for s in (8, 16, 32, 64))
+NEON_IMM_LOGIC = " ".join("%s.i%d" % (m, s)
+                          for m in ("vorr", "vbic", "vand", "vorn")
+                          for s in (8, 16, 32, 64))
+NEON_LOADS = " ".join("vld%d.%d" % (n, s) for n in (1, 2, 3, 4)
+                      for s in (8, 16, 32, 64))
+NEON_STRUCT = NEON_LOADS + " " + " ".join(
+    "vst%d.%d" % (n, s) for n in (1, 2, 3, 4) for s in (8, 16, 32, 64))
 SHAPES = [
     (DP + " rsc", True, "{}, {}, {}", ["regS", "reg", "op2"], ("arm",)),
     (DP + " rsc", True, "{}, {}", ["regS", "op2"], ("arm",)),
@@ -438,6 +563,20 @@ SHAPES = [
     ("mrs", True, "{}, {}", ["reg", "psr"], ("arm", "thumb")),
     ("msr", True, "{}, {}", ["psrw", "reg"], ("arm", "thumb")),
     ("msr", True, "{}, #{}", ["psrw", "modimm"], ("arm",)),
+    # The NEON modified immediate, whose `cmode` an assembler works out from
+    # the value, and the register move that is `vorr rd, rm, rm`.
+    (NEON_IMM_MOVE, False, "{}, #{}", ["vfpr", "neonimm"], ("arm", "thumb")),
+    (NEON_IMM_LOGIC, False, "{}, #{}", ["vfpr", "neonimm"], ("arm", "thumb")),
+    (NEON_IMM_LOGIC, False, "{}, {}, #{}", ["vfpr", "same", "neonimm"],
+     ("arm", "thumb")),
+    ("vmov", False, "{}, {}", ["vfpr", "vfpr"], ("arm", "thumb")),
+    # The structure transfers, in each of their three shapes.
+    (NEON_STRUCT, False, "{}, {}", ["structlist", "structaddr"],
+     ("arm", "thumb")),
+    (NEON_STRUCT, False, "{}, {}", ["lanelist", "structaddr"],
+     ("arm", "thumb")),
+    (NEON_LOADS, False, "{}, {}", ["duplist", "structaddr"],
+     ("arm", "thumb")),
 ]
 
 
@@ -552,8 +691,48 @@ def reglist(rng, thumb, caret=True):
     return "{" + ", ".join(names) + "}" + tail
 
 
+# The values a NEON modified immediate is worth trying: the byte patterns
+# the encoding holds, ones that only their complement holds, and a few that
+# nothing holds.
+NEON_IMMS = [0, 1, 0xFF, 0x100, 0xFF00, 0xFF0000, 0xFF000000, 0xFFFF,
+             0xFFFFFF, 0x1FF, 0x1FFFF, 0xABAB, 0x12345678, 0xFF00FF00,
+             0xFFFFFFFFFFFFFFFF, 0xFF00FF00FF00FF00, 0x7F, -1, -256]
+
+
+def vec_list(rng, letter, count=None, lane=None, stride=1, dash=None):
+    """`{d0-d3}`, `{d0, d2}` or `{d0[1], d1[1]}`, the shapes a vector list
+    is written in."""
+    count = count or rng.randrange(1, 5)
+    first = rng.randrange(0, 32 - count * stride + 1)
+    tail = "" if lane is None else ("[]" if lane == "all" else "[%d]" % lane)
+    if dash is None:
+        dash = stride == 1 and lane is None and rng.random() < 0.5
+    if dash:
+        return "{%s%d-%s%d}" % (letter, first, letter, first + count - 1)
+    return "{%s}" % ", ".join(
+        "%s%d%s" % (letter, first + i * stride, tail) for i in range(count))
+
+
+def struct_address(rng):
+    base = write_reg(rng)
+    align = rng.choice([None, None, 16, 32, 64, 128, 256])
+    inside = "%s%s" % (base, "" if align is None else ":%d" % align)
+    form = rng.random()
+    if form < 0.5:
+        return "[%s]" % inside
+    if form < 0.75:
+        return "[%s]!" % inside
+    return "[%s], %s" % (inside, write_reg(rng))
+
+
 def fill(rng, form, target):
     thumb = TARGETS[target][3]
+    # Every `d`-or-`q` operand of one instruction is the same width, and the
+    # element size a structure transfer names says which lanes it has.
+    quad = rng.random() < 0.5
+    tail = re.match(r"[a-z]*(\d+)$", form.mnem.rpartition(".")[2])
+    size = int(tail.group(1)) if tail else 8
+    last_vec = 0
     args, last_reg = [], 0
     for slot in form.slots:
         k = slot.kind
@@ -629,6 +808,50 @@ def fill(rng, form, target):
             args.append(address(rng, thumb, k))
         elif k == "reglist":
             args.append(reglist(rng, thumb, form.mnem not in ("push", "pop")))
+        elif k == "vfps":
+            args.append("s%d" % rng.randrange(32))
+        elif k == "vfpspair":
+            n = rng.randrange(31)
+            args.append("s%d, s%d" % (n, n + 1))
+        elif k == "vfpd":
+            args.append("d%d" % rng.randrange(32))
+        elif k == "vfpq":
+            args.append("q%d" % rng.randrange(16))
+        elif k == "vfpr":
+            last_vec = rng.randrange(16 if quad else 32)
+            args.append("%s%d" % ("q" if quad else "d", last_vec))
+        elif k == "same":
+            args.append("%s%d" % ("q" if quad else "d", last_vec))
+        elif k == "vfpdlane":
+            args.append("d%d[%d]" % (rng.randrange(32), rng.randrange(8)))
+        elif k == "scalar":
+            args.append("d%d[%d]" % (rng.randrange(16), rng.randrange(4)))
+        elif k == "slist":
+            args.append(vec_list(rng, "s"))
+        elif k in ("dlist", "tbllist"):
+            args.append(vec_list(rng, "d"))
+        elif k == "vfpmem":
+            args.append("[%s, #%d]" % (write_reg(rng), rnum(rng, -1020, 1020, 4)))
+        elif k == "vfpfix":
+            args.append(str(rnum(rng, 1, 32)))
+        elif k == "sizeimm":
+            args.append(str(rng.choice([8, 16, 32])))
+        elif k == "neonimm":
+            args.append(str(rng.choice(NEON_IMMS)))
+        elif k == "structlist":
+            args.append(vec_list(rng, "d", stride=rng.choice([1, 1, 2])))
+        elif k == "lanelist":
+            n = int(form.mnem[3])
+            lanes = max(1, 64 // size)
+            args.append(vec_list(rng, "d", count=n, lane=rng.randrange(lanes),
+                                 stride=rng.choice([1, 1, 2]), dash=False))
+        elif k == "duplist":
+            n = int(form.mnem[3])
+            args.append(vec_list(rng, "d", count=rng.choice([n, n, 1, 2]),
+                                 lane="all", stride=rng.choice([1, 1, 2]),
+                                 dash=False))
+        elif k == "structaddr":
+            args.append(struct_address(rng))
         elif k == "label":
             args.append("1f")
         elif k == "psr":
@@ -651,7 +874,10 @@ def generate(rng, form, target, mutate):
     if mnem in SUFFIX_S and rng.random() < 0.4:
         mnem += "s"
     if form.cond and rng.random() < 0.25:
-        mnem += rng.choice(CONDS)
+        # A condition goes on the mnemonic itself, in front of the type
+        # suffix a vector instruction carries.
+        stem, dot, rest = mnem.partition(".")
+        mnem = stem + rng.choice(CONDS) + dot + rest
     width = ""
     if TARGETS[target][3] and rng.random() < 0.2:
         width = rng.choice([".n", ".w"])
@@ -901,6 +1127,35 @@ def mc_takes_a_shorthand_shift(g, m, ctx):
     return gas_said(g, m, "garbage following instruction", "undefined symbol")
 
 
+def gas_refuses_an_always_condition(g, m, ctx):
+    """`dmbal`, `pldal`, `vrev16al.8`: GNU as looks a mnemonic up before it
+    knows which condition was written, so it refuses even `al`, the
+    condition an unconditional instruction has anyway. llvm-mc takes it, and
+    so does rsasm -- not least because GNU as itself takes it wherever some
+    other form of the mnemonic is conditional (`vnegal.f32 d0, d1`)."""
+    return (gas_said(g, m, "instruction cannot be conditional")
+            and re.match(r"^\w*al(\.\S*)?(\s|$)", ctx["text"]) is not None)
+
+
+def mc_takes_a_condition_on_a_vector_instruction(g, m, ctx):
+    """llvm-mc reads a condition on any NEON instruction and drops it. A
+    NEON instruction cannot be conditional, and GNU as says so."""
+    return gas_said(g, m, "instruction cannot be conditional")
+
+
+def mc_takes_a_width_on_a_typed_mnemonic(g, m, ctx):
+    """`vmull.u32.n`: a mnemonic that carries a data type has no width
+    suffix, and GNU as reads the `n` as part of the type. llvm-mc takes it
+    and ignores it."""
+    return gas_said(g, m, "in type specifier")
+
+
+def mc_takes_a_wide_vector_immediate(g, m, ctx):
+    """`vmov.i16 d0, #-1`: llvm-mc truncates an immediate to the element
+    size, where GNU as refuses one with bits above it."""
+    return gas_said(g, m, "bits set outside the operand size")
+
+
 def gas_reads_p9_as_a_half_float(g, m, ctx):
     """`ldc`/`stc` on coprocessor 9 shares its encoding with the half-float
     `vldr`, and GNU as takes it for one: it halves the offset's scale and
@@ -915,6 +1170,30 @@ def gas_rewrites_a_stack_transfer(g, m, ctx):
     and refuses a `.w` outright. rsasm keeps the block form there, which is
     what llvm-mc writes for all of them."""
     return re.match(r"^(ldm|stm)\w*(\.[nw])? sp,", ctx["text"]) is not None
+
+
+def gas_rewrites_a_single_register_transfer(g, m, ctx):
+    """A block transfer of one register through anything but the stack
+    pointer: GNU as writes the load or store it is the same as, and llvm-mc
+    keeps the block form. rsasm follows GNU as."""
+    return re.match(r"^(ldm|stm)\w*(\.[nw])? \w+!?, *\{\w+\}$",
+                    ctx["text"]) is not None
+
+
+def mc_narrows_a_complemented_move(g, m, ctx):
+    """`mvns r0, #0xffffff00` is `movs r0, #255`: GNU as keeps the 32-bit
+    encoding it had already chosen, and llvm-mc picks the 16-bit one for the
+    instruction it ends up with. rsasm follows GNU as."""
+    return (g[0] == "ok" and m[0] == "ok" and len(g[1][0]) == 4
+            and len(m[1][0]) == 2
+            and re.match(r"^(movs?|mvns?)\b", ctx["text"]) is not None)
+
+
+def mc_drops_a_vfp_register_bit(g, m, ctx):
+    """`fldmiax r6, {d31}`: llvm-mc writes the deprecated `fldmx` transfers
+    without the top bit of the register number, so its d16 to d31 come out
+    as d0 to d15. GNU as writes the bit."""
+    return re.match(r"^(fldm|fstm)", ctx["text"]) is not None
 
 
 def mc_relocates_every_branch(g, m, ctx):
@@ -932,9 +1211,33 @@ KNOWN_SPLITS = [
     ("mc-takes-a-shorthand-shift", mc_takes_a_shorthand_shift, "gas"),
     ("mc-relocates-every-branch", mc_relocates_every_branch, "gas"),
     ("gas-rewrites-a-stack-transfer", gas_rewrites_a_stack_transfer, "mc"),
+    ("gas-rewrites-a-single-register-transfer",
+     gas_rewrites_a_single_register_transfer, "gas"),
+    ("mc-narrows-a-complemented-move", mc_narrows_a_complemented_move, "gas"),
+    ("mc-drops-a-vfp-register-bit", mc_drops_a_vfp_register_bit, "gas"),
+    ("gas-refuses-an-always-condition", gas_refuses_an_always_condition, "mc"),
+    ("mc-takes-a-condition-on-a-vector-instruction",
+     mc_takes_a_condition_on_a_vector_instruction, "gas"),
+    ("mc-takes-a-width-on-a-typed-mnemonic",
+     mc_takes_a_width_on_a_typed_mnemonic, "gas"),
+    ("mc-takes-a-wide-vector-immediate", mc_takes_a_wide_vector_immediate,
+     "gas"),
 ]
 
+def gas_takes_a_condition_on_vaddl(g, m, ctx):
+    """`vaddlne.s8` and `vsublne.s8`: a NEON instruction cannot be
+    conditional, and GNU as says so for every one of them except these two,
+    whose encoder clears the delayed diagnostic before it is printed.
+    llvm-mc takes a condition on any NEON instruction and drops it. rsasm
+    refuses it, as the architecture does and as GNU as does everywhere
+    else."""
+    return re.match(r"^v(addl|subl)(eq|ne|cs|cc|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|hs|lo)\.",
+                    ctx["text"]) is not None
+
+
 DEVIATIONS = [
+    ("a-condition-on-vaddl-or-vsubl",
+     lambda g, m, r, ctx: gas_takes_a_condition_on_vaddl(g, m, ctx)),
     ("p9-is-a-plain-coprocessor-transfer",
      lambda g, m, r, ctx: gas_reads_p9_as_a_half_float(g, m, ctx)),
 ]

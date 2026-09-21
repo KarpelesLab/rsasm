@@ -197,6 +197,9 @@ pub enum OperandKind {
         lane: Option<u32>,
         spaced: bool,
         all: bool,
+        /// `{d5-d5}`, a range of one register: only a structure transfer
+        /// reads that.
+        degenerate: bool,
     },
 }
 
@@ -493,8 +496,10 @@ impl Parser<'_, '_> {
                 self.cx.error(span, "expected a register in the list");
                 return None;
             };
+            let mut ranged = false;
             let hi = if cur.eat_punct(Punct::Minus).is_some() {
                 let span = cur.peek().span;
+                ranged = true;
                 match self.eat_register(cur) {
                     Some(r) => r,
                     None => {
@@ -505,6 +510,10 @@ impl Parser<'_, '_> {
             } else {
                 lo
             };
+            if ranged && hi == lo {
+                self.cx.error(span, "bad range in register list");
+                return None;
+            }
             if hi < lo {
                 self.cx.error(
                     span,
@@ -554,6 +563,7 @@ impl Parser<'_, '_> {
         let mut last = first;
         let mut count = 1u8;
         let mut step = 1u8;
+        let mut degenerate = false;
         if cur.eat_punct(Punct::Minus).is_some() {
             let span = cur.peek().span;
             let Some(hi) = self.eat_vec_register(cur)? else {
@@ -565,6 +575,9 @@ impl Parser<'_, '_> {
                     .error(span, "a register range runs from low to high");
                 return None;
             }
+            // `{d5-d5}` is a range of one, which GNU as reads in a structure
+            // transfer's list and nowhere else.
+            degenerate = hi.n == first.n;
             count = hi.n - first.n + 1;
             last = hi;
         }
@@ -604,6 +617,7 @@ impl Parser<'_, '_> {
                 lane: first.lane,
                 spaced: step == 2,
                 all: first.all,
+                degenerate,
             },
             span: start.to(cur.nth(0).span),
             word: None,

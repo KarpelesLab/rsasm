@@ -821,15 +821,24 @@ def parse_braced(text, i, ops, which):
 # has to print.
 GAS_CLASS = {
     "RR": 0, "APSR_RR": 0,
-    "RRnpc": 1, "RRnpcb": 1, "RRw": 1, "RRnpctw": 1, "RRe": 1,
+    "RRnpc": 1, "RRnpcb": 1, "RRw": 1, "RRnpctw": 3, "RRe": 1,
     "RRnpc_npcsp": 1, "RRnpc_I0": 1,
     "RRnpcsp": 2, "RRo": 2, "RRnpcsp_I32": 2,
+    # `vmrs` takes `apsr_nzcv` where the program counter would be, so the
+    # register spelling of it is one the PC is not.
+    "APSR_RR": 1,
 }
+# `RRnpctw` -- the base of a VFP block transfer -- takes the PC in A32 as
+# long as it is not written back; in Thumb it does not take it at all, which
+# THUMB_BAD says.
 # In Thumb, `do_t_*` puts nearly every register operand through
 # `reject_bad_reg`, which refuses the stack pointer as well as the PC, whatever
 # the table's own kind says. `rfe`'s base is the exception the table records
 # itself, and `RRw` keeps its meaning.
-THUMB_BAD = {"RR", "RRnpc", "RRnpcb", "RRnpcsp", "RRnpc_npcsp", "RRnpc_I0"}
+THUMB_BAD = {"RR", "RRnpc", "RRnpcb", "RRnpcsp", "RRnpc_npcsp", "RRnpc_I0",
+             "APSR_RR"}
+# ...and `RRnpctw` refuses the PC in Thumb, but not the stack pointer.
+THUMB_NO_PC = {"RRnpctw"}
 
 
 def read_insns(src):
@@ -849,29 +858,60 @@ def read_insns(src):
     return out
 
 
-def reg_classes(name, ops, thumb, insns):
-    """One class per operand the form reads, in the order they are written."""
-    kinds = insns.get(name)
+def reading_ops(ops):
+    """The operands of a form that are written in the source, in order."""
+    return [o for o in ops
+            if o[0] not in ("Writeback", "Distinct", "FirstDistinct")]
+
+
+def gas_kinds(name, ops, insns):
+    """The operand kinds `insns[]` gives this form, one per written operand,
+    or None where the two do not line up. A vector mnemonic carries a type
+    suffix that gas's table does not."""
+    kinds = insns.get(name) or insns.get(name.split(".")[0])
     if kinds is None:
         return None
-    reading = [o for o in ops
-               if o[0] not in ("Writeback", "Distinct", "FirstDistinct")]
+    reading = reading_ops(ops)
     # An operand GNU as marks optional may simply not be in the form: the
     # 16-bit Thumb extends have no rotation to write, and `sdiv rd, rm`
     # leaves out the middle register.
     while len(kinds) > len(reading) and any(k.startswith("o") for k in kinds):
         drop = max(i for i, k in enumerate(kinds) if k.startswith("o"))
         kinds = kinds[:drop] + kinds[drop + 1:]
-    if len(kinds) != len(reading):
+    return kinds if len(kinds) == len(reading) else None
+
+
+def bare_kind(kind):
+    """An operand kind with the marks that do not change which registers it
+    holds taken off: the `o` of an optional operand, the `MQ` of an MVE
+    register, and the alternatives after an underscore."""
+    if kind.startswith("o") and len(kind) > 1:
+        kind = kind[1:]
+    kind = kind.split("_")[0]
+    for tail in ("MQR", "MQ"):
+        if kind.endswith(tail) and kind != tail:
+            kind = kind[:-len(tail)]
+    return kind
+
+
+def reg_classes(name, ops, thumb, insns):
+    """One class per operand the form reads, in the order they are written."""
+    kinds = gas_kinds(name, ops, insns)
+    if kinds is None:
         return None
+    reading = reading_ops(ops)
     out = []
-    least = CLASS_FIX.get((name, "T32" if thumb else "Arm"), 0)
+    which = "T32" if thumb else "Arm"
+    least = CLASS_FIX.get((name, which),
+                          VEC_CLASS_FIX.get((name.split(".")[0], which), 0))
     for op, kind in zip(reading, kinds):
         bare = kind[1:] if kind.startswith("o") and len(kind) > 1 else kind
         if op[0] in ("Base", "OffMem"):
             out.append(1 if thumb else GAS_CLASS.get(bare, 255))
         elif op[0] in ("Reg", "RegTwice", "Next"):
-            if thumb and bare in THUMB_BAD:
+            if thumb and bare in THUMB_NO_PC:
+                out.append(1)
+            elif thumb and bare in THUMB_BAD:
                 out.append(2)
             else:
                 out.append(max(least, GAS_CLASS.get(bare, 255)) if
@@ -992,6 +1032,12 @@ def derived(forms):
             out.append(dict(f, name="%s.%s" % (swap[stem], size),
                             ops=(ops[0], (a[0], a[1], b[2]),
                                  (b[0], b[1], a[2]))))
+        # `vshll` by less than the element size shifts by at least one: a
+        # shift of none would be the widening move `vmovl`, which has an
+        # encoding of its own.
+        if stem == "vshll" and any(o[0] == "Imm" for o in ops):
+            f["ops"] = tuple(("PosImm", o[1]) if o[0] == "Imm" else o
+                             for o in ops)
         # The immediate shift left is one encoding whatever the type suffix
         # says, and `vshll` by the element size likewise.
         if stem == "vshl" and size.startswith("s") and "Imm" in kinds:
@@ -1000,6 +1046,10 @@ def derived(forms):
         if stem == "vshll" and size.startswith("i") and "SizeImm" in kinds:
             for letter in "su":
                 out.append(dict(f, name="vshll.%s%s" % (letter, size[1:])))
+        # `vmov s0, s1` needs no type: a single-precision register says
+        # which move it is. The `d` spelling is the NEON `vorr` instead.
+        if name == "vmov.f32" and all(o[0] == "Vfp" and o[1] == 0 for o in ops):
+            out.append(dict(f, name="vmov"))
         # `vzip.32` and `vuzp.32` on `d` registers are both `vtrn.32`, which
         # is what GNU as assembles them as.
         if name == "vtrn.32" and kinds == ("Vfp", "Vfp") and ops[0][1] == 3:
@@ -1061,6 +1111,93 @@ for _which, _top in (("Arm", 0xF4000000), ("T32", 0xF9000000)):
                                   (("NeonStruct", 2, _n, _size),)))
 
 
+# `vmsr` refuses the program counter in both instruction sets, and the
+# stack pointer in Thumb too, which `do_vmsr` checks by hand rather than
+# through the table's own operand kinds.
+VEC_CLASS_FIX = {
+    ("vmsr", "Arm"): 1, ("vmsr", "T32"): 2,
+}
+
+
+def vector_operands(forms, insns):
+    """Narrow the `d`-or-`q` operands GNU as says are one or the other, and
+    add the two-operand spelling of the instructions whose middle operand it
+    marks optional -- `vadd.i8 d0, d1` is `vadd.i8 d0, d0, d1`."""
+    extra = []
+    for form in forms:
+        if form["set"] == "T16":
+            continue
+        ops = list(form["ops"])
+        kinds = gas_kinds(form["name"], ops, insns)
+        if kinds is None:
+            continue
+        reading = reading_ops(ops)
+        where = {id(o): i for i, o in enumerate(ops)}
+        for op, kind in zip(reading, kinds):
+            if op[0] != "Vfp" or op[1] != 3:
+                continue
+            bare = bare_kind(kind)
+            if bare == "RND":
+                ops[where[id(op)]] = ("Vfp", 1, op[2])
+            elif bare == "RNQ":
+                ops[where[id(op)]] = ("Vfp", 2, op[2])
+        form["ops"] = tuple(ops)
+        # The middle operand of a vector instruction may be left out, and
+        # then it is the destination: the two have to be the same kind of
+        # register for that to mean anything.
+        if (len(kinds) >= 3 and kinds[1].startswith("o")
+                and ops[0][0] == "Vfp" and ops[1][0] == "Vfp"
+                and ops[0][1] == ops[1][1]):
+            short = (("VfpTwice", ops[0][1], ops[0][2], ops[1][2]),) \
+                + tuple(ops[2:])
+            extra.append(dict(form, ops=short))
+    forms += extra
+
+
+# The element sizes a NEON type has, which a row of the disassembler's table
+# does not say: its two fields are independent there, so the rows spell
+# `vneg.f8` and `vmul.p16` as readily as `vneg.f32` and `vmul.p8`. Within
+# this backend's scope a NEON float is 32 bits (16-bit floats need the
+# half-precision extension) and a polynomial is 8 (`p64` is ARMv8 crypto).
+def bad_type(name):
+    m = re.fullmatch(r"[a-z0-9]+\.([fp])(\d+)", name)
+    if m:
+        return m.group(2) != {"f": "32", "p": "8"}[m.group(1)]
+    # The reversals fill a region with elements smaller than it is:
+    # `vrev16` reverses bytes, `vrev32` bytes or halfwords.
+    m = re.fullmatch(r"vrev(16|32|64)\.(\d+)", name)
+    return bool(m) and int(m.group(2)) >= int(m.group(1))
+
+
+def vext_split(forms):
+    """`vext` takes four bits of immediate over quadword registers and three
+    over double ones, which is one row in the disassembler's table because
+    the fourth bit is simply zero there. The rows that spell out the
+    combinations are dropped for the two an assembler needs."""
+    out = []
+    for form in forms:
+        if form["name"] != "vext.8":
+            out.append(form)
+            continue
+        # The row that fixes no immediate bit and no register width.
+        if form["word"] & 0xF40:
+            continue
+        for wide in (False, True):
+            ops = []
+            for op in form["ops"]:
+                if op[0] == "Vfp":
+                    ops.append(("Vfp", 2 if wide else 1, op[2]))
+                elif op[0] == "VfpTwice":
+                    ops.append(("VfpTwice", 2 if wide else 1, op[2], op[3]))
+                elif op[0] == "Imm":
+                    ops.append(("Imm", ((8, 4 if wide else 3),), 1, 0))
+                else:
+                    ops.append(op)
+            out.append(dict(form, word=form["word"] | (0x40 if wide else 0),
+                            ops=tuple(ops)))
+    return out
+
+
 def build(entries, insns):
     """The forms, and the audit trail: one line per row saying where it
     went."""
@@ -1087,7 +1224,8 @@ def build(entries, insns):
         except Unsupported as exc:
             audit.append("%-4s %08x %-24s -- ?? %s" % (e["set"], e["val"], mnem, exc))
             continue
-        mine = [n for n in names if n[0] not in HAND and n[0] not in DIS]
+        mine = [n for n in names if n[0] not in HAND and n[0] not in DIS
+                and not (e["set"] == "neon" and bad_type(n[0]))]
         if not mine:
             kind = "hand-written" if any(n in HAND for n, _, _ in names) else (
                 "disassembly only")
@@ -1143,6 +1281,8 @@ def build(entries, insns):
         forms.append({"name": name, "set": which, "word": word, "cond": cond,
                       "ops": ops})
     forms = merge(forms)
+    vector_operands(forms, insns)
+    forms = vext_split(forms)
     seen, out = set(), []
     for f in forms:
         key = (f["name"], f["set"], f["word"], tuple(f["ops"]))
@@ -1273,6 +1413,8 @@ pub enum Op {
     /// A shift amount the field counts down from its own width: `vshr.s8
     /// d0, d1, #1` fills the field, and `#8` leaves it empty.
     NegImm(Field),
+    /// A shift amount of at least one, which the field holds as it is.
+    PosImm(Field),
     /// The element width as an operand, which the field already holds: the
     /// value is `base << field`, `base` being 8, 16 or 32.
     SizeImm(Field, u8),
@@ -1319,8 +1461,8 @@ pub struct Form {
     pub ops: &'static [Op],
     /// Which registers each operand may hold, in the order they are
     /// written: 0 any, 1 not the PC, 2 neither the PC nor the stack
-    /// pointer, 255 not a register at all. Empty where GNU as's own table
-    /// says nothing.
+    /// pointer, 3 the PC only where the operand is not written back, 255
+    /// not a register at all. Empty where GNU as's own table says nothing.
     pub regs: &'static [u8],
 }
 
@@ -1391,7 +1533,7 @@ def rust_op(op):
         return "Op::Fixed(%d)" % op[1]
     if k == "Scalar":
         return "Op::Scalar"
-    if k in ("VfpFix", "VfpImm", "NegImm"):
+    if k in ("VfpFix", "VfpImm", "NegImm", "PosImm"):
         return "Op::%s(%s)" % (k, rust_field(op[1]))
     if k == "Named":
         return 'Op::Named("%s")' % op[1]

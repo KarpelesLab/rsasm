@@ -178,15 +178,21 @@ impl Walk<'_, '_, '_> {
     /// form may put there.
     fn allowed(&mut self, r: Reg) -> Option<()> {
         let class = self.regs.get(self.at).copied().unwrap_or(255);
+        let writeback = self.op().is_some_and(|o| o.writeback);
         let bad = match class {
             1 => r == reg::PC,
             2 => r == reg::PC || r == reg::SP,
+            // The base of a VFP block transfer may be the PC in A32 as long
+            // as the instruction does not write it back.
+            3 => r == reg::PC && writeback,
             _ => false,
         };
         if bad {
             let name = reg::name_of(r);
             let what = if class == 2 {
                 "neither `pc` nor `sp`"
+            } else if class == 3 {
+                "anything but `pc` where the base is written back"
             } else {
                 "anything but `pc`"
             };
@@ -347,6 +353,8 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
             if form.cond {
                 w.word |= u32::from(ins.cond) << 28;
             } else if ins.cond_written && ins.cond != AL {
+                // `al` is let through: it is the condition an unconditional
+                // instruction has anyway, and writing it changes nothing.
                 let text = ins.text;
                 w.fail(|| format!("`{text}` cannot be conditional"))?;
             }
@@ -643,9 +651,18 @@ fn step(w: &mut Walk<'_, '_, '_>, form: &Form, op: Op) -> Option<()> {
         }
         Op::VfpLane(kind, field, lane) => vfp_lane(w, kind, field, lane)?,
         Op::VfpList(kind, first, count) => vfp_list(w, kind, first, count)?,
-        Op::VfpMem => vfp_mem(w)?,
+        Op::VfpMem => vfp_mem(w, form.set == Set::T32)?,
         Op::VfpImm(field) => w.immediate(field, 1, 0)?,
         Op::VfpFix(field) => vfp_fix(w, field)?,
+        Op::PosImm(field) => {
+            let top = (1i64 << width_of(field)) - 1;
+            let v = w.constant()?;
+            if v < 1 || v > top {
+                return w.fail(|| format!("a shift here is 1 to {top}, not {v}"));
+            }
+            place(&mut w.word, field, v as u32);
+            w.take();
+        }
         Op::NegImm(field) => {
             // `vshr.s8 d0, d1, #8` empties the field and `#1` fills it.
             let width = width_of(field);
@@ -938,6 +955,7 @@ fn neon_struct(w: &mut Walk<'_, '_, '_>, kind: u8, n: u8, size: u32) -> Option<(
         lane,
         spaced,
         all,
+        degenerate: _,
     } = op.kind
     else {
         let what = op.describe();
@@ -1389,11 +1407,15 @@ fn tbl_list(w: &mut Walk<'_, '_, '_>, first: Field, count: Field) -> Option<()> 
         lane: None,
         spaced: false,
         all: false,
+        degenerate,
     } = op.kind
     else {
         let what = op.describe();
         return w.fail(|| format!("expected a list of `d` registers, found {what}"));
     };
+    if degenerate {
+        return w.fail(|| "a register range runs from one register to another".into());
+    }
     if n < 1 || u32::from(n - 1) >= 1 << width_of(count) {
         return w.fail(|| "a table holds one to four registers".into());
     }
@@ -1441,11 +1463,15 @@ fn vfp_list(w: &mut Walk<'_, '_, '_>, kind: u8, first: Field, count: Field) -> O
         lane: None,
         spaced: false,
         all: false,
+        degenerate,
     } = op.kind
     else {
         let what = op.describe();
         return w.fail(|| format!("expected a vector register list, found {what}"));
     };
+    if degenerate {
+        return w.fail(|| "a register range runs from one register to another".into());
+    }
     let want = if kind == 0 { VecKind::S } else { VecKind::D };
     if got != want {
         let letter = want.letter();
@@ -1461,7 +1487,7 @@ fn vfp_list(w: &mut Walk<'_, '_, '_>, kind: u8, first: Field, count: Field) -> O
 }
 
 /// `vldr` and `vstr` address `[rn, #±imm8*4]`, and write no base back.
-fn vfp_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
+fn vfp_mem(w: &mut Walk<'_, '_, '_>, thumb: bool) -> Option<()> {
     let Some(op) = w.op().cloned() else {
         return w.fail(|| "expected a memory operand".into());
     };
@@ -1471,6 +1497,11 @@ fn vfp_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
     };
     if mem.index != Index::Offset {
         return w.fail(|| "this instruction does not write its base register back".into());
+    }
+    // `do_neon_ldr_str`: a store through the PC is deprecated in A32 and
+    // UNPREDICTABLE in T32.
+    if thumb && mem.base == reg::PC && w.word & (1 << 20) == 0 {
+        return w.fail(|| "a store cannot address through `pc` here".into());
     }
     let off = match mem.offset {
         MemOffset::None => 0,

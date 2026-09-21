@@ -741,12 +741,16 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return Some(move_wide_bits(rd, v, false));
     }
     // Last, the complement: `mov r0, #-2` is `mvn r0, #1`. LLVM stops short
-    // of doing this for `movs`, and so does this.
-    if !ins.set_flags
+    // of turning a `movs` into a `mvns` that way, and so does this; the
+    // other way round it does take, and so does this.
+    if (!ins.set_flags || mvn)
         && let Some(imm12) = imm::thumb_expand(!v)
     {
         let (i, rest) = expand_parts(imm12);
-        return Some(wide(other | (i << 10), rest | ((rd as u16) << 8)));
+        return Some(wide(
+            other | (i << 10) | (s << 4),
+            rest | ((rd as u16) << 8),
+        ));
     }
     cx.error(
         src.span,
@@ -798,6 +802,23 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
     };
     let s = u16::from(ins.set_flags);
+    // `subs pc, lr, #imm` is the exception return, and the one instruction
+    // that writes the PC and the flags at once. `movs pc, lr` is the same
+    // encoding with no immediate.
+    if sub && ins.set_flags && rd == reg::PC && rn == reg::LR && !two_operand {
+        if !want_wide(ins) {
+            return no_encoding(cx, ins);
+        }
+        let v = encode::imm_of(cx, src)?;
+        if !(0..=0xFF).contains(&v) {
+            cx.error(
+                src.span,
+                format!("immediate {v} is out of range (0 to 255)"),
+            );
+            return None;
+        }
+        return Some(wide(0xF3DE, 0x8F00 | v as u16));
+    }
     // `do_t_add_sub`: the first source may be the stack pointer, and the
     // destination only when it is; nothing else may be, and the PC only
     // as the first source of the `addw`/`subw` a PC-relative address uses.
@@ -1524,6 +1545,8 @@ fn load_store_dual(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, t: Transfer) -> Option<V
 /// transfer register set to 15.
 fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
+    // A preload is 32 bits wide, so a `.n` cannot be honoured.
+    wide_only(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[1])?;
     let OperandKind::Mem(mem) = ins.ops[0].kind else {

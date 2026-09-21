@@ -379,9 +379,11 @@ pub fn resolve(text: &str) -> Option<Resolved> {
     // The width hint is the last dotted part; everything from the first dot
     // is the data type a vector instruction carries, which is part of its
     // name: `vcvt` + `eq` + `.f32.u32`.
+    // A mnemonic that carries a data type has no width hint: GNU as reads
+    // the whole tail as the type, so `vadd.i8.w` is not an instruction.
     let (head, width) = match text.rsplit_once('.') {
-        Some((h, "n")) if !h.is_empty() => (h, Width::Narrow),
-        Some((h, "w")) if !h.is_empty() => (h, Width::Wide),
+        Some((h, "n")) if !h.is_empty() && !h.contains('.') => (h, Width::Narrow),
+        Some((h, "w")) if !h.is_empty() && !h.contains('.') => (h, Width::Wide),
         _ => (text, Width::Any),
     };
     let (stem, types) = match head.split_once('.') {

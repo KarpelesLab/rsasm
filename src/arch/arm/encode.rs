@@ -162,6 +162,10 @@ fn branch_variant(w: u32, expr: ExprRef, kind: FixupKind, span: Span) -> Vec<Var
 pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     use Mnem::*;
     let ops = ins.ops;
+    if ins.width != super::insn::Width::Any {
+        cx.error(ins.span, "width suffixes are invalid in ARM mode");
+        return None;
+    }
     match ins.mnem {
         And | Eor | Sub | Rsb | Add | Adc | Sbc | Rsc | Tst | Teq | Cmp | Cmn | Orr | Mov | Bic
         | Mvn => data_processing(cx, ins),
@@ -416,6 +420,12 @@ fn memory_operand<'a>(cx: &mut AsmCtx<'_>, op: &'a Operand) -> Option<&'a Mem> {
     match &op.kind {
         OperandKind::Mem(m) if m.base == reg::PC && m.index != Index::Offset => {
             cx.error(m.span, "a PC-relative address cannot write `pc` back");
+            None
+        }
+        // `encode_arm_addr_mode_2` and `_3`: the register an address is
+        // indexed by is never the program counter.
+        OperandKind::Mem(m) if matches!(m.offset, MemOffset::Reg { rm, .. } if rm == reg::PC) => {
+            cx.error(m.span, "`pc` cannot be an index register");
             None
         }
         OperandKind::Mem(m) => Some(m),
