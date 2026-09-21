@@ -68,6 +68,15 @@ impl Assembler {
         }
 
         let handled = match text.as_str() {
+            // ---- COFF ------------------------------------------------------
+            // First, because `.type` means one thing on its own and another
+            // between `.def` and `.endef`.
+            _ if crate::coff::is_directive(&text)
+                || (self.coff.in_def() && crate::coff::is_def_field(&text)) =>
+            {
+                self.coff_directive(&text, &mut cur, span)
+            }
+
             // ---- sections -------------------------------------------------
             ".text" | ".data" | ".bss" | ".rodata" => {
                 let id = self.standard_section(&text);
@@ -215,8 +224,30 @@ impl Assembler {
             ".include" => self.dir_include(&mut cur, span),
             ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
             // ---- debugging information ------------------------------------
+            // A COFF object records the source file name as a symbol of its
+            // own; the numbered form is DWARF's either way.
+            ".file" if self.options.format.is_coff() && !Self::is_numbered_file(&cur) => {
+                if let Some(s) = self.expect_string(&mut cur, "a file name") {
+                    let name = String::from_utf8_lossy(&s).into_owned();
+                    self.coff.files.push(name);
+                }
+                true
+            }
             ".file" => {
                 self.dir_dwarf_file(&mut cur, span);
+                true
+            }
+            // DWARF in a COFF object needs section-relative relocations and
+            // conventions of its own, which rsasm does not write yet; a table
+            // a linker would misread is worse than none.
+            ".loc" | ".loc_mark_labels" if self.options.format.is_coff() => {
+                self.coff_refuse_dwarf(&text, span);
+                cur.set_pos(cur.all().len());
+                true
+            }
+            _ if text.starts_with(".cfi_") && self.options.format.is_coff() => {
+                self.coff_refuse_dwarf(&text, span);
+                cur.set_pos(cur.all().len());
                 true
             }
             ".loc" => {
@@ -355,7 +386,7 @@ impl Assembler {
         Some(String::from_utf8_lossy(self.pool.get(i)).into_owned())
     }
 
-    fn expect_string(&mut self, cur: &mut Cursor<'_>, what: &str) -> Option<Vec<u8>> {
+    pub(crate) fn expect_string(&mut self, cur: &mut Cursor<'_>, what: &str) -> Option<Vec<u8>> {
         let tok = cur.peek();
         let TokKind::Str(i) = tok.kind else {
             self.diags
@@ -507,6 +538,23 @@ impl Assembler {
             && !self.macho_object()
         {
             let name = self.interner.get(m).to_string();
+            // COFF's own modifiers (`@IMGREL`) are the format's, not the
+            // backend's: they name what the field holds, not a relocation
+            // number; see `crate::coff::modifier_class`.
+            let coff = self
+                .options
+                .format
+                .is_coff()
+                .then(|| crate::coff::modifier_class(&name))
+                .flatten();
+            if let Some(class) = coff {
+                let kind = crate::section::FixupKind::data(size)
+                    .with_reloc(reloc)
+                    .with_class(class);
+                let espan = self.exprs.span(e);
+                self.cur_section().emit_fixup(size, e, kind, espan);
+                return;
+            }
             match self.arch.modifier_reloc(&name, size, false) {
                 Some(r) => {
                     reloc = r;
@@ -822,7 +870,7 @@ impl Assembler {
 
     // ---- sections ---------------------------------------------------------
 
-    fn dir_section(&mut self, cur: &mut Cursor<'_>, _span: Span, push: bool) -> bool {
+    fn dir_section(&mut self, cur: &mut Cursor<'_>, span: Span, push: bool) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
             // A name is everything up to a comma or a space, as GNU as reads
@@ -862,6 +910,38 @@ impl Assembler {
         };
         let mut flags = default_flags_for(&text);
         let mut entsize = 0u64;
+
+        // A COFF section's attributes are its own: flag letters that mean
+        // different things, and a COMDAT selection where ELF has a type.
+        if self.options.format.is_coff() {
+            let mut info = None;
+            let mut key = name;
+            if cur.eat_punct(Punct::Comma).is_some() {
+                let (characteristics, comdat, k) =
+                    crate::coff::parse_section_attributes(self, &mut *cur, &text, span);
+                flags = crate::coff::section_flags(characteristics);
+                kind = k;
+                info = Some(crate::coff::SectionInfo {
+                    characteristics,
+                    comdat,
+                });
+                // llvm-mc tells sections apart by name and COMDAT symbol.
+                if let Some(sym) = comdat.and_then(|c| c.symbol) {
+                    let sym = self.interner.get(self.symbols.get(sym).name).to_string();
+                    key = self.interner.intern(&format!("{text}\u{0}{sym}"));
+                }
+            }
+            let id = self.get_or_create_section(key, kind, flags, 1);
+            // The first description of a section is the one that counts.
+            if let Some(info) = info {
+                self.coff.sections.entry(id).or_insert(info);
+            }
+            if push {
+                self.push_section_stack();
+            }
+            self.set_section(id);
+            return true;
+        }
 
         if cur.eat_punct(Punct::Comma).is_some() {
             if let Some(s) = self.expect_string(cur, "of section flags") {
@@ -941,6 +1021,15 @@ impl Assembler {
     /// True for `.set word` — a single identifier and nothing else, which no
     /// assignment can be. Returning `false` from the table sends it on to the
     /// architecture's directive hook.
+    /// Whether a `.file` is the numbered form, which is DWARF's whatever the
+    /// object format; `.file "name"` alone is the source file's name.
+    fn is_numbered_file(cur: &Cursor<'_>) -> bool {
+        matches!(
+            cur.peek().kind,
+            TokKind::Int(_) | TokKind::Punct(Punct::Minus)
+        )
+    }
+
     fn is_set_option(cur: &Cursor<'_>) -> bool {
         let rest = cur.rest();
         rest.len() == 1 && matches!(rest[0].kind, TokKind::Ident(_))
@@ -1006,8 +1095,9 @@ impl Assembler {
         let Some((tname, tspan)) = self.expect_name(cur) else {
             return true;
         };
+        // Where `@` may start a name (COFF), `@function` is one word.
         let t = self.interner.get(tname).to_ascii_lowercase();
-        let ty = match t.trim_start_matches("stt_") {
+        let ty = match t.trim_start_matches('@').trim_start_matches("stt_") {
             "function" | "func" => SymType::Func,
             "object" => SymType::Object,
             "notype" => SymType::NoType,
@@ -1040,24 +1130,45 @@ impl Assembler {
             return true;
         };
         let mut align = 1u64;
+        let mut given = None;
         if cur.eat_punct(Punct::Comma).is_some()
             && let Some(e) = self.parse_expr(cur)
         {
-            align = self
-                .eval_absolute(e, "`.comm` alignment")
-                .unwrap_or(1)
-                .max(1) as u64;
+            let v = self.eval_absolute(e, "`.comm` alignment").unwrap_or(1);
+            align = v.max(1) as u64;
+            given = Some(v.max(0) as u64);
         }
         if size < 0 {
             self.diags.error(span, "`.comm` size must not be negative");
             return true;
         }
+        // COFF has no local common block: `.lcomm` puts the object in
+        // `.bss` instead, which is where llvm-mc and GNU as put it.
+        if local && self.options.format.is_coff() {
+            self.coff_lcomm(name, nspan, size as u64, align, span);
+            return true;
+        }
+        let mut size = size as u64;
+        // A COFF common block records only its size, and `.comm`'s alignment
+        // is a power of two there, as both references read it. llvm-mc makes
+        // the block at least that large, which is how the linker, placing it
+        // at a boundary of its size, honours the alignment.
+        if self.options.format.is_coff()
+            && let Some(log2) = given
+        {
+            if log2 > 5 {
+                self.diags.error(
+                    span,
+                    format!("a COFF common block can be aligned to at most 32 bytes, not 2^{log2}"),
+                );
+                return true;
+            }
+            align = 1 << log2;
+            size = size.max(align);
+        }
         let id = self.symbols.intern(name, nspan);
         let sym = self.symbols.get_mut(id);
-        sym.value = SymbolValue::Common {
-            size: size as u64,
-            align,
-        };
+        sym.value = SymbolValue::Common { size, align };
         sym.def_span = nspan;
         sym.ty = SymType::Object;
         if !local {

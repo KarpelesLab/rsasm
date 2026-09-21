@@ -86,9 +86,14 @@ impl Assembler {
         // DWARF is written from the settled layout, into sections of its own
         // that nothing in the code refers to, so the layout of the code
         // cannot change when it runs again to place them. So are a target's
-        // records of where the code was padded.
+        // records of where the code was padded, and the unwind data a COFF
+        // object's `.seh_*` directives describe, which counts the bytes of a
+        // prologue.
         let dwarf = self.emit_dwarf();
         if (self.emit_layout_records() || dwarf) && !self.settle_layout() {
+            return false;
+        }
+        if self.emit_coff_unwind() && !self.settle_layout() {
             return false;
         }
 
@@ -1356,6 +1361,19 @@ impl Assembler {
         let f = &self.section(section).frags[fi];
         let relaxable = f.relaxable
             || matches!(&f.kind, FragKind::Bytes { variants, .. } if variants.len() > 1);
+        // Nothing is preempted in a COFF object: Windows has no symbol
+        // interposition, so llvm-mc resolves a reference to a symbol in the
+        // fixup's own section, weak ones included — a weak definition there
+        // is an alias the reference can be bound to right here. Except to a
+        // function (`.def f; .type 32; .endef`): the MSVC linker's
+        // incremental linking and control flow guard find the calls between
+        // functions by their relocations, so llvm-mc keeps every one it can.
+        if self.options.format.is_coff() {
+            let describable = crate::output::coff::machine(self.target())
+                .and_then(|m| crate::output::coff::reloc::map(m, kind.class, reloc))
+                .is_some();
+            return (describable || relaxable) && crate::coff::is_function(self, target);
+        }
         // A field no relocation can describe has to be filled in here, unless
         // the instruction has a larger form to move to that one can.
         if reloc == 0 && !relaxable {
@@ -1519,6 +1537,15 @@ impl Assembler {
             self.target().elf_machine(),
             crate::output::elf::is_elf64(self.target()),
         );
+        // COFF keeps every addend in the field, and numbers its relocations
+        // its own way; the translation happens here, where a field that COFF
+        // cannot describe still has a span to blame.
+        let coff = self
+            .options
+            .format
+            .is_coff()
+            .then(|| crate::output::coff::machine(self.target()))
+            .flatten();
         for si in 0..self.sections.len() {
             let id = SectionId(si as u32);
             for fi in 0..self.sections[si].frags.len() {
@@ -1608,6 +1635,15 @@ impl Assembler {
                                 }
                             }
                             for mut r in self.build_relocation(e, &kind, id, fi, at, span) {
+                                if let Some(machine) = coff {
+                                    if !self
+                                        .coff_relocation(machine, &mut r, &kind, si, fi, off, span)
+                                    {
+                                        continue;
+                                    }
+                                    relocs.push(r);
+                                    continue;
+                                }
                                 let (arch, _) = self.frag_arch(si, fi);
                                 if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
                                     // A byte or word field has no room for a
@@ -1693,6 +1729,8 @@ impl Assembler {
         let effects = self
             .find_modifier(e)
             .filter(|_| self.options.dialect != crate::lexer::Dialect::Nasm)
+            // A COFF object has no GOT for a modifier to imply.
+            .filter(|_| !self.options.format.is_coff())
             .map(|m| {
                 let name = self.interner.get(m).to_string();
                 self.frag_arch(si, fi).0.modifier_symbols(&name)
@@ -1816,9 +1854,22 @@ impl Assembler {
             return Vec::new();
         }
 
-        // A modifier anywhere in the expression selects the relocation.
+        // A modifier anywhere in the expression selects the relocation. The
+        // COFF-only ones (`@IMGREL`, `@SECREL32`) name what the field holds
+        // rather than a relocation number, which no psABI has for them, so
+        // they come through as a class the COFF writer reads.
+        let coff_class = self
+            .options
+            .format
+            .is_coff()
+            .then(|| {
+                self.find_modifier(e)
+                    .and_then(|m| crate::coff::modifier_class(self.interner.get(m)))
+            })
+            .flatten();
         let reloc = self
             .find_modifier(e)
+            .filter(|_| coff_class.is_none())
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
                 self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
@@ -1861,13 +1912,17 @@ impl Assembler {
             self.relocation_symbol(t, kind, si, fi, names_symbol, &mut addend, &mut reloc)
         });
 
+        let mut desc = RelocDesc::of(kind);
+        if let Some(class) = coff_class {
+            desc.class = class;
+        }
         let mut relocs = vec![Relocation {
             section,
             offset: at,
             symbol,
             addend,
             kind: reloc,
-            desc: RelocDesc::of(kind),
+            desc,
         }];
         relocs.extend(subtrahend);
         relocs
@@ -1901,10 +1956,16 @@ impl Assembler {
         // function, whose instruction set a linker reads from it.
         let sym = self.symbols.get(target);
         let keep = arch.keeps_reloc_symbol(sym.target_flags, sym.ty);
+        // NASM's rule holds for its COFF objects too. Otherwise COFF keeps
+        // the local symbols the source named, and llvm-mc relocates against
+        // them by name; only the assembler's own labels, which never reach
+        // the symbol table, go through their section.
         let by_section = !keep
             && if self.options.dialect == crate::lexer::Dialect::Nasm {
                 !names_symbol
                     && (binding == Binding::Local || self.symbols.get(target).is_defined())
+            } else if self.options.format.is_coff() {
+                !crate::coff::keeps_symbol(self, target)
             } else {
                 match binding {
                     Binding::Local => true,
@@ -1988,7 +2049,15 @@ impl Assembler {
                         // for them, which a data section can hold too.
                         if fill.is_empty() && (exec || nop_state.is_some()) {
                             let (arch, state) = self.frag_arch(si, fi);
-                            arch.nop_fill(nop_state.as_ref().unwrap_or(state), size as u64)
+                            let state = nop_state.as_ref().unwrap_or(state);
+                            // A COFF object follows llvm-mc, whose no-ops are
+                            // not GNU as's; see `output::coff::nop_fill`.
+                            self.options
+                                .format
+                                .is_coff()
+                                .then(|| crate::output::coff::nop_fill(arch, state, size))
+                                .flatten()
+                                .unwrap_or_else(|| arch.nop_fill(state, size as u64))
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()

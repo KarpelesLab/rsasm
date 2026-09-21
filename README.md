@@ -98,6 +98,10 @@ but 18 forms where both manuals show MAME to be wrong.
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
   flat binaries, and flat images as Intel HEX (`-f ihex`)
+- PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
+  `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
+  `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
+  [PE/COFF](#pecoff)
 - Mach-O relocatable objects for x86-64 and arm64 (`-f macho`, or a Darwin
   triple such as `-a arm64-apple-macos`), with Darwin's section, symbol and
   data-in-code directives, byte for byte as llvm-mc writes them; see
@@ -152,7 +156,11 @@ but 18 forms where both manuals show MAME to be wrong.
   string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
-- PE/COFF
+- in PE/COFF objects: DWARF (`-g`, `.loc` and `.cfi_*` are refused with
+  `-f coff`) and CodeView debug information, unwind data for ARM64 (its
+  `.seh_*` directives are refused), i386 `.safeseh`, and unwind data for a
+  function in a COMDAT section, which needs `.xdata` and `.pdata` sections
+  associated with it (refused)
 - in Mach-O objects: 32-bit machines (i386, armv7), thread-local variables
   (`@TLVP`, `@TLVPPAGE`), DWARF and call frame information (`-g`, `.loc` and
   `.cfi_*` are refused, and with them compact unwind), indirect symbol tables
@@ -254,9 +262,9 @@ rsasm [options] <input.s>...
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported),
                      or a target triple: `x86_64-apple-macos` also picks
-                     Mach-O output
-  -f, --format <fmt> output format: elf (default), elf32, elf64, macho, bin
-                     or ihex
+                     Mach-O output, `x86_64-pc-windows-msvc` PE/COFF
+  -f, --format <fmt> output format: elf (default), elf32, elf64, coff,
+                     win64, win32, macho, bin or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
   -d, --dialect <d>  source dialect: gas, nasm, motorola, renesas (CA78K0),
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
@@ -513,10 +521,12 @@ $ rsasm -d nasm -f bin -o boot.bin boot.asm   # a 512-byte boot sector
 `tools/nasm-diff/run.sh` assembles a corpus of whole programs with rsasm
 `-d nasm` and with NASM 2.16.03 (built by `tools/oracles/build.sh`), and
 compares the flat binaries byte for byte and the ELF objects section by
-section, relocations and global symbols included. 373 of 373 match. Local
-symbols are not compared: NASM writes every label into the symbol table, where
+section, relocations and global symbols included. Local symbols are not
+compared in ELF objects: NASM writes every label into the symbol table, where
 rsasm, like GNU as, keeps them to itself, and a linker never sees the
-difference.
+difference. `-f win64` and `-f win32` objects are compared whole, as
+`tools/coff-diff/canon.sh` prints them; see [PE/COFF](#pecoff). 403 of 403
+match.
 
 ## Multi-architecture files
 
@@ -602,6 +612,93 @@ Three differences remain:
 The producer named in the unit is `rsasm` and its version, or the value of
 `DEBUG_PRODUCER`, which llvm-mc also reads.
 
+## PE/COFF
+
+`-f coff` writes a Windows object file for the target: an AMD64 object for
+`x86-64`, I386 for `i386` and ARM64 for `aarch64`. `-f win64` and `-f win32`
+are NASM's names for the same thing, and choose `x86-64` or `i386` when `-a`
+does not:
+
+```console
+$ rsasm -f win64 -o hello.obj hello.s     # then link.exe, lld-link or mingw ld
+```
+
+What the source can say:
+
+- sections with `.section name,"flags"`, in llvm-mc's reading of the flag
+  letters (`x`, `r`, `d`, `w`, `b`, `n`, `s`, `y`, `i`, `D`), `$`-grouped
+  names such as `.text$mn` and `.CRT$XCU`, and COMDATs: `.section
+  name,"flags",<selection>,<symbol>` with `discard`, `one_only`, `same_size`,
+  `same_contents`, `associative`, `largest` or `newest`, and `.linkonce`.
+  Sections of one name told apart by their COMDAT symbol stay apart, as a
+  compiler's one `.rdata` per folded constant needs
+- symbols: `.def`/`.scl`/`.type`/`.endef`, `.weak` as a weak external,
+  `.comm` (with its alignment as a power of two) and `.lcomm` (into `.bss`),
+  absolute and `.set` symbols, `.file`, and names with `@` in them, such as
+  MSVC's mangled ones
+- relocations for all three machines, with COFF's convention of keeping the
+  addend in the relocated bytes: `IMAGE_REL_AMD64_ADDR64`, `ADDR32`,
+  `ADDR32NB`, `REL32`, `SECTION` and `SECREL`; `IMAGE_REL_I386_DIR32`,
+  `DIR32NB`, `REL32`, `SECTION` and `SECREL`; and `IMAGE_REL_ARM64_BRANCH26`,
+  `BRANCH19`, `BRANCH14`, `PAGEBASE_REL21`, `REL21`, `PAGEOFFSET_12A`,
+  `PAGEOFFSET_12L`, `ADDR64`, `ADDR32`, `ADDR32NB`, `REL32`, `SECTION` and
+  `SECREL`; `.rva`, `@IMGREL` and NASM's `wrt ..imagebase` for image-relative
+  addresses, `.secrel32` and `@SECREL32`, and `.secidx`
+- x86-64 unwind data: `.seh_proc`, `.seh_pushreg`, `.seh_stackalloc`,
+  `.seh_setframe`, `.seh_savereg`, `.seh_savexmm`, `.seh_pushframe`,
+  `.seh_handler`, `.seh_handlerdata`, `.seh_endprologue` and `.seh_endproc`
+  write `.xdata` and `.pdata`, counting the prologue from the final lengths
+  of its instructions
+
+Backends choose relocations as ELF numbers, the one numbering all of them
+share, and name in a `reloc::RelocClass` what a number cannot say;
+`src/output/coff/reloc.rs` translates both into COFF's numbering, and says
+where each COFF relocation measures its PC from, which is what the addend in
+the field has to make up for. Nothing in a backend knows COFF exists, and ELF
+output does not go through the translation. `@IMGREL`, `.rva`, `.secrel32`
+and `.secidx` name something no psABI has a number for, so they travel as
+classes of their own; they are refused outside COFF output.
+
+llvm-mc is the reference: it writes COFF for all three machines, and it is
+the assembler of the LLVM Windows toolchains. GNU as for mingw agrees with it
+on relocations — which ones, where, of what type, against what, and what the
+field holds — and on almost nothing else, so where the two differ rsasm
+follows llvm-mc:
+
+- `.text`, `.data` and `.bss` are always present and four-byte aligned, and a
+  section is not padded at its end; GNU as aligns them to 16 and pads.
+- Section symbols carry a checksum of the section, and there is no `.file`
+  symbol unless the source has a `.file`; GNU as writes no checksum and a
+  `.file` named `fake`.
+- A relocation against a local label names the label, which is in the symbol
+  table; GNU as names its section and puts the label's offset in the field. A
+  linker reads the two the same.
+- Nothing is preempted in a COFF object, so a reference to a symbol in its own
+  section is resolved whatever its binding, except a call to a function
+  (`.type 32`), which llvm-mc leaves to the linker for incremental linking and
+  control flow guard; GNU as resolves that and relocates a call to a weak
+  definition instead.
+- A weak definition hides behind `.weak.<name>.default.<first global>`, where
+  GNU as leaves out `.default`.
+- A sign-extended 32-bit field is `IMAGE_REL_AMD64_ADDR32`, the only 32-bit
+  absolute type the PE specification has; GNU as writes type 17.
+- Code is padded with llvm-mc's no-ops: up to fifteen bytes at once for
+  x86-64, one-byte `nop`s for i386, whose default Windows CPU has no `nopl`.
+- On i386, a local label spelled with a leading `L` is private, as in
+  llvm-mc's Microsoft conventions; elsewhere `.L` is.
+
+Neither reference writes `IMAGE_REL_AMD64_REL32_1` to `_5`: both measure every
+PC-relative field from four bytes past it and put the difference in the field,
+so rsasm does the same. Two things differ on purpose: ELF's `.type
+foo,@function` is accepted and says nothing, where llvm-mc refuses it, and a
+`.comm` alignment past 32 bytes is refused, where llvm-mc 22 crashes.
+
+In NASM source the object follows NASM's COFF writer rather than llvm-mc's:
+its section words (`code`, `data`, `rdata`, `bss`, `info`, `align=`) and
+characteristics, only the sections the source named or filled, no
+checksums, its `.file`, `.absolut` and (for i386) `@feat.00` symbols, and
+relocations against a defined symbol's section.
+
 ## Mach-O objects
 
 `-f macho`, or a target triple for Darwin in `-a`, writes an `MH_OBJECT` for
@@ -668,7 +765,7 @@ Three differences remain, and the corpora leave them out:
 
 ## Verification
 
-Eight differential harnesses assemble the same source with rsasm and with an
+Nine differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
@@ -697,9 +794,9 @@ independent assembler, and compare the bytes:
   distances between sections. 154 of 154 match across twenty-nine variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
-  programs compared as flat binaries and as ELF objects, relocations and global
-  symbols included. 373 of 373 match. `tools/oracles/build.sh` builds NASM from
-  a checksum-pinned source.
+  programs compared as flat binaries, as ELF objects, relocations and global
+  symbols included, and as `win64` and `win32` COFF objects. 403 of 403
+  match. `tools/oracles/build.sh` builds NASM from a checksum-pinned source.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.
 - `tools/dwarf-diff/run.sh` for [debug information](#debug-information),
@@ -707,6 +804,13 @@ independent assembler, and compare the bytes:
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
   Clang. 1,177 of 1,177 match across twenty-four target variants.
+- `tools/coff-diff/run.sh` for [PE/COFF objects](#pecoff), against llvm-mc 22
+  for x86-64, i386 and ARM64 as whole objects — every section's
+  characteristics and bytes, every symbol with its auxiliary records, every
+  relocation — from single statements, hand-written programs and Clang's
+  output, and against GNU as 2.47 for mingw as relocations with the addends
+  their fields hold. 292 of 292 comparisons match. `tools/oracles/build.sh`
+  builds GNU as for mingw alongside the other cross assemblers.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
@@ -761,7 +865,7 @@ each binding — local, global, weak, hidden and the other visibilities, `.set`
 aliases either way round, `.globl` after use, another section, undefined —
 through branches, calls, PC-relative loads and data.
 
-All eight run in CI. The expected bytes in the hermetic tests under `tests/` were
+All nine run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 
@@ -878,6 +982,7 @@ $ tools/xas-diff/run.sh     # needs tools/oracles/build.sh
 $ tools/nasm-diff/run.sh    # needs NASM from tools/oracles/build.sh
 $ tools/multiarch-diff/run.sh  # needs all of the above
 $ tools/dwarf-diff/run.sh   # needs llvm-mc and tools/oracles/build.sh
+$ tools/coff-diff/run.sh    # needs llvm-mc and tools/oracles/build.sh
 $ tools/macho-diff/run.sh   # needs llvm-mc, llvm-readobj and llvm-objdump
 ```
 
