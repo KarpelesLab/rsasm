@@ -36,10 +36,14 @@
 # generates the corpus, builds the same string from GNU as's own list.
 #
 # ARM is checked against GNU as for ARMv7-A, whose Thumb-2 no-ops and
-# interworking rules are what `-march=armv7-a` gives; without it GNU as
-# assumes an ARMv4T-era CPU. Its snippets start with `.syntax unified`, GNU
-# as's default being the older divided Thumb syntax, and rsasm knowing only
-# the unified one.
+# interworking rules are what `-march=armv7ve` gives; without a `-march` GNU
+# as assumes an ARMv4T-era CPU. `armv7ve` is ARMv7-A with the security,
+# virtualization and divide extensions, which together are the whole set this
+# backend claims -- `smc`, `hvc`, `sdiv` and the banked `msr` need them, and
+# `-mfpu=neon-vfpv4` adds the floating-point unit and NEON. Its
+# snippets are assembled after `.syntax unified`, GNU as's default being the
+# older divided syntax, and rsasm knowing only the unified one; the
+# `-relocs` snippets say so themselves, since they are whole programs.
 #
 # A vendor syntax no reference assembler reads (CC-RL, CC-RH, CC-RX) is checked in
 # pairs instead: <key>-pairs.txt holds snippets separated by `=== <name>`, each
@@ -136,13 +140,13 @@ i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
 aarch64|aarch64|gas|aarch64-elf-as -march=armv9.5-a+crc+crypto+fp+lse+lsfe+lse128+lsui+simd+pan+lor+ras+rdma+fp16+fp16fml+fprcvt+profile+sve+tme+fcma+jscvt+rcpc+rcpc2+dotprod+sha2+frintts+sb+predres+predres2+poe2+tev+aes+sm4+sha3+rng+ssbs+lscp+memtag+occmo+cmpbr+sve2+sve2-sm4+sve2-aes+sve2-sha3+sve2-bitperm+sme+sme-f64f64+sme-i16i64+sme2+bf16+i8mm+f32mm+f64mm+ls64+flagm+flagm2+pauth+xs+wfxt+mops+hbc+cssc+chk+gcs+the+rasv2+ite+d128+sve-b16b16+sve-bfscale+sme2p1+sve2p1+sve-f16f32mm+f8f32mm+f8f16mm+sve-aes+sve-aes2+ssve-aes+sve-bitperm+ssve-bitperm+rcpc3+cpa+faminmax+fp8+lut+brbe+sme-lutv2+fp8fma+fp8dot4+fp8dot2+ssve-fp8fma+ssve-fp8dot4+ssve-fp8dot2+sme-f8f32+sme-f8f16+sme-f16f16+sme-b16b16+pops+sve2p2+sme2p2+gcie+ssve-fexpa+sme-tmop+sme-mop4+mops-go+sve2p3+sme2p3+f16f32dot+f16f32mm+f16mm+sve-b16mm+mtetc+tlbid+sme-fa64|elf:.text
-arm|arm|gas|arm-none-eabi-as -march=armv7-a|elf:.text
+arm|arm|gas|arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4|elf:.text
 msp430|msp430|gas|msp430-elf-as -mcpu=430|elf:.text
 msp430x|msp430x|gas|msp430-elf-as -mcpu=430x|elf:.text
 msp430xv2|msp430xv2|gas|msp430-elf-as -mcpu=430xv2|elf:.text|msp430
 msp430-poly|msp430|gas|msp430-elf-as -mcpu=430 -mP|elf:.text
 msp430x-poly|msp430x|gas|msp430-elf-as -mcpu=430x -mP|elf:.text|msp430-poly
-thumb|thumb|gas|arm-none-eabi-as -march=armv7-a -mthumb|elf:.text
+thumb|thumb|gas|arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4 -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
 powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
 powerpc|powerpc|gas|powerpc64-linux-gnu-as -a32 -mbig -mfuture|elf:.text
@@ -167,6 +171,7 @@ fail=0
 # the 8051 note above.
 prelude() { # key
   case "$1" in
+    arm | thumb) printf '\t.syntax unified\n' ;;
     i8051 | i8051-hex) printf '\tinclude "stddef51.inc"\n' ;;
     i8051-sdas) printf '\t.area CSEG (ABS)\n' ;;
   esac

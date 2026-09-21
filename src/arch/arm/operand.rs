@@ -19,6 +19,59 @@ use crate::expr::ExprRef;
 use crate::lexer::{Punct, TokKind};
 use crate::source::Span;
 
+/// Which bank a vector register comes from: 32 single-precision `s`
+/// registers, 32 double-precision `d` registers over the same bytes, and 16
+/// quadword `q` registers over pairs of those. Not API.
+#[doc(hidden)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum VecKind {
+    S,
+    D,
+    Q,
+}
+
+#[doc(hidden)]
+impl VecKind {
+    pub fn letter(self) -> char {
+        match self {
+            VecKind::S => 's',
+            VecKind::D => 'd',
+            VecKind::Q => 'q',
+        }
+    }
+}
+
+/// One vector register, and the lane of it an operand may name. Not API.
+#[doc(hidden)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct VecReg {
+    pub kind: VecKind,
+    pub n: u8,
+    /// `d0[1]`: which element of the register, which only a scalar operand
+    /// or a structure transfer takes.
+    pub lane: Option<u32>,
+    /// `d0[]`: every element of it at once, which a structure load writes
+    /// one element over.
+    pub all: bool,
+}
+
+/// The vector register a name spells, if it is one. Not API.
+#[doc(hidden)]
+pub fn vec_register(name: &str) -> Option<(VecKind, u8)> {
+    let (kind, rest) = match name.as_bytes().first()? {
+        b's' => (VecKind::S, &name[1..]),
+        b'd' => (VecKind::D, &name[1..]),
+        b'q' => (VecKind::Q, &name[1..]),
+        _ => return None,
+    };
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u8 = rest.parse().ok()?;
+    let last = if kind == VecKind::Q { 15 } else { 31 };
+    (n <= last).then_some((kind, n))
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Shift {
     Lsl,
@@ -87,11 +140,17 @@ pub enum MemOffset {
     None,
     /// A signed byte count; the sign becomes the U bit.
     Imm(i64),
+    /// `[rn], {imm}`: the unindexed form of `ldc` and `stc`, whose byte the
+    /// coprocessor reads and the core does not.
+    Unindexed(i64),
     Reg {
         rm: Reg,
         add: bool,
         shift: Shift,
         amount: u32,
+        /// Whether a shift was written at all. `[r0, r1, lsl #0]` shifts by
+        /// nothing and still has no 16-bit Thumb form.
+        shifted: bool,
     },
 }
 
@@ -100,6 +159,10 @@ pub struct Mem {
     pub base: Reg,
     pub offset: MemOffset,
     pub index: Index,
+    /// `[r0:64]`: the alignment a NEON structure transfer may promise, in
+    /// bits. Not API.
+    #[doc(hidden)]
+    pub align: Option<u32>,
     pub span: Span,
 }
 
@@ -115,10 +178,34 @@ pub enum OperandKind {
     /// An immediate or a branch target; which one depends on the instruction.
     Imm(ExprRef),
     Mem(Mem),
-    /// `{r0-r3, lr}`, as a bitmask of registers.
-    List(u16),
+    /// `{r0-r3, lr}`, as a bitmask of registers. `user` is the `^` that
+    /// makes an A32 block transfer read the user-mode register bank, or,
+    /// with the PC in the list, restore the saved status register.
+    List {
+        mask: u16,
+        user: bool,
+    },
     /// `=expr`: a value for `ldr` to load from the literal pool.
     Literal(ExprRef),
+    /// `{expr}`: `nop`'s hint number and the coprocessor opcode of `cdp`.
+    Braced(ExprRef),
+    /// A VFP or NEON register, perhaps with a lane index.
+    Vec(VecReg),
+    /// `{d0-d3}`, `{s0, s1}` or `{d0[2], d1[2]}`: a run of vector registers,
+    /// held as the first of them and how many there are. `spaced` is the
+    /// `{d0, d2}` the structure transfers take, whose registers step by two,
+    /// and `all` the `{d0[]}` one of them writes an element over.
+    VecList {
+        kind: VecKind,
+        first: u8,
+        count: u8,
+        lane: Option<u32>,
+        spaced: bool,
+        all: bool,
+        /// `{d5-d5}`, a range of one register: only a structure transfer
+        /// reads that.
+        degenerate: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -135,6 +222,15 @@ pub struct Operand {
 }
 
 impl Operand {
+    /// The vector register this operand is, if it is one. Not API.
+    #[doc(hidden)]
+    pub fn vec(&self) -> Option<VecReg> {
+        match self.kind {
+            OperandKind::Vec(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn reg(&self) -> Option<Reg> {
         match self.kind {
             OperandKind::Reg(r) => Some(r),
@@ -155,8 +251,11 @@ impl Operand {
             OperandKind::Shifted { .. } => "a shifted register".into(),
             OperandKind::Imm(_) => "an immediate".into(),
             OperandKind::Mem(_) => "a memory operand".into(),
-            OperandKind::List(_) => "a register list".into(),
+            OperandKind::List { .. } => "a register list".into(),
             OperandKind::Literal(_) => "a literal pool value".into(),
+            OperandKind::Braced(_) => "a value in braces".into(),
+            OperandKind::Vec(v) => format!("register `{}{}`", v.kind.letter(), v.n),
+            OperandKind::VecList { .. } => "a vector register list".into(),
         }
     }
 }
@@ -256,6 +355,56 @@ impl Parser<'_, '_> {
         })
     }
 
+    /// A vector register and the lane it may name, if that is what comes
+    /// next. `None` means it was not one; an error inside the lane index is
+    /// reported and returns `Some(None)`'s outer `None`.
+    fn eat_vec_register(&mut self, cur: &mut Cursor<'_>) -> Option<Option<VecReg>> {
+        let TokKind::Ident(name) = cur.peek().kind else {
+            return Some(None);
+        };
+        let Some((kind, n)) = vec_register(&self.cx.interner.get(name).to_ascii_lowercase()) else {
+            return Some(None);
+        };
+        cur.advance();
+        let mut lane = None;
+        if cur.check_punct(Punct::LBracket) {
+            let span = cur.advance().span;
+            // `d0[]` is every lane of the register at once, which is how a
+            // structure load spells the element it copies over them.
+            if cur.eat_punct(Punct::RBracket).is_some() {
+                return Some(Some(VecReg {
+                    kind,
+                    n,
+                    lane: None,
+                    all: true,
+                }));
+            }
+            let e = self.cx.expr_parser().parse(cur)?;
+            let Some(v) = self.cx.constant(e) else {
+                self.cx
+                    .error(span, "a lane index must be a constant expression");
+                return None;
+            };
+            if !(0..16).contains(&v) {
+                self.cx
+                    .error(span, format!("lane {v} is out of range (0 to 15)"));
+                return None;
+            }
+            if cur.eat_punct(Punct::RBracket).is_none() {
+                let span = cur.peek().span;
+                self.cx.error(span, "expected `]` after a lane index");
+                return None;
+            }
+            lane = Some(v as u32);
+        }
+        Some(Some(VecReg {
+            kind,
+            n,
+            lane,
+            all: false,
+        }))
+    }
+
     fn eat_register(&mut self, cur: &mut Cursor<'_>) -> Option<Reg> {
         let TokKind::Ident(name) = cur.peek().kind else {
             return None;
@@ -282,6 +431,15 @@ impl Parser<'_, '_> {
         }
         if cur.check_punct(Punct::LBracket) {
             return self.parse_mem(cur);
+        }
+        if let Some(v) = self.eat_vec_register(cur)? {
+            let writeback = cur.eat_punct(Punct::Bang).is_some();
+            return Some(Operand {
+                kind: OperandKind::Vec(v),
+                span: start.to(cur.nth(0).span),
+                word: None,
+                writeback,
+            });
         }
         if let Some(r) = self.eat_register(cur) {
             let writeback = cur.eat_punct(Punct::Bang).is_some();
@@ -317,14 +475,37 @@ impl Parser<'_, '_> {
             self.cx.error(start, "empty register list");
             return None;
         }
+        if let Some(v) = self.eat_vec_register(cur)? {
+            return self.parse_vec_list(cur, start, v);
+        }
+        // `{5}` is not a register list at all: it is the hint number of
+        // `nop` and the coprocessor option of `cdp` and `ldc`.
+        if !matches!(cur.peek().kind, TokKind::Ident(n)
+            if reg::is_register(&self.cx.interner.get(n).to_ascii_lowercase()))
+        {
+            let e = self.cx.expr_parser().parse(cur)?;
+            if cur.eat_punct(Punct::RBrace).is_none() {
+                let span = cur.peek().span;
+                self.cx.error(span, "expected `}`");
+                return None;
+            }
+            return Some(Operand {
+                kind: OperandKind::Braced(e),
+                span: start.to(cur.nth(0).span),
+                word: None,
+                writeback: false,
+            });
+        }
         loop {
             let span = cur.peek().span;
             let Some(lo) = self.eat_register(cur) else {
                 self.cx.error(span, "expected a register in the list");
                 return None;
             };
+            let mut ranged = false;
             let hi = if cur.eat_punct(Punct::Minus).is_some() {
                 let span = cur.peek().span;
+                ranged = true;
                 match self.eat_register(cur) {
                     Some(r) => r,
                     None => {
@@ -335,6 +516,10 @@ impl Parser<'_, '_> {
             } else {
                 lo
             };
+            if ranged && hi == lo {
+                self.cx.error(span, "bad range in register list");
+                return None;
+            }
             if hi < lo {
                 self.cx.error(
                     span,
@@ -360,8 +545,86 @@ impl Parser<'_, '_> {
                 .error(span, "expected `,` or `}` in a register list");
             return None;
         }
+        // `^` after the list asks for the user-mode bank, or, with the PC
+        // in it, an exception return.
+        let user = cur.eat_punct(Punct::Caret).is_some();
         Some(Operand {
-            kind: OperandKind::List(mask),
+            kind: OperandKind::List { mask, user },
+            span: start.to(cur.nth(0).span),
+            word: None,
+            writeback: false,
+        })
+    }
+
+    /// The rest of `{d0-d3}`, `{s0, s1}` or `{d0[2], d2[2]}`, having read
+    /// the first register. A list is a run, written either as a range or as
+    /// each register in turn, and the structure transfers also take one
+    /// whose registers step by two.
+    fn parse_vec_list(
+        &mut self,
+        cur: &mut Cursor<'_>,
+        start: Span,
+        first: VecReg,
+    ) -> Option<Operand> {
+        let mut last = first;
+        let mut count = 1u8;
+        let mut step = 1u8;
+        let mut degenerate = false;
+        if cur.eat_punct(Punct::Minus).is_some() {
+            let span = cur.peek().span;
+            let Some(hi) = self.eat_vec_register(cur)? else {
+                self.cx.error(span, "expected a register after `-`");
+                return None;
+            };
+            if hi.kind != first.kind || hi.n < first.n {
+                self.cx
+                    .error(span, "a register range runs from low to high");
+                return None;
+            }
+            // `{d5-d5}` is a range of one, which GNU as reads in a structure
+            // transfer's list and nowhere else.
+            degenerate = hi.n == first.n;
+            count = hi.n - first.n + 1;
+            last = hi;
+        }
+        while cur.eat_punct(Punct::Comma).is_some() {
+            let span = cur.peek().span;
+            let Some(next) = self.eat_vec_register(cur)? else {
+                self.cx.error(span, "expected a register in the list");
+                return None;
+            };
+            if next.kind != first.kind || next.lane != first.lane || next.all != first.all {
+                self.cx
+                    .error(span, "a vector register list holds one kind of register");
+                return None;
+            }
+            if count == 1 && next.n == last.n + 2 {
+                step = 2;
+            }
+            if next.n != last.n + step {
+                self.cx
+                    .error(span, "a vector register list is a run of registers");
+                return None;
+            }
+            last = next;
+            count += 1;
+        }
+        if cur.eat_punct(Punct::RBrace).is_none() {
+            let span = cur.peek().span;
+            self.cx
+                .error(span, "expected `,` or `}` in a register list");
+            return None;
+        }
+        Some(Operand {
+            kind: OperandKind::VecList {
+                kind: first.kind,
+                first: first.n,
+                count,
+                lane: first.lane,
+                spaced: step == 2,
+                all: first.all,
+                degenerate,
+            },
             span: start.to(cur.nth(0).span),
             word: None,
             writeback: false,
@@ -376,8 +639,23 @@ impl Parser<'_, '_> {
             return None;
         };
 
+        // `[r0:64]`, `[r0 :64]` and `[r0, :64]` all promise an alignment,
+        // which only the NEON structure transfers take.
+        let mut align = None;
         let mut offset = MemOffset::None;
-        if cur.eat_punct(Punct::Comma).is_some() {
+        let colon = cur.check_punct(Punct::Colon)
+            || (cur.check_punct(Punct::Comma) && cur.nth(1).kind == TokKind::Punct(Punct::Colon));
+        if colon {
+            cur.eat_punct(Punct::Comma);
+            let span = cur.advance().span;
+            let e = self.cx.expr_parser().parse(cur)?;
+            let Some(v) = self.cx.constant(e) else {
+                self.cx
+                    .error(span, "an alignment must be a constant expression");
+                return None;
+            };
+            align = Some(v.clamp(0, u32::MAX.into()) as u32);
+        } else if cur.eat_punct(Punct::Comma).is_some() {
             offset = self.parse_mem_offset(cur)?;
         }
         if cur.eat_punct(Punct::RBracket).is_none() {
@@ -393,8 +671,26 @@ impl Parser<'_, '_> {
             // after the transfer. A memory operand is always last, so there is
             // nothing else this comma could introduce.
             cur.advance();
-            offset = self.parse_mem_offset(cur)?;
-            Index::PostIndex
+            if cur.check_punct(Punct::LBrace) {
+                // `[rn], {8}`: `ldc`'s unindexed form, where the byte is the
+                // coprocessor's and the base is not changed.
+                let span = cur.peek().span;
+                let braced = self.parse_reglist(cur)?;
+                let OperandKind::Braced(e) = braced.kind else {
+                    self.cx.error(span, "expected a value in braces");
+                    return None;
+                };
+                let Some(v) = self.cx.constant(e) else {
+                    self.cx
+                        .error(span, "this option must be a constant expression");
+                    return None;
+                };
+                offset = MemOffset::Unindexed(v);
+                Index::Offset
+            } else {
+                offset = self.parse_mem_offset(cur)?;
+                Index::PostIndex
+            }
         } else {
             Index::Offset
         };
@@ -404,6 +700,7 @@ impl Parser<'_, '_> {
                 base,
                 offset,
                 index,
+                align,
                 span: start.to(cur.nth(0).span),
             }),
             span: start.to(cur.nth(0).span),
@@ -425,7 +722,9 @@ impl Parser<'_, '_> {
         if let Some(rm) = self.eat_register(cur) {
             let mut shift = Shift::Lsl;
             let mut amount = 0u32;
+            let mut shifted = false;
             if cur.check_punct(Punct::Comma) && self.peek_shift(cur, 1).is_some() {
+                shifted = true;
                 cur.advance();
                 let s = self.peek_shift(cur, 0)?;
                 cur.advance();
@@ -457,6 +756,7 @@ impl Parser<'_, '_> {
                 add,
                 shift,
                 amount,
+                shifted,
             });
         }
         // Not a register after all; re-read the whole thing as an expression

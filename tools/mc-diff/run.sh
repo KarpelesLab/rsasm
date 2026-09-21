@@ -34,8 +34,8 @@ x86-64-simd|x86-64|x86_64|
 x86-64-simd-intel|x86-64|x86_64||.intel_syntax noprefix
 i386-simd|i386|i386|
 aarch64|aarch64|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
-arm|arm|armv7|
-thumb|thumb|thumbv7|
+arm|arm|armv7|-mattr=+neon,+vfp4,+fp16
+thumb|thumb|thumbv7|-mattr=+neon,+vfp4,+fp16
 riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c
 riscv64|riscv64|riscv64|-mattr=+m,+a,+f,+d,+c
 powerpc|powerpc|powerpc|

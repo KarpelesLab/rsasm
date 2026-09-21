@@ -1,8 +1,9 @@
 # Differential fuzzing
 
-Four fuzzers: one for x86, one for PowerPC's vector and POWER8-10
-instructions (see [PowerPC](#powerpc)), one for whole 8051 programs (see
-[The 8051](#the-8051)) and one for whole AVR programs (see [AVR](#avr)).
+Fuzzers for x86, ARM and Thumb (see [ARM](#arm)), AArch64 (see
+[AArch64](#aarch64)), the MSP430 (see [MSP430](#msp430)), PowerPC's vector
+and POWER8-10 instructions (see [PowerPC](#powerpc)), whole 8051 programs
+(see [The 8051](#the-8051)) and whole AVR programs (see [AVR](#avr)).
 
 ## x86
 
@@ -86,6 +87,45 @@ FP16 complex multiplications with a repeated register, reads an unsized
 `{sae}` on some 256-bit AVX10.2 conversions. For the EVEX `vmovq` load and
 store the two pick different, equally valid opcodes, and rsasm follows
 llvm-mc, as the corpora note.
+
+## ARM
+
+`arm.py` generates random A32 and T32 instructions, assembles them with GNU
+as, llvm-mc and rsasm, and compares bytes, relocations and accept/reject.
+The forms come from the instruction tables in binutils'
+`opcodes/arm-dis.c` — read at run time for their mnemonics and operand
+*syntax* only, never their encodings, and independently of
+`tools/tables/arm.py`, which writes the table rsasm encodes from. The
+instructions whose syntax a format string does not spell out — the
+data-processing second operand, the addressing modes, the register lists,
+the branches, `msr`/`mrs`, the NEON modified immediate and the structure
+transfers — are written out in `SHAPES`.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/arm.py fuzz --count 20000
+$ tools/fuzz/arm.py fuzz --target thumb --only '^vld' --seed 7
+$ tools/fuzz/arm.py check --target arm lines.txt        # one per line
+```
+
+The references run as ARMv7-A with the security, virtualization and divide
+extensions and an FPU (`-march=armv7ve -mfpu=neon-vfpv4`, and llvm-mc with
+the matching `-mattr`), which is what this backend claims. A quarter of the
+cases are deliberately invalid.
+
+Where the two references disagree the script names the rule and which side
+rsasm follows (`KNOWN_SPLITS`): rsasm follows GNU as where llvm-mc is the
+looser of the two — it takes a condition, a width suffix, an over-wide
+immediate, an UNPREDICTABLE register or a two-operand shorthand with a shift
+that GNU as refuses, relocates every branch, narrows a move it has
+complemented, and loses the top register bit of `fldmiax` — and llvm-mc
+where GNU as is: it refuses even an `al` condition on an instruction that
+cannot be conditional, and rewrites a one-register `ldm sp`/`stm sp` into a
+16-bit stack transfer the register may not reach. Two deviations are
+rsasm's own and listed in `DEVIATIONS`: `ldc p9` is a plain coprocessor
+transfer, not the half-precision `vldr` GNU as reads it as, and a condition
+on `vaddl` or `vsubl` is refused, as it is on every other NEON instruction,
+where GNU as alone takes it. Runs of 20,000 instructions find nothing else.
 
 ## MSP430
 

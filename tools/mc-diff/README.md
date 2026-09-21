@@ -90,6 +90,11 @@ answers differently, so the snippets there leave the case out and say so:
   bytes for ARM and 2 for Thumb. The snippets align their code sections.
 - The end of a code section: GNU as and rsasm pad it to its alignment, up to
   a word; llvm-mc does not. The Thumb snippets end their sections on a word.
+- The vector instructions: llvm-mc takes a condition, a width suffix or an
+  immediate wider than the element size on a NEON instruction, and a
+  quadword register where only a double one goes; GNU as and rsasm refuse
+  all four, so the corpora hold none of them. llvm-mc runs with
+  `-mattr=+neon,+vfp4,+fp16`, the features `-mfpu=neon-vfpv4` gives GNU as.
 
 The MIPS snippets start with `.set noreorder`, so that llvm-mc does not add a
 `nop` after each branch.

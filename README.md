@@ -55,7 +55,7 @@ assembler, not against rsasm's own idea of the manual. See
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21730 |
-| ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 2952 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
@@ -126,7 +126,14 @@ but 18 forms where both manuals show MAME to be wrong.
   `{vex}`, `{vex3}` and `{evex}` pseudo-prefixes
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
-  the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
+  the two instruction sets, and `$a`/`$t`/`$d` mapping symbols; the whole
+  ARMv7-A/R/M instruction set with the security, virtualization and divide
+  extensions, and with it the floating-point unit up to VFPv4 and NEON --
+  the vector arithmetic over `d` and `q` registers, the shifts, the widening
+  and narrowing forms, scalars and lanes, `vmov`'s modified immediate with
+  the `cmode` GNU as picks for it, `vldm`/`vstm`/`vpush`/`vpop`, and the
+  `vld1`-`vld4` and `vst1`-`vst4` structure transfers with their lists,
+  alignments and lane indices
 - AArch64 the same way: literal pools (`ldr x0, =0x123456789`, `ldr w0, =sym`,
   `.ltorg`, `.pool`) with `$x`/`$d` mapping symbols, and the system
   instructions with every operand name GNU as knows — `dc`, `ic`, `at`,
@@ -189,6 +196,15 @@ but 18 forms where both manuals show MAME to be wrong.
   of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
   pool entries; and the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
+- ARM vectors: the floating-point immediate of `vmov.f32 s0, #1.0` and
+  `vmov.f64 d0, #0.5`, which needs a literal this assembler's GAS-dialect
+  lexer does not read (`vcmp.f32 s0, 0` against the integer zero works);
+  half-precision arithmetic (the conversions `vcvt.f16.f32`, `vcvtb` and
+  `vcvtt` are there); and everything past ARMv7 and VFPv4 -- the ARMv8-A
+  additions (`vrint`, `vcvta`/`vcvtn`/`vcvtp`/`vcvtm`, `vmaxnm`, `vsel`, the
+  cryptographic and CRC instructions), ARMv8-M's security extension,
+  ARMv8.1-M's low-overhead loops and MVE, the custom datapath extension and
+  PACBTI, and the M-profile special registers of `vmrs`/`vmsr`
 - AArch64: SME beyond `smstart`, `smstop` and `zero {za}` — the ZA array and
   its tiles, `zt0`, the multi-vector and strided register lists, predicates as
   counters and `psel`; and the general-purpose instructions no SIMD mnemonic
@@ -795,7 +811,7 @@ independent assembler, and compare the bytes:
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 37,354 of 37,354 match across twenty-one target variants. For RISC-V
+  supports. 38,561 of 38,561 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -810,7 +826,7 @@ independent assembler, and compare the bytes:
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 22,704 of 22,704 match across fifty-six
+  from checksum-pinned sources. 24,003 of 24,003 match across fifty-six
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -925,6 +941,29 @@ register goes), which both read as its number. The instruction table behind
 them, `src/arch/powerpc/vector.rs`, is written from that same opcode table by
 `tools/tables/powerpc.py`, never by hand.
 
+ARM and Thumb are derived and fuzzed the same way. `tools/tables/arm.py`
+reads the five tables in binutils' `opcodes/arm-dis.c` — the A32, 16-bit
+Thumb, 32-bit Thumb, coprocessor and NEON ones — and turns each row's format
+string, which spells out where the disassembler finds every operand, into
+the form an assembler encodes from, writing `src/arch/arm/table.rs` (2,523
+forms under 712 spellings). Every row is accounted for: it becomes a form,
+its mnemonic belongs to a hand-written encoder (the ones whose bytes depend
+on more than the operands — the data-processing group with its Thumb width
+selection, the branches, the literal pool, `ldm`/`stm`, `it`, `cbz`,
+`msr`/`mrs`), it is a spelling only the disassembler prints, or its
+architecture is out of scope; a row that is none of those is an error, and
+`tools/tables/arm.py check` says whether the file is still what binutils
+gives. Where the disassembler's table is looser than the instruction set —
+it will print `vneg.f8`, a `vext` immediate too wide for its registers, or a
+quadword register where only a double one goes — the restriction comes from
+the operand kinds of gas's own `insns[]`, and what neither table says is
+written out in the script with the reason. `tools/fuzz/arm.py` then
+generates random instructions from those same format strings, read again and
+independently, and compares rsasm against GNU as and llvm-mc in both
+instruction sets; runs of 20,000 instructions find no case where rsasm
+differs from both. GNU as takes a condition on `vaddl` and `vsubl`, alone of
+the NEON instructions, which is the one recorded deviation.
+
 The first three also compare whole objects for every ELF target, from the
 `*-relocs.txt` corpora: each allocated section's type, flags, size, alignment
 and bytes, the global, weak and undefined symbols, and every relocation, read
@@ -955,7 +994,14 @@ the linker, how relaxation sizes Thumb instructions, and that a code
 section's end is padded to a word. rsasm follows
 GNU as there, and llvm-mc where the two only differ in spelling: Thumb
 alignment padding uses 16-bit no-ops, and `adds r0, r0, #1` keeps the
-three-operand form, where GNU as uses 32-bit no-ops and the 8-bit form. See
+three-operand form, where GNU as uses 32-bit no-ops and the 8-bit form. In
+the vector instructions it is llvm-mc that is the looser of the two, and
+rsasm follows GNU as: a condition, a width suffix or an immediate wider than
+the element size is refused on a NEON instruction, as is a quadword register
+where only a double one goes. The exception is the `al` condition, which
+llvm-mc takes everywhere and GNU as refuses on anything unconditional --
+except where some other form of the mnemonic is conditional, which is how it
+comes to take `vnegal.f32 d0, d1`; rsasm takes it everywhere. See
 `tools/xas-diff/README.md`.
 
 ## Design

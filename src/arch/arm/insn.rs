@@ -70,6 +70,10 @@ pub enum Mnem {
     Mov,
     Bic,
     Mvn,
+    /// `orr` with the second operand complemented, which only Thumb has.
+    Orn,
+    /// `rsb rd, rm, #0` under a shorter name.
+    Neg,
     // Shifts, which A32 encodes as forms of `mov`.
     Lsl,
     Lsr,
@@ -85,6 +89,23 @@ pub enum Mnem {
     Strh,
     Ldrsb,
     Ldrsh,
+    /// The doubleword transfers, which move a register pair.
+    Ldrd,
+    Strd,
+    /// The `t` suffix: a transfer made with user-mode privileges, which is
+    /// post-indexed whatever the source wrote.
+    Ldrt,
+    Strt,
+    Ldrbt,
+    Strbt,
+    Ldrht,
+    Strht,
+    Ldrsbt,
+    Ldrsht,
+    /// The preloads, which are loads into no register at all.
+    Pld,
+    Pldw,
+    Pli,
     Ldm(BlockMode),
     Stm(BlockMode),
     Push,
@@ -97,6 +118,9 @@ pub enum Mnem {
     Bl,
     Bx,
     Blx,
+    /// The Thumb compare-and-branch, which tests a register against zero.
+    Cbz,
+    Cbnz,
     // Multiplies.
     Mul,
     Mla,
@@ -105,32 +129,74 @@ pub enum Mnem {
     Umlal,
     Smull,
     Smlal,
-    // Move-wide and the small unary operations.
+    // Move-wide, and the Thumb `add`/`sub` restricted to a plain twelve-bit
+    // immediate.
     Movw,
     Movt,
-    Clz,
-    Rev,
-    Rev16,
-    Revsh,
-    Uxtb,
-    Uxth,
-    Sxtb,
-    Sxth,
-    // System and hints.
-    Nop,
-    Svc,
-    Bkpt,
+    Addw,
+    Subw,
+    // The status registers, whose operands are neither registers nor
+    // immediates but field specifiers and banked register names.
     Mrs,
     Msr,
-    Dmb,
-    Dsb,
-    Isb,
     /// `it`, `itt`, `ite` and so on: the letters after the first `t`, as the
     /// mask field for an even condition; see `thumb::it_block`.
     It(u8),
+    /// An instruction from the generated table, held as the index of its
+    /// first form in [`super::table::FORMS`]; `super::generic` encodes it.
+    Ext(u16),
+}
+
+/// What a core load or store moves, and how, which is all that separates
+/// the twenty spellings of one addressing mode.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Transfer {
+    pub load: bool,
+    /// How many bytes move: 1, 2, 4 or 8.
+    pub size: u8,
+    /// Whether a byte or halfword is sign-extended into the register.
+    pub signed: bool,
+    /// The `t` suffix: the transfer takes user-mode privileges, which makes
+    /// it post-indexed however the source wrote the address.
+    pub translate: bool,
+}
+
+const fn tr(load: bool, size: u8, signed: bool, translate: bool) -> Transfer {
+    Transfer {
+        load,
+        size,
+        signed,
+        translate,
+    }
 }
 
 impl Mnem {
+    /// The transfer a load or store makes, for the mnemonics that are one.
+    pub fn transfer(self) -> Option<Transfer> {
+        use Mnem::*;
+        Some(match self {
+            Ldr => tr(true, 4, false, false),
+            Str => tr(false, 4, false, false),
+            Ldrb => tr(true, 1, false, false),
+            Strb => tr(false, 1, false, false),
+            Ldrh => tr(true, 2, false, false),
+            Strh => tr(false, 2, false, false),
+            Ldrsb => tr(true, 1, true, false),
+            Ldrsh => tr(true, 2, true, false),
+            Ldrd => tr(true, 8, false, false),
+            Strd => tr(false, 8, false, false),
+            Ldrt => tr(true, 4, false, true),
+            Strt => tr(false, 4, false, true),
+            Ldrbt => tr(true, 1, false, true),
+            Strbt => tr(false, 1, false, true),
+            Ldrht => tr(true, 2, false, true),
+            Strht => tr(false, 2, false, true),
+            Ldrsbt => tr(true, 1, true, true),
+            Ldrsht => tr(true, 2, true, true),
+            _ => return None,
+        })
+    }
+
     /// The 4-bit A32 data-processing opcode, for the sixteen operations that
     /// have one.
     pub fn dp_opcode(self) -> Option<u32> {
@@ -184,6 +250,8 @@ impl Mnem {
             Bic => (And, false),
             Mov => (Mvn, false),
             Mvn => (Mov, false),
+            Orr => (Orn, false),
+            Orn => (Orr, false),
             Adc => (Sbc, false),
             Sbc => (Adc, false),
             _ => return None,
@@ -197,7 +265,7 @@ impl Mnem {
         self.dp_opcode().is_some() && !self.is_compare()
             || matches!(
                 self,
-                Lsl | Lsr | Asr | Ror | Rrx | Mul | Mla | Umull | Umlal | Smull | Smlal
+                Lsl | Lsr | Asr | Ror | Rrx | Orn | Neg | Mul | Mla | Umull | Umlal | Smull | Smlal
             )
     }
 }
@@ -217,12 +285,19 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("add", Add); add("adc", Adc); add("sbc", Sbc); add("rsc", Rsc);
         add("tst", Tst); add("teq", Teq); add("cmp", Cmp); add("cmn", Cmn);
         add("orr", Orr); add("mov", Mov); add("bic", Bic); add("mvn", Mvn);
+        add("orn", Orn); add("neg", Neg);
         add("lsl", Lsl); add("lsr", Lsr); add("asr", Asr); add("ror", Ror);
         add("rrx", Rrx);
         add("ldr", Ldr); add("str", Str);
         add("ldrb", Ldrb); add("strb", Strb);
         add("ldrh", Ldrh); add("strh", Strh);
         add("ldrsb", Ldrsb); add("ldrsh", Ldrsh);
+        add("ldrd", Ldrd); add("strd", Strd);
+        add("ldrt", Ldrt); add("strt", Strt);
+        add("ldrbt", Ldrbt); add("strbt", Strbt);
+        add("ldrht", Ldrht); add("strht", Strht);
+        add("ldrsbt", Ldrsbt); add("ldrsht", Ldrsht);
+        add("pld", Pld); add("pldw", Pldw); add("pli", Pli);
         // The stack-oriented spellings are the same instructions: a full
         // descending stack pushes with `stmdb` and pops with `ldmia`.
         add("ldm", Ldm(ia)); add("ldmia", Ldm(ia)); add("ldmfd", Ldm(ia));
@@ -236,16 +311,14 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("push", Push); add("pop", Pop);
         add("adr", Adr); add("adrl", Adrl);
         add("b", B); add("bl", Bl); add("bx", Bx); add("blx", Blx);
+        add("cbz", Cbz); add("cbnz", Cbnz);
         add("mul", Mul); add("mla", Mla); add("mls", Mls);
         add("umull", Umull); add("umlal", Umlal);
         add("smull", Smull); add("smlal", Smlal);
         add("movw", Movw); add("movt", Movt);
-        add("clz", Clz); add("rev", Rev); add("rev16", Rev16); add("revsh", Revsh);
-        add("uxtb", Uxtb); add("uxth", Uxth); add("sxtb", Sxtb); add("sxth", Sxth);
-        add("nop", Nop); add("svc", Svc); add("swi", Svc);
-        add("bkpt", Bkpt);
+        add("addw", Addw); add("subw", Subw);
         add("mrs", Mrs); add("msr", Msr);
-        add("dmb", Dmb); add("dsb", Dsb); add("isb", Isb);
+
         // Every `it` spelling: up to three more instructions, each `t` (the
         // condition, a clear bit) or `e` (its inverse, a set one), from the
         // top bit down, then a set bit that ends them.
@@ -257,6 +330,18 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
         add("ittet", It(0x5)); add("ittee", It(0x7));
         add("itett", It(0x9)); add("itete", It(0xb));
         add("iteet", It(0xd)); add("iteee", It(0xf));
+        // Everything the generated table holds, under every spelling GNU as
+        // takes for it. A hand-written mnemonic always wins, so a name in
+        // both -- `rev` in Thumb, say -- keeps the encoder that knows the
+        // width rules.
+        for (i, f) in super::table::FORMS.iter().enumerate() {
+            m.entry(f.name).or_insert(Ext(i as u16));
+        }
+        for (spelling, real) in super::table::SPELLINGS {
+            if let Some(v) = m.get(real).copied() {
+                m.entry(*spelling).or_insert(v);
+            }
+        }
         m
     })
 }
@@ -291,12 +376,19 @@ pub struct Resolved {
 /// Returns `None` if no split yields a known mnemonic, which the caller
 /// reports as an unknown instruction.
 pub fn resolve(text: &str) -> Option<Resolved> {
-    // The width hint is unambiguous: nothing in the table contains a dot.
+    // The width hint is the last dotted part; everything from the first dot
+    // is the data type a vector instruction carries, which is part of its
+    // name: `vcvt` + `eq` + `.f32.u32`.
+    // A mnemonic that carries a data type has no width hint: GNU as reads
+    // the whole tail as the type, so `vadd.i8.w` is not an instruction.
     let (head, width) = match text.rsplit_once('.') {
-        Some((h, "n")) => (h, Width::Narrow),
-        Some((h, "w")) => (h, Width::Wide),
-        Some(_) => return None,
-        None => (text, Width::Any),
+        Some((h, "n")) if !h.is_empty() && !h.contains('.') => (h, Width::Narrow),
+        Some((h, "w")) if !h.is_empty() && !h.contains('.') => (h, Width::Wide),
+        _ => (text, Width::Any),
+    };
+    let (stem, types) = match head.split_once('.') {
+        Some((s, t)) => (s, Some(t)),
+        None => (head, None),
     };
 
     let mk = |mnem: Mnem, cond: u8, cond_written: bool, set_flags: bool| Resolved {
@@ -306,28 +398,33 @@ pub fn resolve(text: &str) -> Option<Resolved> {
         set_flags,
         width,
     };
+    // The name to look up is the stem with the type suffix put back on.
+    let named = |base: &str| match types {
+        None => lookup(base),
+        Some(t) => lookup(&format!("{base}.{t}")),
+    };
 
     // An exact match always wins, so `bl`, `mrs` and `mls` are never taken
     // apart into a shorter mnemonic plus a suffix.
-    if let Some(m) = lookup(head) {
+    if let Some(m) = named(stem) {
         return Some(mk(m, AL, false, false));
     }
 
     // Condition first: `bls` is `b` + `ls`, not `bl` + `s`. The base may still
     // carry an `s`, giving the UAL order `add` + `s` + `eq`. The split is
     // checked because the mnemonic is user text and need not be ASCII.
-    if let Some((base, suffix)) = head
+    if let Some((base, suffix)) = stem
         .len()
         .checked_sub(2)
-        .and_then(|at| head.split_at_checked(at))
+        .and_then(|at| stem.split_at_checked(at))
         && !base.is_empty()
         && let Some(cond) = condition(suffix)
     {
-        if let Some(m) = lookup(base) {
+        if let Some(m) = named(base) {
             return Some(mk(m, cond, true, false));
         }
         if let Some(base) = base.strip_suffix('s')
-            && let Some(m) = lookup(base)
+            && let Some(m) = named(base)
             && m.allows_s()
         {
             return Some(mk(m, cond, true, true));
@@ -335,8 +432,8 @@ pub fn resolve(text: &str) -> Option<Resolved> {
     }
 
     // A bare `s`: `movs`, `bics`, `adds`.
-    if let Some(base) = head.strip_suffix('s')
-        && let Some(m) = lookup(base)
+    if let Some(base) = stem.strip_suffix('s')
+        && let Some(m) = named(base)
         && m.allows_s()
     {
         return Some(mk(m, AL, false, true));

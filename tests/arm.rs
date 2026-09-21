@@ -2,8 +2,10 @@
 //!
 //! Every expected byte string here was produced by a run of
 //! `tools/mc-diff/run.sh arm thumb`, which compares rsasm against
-//! `llvm-mc -triple=armv7` and `-triple=thumbv7`. The handful of forms that
-//! cannot appear in that corpus — the ones whose llvm-mc spelling needs a `#`,
+//! `llvm-mc -triple=armv7` and `-triple=thumbv7`, or of
+//! `tools/xas-diff/run.sh arm thumb`, which compares it against GNU as for
+//! `-march=armv7ve -mfpu=neon-vfpv4`. The handful of forms that cannot
+//! appear in either corpus — the ones whose llvm-mc spelling needs a `#`,
 //! which this assembler's GAS-dialect lexer eats as a comment — were checked
 //! separately with `llvm-mc -show-encoding` and are called out where they
 //! appear.
@@ -418,10 +420,12 @@ fn thumb_negative_immediates() {
     tenc("cmp r0, -1", "b0 f1 ff 3f");
     tenc("cmp r1, -2", "11 f1 02 0f");
     tenc("cmp r0, -300", "10 f5 96 7f");
-    tenc("add r0, r1, -1", "a1 f1 01 00");
-    tenc("adds r0, r1, -1", "48 1e");
+    // A value the twelve-bit encoding holds as written stays as written;
+    // only one it cannot becomes the other operation with the sign off.
+    tenc("add r0, r1, -1", "01 f1 ff 30");
+    tenc("adds r0, r1, -1", "11 f1 ff 30");
     tenc("subs r0, r1, -300", "11 f5 96 70");
-    tenc("add r0, -1", "a0 f1 01 00");
+    tenc("add r0, -1", "00 f1 ff 30");
     tenc("adds r0, -200", "c8 38");
     tenc("add r0, r1, -4095", "a1 f6 ff 70");
 }
@@ -552,7 +556,7 @@ fn a_thumb_branch_grows_when_the_target_is_out_of_reach() {
 /// exceeded.
 #[test]
 fn out_of_range_operands_are_diagnosed() {
-    let e = errors_for("arm", "mov r0, 0x101");
+    let e = errors_for("arm", "movs r0, 0x101");
     assert!(e.contains("not an ARM modified immediate"), "{e}");
     assert!(e.contains("rotated right by an even amount"), "{e}");
 
@@ -560,18 +564,32 @@ fn out_of_range_operands_are_diagnosed() {
     assert!(errors_for("arm", "ldrh r0, [r1, 300]").contains("-255 to 255"));
     assert!(errors_for("arm", "movw r0, 65536").contains("0 to 65535"));
     assert!(errors_for("arm", "add r0, r1, r2, lsl 33").contains("0 to 31"));
-    assert!(errors_for("arm", "mov r0, r1, ror 0").contains("write `rrx` instead"));
+    assert!(errors_for("arm", "mov r0, r1, lsr 33").contains("0 to 32"));
     assert!(errors_for("arm", "push {r3-r1}").contains("runs backwards"));
     assert!(errors_for("arm", "bogus r0").contains("unknown instruction"));
     assert!(errors_for("arm", "add r0").contains("takes 2 or 3 operand(s)"));
     assert!(errors_for("arm", "b 0x8000000").contains("out of range"));
-    assert!(errors_for("arm", "add r0, r1, 0x100000000").contains("does not fit in 32 bits"));
     assert!(errors_for("arm", "addeqs r0, r1, r2").contains("unknown instruction"));
     assert!(errors_for("arm", "bkpteq 1").contains("cannot be conditional"));
     assert!(errors_for("arm", "cmps r0, r1").contains("unknown instruction"));
     assert!(errors_for("arm", "add r0!, r1, r2").contains("writeback"));
     assert!(errors_for("arm", "movws r0, 1").contains("unknown instruction"));
     assert!(errors_for("arm", "ldrs r0, [r1]").contains("unknown instruction"));
+    // A vector instruction cannot be conditional, and one that carries a
+    // data type has no width suffix.
+    assert!(errors_for("arm", "vaddne.i8 d0, d1, d2").contains("cannot be conditional"));
+    assert!(errors_for("arm", "add.w r0, r1, r2").contains("invalid in ARM mode"));
+    assert!(errors_for("thumb", "vadd.i8.w d0, d1, d2").contains("unknown instruction"));
+    assert!(errors_for("arm", "vadd.i8 q0, q1, d2").contains("expected a `q` register"));
+    assert!(errors_for("arm", "vpadd.i8 q0, q1, q2").contains("expected a `d` register"));
+    assert!(errors_for("arm", "vext.8 d0, d1, d2, 9").contains("out of range"));
+    assert!(errors_for("arm", "vshll.s8 q0, d1, 0").contains("1 to 7"));
+    assert!(errors_for("arm", "vmov.i16 d0, 0x12345").contains("outside the element size"));
+    assert!(errors_for("arm", "vmov.i32 d0, 0x12345").contains("no vector immediate"));
+    assert!(errors_for("arm", "vld1.8 {d0, d1, d2, d3, d4}, [r0]").contains("bad list type"));
+    assert!(errors_for("arm", "vld3.8 {d0, d1}, [r0]").contains("bad list type"));
+    assert!(errors_for("arm", "vld1.8 {d0}, [r0:128]").contains("alignment"));
+    assert!(errors_for("arm", "vldmia r0, {d5-d5}").contains("one register to another"));
 }
 
 /// Thumb has narrower fields and no predication outside an `it` block, and
@@ -579,15 +597,204 @@ fn out_of_range_operands_are_diagnosed() {
 #[test]
 fn thumb_restrictions_are_diagnosed() {
     assert!(errors_for("thumb", "addeq r0, r1, r2").contains("`it` block"));
-    assert!(errors_for("thumb", "push {r8}").contains("can only list r0-r7"));
-    assert!(errors_for("thumb", "ldr r0, [r1, 4]!").contains("pre- and post-indexed"));
+    assert!(errors_for("thumb", "push {sp}").contains("base register"));
+    assert!(errors_for("thumb", "ldm r0!, {r0, r1}").contains("base register"));
     assert!(errors_for("thumb", "movs r0, 0x101").contains("Thumb expandable immediate"));
     assert!(errors_for("thumb", "lsls r0, r1, 32").contains("0 to 31"));
-    assert!(errors_for("thumb", "mov r0, 0x100000000").contains("does not fit in 32 bits"));
-    assert!(errors_for("thumb", "cmp r0, 0x101").contains("neither is its negation"));
+    assert!(errors_for("thumb", "orn sp, r1, r2").contains("not allowed here"));
+    assert!(errors_for("thumb", "cmp r0, 0x101").contains("neither is its complement"));
+    assert!(errors_for("thumb", "strd r0, r1, [r2, 7]").contains("steps of 4"));
+    assert!(errors_for("thumb", "cbz r8, .").contains("only tests r0-r7"));
     // An offset past 32 bits must not wrap around into a small one.
-    assert!(errors_for("thumb", "ldr r0, [r1, 0x100000004]").contains("0 to 4095"));
+    assert!(errors_for("thumb", "ldr r0, [r1, 0x100000004]").contains("-255 to 255"));
     assert!(errors_for("thumb", "ldr r0, [r1, 124].n").contains("unexpected token"));
+}
+
+/// The load/store exclusives, the swap they replaced, and the saturating and
+/// packing group.
+#[test]
+fn exclusives_saturating_and_packing() {
+    enc("ldrex r0, [r1]", "9f 0f 91 e1");
+    enc("strexd r0, r2, r3, [r4]", "92 0f a4 e1");
+    enc("clrex", "1f f0 7f f5");
+    enc("swp r0, r1, [r2]", "91 00 02 e1");
+    enc("ssat r0, 1, r1, lsl 3", "91 01 a0 e6");
+    enc("ssat r0, 32, r1, asr 5", "d1 02 bf e6");
+    enc("usat r0, 0, r1", "11 00 e0 e6");
+    enc("pkhbt r0, r1, r2, lsl 3", "92 01 81 e6");
+    enc("pkhtb r0, r1, r2, asr 5", "d2 02 81 e6");
+    // `pkhtb` with no shift is `pkhbt` with the sources the other way round,
+    // which is how GNU as writes it.
+    enc("pkhtb r0, r1, r2", "11 00 82 e6");
+    enc("uadd8 r0, r1, r2", "92 0f 51 e6");
+    enc("sel r0, r1, r2", "b2 0f 81 e6");
+    enc("qdsub r0, r1, r2", "51 00 62 e1");
+    tenc("ldrex r0, [r1, 4]", "51 e8 01 0f");
+    tenc("strexd r0, r2, r3, [r1]", "c1 e8 70 23");
+    tenc("ssat r0, 1, r1, asr 3", "21 f3 c0 00");
+    tenc("pkhtb r0, r1, r2, asr 5", "c1 ea 62 10");
+    tenc("uadd8 r0, r1, r2", "81 fa 42 f0");
+}
+
+/// The bitfield moves, the extends and the halfword multiplies.
+#[test]
+fn bitfields_extends_and_the_halfword_multiplies() {
+    enc("sxtab r0, r1, r2, ror 8", "72 04 a1 e6");
+    enc("uxth r0, r1, ror 16", "71 08 ff e6");
+    enc("bfi r0, r1, 4, 8", "11 02 cb e7");
+    enc("bfc r0, 0, 32", "1f 00 df e7");
+    enc("sbfx r0, r1, 7, 9", "d1 03 a8 e7");
+    enc("rbit r0, r1", "31 0f ff e6");
+    enc("smlabb r0, r1, r2, r3", "81 32 00 e1");
+    enc("smlald r0, r1, r2, r3", "12 03 41 e7");
+    enc("smmulr r0, r1, r2", "31 f2 50 e7");
+    enc("umaal r0, r1, r2, r3", "92 03 41 e0");
+    enc("sdiv r0, r1, r2", "11 f2 10 e7");
+    tenc("sxtb.w r0, r1, ror 8", "4f fa 91 f0");
+    tenc("bfi r0, r1, 4, 8", "61 f3 0b 10");
+    tenc("rev.w r0, r1", "91 fa 81 f0");
+    tenc("clz r0, r1", "b1 fa 81 f0");
+    tenc("mul r0, r1", "01 fb 00 f0");
+    tenc("smlald r0, r1, r2, r3", "c2 fb c3 01");
+    tenc("sdiv r0, r1, r2", "91 fb f2 f0");
+}
+
+/// The coprocessor instructions, whose operands are a coprocessor number,
+/// its registers and an opcode; a Thumb one is the ARM word, halfword by
+/// halfword, with `al` left in the condition field.
+#[test]
+fn coprocessor_instructions() {
+    enc("mcr p15, 0, r0, c1, c0, 0", "10 0f 01 ee");
+    enc("mrc p15, 0, r0, c1, c0, 0", "10 0f 11 ee");
+    enc("mrc p15, 0, APSR_nzcv, c1, c0, 0", "10 ff 11 ee");
+    enc("cdp p1, 2, c3, c4, c5, 6", "c5 31 24 ee");
+    enc("mcrr p1, 2, r3, r4, c5", "25 31 44 ec");
+    enc("ldc p1, c2, [r3, 8]!", "02 21 b3 ed");
+    enc("stc2l p1, c2, [r3], {255}", "ff 21 c3 fc");
+    tenc("mcr p15, 0, r0, c1, c0, 0", "01 ee 10 0f");
+    tenc("ldc p1, c2, [r3], {8}", "93 ec 08 21");
+}
+
+/// The hint and barrier space, and the system instructions.
+#[test]
+fn hints_barriers_and_the_system_space() {
+    enc("nop {5}", "05 f0 20 e3");
+    enc("dbg 3", "f3 f0 20 e3");
+    enc("dmb ish", "5b f0 7f f5");
+    enc("isb", "6f f0 7f f5");
+    enc("setend be", "00 02 01 f1");
+    enc("cpsie f, 16", "50 00 0a f1");
+    enc("srsdb sp!, 19", "13 05 6d f9");
+    enc("rfeia r0!", "00 0a b0 f8");
+    enc("ldmia r0!, {r1, pc}^", "02 80 f0 e8");
+    enc("smc 15", "7f 00 60 e1");
+    enc("hvc 0xffff", "7f ff 4f e1");
+    enc("eret", "6e 00 60 e1");
+    tenc("nop.w", "af f3 00 80");
+    tenc("dmb ish", "bf f3 5b 8f");
+    tenc("setend be", "58 b6");
+    tenc("cpsid a, 31", "af f3 9f 87");
+    tenc("srsdb sp!, 0", "2d e8 00 c0");
+    tenc("rfeia r0!", "b0 e9 00 c0");
+    tenc("udf.w 0x1234", "f1 f7 34 a2");
+    tenc("smc 15", "ff f7 00 80");
+    tenc("hvc 0x1234", "e1 f7 34 82");
+}
+
+/// `mrs` and `msr` reach the status registers by field, `apsr` by bit name,
+/// and every mode's banked registers by name.
+#[test]
+fn the_status_registers() {
+    enc("mrs r0, spsr_fiq", "00 02 4e e1");
+    enc("mrs r0, elr_hyp", "00 03 0e e1");
+    enc("mrs r0, lr_irq", "00 03 00 e1");
+    enc("msr elr_hyp, r1", "01 f3 2e e1");
+    enc("msr cpsr_f, 255", "ff f0 28 e3");
+    enc("msr apsr_g, r0", "00 f0 24 e1");
+    enc("msr apsr_nzcvqg, r0", "00 f0 2c e1");
+    enc("msr cpsr_all, r0", "00 f0 29 e1");
+    tenc("mrs r0, sp_usr", "e5 f3 20 80");
+    tenc("msr apsr_g, r0", "80 f3 00 84");
+    // `movs pc, lr` is the exception return, which is `subs pc, lr, #0`.
+    tenc("movs pc, lr", "de f3 00 8f");
+}
+
+/// The preloads address memory and load nothing, so their transfer register
+/// field is all ones.
+#[test]
+fn preloads_and_the_other_transfers() {
+    enc("pld [r0, -4]", "04 f0 50 f5");
+    enc("pli [r0, r1]", "01 f0 d0 f6");
+    enc("ldrd r0, r1, [r2, 8]!", "d8 00 e2 e1");
+    enc("strd r0, r1, [r2], r3", "f3 00 82 e0");
+    enc("ldrt r0, [r1], 4", "04 00 b1 e4");
+    enc("neg r0, r1", "00 00 61 e2");
+    tenc("pld [r0, -4]", "10 f8 04 fc");
+    tenc("pli [r0, r1]", "10 f9 01 f0");
+    tenc("ldrd r0, r1, [r2, 1020]", "d2 e9 ff 01");
+    tenc("strd r0, r1, [r2, -8]!", "62 e9 02 01");
+    tenc("ldrt r0, [r1, 4]", "51 f8 04 0e");
+}
+
+/// Thumb-2's 32-bit data-processing forms, and the width the assembler picks
+/// where both exist.
+#[test]
+fn thumb_32_bit_data_processing() {
+    tenc("and.w r0, r1, r2", "01 ea 02 00");
+    tenc("and r0, r1, 0xfffffffe", "21 f0 01 00");
+    tenc("orn r0, r1, r2", "61 ea 02 00");
+    tenc("teq r0, 255", "90 f0 ff 0f");
+    tenc("cmp.w r0, r1", "b0 eb 01 0f");
+    tenc("mvn.w r0, r1", "6f ea 01 00");
+    tenc("rsb r0, r1, 255", "c1 f1 ff 00");
+    tenc("addw r0, r1, 4095", "01 f6 ff 70");
+    tenc("subw r0, r1, 100", "a1 f2 64 00");
+    tenc("add r0, pc, 4", "01 a0");
+    tenc("lsl.w r0, r1, 3", "4f ea c1 00");
+    tenc("ror.w r0, r1, 15", "4f ea f1 30");
+    tenc("rrx r0, r1", "4f ea 31 00");
+    tenc("lsr r0, r1, r2", "21 fa 02 f0");
+    // `mov` with a shifted source is the shift instruction itself.
+    tenc("movs r7, r5, lsl 29", "6f 07");
+}
+
+/// Thumb-2's addressing modes, which the 16-bit encodings have none of.
+#[test]
+fn thumb_32_bit_loads_and_stores() {
+    tenc("ldr r0, [r1, 4]!", "51 f8 04 0f");
+    tenc("ldr r0, [r1], -4", "51 f8 04 09");
+    tenc("ldr.w r0, [r1, r2, lsl 2]", "51 f8 22 00");
+    tenc("ldrb r0, [r1, -8]", "11 f8 08 0c");
+    tenc("ldrsb.w r0, [r1, r2]", "11 f9 02 00");
+    // A PC-relative address is the literal form, whose offset is twelve
+    // whole bits with the sign in the first halfword.
+    tenc("ldrb r5, [pc, -64]", "1f f8 40 50");
+    tenc("ldm.w r0!, {r1, r8}", "b0 e8 02 01");
+    tenc("ldmdb r0!, {r1, r2}", "30 e9 06 00");
+    tenc("push {r0, r8}", "2d e9 01 01");
+    tenc("pop.w {r4, r5}", "bd e8 30 00");
+    // A one-register block transfer is the load or store that means the same
+    // thing, which is how it reaches a 16-bit encoding.
+    tenc("ldm r6, {r7}", "37 68");
+    tenc("tbb [r0, r1]", "d0 e8 01 f0");
+    tenc("tbh [r0, r1, lsl 1]", "d0 e8 11 f0");
+}
+
+/// `cbz` and `cbnz` reach 4 to 130 bytes forward and have no relocation, so
+/// a target further off is an error rather than a wider instruction.
+#[test]
+fn compare_and_branch_on_zero() {
+    tenc(
+        "cbz r0, 1f\n        nop\n        nop\n1:      nop\n",
+        "08 b1 00 bf 00 bf 00 bf",
+    );
+    tenc(
+        "cbnz r7, 1f\n        nop\n1:      nop\n",
+        "07 b9 00 bf 00 bf",
+    );
+    // A branch to the next instruction is a no-op, as GNU as writes it.
+    tenc("cbz r0, 1f\n1:      nop\n", "00 bf 00 bf");
+    assert!(errors_for("thumb", "cbz r0, .").contains("4 to 130 bytes forward"));
 }
 
 /// Malformed input must produce a diagnostic, never a panic. Nothing here is
@@ -756,4 +963,152 @@ fn at_sign_comments_and_first_column_hash_comments() {
 #[test]
 fn word_is_four_bytes_on_arm() {
     assert_eq!(hex(&text_for("arm", ".word 0x11223344\n")), "44 33 22 11");
+}
+
+/// The floating-point unit: the arithmetic, the conversions, the transfers
+/// and the moves between core and vector registers.
+#[test]
+fn the_floating_point_unit() {
+    enc("vadd.f32 s0, s1, s2", "81 0a 30 ee");
+    enc("vmla.f64 d0, d1, d2", "02 0b 01 ee");
+    enc("vsqrt.f32 s7, s8", "c4 3a f1 ee");
+    enc("vcmpe.f64 d0, d1", "c1 0b b4 ee");
+    enc("vcmp.f32 s0, 0", "40 0a b5 ee");
+    enc("vmov s0, s1", "60 0a b0 ee");
+    enc("vmov.f64 d0, d1", "41 0b b0 ee");
+    enc("vcvt.f64.f32 d0, s1", "e0 0a b7 ee");
+    enc("vcvt.s32.f32 s0, s1", "e0 0a bd ee");
+    enc("vcvtr.u32.f64 s0, d1", "41 0b bc ee");
+    // The fixed-point conversions name the number of fraction bits, which
+    // the field holds counted down from the element size.
+    enc("vcvt.f32.s16 s0, s0, 4", "46 0a ba ee");
+    enc("vldr d0, [r1, 8]", "02 0b 91 ed");
+    enc("vstr s0, [r1, 1020]", "ff 0a 81 ed");
+    enc("vldmia r0!, {s0-s3}", "04 0a b0 ec");
+    enc("vpush {d0-d3}", "08 0b 2d ed");
+    enc("vpop {s0}", "01 0a bd ec");
+    // The deprecated `fldmx` transfers, whose list is one word longer than
+    // the registers in it.
+    enc("fldmiax r0!, {d0-d3}", "09 0b b0 ec");
+    enc("vmov r0, r1, d2", "12 0b 51 ec");
+    enc("vmov s2, s3, r0, r1", "11 0a 41 ec");
+    enc("vmov.s8 r1, d0[3]", "70 1b 50 ee");
+    enc("vmov.32 d0[1], r1", "10 1b 20 ee");
+    enc("vmrs apsr_nzcv, fpscr", "10 fa f1 ee");
+    enc("vmsr fpscr, r0", "10 0a e1 ee");
+    // A VFP instruction takes a condition, unlike a NEON one.
+    enc("vaddeq.f32 s0, s1, s2", "81 0a 30 0e");
+}
+
+/// NEON data processing: the three-register arithmetic over `d` and `q`
+/// registers, the shifts, the widening and narrowing forms, the scalar
+/// multiplies and the permutes.
+#[test]
+fn neon_data_processing() {
+    enc("vadd.i8 d0, d1, d2", "02 08 01 f2");
+    enc("vadd.i16 q0, q1, q2", "44 08 12 f2");
+    enc("vsub.f32 q0, q1, q2", "44 0d 22 f2");
+    enc("vmul.p8 d0, d1, d2", "12 09 01 f3");
+    enc("vand q0, q1, q2", "54 01 02 f2");
+    enc("vbsl d0, d1, d2", "12 01 11 f3");
+    enc("vceq.i8 d0, d1, 0", "01 01 b1 f3");
+    // `vcle` and `vclt` are `vcge` and `vcgt` with the sources the other way
+    // round, which is how GNU as writes them.
+    enc("vcle.s8 d0, d1, d2", "11 03 02 f2");
+    enc("vcgt.f32 d0, d1, 0", "01 04 b9 f3");
+    enc("vqadd.s8 d0, d1, d2", "12 00 01 f2");
+    enc("vhadd.s8 d0, d1, d2", "02 00 01 f2");
+    enc("vmax.s8 d0, d1, d2", "02 06 01 f2");
+    enc("vpadd.i8 d0, d1, d2", "12 0b 01 f2");
+    enc("vabd.f32 q0, q1, q2", "44 0d 22 f3");
+    enc("vshl.i32 q0, q1, 31", "52 05 bf f2");
+    // A right shift counts down from the element size, so the widest one
+    // leaves the field empty.
+    enc("vshr.s8 d0, d1, 8", "11 00 88 f2");
+    enc("vsra.s32 d0, d1, 32", "11 01 a0 f2");
+    enc("vsri.16 q0, q1, 15", "52 04 91 f3");
+    enc("vqshlu.s8 d0, d1, 7", "11 06 8f f3");
+    enc("vshrn.i16 d0, q1, 8", "12 08 88 f2");
+    enc("vqshrun.s16 d0, q1, 8", "12 08 88 f3");
+    // `vshll` by the element size is an encoding of its own, and takes the
+    // type suffix under any of its three spellings.
+    enc("vshll.s8 q0, d1, 8", "01 03 b2 f3");
+    enc("vshll.i16 q0, d1, 16", "01 03 b6 f3");
+    enc("vmovl.s8 q0, d1", "11 0a 88 f2");
+    enc("vqmovun.s16 d0, q1", "42 02 b2 f3");
+    enc("vaddl.s8 q0, d1, d2", "02 00 81 f2");
+    enc("vmull.p8 q0, d1, d2", "02 0e 81 f2");
+    enc("vqdmlal.s16 q0, d1, d2", "02 09 91 f2");
+    enc("vmul.i16 d0, d1, d2[1]", "4a 08 91 f2");
+    enc("vmlal.s16 q0, d1, d2[3]", "6a 02 91 f2");
+    enc("vqdmulh.s16 d0, d1, d2[2]", "62 0c 91 f2");
+    // `vext` takes three bits of immediate over `d` registers and four over
+    // `q` ones.
+    enc("vext.8 d0, d1, d2, 3", "02 03 b1 f2");
+    enc("vext.8 q0, q1, q2, 9", "44 09 b2 f2");
+    enc("vrev64.32 d0, d1", "01 00 b8 f3");
+    enc("vcnt.8 d0, d1", "01 05 b0 f3");
+    enc("vmvn q0, q1", "c2 05 b0 f3");
+    enc("vpaddl.s8 d0, d1", "01 02 b0 f3");
+    enc("vrecpe.f32 q0, q1", "42 05 bb f3");
+    enc("vcvt.s32.f32 q0, q1, 3", "52 0f bd f2");
+    enc("vdup.8 d0, d1[3]", "01 0c b7 f3");
+    enc("vdup.16 q0, r1", "30 1b a0 ee");
+    enc("vtbl.8 d0, {d1-d3}, d4", "04 0a b1 f3");
+    enc("vtbx.8 d0, {d1-d2}, d3", "43 09 b1 f3");
+    // `vzip.32` and `vuzp.32` on `d` registers are both `vtrn.32`.
+    enc("vzip.32 d0, d1", "81 00 ba f3");
+    enc("vuzp.8 q0, q1", "42 01 b2 f3");
+    // The middle operand may be left out, and then it is the destination.
+    enc("vadd.i8 d0, d1", "01 08 00 f2");
+    enc("vmla.f32 q0, q1", "52 0d 00 f2");
+}
+
+/// The NEON modified immediate, whose `cmode` comes from the value written,
+/// and the structure loads and stores, whose list shape picks the encoding.
+#[test]
+fn the_neon_immediate_and_structure_transfers() {
+    enc("vmov.i8 d0, 0x12", "12 0e 81 f2");
+    enc("vmov.i32 d0, 0xff0000", "1f 04 87 f3");
+    enc("vmov.i64 q0, 0xff00ff00ff00ff00", "7a 0e 82 f3");
+    enc("vmvn.i32 d0, 0xff", "3f 00 87 f3");
+    enc("vorr.i16 q0, 0x100", "51 0b 80 f2");
+    enc("vbic.i32 d0, 0xff0000", "3f 05 87 f3");
+    // `vmov dd, dm` is `vorr dd, dm, dm`, which is what GNU as writes.
+    enc("vmov d0, d1", "11 01 21 f2");
+    enc("vld1.8 {d0}, [r0]", "0f 07 20 f4");
+    enc("vld1.16 {d0, d1}, [r0:64]!", "5d 0a 20 f4");
+    enc("vld2.32 {d0, d2}, [r0], r1", "81 09 20 f4");
+    enc("vld3.8 {d0[1], d1[1], d2[1]}, [r0]", "2f 02 a0 f4");
+    enc("vld4.16 {d0[], d1[], d2[], d3[]}, [r0:64]", "5f 0f a0 f4");
+    enc("vst1.8 {d0-d3}, [r0:256]", "3f 02 00 f4");
+    enc("vst2.16 {d0[2], d1[2]}, [r0:32]!", "9d 05 80 f4");
+    enc("vst4.32 {d0, d1, d2, d3}, [r0:128]", "af 00 00 f4");
+}
+
+/// A T32 vector instruction is the A32 one with its top byte translated, and
+/// the two exception-return forms Thumb has of its own.
+#[test]
+fn thumb_vector_instructions() {
+    tenc("vadd.f32 s0, s1, s2", "30 ee 81 0a");
+    tenc("vldr d0, [r1, 8]", "91 ed 02 0b");
+    tenc("vpush {d0-d3}", "2d ed 08 0b");
+    tenc("vmov.32 d0[1], r1", "20 ee 10 1b");
+    tenc("vmrs r0, fpscr", "f1 ee 10 0a");
+    tenc("vadd.i8 d0, d1, d2", "01 ef 02 08");
+    tenc("vmul.f32 q0, q1, q2", "02 ff 54 0d");
+    tenc("vshr.s8 d0, d1, 8", "88 ef 11 00");
+    tenc("vmov.i32 d0, 0xff0000", "87 ff 1f 04");
+    tenc("vext.8 q0, q1, q2, 9", "b2 ef 44 09");
+    tenc("vcvt.f32.s32 q0, q1", "bb ff 42 06");
+    tenc("vtbl.8 d0, {d1-d3}, d4", "b1 ff 04 0a");
+    tenc("vld1.8 {d0}, [r0]", "20 f9 0f 07");
+    tenc("vst2.16 {d0[2], d1[2]}, [r0:32]!", "80 f9 9d 05");
+    tenc("vld4.16 {d0[], d1[], d2[], d3[]}, [r0:64]", "a0 f9 5f 0f");
+    // `subs pc, lr, #imm` is the exception return; `movs pc, lr` is the
+    // same encoding with no immediate.
+    tenc("subs pc, lr, 4", "de f3 04 8f");
+    tenc("movs pc, lr", "de f3 00 8f");
+    // `mvns rd, #x` where only the complement is expandable is `movs`.
+    tenc("mvns r8, -2", "5f f0 01 08");
 }

@@ -13,8 +13,8 @@
 //! sees, since the core reads the field back as a little-endian integer.
 
 use super::imm;
-use super::insn::{AL, Mnem, Width};
-use super::operand::{Index, Mem, MemOffset, OperandKind, Shift};
+use super::insn::{AL, Mnem, Transfer, Width};
+use super::operand::{Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
 use super::reg::{self, Reg};
 use super::{Insn, encode, reloc};
 use crate::arch::AsmCtx;
@@ -26,6 +26,51 @@ pub const NOP: u16 = 0xbf00;
 
 fn low(r: Reg) -> bool {
     r < 8
+}
+
+/// GNU as's `reject_bad_reg`: an ordinary register operand of a 32-bit Thumb
+/// instruction is neither the stack pointer nor the PC. The exceptions --
+/// `add` and `sub` with the stack pointer, `mov`, `cmp`, and the word-sized
+/// loads and stores -- check for themselves.
+fn bad_reg(cx: &mut AsmCtx<'_>, span: Span, r: Reg) -> Option<()> {
+    if r == reg::SP || r == reg::PC {
+        cx.error(
+            span,
+            format!("`{}` is not allowed here in Thumb", reg::name_of(r)),
+        );
+        return None;
+    }
+    Some(())
+}
+
+/// The same, for a register that may still be the PC.
+fn not_pc(cx: &mut AsmCtx<'_>, span: Span, r: Reg) -> Option<()> {
+    if r == reg::PC {
+        cx.error(span, "`pc` is not allowed here");
+        return None;
+    }
+    Some(())
+}
+
+/// Every register an operand names, for the checks above: a shifted register
+/// hides one inside it.
+fn operand_regs(op: &Operand) -> Vec<Reg> {
+    match op.kind {
+        OperandKind::Reg(r) => vec![r],
+        OperandKind::Shifted { rm, amount, .. } => match amount {
+            ShiftAmt::Reg(rs) => vec![rm, rs],
+            _ => vec![rm],
+        },
+        _ => vec![],
+    }
+}
+
+/// Rejects the stack pointer and the PC in every register an operand names.
+fn bad_regs(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<()> {
+    for r in operand_regs(op) {
+        bad_reg(cx, op.span, r)?;
+    }
+    Some(())
 }
 
 fn narrow(w: u16) -> Vec<Variant> {
@@ -130,6 +175,15 @@ fn want_wide(ins: &Insn<'_>) -> bool {
     ins.width != Width::Narrow
 }
 
+/// Refuses a `.n` on an instruction that has only a 32-bit encoding.
+fn wide_only(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<()> {
+    if want_wide(ins) {
+        return Some(());
+    }
+    no_encoding(cx, ins)?;
+    None
+}
+
 /// Reports that no encoding of this width exists, once every candidate has
 /// been ruled out.
 fn no_encoding(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
@@ -221,15 +275,15 @@ fn encode_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         B | Bl | Bx | Blx => branch(cx, ins),
         Mov | Mvn => mov(cx, ins),
         Add | Sub => add_sub(cx, ins),
+        Addw | Subw => add_sub_wide(cx, ins),
         Cmp => compare(cx, ins),
-        Cmn | Tst => test(cx, ins),
-        And | Eor | Orr | Bic | Adc | Sbc | Rsb => alu_reg(cx, ins),
-        Lsl | Lsr | Asr | Ror => shift_insn(cx, ins),
-        Rrx => {
-            cx.error(ins.span, "`rrx` has no 16-bit Thumb encoding");
-            None
-        }
-        Ldr | Str | Ldrb | Strb | Ldrh | Strh | Ldrsb | Ldrsh => load_store(cx, ins),
+        Cmn | Tst | Teq => test(cx, ins),
+        Neg => negate(cx, ins),
+        And | Eor | Orr | Orn | Bic | Adc | Sbc | Rsb => alu_reg(cx, ins),
+        Lsl | Lsr | Asr | Ror | Rrx => shift_insn(cx, ins),
+        Ldr | Str | Ldrb | Strb | Ldrh | Strh | Ldrsb | Ldrsh | Ldrd | Strd | Ldrt | Strt
+        | Ldrbt | Strbt | Ldrht | Strht | Ldrsbt | Ldrsht => load_store(cx, ins),
+        Pld | Pldw | Pli => preload(cx, ins),
         Push | Pop => push_pop(cx, ins),
         Adr => adr(cx, ins),
         Adrl => {
@@ -239,30 +293,11 @@ fn encode_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Ldm(_) | Stm(_) => block_transfer(cx, ins),
         Mul | Mla | Mls | Umull | Umlal | Smull | Smlal => multiply(cx, ins),
         Movw | Movt => move_wide(cx, ins),
-        Clz => clz(cx, ins),
-        Rev | Rev16 | Revsh | Uxtb | Uxth | Sxtb | Sxth => unary(cx, ins),
-        Nop => {
-            unconditional(cx, ins)?;
-            encode::arity(cx, ins, &[0])?;
-            if want_narrow(ins) {
-                Some(narrow(NOP))
-            } else {
-                Some(wide(0xf3af, 0x8000))
-            }
-        }
-        Svc => {
-            unconditional(cx, ins)?;
-            encode::arity(cx, ins, &[1])?;
-            let v = encode::imm_bits(cx, &ins.ops[0], 8)?;
-            Some(narrow(0xdf00 | v as u16))
-        }
-        Bkpt => {
-            unconditional(cx, ins)?;
-            encode::arity(cx, ins, &[1])?;
-            let v = encode::imm_bits(cx, &ins.ops[0], 8)?;
-            Some(narrow(0xbe00 | v as u16))
-        }
-        Rsc | Teq | Mrs | Msr | Dmb | Dsb | Isb => {
+        Ext(at) => super::generic::assemble(cx, ins, at),
+        Mrs => status_read(cx, ins),
+        Msr => status_write(cx, ins),
+        Cbz | Cbnz => compare_branch(cx, ins),
+        Rsc => {
             cx.error(
                 ins.span,
                 format!("`{}` is not supported in Thumb by this backend", ins.text),
@@ -387,6 +422,9 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 
     if matches!(ins.mnem, Mnem::Bx | Mnem::Blx) && op.reg().is_some() {
         unconditional(cx, ins)?;
+        if !want_narrow(ins) {
+            return no_encoding(cx, ins);
+        }
         let rm = encode::reg_of(cx, op)? as u16;
         let base = if ins.mnem == Mnem::Bx { 0x4700 } else { 0x4780 };
         return Some(narrow(base | (rm << 3)));
@@ -399,6 +437,10 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 
     // Thumb reads the PC as the address of the instruction plus four,
     // whatever the instruction's own length.
+    // A call to a label is always two halfwords.
+    if matches!(ins.mnem, Mnem::Bl | Mnem::Blx) && !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
     match ins.mnem {
         Mnem::Bl => {
             unconditional(cx, ins)?;
@@ -485,7 +527,7 @@ fn branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     }
 }
 
-// ---- moves -----------------------------------------------------------------
+// ---- data processing --------------------------------------------------------
 
 /// Splits the twelve bits of a `ThumbExpandImm` across the two halfwords.
 fn expand_parts(imm12: u32) -> (u16, u16) {
@@ -494,66 +536,221 @@ fn expand_parts(imm12: u32) -> (u16, u16) {
     (i, rest)
 }
 
+/// The 32-bit encodings of a data-processing operation: the first halfword
+/// of the shifted-register form and of the modified-immediate form, without
+/// the S bit or the first source register.
+///
+/// Six operations share another's opcode with a register fixed in it. A
+/// comparison is the arithmetic instruction with `rd` set to 15, and `mov`
+/// and `mvn` are `orr` and `orn` with `rn` set to 15, which is why
+/// [`wide_dp`] can encode all sixteen the same way.
+fn wide_op(m: Mnem) -> Option<(u16, u16)> {
+    use Mnem::*;
+    Some(match m {
+        And | Tst => (0xea00, 0xf000),
+        Bic => (0xea20, 0xf020),
+        Orr | Mov => (0xea40, 0xf040),
+        Orn | Mvn => (0xea60, 0xf060),
+        Eor | Teq => (0xea80, 0xf080),
+        Add | Cmn => (0xeb00, 0xf100),
+        Adc => (0xeb40, 0xf140),
+        Sbc => (0xeb60, 0xf160),
+        Sub | Cmp => (0xeba0, 0xf1a0),
+        Rsb | Neg => (0xebc0, 0xf1c0),
+        _ => return None,
+    })
+}
+
+/// The second halfword of a shifted-register form: the shift amount split
+/// around the destination register as `imm3:imm2`, then the type and `rm`.
+fn shift_hw2(rd: Reg, rm: Reg, shift: Shift, amount: u32) -> u16 {
+    // A shift of zero is written as `lsl` whichever kind the source names,
+    // and `lsr #32` and `asr #32` are spelled with a zero amount -- which is
+    // why `lsr #0` cannot mean 32. `rrx` takes `ror`'s type with a zero
+    // amount, so a real `ror #0` has no encoding of its own either.
+    let (kind, n) = match shift {
+        _ if amount == 0 => (Shift::Lsl, 0),
+        Shift::Lsr | Shift::Asr if amount == 32 => (shift, 0),
+        _ => (shift, amount),
+    };
+    (((n >> 2) & 7) << 12) as u16
+        | ((rd as u16) << 8)
+        | ((n & 3) << 6) as u16
+        | (kind.code() << 4) as u16
+        | rm as u16
+}
+
+/// A 32-bit data-processing instruction, `op{s}.w rd, rn, <operand2>`.
+fn wide_dp(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    m: Mnem,
+    rd: Reg,
+    rn: Reg,
+    src: &Operand,
+    set_flags: bool,
+) -> Option<Vec<Variant>> {
+    let Some((reg_base, imm_base)) = wide_op(m) else {
+        return no_encoding(cx, ins);
+    };
+    let s = u16::from(set_flags) << 4;
+    match &src.kind {
+        OperandKind::Reg(rm) => Some(wide(
+            reg_base | s | rn as u16,
+            ((rd as u16) << 8) | *rm as u16,
+        )),
+        OperandKind::Shifted { rm, shift, amount } => {
+            let n = match amount {
+                ShiftAmt::Imm(n) => *n,
+                // `rrx` is `ror` by zero.
+                ShiftAmt::None => 0,
+                ShiftAmt::Reg(_) => {
+                    cx.error(
+                        src.span,
+                        "a 32-bit Thumb instruction cannot take a register shift amount",
+                    );
+                    return None;
+                }
+            };
+            let hw2 = if matches!(amount, ShiftAmt::None) {
+                ((rd as u16) << 8) | (3 << 4) | *rm as u16
+            } else {
+                shift_hw2(rd, *rm, *shift, n)
+            };
+            Some(wide(reg_base | s | rn as u16, hw2))
+        }
+        OperandKind::Imm(_) => {
+            let v = encode::imm32(cx, src)?;
+            if let Some(imm12) = imm::thumb_expand(v) {
+                let (i, rest) = expand_parts(imm12);
+                return Some(wide(
+                    imm_base | (i << 10) | s | rn as u16,
+                    rest | ((rd as u16) << 8),
+                ));
+            }
+            // The substitution A32 makes as well: `and rd, rn, #~x` is
+            // `bic rd, rn, #x`, and `cmp rd, #-x` is `cmn rd, #x`.
+            if let Some((partner, negate)) = m.immediate_partner() {
+                let alt = if negate { v.wrapping_neg() } else { !v };
+                if let Some(imm12) = imm::thumb_expand(alt)
+                    && let Some((_, base)) = wide_op(partner)
+                {
+                    let (i, rest) = expand_parts(imm12);
+                    return Some(wide(
+                        base | (i << 10) | s | rn as u16,
+                        rest | ((rd as u16) << 8),
+                    ));
+                }
+            }
+            cx.error(
+                src.span,
+                format!(
+                    "{} (0x{v:08x}) is not a Thumb expandable immediate, and neither \
+                     is its complement",
+                    v as i32
+                ),
+            );
+            None
+        }
+        _ => no_encoding(cx, ins),
+    }
+}
+
 fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
     let rd = encode::reg_of(cx, &ins.ops[0])?;
     let src = &ins.ops[1];
+    let mvn = ins.mnem == Mnem::Mvn;
     let s = u16::from(ins.set_flags);
-
-    if ins.mnem == Mnem::Mvn {
-        // Only the flag-setting low-register form is 16 bits.
-        if let Some(rm) = src.reg()
-            && sets_flags16(ins)
-            && low(rd)
-            && low(rm)
-            && want_narrow(ins)
-        {
-            return Some(narrow(0x43c0 | ((rm as u16) << 3) | rd as u16));
+    // `movs pc, lr` is the exception return, which is `subs pc, lr, #0`.
+    if !mvn && ins.set_flags && rd == reg::PC && src.reg() == Some(reg::LR) {
+        if !want_wide(ins) {
+            return no_encoding(cx, ins);
         }
-        return no_encoding(cx, ins);
+        return Some(wide(0xf3de, 0x8f00));
+    }
+    // `do_t_mov_cmp`: only a plain `mov` between registers may name the
+    // stack pointer or the PC, and then not both, and not in the 32-bit
+    // form; `mvn` and every immediate form refuse both.
+    if mvn || ins.set_flags || src.reg().is_none() {
+        bad_reg(cx, ins.ops[0].span, rd)?;
+        bad_regs(cx, src)?;
     }
 
     if let Some(rm) = src.reg() {
-        if ins.set_flags && !ins.in_it && low(rd) && low(rm) && want_narrow(ins) {
-            // `movs rd, rm` is `lsls rd, rm, #0`, which in an `it` block
-            // would not set the flags.
-            return Some(narrow(((rm as u16) << 3) | rd as u16));
+        if want_narrow(ins) {
+            if mvn {
+                if sets_flags16(ins) && low(rd) && low(rm) {
+                    return Some(narrow(0x43c0 | ((rm as u16) << 3) | rd as u16));
+                }
+            } else if ins.set_flags {
+                // `movs rd, rm` is `lsls rd, rm, #0`, which in an `it` block
+                // would not set the flags.
+                if !ins.in_it && low(rd) && low(rm) {
+                    return Some(narrow(((rm as u16) << 3) | rd as u16));
+                }
+            } else {
+                let d = rd as u16;
+                return Some(narrow(
+                    0x4600 | ((d & 8) << 4) | ((rm as u16) << 3) | (d & 7),
+                ));
+            }
         }
-        if !ins.set_flags && want_narrow(ins) {
-            let rd = rd as u16;
-            return Some(narrow(
-                0x4600 | ((rd & 8) << 4) | ((rm as u16) << 3) | (rd & 7),
-            ));
+        if !want_wide(ins) {
+            return no_encoding(cx, ins);
         }
-        return no_encoding(cx, ins);
+        not_pc(cx, ins.ops[0].span, rd)?;
+        not_pc(cx, src.span, rm)?;
+        if rd == reg::SP && rm == reg::SP {
+            cx.error(ins.span, "`mov.w sp, sp` is not encodable");
+            return None;
+        }
+        return wide_dp(cx, ins, ins.mnem, rd, reg::PC, src, ins.set_flags);
+    }
+    if let OperandKind::Shifted { rm, shift, amount } = src.kind {
+        if mvn {
+            bad_reg(cx, ins.ops[0].span, rd)?;
+            bad_regs(cx, src)?;
+            if !want_wide(ins) {
+                return no_encoding(cx, ins);
+            }
+            return wide_dp(cx, ins, ins.mnem, rd, reg::PC, src, ins.set_flags);
+        }
+        return encode_shift(cx, ins, rd, rm, shift, amount, src.span);
     }
 
     let v = encode::imm32(cx, src)?;
-    if sets_flags16(ins) && low(rd) && v <= 0xff && want_narrow(ins) {
+    if !mvn && sets_flags16(ins) && low(rd) && v <= 0xff && want_narrow(ins) {
         return Some(narrow(0x2000 | ((rd as u16) << 8) | v as u16));
     }
     if !want_wide(ins) {
         return no_encoding(cx, ins);
     }
+    let (base, other) = if mvn {
+        (0xf06fu16, 0xf04fu16)
+    } else {
+        (0xf04f, 0xf06f)
+    };
     if let Some(imm12) = imm::thumb_expand(v) {
         let (i, rest) = expand_parts(imm12);
-        return Some(wide(
-            0xf04f | (i << 10) | (s << 4),
-            rest | ((rd as u16) << 8),
-        ));
+        return Some(wide(base | (i << 10) | (s << 4), rest | ((rd as u16) << 8)));
     }
     // `movw` reaches any 16-bit constant, but has no flag-setting form.
-    if v <= 0xffff && !ins.set_flags {
+    if !mvn && v <= 0xffff && !ins.set_flags {
         return Some(move_wide_bits(rd, v, false));
     }
-    // Last, the complement: `mov r0, #-2` is `mvn r0, #1`. LLVM stops short of
-    // doing this for `movs`, and so does this.
-    if !ins.set_flags
+    // Last, the complement: `mov r0, #-2` is `mvn r0, #1`. LLVM stops short
+    // of turning a `movs` into a `mvns` that way, and so does this; the
+    // other way round it does take, and so does this.
+    if (!ins.set_flags || mvn)
         && let Some(imm12) = imm::thumb_expand(!v)
     {
         let (i, rest) = expand_parts(imm12);
-        return Some(wide(0xf06f | (i << 10), rest | ((rd as u16) << 8)));
+        return Some(wide(
+            other | (i << 10) | (s << 4),
+            rest | ((rd as u16) << 8),
+        ));
     }
     cx.error(
         src.span,
@@ -580,9 +777,11 @@ fn move_wide_bits(rd: Reg, v: u32, top: bool) -> Vec<Variant> {
 
 fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
+    wide_only(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
     let rd = encode::reg_of(cx, &ins.ops[0])?;
+    bad_reg(cx, ins.ops[0].span, rd)?;
     let v = encode::imm_bits(cx, &ins.ops[1], 16)?;
     Some(move_wide_bits(rd, v, ins.mnem == Mnem::Movt))
 }
@@ -597,11 +796,39 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let two_operand = ins.ops.len() == 2;
     // `add r0, r1` and `add r0, #1` both leave the first source implicit.
     let (rn, src) = if two_operand {
+        encode::no_shorthand_shift(cx, &ins.ops[1])?;
         (rd, &ins.ops[1])
     } else {
         (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
     };
     let s = u16::from(ins.set_flags);
+    // `subs pc, lr, #imm` is the exception return, and the one instruction
+    // that writes the PC and the flags at once. `movs pc, lr` is the same
+    // encoding with no immediate.
+    if sub && ins.set_flags && rd == reg::PC && rn == reg::LR && !two_operand {
+        if !want_wide(ins) {
+            return no_encoding(cx, ins);
+        }
+        let v = encode::imm_of(cx, src)?;
+        if !(0..=0xFF).contains(&v) {
+            cx.error(
+                src.span,
+                format!("immediate {v} is out of range (0 to 255)"),
+            );
+            return None;
+        }
+        return Some(wide(0xF3DE, 0x8F00 | v as u16));
+    }
+    // `do_t_add_sub`: the first source may be the stack pointer, and the
+    // destination only when it is; nothing else may be, and the PC only
+    // as the first source of the `addw`/`subw` a PC-relative address uses.
+    if rd == reg::SP && rn != reg::SP {
+        cx.error(
+            ins.ops[0].span,
+            "`sp` is the destination only when it is also the source",
+        );
+        return None;
+    }
 
     if let Some(rm) = src.reg() {
         if sets_flags16(ins) && low(rd) && low(rn) && low(rm) && want_narrow(ins) {
@@ -610,30 +837,53 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 base | ((rm as u16) << 6) | ((rn as u16) << 3) | rd as u16,
             ));
         }
-        if !ins.set_flags && !sub && rd == rn && want_narrow(ins) {
+        if !ins.set_flags && !sub && (rd == rn || rd == rm) && want_narrow(ins) {
+            // `add r0, r3, r0` adds the other source, as `do_t_add_sub`
+            // swaps them to reach this encoding.
+            let other = if rd == rn { rm } else { rn };
             let rd = rd as u16;
             return Some(narrow(
-                0x4400 | ((rd & 8) << 4) | ((rm as u16) << 3) | (rd & 7),
+                0x4400 | ((rd & 8) << 4) | ((other as u16) << 3) | (rd & 7),
             ));
         }
         if want_wide(ins) {
-            let base = if sub { 0xeba0 } else { 0xeb00 };
-            return Some(wide(
-                base | (s << 4) | rn as u16,
-                ((rd as u16) << 8) | rm as u16,
-            ));
+            not_pc(cx, ins.ops[0].span, rd)?;
+            not_pc(cx, ins.span, rn)?;
+            bad_reg(cx, src.span, rm)?;
+            return wide_dp(cx, ins, ins.mnem, rd, rn, src, ins.set_flags);
         }
         return no_encoding(cx, ins);
     }
-    if let OperandKind::Shifted { .. } = src.kind {
-        return no_encoding(cx, ins);
+    if matches!(src.kind, OperandKind::Shifted { .. }) {
+        if !want_wide(ins) {
+            return no_encoding(cx, ins);
+        }
+        not_pc(cx, ins.ops[0].span, rd)?;
+        not_pc(cx, ins.span, rn)?;
+        bad_regs(cx, src)?;
+        return wide_dp(cx, ins, ins.mnem, rd, rn, src, ins.set_flags);
     }
 
     let written = encode::imm_of(cx, src)?;
-    // A negative constant is the other operation with the sign removed, the
-    // same substitution A32 makes.
+    // A negative constant that the twelve-bit encoding holds as written is
+    // written that way: `adds r6, #-1` is `adds.w r6, r6, #0xffffffff`,
+    // which is not the same instruction as `subs r6, #1` -- it leaves a
+    // different carry. Only where the value has no encoding of its own does
+    // the other operation with the sign taken off stand in for it.
+    if written < 0
+        && want_wide(ins)
+        && let Some(imm12) = imm::thumb_expand(written as u32)
+    {
+        not_pc(cx, ins.ops[0].span, rd)?;
+        let (i, rest) = expand_parts(imm12);
+        let base = if sub { 0xf1a0 } else { 0xf100 };
+        return Some(wide(
+            base | (i << 10) | (s << 4) | rn as u16,
+            rest | ((rd as u16) << 8),
+        ));
+    }
     let sub = if written < 0 { !sub } else { sub };
-    let Some(v) = u32::try_from(written.unsigned_abs()).ok() else {
+    let Ok(v) = u32::try_from(written.unsigned_abs()) else {
         cx.error(
             src.span,
             format!("immediate {written} does not fit in 32 bits"),
@@ -654,6 +904,16 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             && v / 4 <= 0xff
         {
             return Some(narrow(0xa800 | ((rd as u16) << 8) | (v / 4) as u16));
+        }
+        if !sub
+            && rn == reg::PC
+            && low(rd)
+            && !ins.set_flags
+            && v.is_multiple_of(4)
+            && v / 4 <= 0xff
+        {
+            // `add rd, pc, #imm` is what `adr` assembles to.
+            return Some(narrow(0xa000 | ((rd as u16) << 8) | (v / 4) as u16));
         }
         if sets_flags16(ins) && low(rd) && low(rn) {
             // Which 16-bit form wins depends on how the source spelled it:
@@ -679,6 +939,20 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if !want_wide(ins) {
         return no_encoding(cx, ins);
     }
+    not_pc(cx, ins.ops[0].span, rd)?;
+    if rn == reg::PC {
+        // A PC-relative address always takes the plain twelve-bit form.
+        if v > 0xfff || ins.set_flags {
+            return no_encoding(cx, ins);
+        }
+        let i = ((v >> 11) & 1) as u16;
+        let imm3 = ((v >> 8) & 7) as u16;
+        let base = if sub { 0xf2af } else { 0xf20f };
+        return Some(wide(
+            base | (i << 10),
+            (imm3 << 12) | ((rd as u16) << 8) | (v & 0xff) as u16,
+        ));
+    }
     if let Some(imm12) = imm::thumb_expand(v) {
         let (i, rest) = expand_parts(imm12);
         let base = if sub { 0xf1a0 } else { 0xf100 };
@@ -698,6 +972,16 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             (imm3 << 12) | ((rd as u16) << 8) | imm8,
         ));
     }
+    // Last, the other operation with the value negated: `sub rd, rn,
+    // #0xababbabac` is `add rd, rn, #0x54545454`.
+    if let Some(imm12) = imm::thumb_expand(v.wrapping_neg()) {
+        let (i, rest) = expand_parts(imm12);
+        let base = if sub { 0xf100 } else { 0xf1a0 };
+        return Some(wide(
+            base | (i << 10) | (s << 4) | rn as u16,
+            rest | ((rd as u16) << 8),
+        ));
+    }
     cx.error(
         src.span,
         format!(
@@ -709,6 +993,52 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     None
 }
 
+/// `addw rd, rn, #imm12` and `subw`, which are `add`/`sub` restricted to the
+/// plain twelve-bit immediate form.
+fn add_sub_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    unconditional(cx, ins)?;
+    wide_only(cx, ins)?;
+    encode::no_flags(cx, ins)?;
+    encode::arity(cx, ins, &[2, 3])?;
+    let rd = encode::reg_of(cx, &ins.ops[0])?;
+    let (rn, src) = if ins.ops.len() == 2 {
+        encode::no_shorthand_shift(cx, &ins.ops[1])?;
+        (rd, &ins.ops[1])
+    } else {
+        (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
+    };
+    // `addw sp, sp, #n` is allowed, as it is for `add`.
+    not_pc(cx, ins.ops[0].span, rd)?;
+    if rd == reg::SP && rn != reg::SP {
+        cx.error(
+            ins.ops[0].span,
+            "`sp` is the destination only when it is also the source",
+        );
+        return None;
+    }
+    let written = encode::imm_of(cx, src)?;
+    // A negative constant is the other operation with the sign taken off,
+    // the same substitution `add` and `sub` make.
+    let sub = (ins.mnem == Mnem::Subw) != (written < 0);
+    let v = written.unsigned_abs();
+    if v > 0xfff {
+        cx.error(
+            src.span,
+            format!("immediate {written} does not fit in twelve bits"),
+        );
+        return None;
+    }
+    let v = v as u32;
+    let i = ((v >> 11) & 1) as u16;
+    let imm3 = ((v >> 8) & 7) as u16;
+    let imm8 = (v & 0xff) as u16;
+    let base = if sub { 0xf2a0 } else { 0xf200 };
+    Some(wide(
+        base | (i << 10) | rn as u16,
+        (imm3 << 12) | ((rd as u16) << 8) | imm8,
+    ))
+}
+
 // ---- comparisons and the register ALU forms --------------------------------
 
 fn compare(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
@@ -716,61 +1046,84 @@ fn compare(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     encode::arity(cx, ins, &[2])?;
     let rn = encode::reg_of(cx, &ins.ops[0])?;
     let src = &ins.ops[1];
-    if let Some(rm) = src.reg() {
-        if want_narrow(ins) {
-            if low(rn) && low(rm) {
-                return Some(narrow(0x4280 | ((rm as u16) << 3) | rn as u16));
-            }
-            let rn = rn as u16;
-            return Some(narrow(
-                0x4500 | ((rn & 8) << 4) | ((rm as u16) << 3) | (rn & 7),
-            ));
+    not_pc(cx, ins.ops[0].span, rn)?;
+    if let Some(rm) = src.reg()
+        && want_narrow(ins)
+    {
+        not_pc(cx, src.span, rm)?;
+        if low(rn) && low(rm) {
+            return Some(narrow(0x4280 | ((rm as u16) << 3) | rn as u16));
         }
-        return no_encoding(cx, ins);
+        // The high-register form cannot compare two low ones, which is what
+        // the encoding above is for.
+        let n = rn as u16;
+        return Some(narrow(
+            0x4500 | ((n & 8) << 4) | ((rm as u16) << 3) | (n & 7),
+        ));
     }
-    let v = encode::imm32(cx, src)?;
-    if low(rn) && v <= 0xff && want_narrow(ins) {
-        return Some(narrow(0x2800 | ((rn as u16) << 8) | v as u16));
+    if let OperandKind::Imm(_) = src.kind {
+        let v = encode::imm32(cx, src)?;
+        if low(rn) && v <= 0xff && want_narrow(ins) {
+            return Some(narrow(0x2800 | ((rn as u16) << 8) | v as u16));
+        }
     }
     if !want_wide(ins) {
         return no_encoding(cx, ins);
     }
-    if let Some(imm12) = imm::thumb_expand(v) {
-        let (i, rest) = expand_parts(imm12);
-        return Some(wide(0xf1b0 | (i << 10) | rn as u16, rest | 0x0f00));
-    }
-    // `cmp r0, #-300` compares against the negation: `cmn r0, #300`.
-    if let Some(imm12) = imm::thumb_expand(v.wrapping_neg()) {
-        let (i, rest) = expand_parts(imm12);
-        return Some(wide(0xf110 | (i << 10) | rn as u16, rest | 0x0f00));
-    }
-    cx.error(
-        src.span,
-        format!(
-            "{} (0x{v:08x}) is not a Thumb expandable immediate, and neither is \
-             its negation",
-            v as i32
-        ),
-    );
-    None
+    bad_regs(cx, src)?;
+    wide_dp(cx, ins, Mnem::Cmp, reg::PC, rn, src, true)
 }
 
+/// `tst`, `teq` and `cmn`, which have no destination.
 fn test(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
     let rn = encode::reg_of(cx, &ins.ops[0])?;
-    let Some(rm) = ins.ops[1].reg() else {
-        return no_encoding(cx, ins);
-    };
-    if !low(rn) || !low(rm) || !want_narrow(ins) {
+    let src = &ins.ops[1];
+    if ins.mnem == Mnem::Cmn {
+        not_pc(cx, ins.ops[0].span, rn)?;
+    } else {
+        bad_reg(cx, ins.ops[0].span, rn)?;
+    }
+    bad_regs(cx, src)?;
+    if let Some(rm) = src.reg()
+        && ins.mnem != Mnem::Teq
+        && low(rn)
+        && low(rm)
+        && want_narrow(ins)
+    {
+        let op: u16 = if ins.mnem == Mnem::Tst { 8 } else { 11 };
+        return Some(narrow(0x4000 | (op << 6) | ((rm as u16) << 3) | rn as u16));
+    }
+    if !want_wide(ins) {
         return no_encoding(cx, ins);
     }
-    let op: u16 = if ins.mnem == Mnem::Tst { 8 } else { 11 };
-    Some(narrow(0x4000 | (op << 6) | ((rm as u16) << 3) | rn as u16))
+    wide_dp(cx, ins, ins.mnem, reg::PC, rn, src, true)
 }
 
-/// The 16-bit register-to-register ALU group, which always sets the flags and
-/// only reaches `r0`-`r7`.
+/// `neg rd, rm`, which is `rsb rd, rm, #0` written short.
+fn negate(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    unconditional(cx, ins)?;
+    encode::arity(cx, ins, &[2])?;
+    let rd = encode::reg_of(cx, &ins.ops[0])?;
+    let rn = encode::reg_of(cx, &ins.ops[1])?;
+    bad_reg(cx, ins.ops[0].span, rd)?;
+    bad_reg(cx, ins.ops[1].span, rn)?;
+    if sets_flags16(ins) && low(rd) && low(rn) && want_narrow(ins) {
+        return Some(narrow(0x4240 | ((rn as u16) << 3) | rd as u16));
+    }
+    if !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
+    Some(wide(
+        0xf1c0 | (u16::from(ins.set_flags) << 4) | rn as u16,
+        (rd as u16) << 8,
+    ))
+}
+
+/// The bitwise and carry-propagating operations: `and`, `eor`, `orr`, `orn`,
+/// `bic`, `adc`, `sbc` and `rsb`. Only the two-register spellings of the
+/// first seven have a 16-bit encoding, and it always sets the flags.
 fn alu_reg(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     let op: u16 = match ins.mnem {
@@ -780,38 +1133,59 @@ fn alu_reg(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Mnem::Sbc => 6,
         Mnem::Rsb => 9,
         Mnem::Orr => 12,
-        _ => 14,
+        Mnem::Bic => 14,
+        // `orn` is Thumb-2's own, and has no 16-bit form.
+        _ => 0xff,
     };
-    // `rsbs rd, rn, #0` is Thumb's negate; the immediate is part of the
-    // spelling and carries no bits.
-    if ins.mnem == Mnem::Rsb {
-        encode::arity(cx, ins, &[3])?;
-        let rd = encode::reg_of(cx, &ins.ops[0])?;
-        let rn = encode::reg_of(cx, &ins.ops[1])?;
-        let v = encode::imm_of(cx, &ins.ops[2])?;
-        if v != 0 || !sets_flags16(ins) || !low(rd) || !low(rn) || !want_narrow(ins) {
-            return no_encoding(cx, ins);
-        }
-        return Some(narrow(0x4000 | (op << 6) | ((rn as u16) << 3) | rd as u16));
-    }
     encode::arity(cx, ins, &[2, 3])?;
     let rd = encode::reg_of(cx, &ins.ops[0])?;
     let (rn, src) = if ins.ops.len() == 2 {
+        encode::no_shorthand_shift(cx, &ins.ops[1])?;
         (rd, &ins.ops[1])
     } else {
         (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
     };
-    let Some(rm) = src.reg() else {
-        return no_encoding(cx, ins);
-    };
-    if !sets_flags16(ins) || rd != rn || !low(rd) || !low(rm) || !want_narrow(ins) {
+    bad_reg(cx, ins.ops[0].span, rd)?;
+    bad_reg(cx, ins.ops[0].span, rn)?;
+    bad_regs(cx, src)?;
+    // `rsbs rd, rn, #0` is Thumb's negate, and the only 16-bit `rsb`.
+    if ins.mnem == Mnem::Rsb {
+        let zero = matches!(src.kind, OperandKind::Imm(_)) && encode::imm_of(cx, src)? == 0;
+        if zero && sets_flags16(ins) && low(rd) && low(rn) && want_narrow(ins) {
+            return Some(narrow(0x4000 | (op << 6) | ((rn as u16) << 3) | rd as u16));
+        }
+    } else if let Some(rm) = src.reg()
+        && op != 0xff
+        && sets_flags16(ins)
+        && low(rd)
+        && low(rm)
+        && low(rn)
+        && want_narrow(ins)
+    {
+        // `and`, `eor`, `adc` and `orr` commute, so the 16-bit form takes
+        // either source as the destination; `bic` and `sbc` do not.
+        let commutes = matches!(ins.mnem, Mnem::And | Mnem::Eor | Mnem::Adc | Mnem::Orr);
+        if rd == rn {
+            return Some(narrow(0x4000 | (op << 6) | ((rm as u16) << 3) | rd as u16));
+        }
+        if commutes && rd == rm {
+            return Some(narrow(0x4000 | (op << 6) | ((rn as u16) << 3) | rd as u16));
+        }
+    }
+    if !want_wide(ins) {
         return no_encoding(cx, ins);
     }
-    Some(narrow(0x4000 | (op << 6) | ((rm as u16) << 3) | rd as u16))
+    wide_dp(cx, ins, ins.mnem, rd, rn, src, ins.set_flags)
 }
 
 fn shift_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
+    if ins.mnem == Mnem::Rrx {
+        encode::arity(cx, ins, &[2])?;
+        let rd = encode::reg_of(cx, &ins.ops[0])?;
+        let rm = encode::reg_of(cx, &ins.ops[1])?;
+        return encode_shift(cx, ins, rd, rm, Shift::Rrx, ShiftAmt::None, ins.span);
+    }
     encode::arity(cx, ins, &[2, 3])?;
     let rd = encode::reg_of(cx, &ins.ops[0])?;
     let (rm, amount) = if ins.ops.len() == 2 {
@@ -819,56 +1193,116 @@ fn shift_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     } else {
         (encode::reg_of(cx, &ins.ops[1])?, &ins.ops[2])
     };
-    if !sets_flags16(ins) || !low(rd) || !low(rm) || !want_narrow(ins) {
-        return no_encoding(cx, ins);
-    }
-    // A register shift amount is the flag-setting two-operand form, so the
-    // destination has to be the value being shifted.
-    if let Some(rs) = amount.reg() {
-        if rd != rm || !low(rs) {
+    let shift = match ins.mnem {
+        Mnem::Lsl => Shift::Lsl,
+        Mnem::Lsr => Shift::Lsr,
+        Mnem::Asr => Shift::Asr,
+        _ => Shift::Ror,
+    };
+    let amt = match amount.reg() {
+        Some(rs) => ShiftAmt::Reg(rs),
+        None => {
+            let v = encode::imm_of(cx, amount)?;
+            let hi = match shift {
+                Shift::Lsl | Shift::Ror => 31,
+                _ => 32,
+            };
+            let lo = 0;
+            if v < lo || v > hi {
+                cx.error(
+                    amount.span,
+                    format!("shift amount {v} is out of range ({lo} to {hi})"),
+                );
+                return None;
+            }
+            ShiftAmt::Imm(v as u32)
+        }
+    };
+    encode_shift(cx, ins, rd, rm, shift, amt, amount.span)
+}
+
+/// A shift of one register into another, which `mov` with a shifted source
+/// is another spelling of: `movs r7, r5, lsl #29` is `lsls r7, r5, #29`, as
+/// `do_t_mov_cmp` writes it.
+fn encode_shift(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    rd: Reg,
+    rm: Reg,
+    shift: Shift,
+    amount: ShiftAmt,
+    span: Span,
+) -> Option<Vec<Variant>> {
+    let s = u16::from(ins.set_flags) << 4;
+    bad_reg(cx, ins.ops[0].span, rd)?;
+    bad_reg(cx, span, rm)?;
+    if let ShiftAmt::Reg(rs) = amount {
+        bad_reg(cx, span, rs)?;
+        // The 16-bit form shifts the destination in place and sets the flags.
+        if sets_flags16(ins) && rd == rm && low(rd) && low(rs) && want_narrow(ins) {
+            let op: u16 = match shift {
+                Shift::Lsl => 2,
+                Shift::Lsr => 3,
+                Shift::Asr => 4,
+                _ => 7,
+            };
+            return Some(narrow(0x4000 | (op << 6) | ((rs as u16) << 3) | rd as u16));
+        }
+        if !want_wide(ins) {
             return no_encoding(cx, ins);
         }
-        let op: u16 = match ins.mnem {
-            Mnem::Lsl => 2,
-            Mnem::Lsr => 3,
-            Mnem::Asr => 4,
-            _ => 7,
+        let base: u16 = match shift {
+            Shift::Lsl => 0xfa00,
+            Shift::Lsr => 0xfa20,
+            Shift::Asr => 0xfa40,
+            _ => 0xfa60,
         };
-        return Some(narrow(0x4000 | (op << 6) | ((rs as u16) << 3) | rd as u16));
+        return Some(wide(
+            base | s | rm as u16,
+            0xf000 | ((rd as u16) << 8) | rs as u16,
+        ));
     }
-    if ins.mnem == Mnem::Ror {
-        cx.error(
-            ins.span,
-            "`ror` by an immediate has no 16-bit Thumb encoding",
-        );
-        return None;
-    }
-    let v = encode::imm_of(cx, amount)?;
-    let (lo, hi) = match ins.mnem {
-        Mnem::Lsl => (0, 31),
-        _ => (1, 32),
+    // `ror` has no 16-bit form at all, whatever its amount.
+    let narrow_ok = shift != Shift::Ror;
+    let (shift, v) = match amount {
+        // A shift of zero is `lsl` whatever the source called it.
+        ShiftAmt::Imm(0) => (Shift::Lsl, 0),
+        ShiftAmt::Imm(v) => (shift, v),
+        // `rrx` is `ror` by zero, and has no 16-bit form.
+        _ => {
+            if !want_wide(ins) {
+                return no_encoding(cx, ins);
+            }
+            return Some(wide(0xea4f | s, ((rd as u16) << 8) | (3 << 4) | rm as u16));
+        }
     };
-    if v < lo || v > hi {
-        cx.error(
-            amount.span,
-            format!("shift amount {v} is out of range ({lo} to {hi})"),
-        );
-        return None;
+
+    if narrow_ok && sets_flags16(ins) && low(rd) && low(rm) && want_narrow(ins) {
+        let base: u16 = match shift {
+            Shift::Lsl => 0x0000,
+            Shift::Lsr => 0x0800,
+            _ => 0x1000,
+        };
+        return Some(narrow(
+            base | ((v as u16 & 0x1f) << 6) | ((rm as u16) << 3) | rd as u16,
+        ));
     }
-    let field = (v as u16) & 0x1f;
-    let base: u16 = match ins.mnem {
-        Mnem::Lsl => 0x0000,
-        Mnem::Lsr => 0x0800,
-        _ => 0x1000,
-    };
-    Some(narrow(base | (field << 6) | ((rm as u16) << 3) | rd as u16))
+    if !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
+    // A shift by a constant is `mov` with that shift applied.
+    Some(wide(0xea4f | s, shift_hw2(rd, rm, shift, v)))
 }
 
 // ---- loads and stores ------------------------------------------------------
 
 fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    let t = ins.mnem.transfer()?;
     unconditional(cx, ins)?;
     encode::no_flags(cx, ins)?;
+    if t.size == 8 {
+        return load_store_dual(cx, ins, t);
+    }
     encode::arity(cx, ins, &[2])?;
     let rt = encode::reg_of(cx, &ins.ops[0])?;
     if let OperandKind::Literal(e) = ins.ops[1].kind {
@@ -881,35 +1315,313 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         );
         return None;
     };
-    if mem.index != Index::Offset {
+    if mem.base == reg::PC && mem.index != Index::Offset {
+        cx.error(mem.span, "a PC-relative address cannot write `pc` back");
+        return None;
+    }
+    // `ldr` and `str` may move the stack pointer, and `ldr` the PC, which is
+    // a branch; every other width, and every unprivileged form, may not.
+    if t.size == 4 && !t.signed && !t.translate {
+        if !t.load {
+            not_pc(cx, ins.ops[0].span, rt)?;
+        }
+    } else {
+        bad_reg(cx, ins.ops[0].span, rt)?;
+    }
+    if mem.base == reg::PC && (!t.load || mem.index != Index::Offset) {
         cx.error(
             mem.span,
-            "pre- and post-indexed addressing is not supported in Thumb by this backend",
+            "a PC-relative address is a plain load, with no writeback",
         );
         return None;
     }
-    if want_narrow(ins)
-        && let Some(v) = narrow_load_store(ins.mnem, rt, &mem)
+    if !t.translate
+        && want_narrow(ins)
+        && let Some(v) = narrow_load_store(t, rt, &mem)
     {
         return Some(narrow(v));
     }
     if !want_wide(ins) {
         return no_encoding(cx, ins);
     }
-    let MemOffset::Imm(off) = mem.offset else {
-        if matches!(mem.offset, MemOffset::None) {
-            return wide_load_store(cx, ins, rt, mem.base, 0);
-        }
+    wide_load_store(cx, ins, t, rt, &mem)
+}
+
+/// The first halfword of a 32-bit Thumb load or store: the base that takes a
+/// positive twelve-bit offset, and the base that takes everything else --
+/// an eight-bit signed offset, writeback, a scaled index register and the
+/// unprivileged form.
+fn wide_base(t: Transfer) -> Option<(u16, u16)> {
+    Some(match (t.load, t.size, t.signed) {
+        (false, 1, _) => (0xf880, 0xf800),
+        (true, 1, false) => (0xf890, 0xf810),
+        (true, 1, true) => (0xf990, 0xf910),
+        (false, 2, _) => (0xf8a0, 0xf820),
+        (true, 2, false) => (0xf8b0, 0xf830),
+        (true, 2, true) => (0xf9b0, 0xf930),
+        (false, 4, _) => (0xf8c0, 0xf840),
+        (true, 4, _) => (0xf8d0, 0xf850),
+        _ => return None,
+    })
+}
+
+/// The index register of a 32-bit Thumb address, which is neither the stack
+/// pointer nor the PC, and has no place at all beside a PC-relative base.
+fn index_register(cx: &mut AsmCtx<'_>, mem: &Mem, rm: Reg) -> Option<()> {
+    bad_reg(cx, mem.span, rm)?;
+    if mem.base == reg::PC {
+        cx.error(mem.span, "a PC-relative address takes no index register");
+        return None;
+    }
+    Some(())
+}
+
+fn wide_load_store(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    t: Transfer,
+    rt: Reg,
+    mem: &Mem,
+) -> Option<Vec<Variant>> {
+    let Some((base12, base8)) = wide_base(t) else {
         return no_encoding(cx, ins);
     };
-    if !(0..=0xfff).contains(&off) {
+    let rn = mem.base as u16;
+    let rt = (rt as u16) << 12;
+    if let MemOffset::Reg {
+        rm,
+        add,
+        shift,
+        amount,
+        ..
+    } = mem.offset
+    {
+        index_register(cx, mem, rm)?;
+        if !add || shift != Shift::Lsl || amount > 3 || mem.index != Index::Offset || t.translate {
+            cx.error(
+                mem.span,
+                "a 32-bit Thumb index register is added, and may be shifted left \
+                 by 0 to 3",
+            );
+            return None;
+        }
+        return Some(wide(base8 | rn, rt | ((amount as u16) << 4) | rm as u16));
+    }
+    let off = match mem.offset {
+        MemOffset::None => 0,
+        MemOffset::Imm(v) => v,
+        MemOffset::Unindexed(_) => {
+            cx.error(mem.span, "only `ldc` and `stc` take `[rn], {option}`");
+            return None;
+        }
+        MemOffset::Reg { .. } => unreachable!(),
+    };
+    // A PC-relative address is the literal form, which has no unprivileged
+    // spelling: GNU as writes the ordinary load for one.
+    if mem.base == reg::PC && mem.index == Index::Offset {
+        // The literal forms put the sign in the first halfword and give the
+        // second twelve whole bits of offset.
+        if off.unsigned_abs() > 0xfff {
+            cx.error(
+                mem.span,
+                format!("offset {off} is out of range (-4095 to 4095)"),
+            );
+            return None;
+        }
+        let u = u16::from(off >= 0) << 7;
+        return Some(wide(base8 | u | rn, rt | (off.unsigned_abs() as u16)));
+    }
+    // The unprivileged form has neither writeback nor a negative offset.
+    if t.translate {
+        if mem.index != Index::Offset {
+            cx.error(
+                mem.span,
+                "an unprivileged Thumb transfer does not write its base register back",
+            );
+            return None;
+        }
+        if !(0..=255).contains(&off) {
+            cx.error(
+                mem.span,
+                format!("offset {off} is out of range (0 to 255) for `{}`", ins.text),
+            );
+            return None;
+        }
+        return Some(wide(base8 | rn, rt | 0xe00 | off as u16));
+    }
+    if mem.index == Index::Offset && (0..=0xfff).contains(&off) {
+        return Some(wide(base12 | rn, rt | off as u16));
+    }
+    if off.unsigned_abs() > 0xff {
         cx.error(
             mem.span,
-            format!("offset {off} does not fit in the 12-bit Thumb field (0 to 4095)"),
+            format!("offset {off} does not fit in the 8-bit field (-255 to 255)"),
         );
         return None;
     }
-    wide_load_store(cx, ins, rt, mem.base, off as u16)
+    let (p, w) = match mem.index {
+        Index::Offset => (1, 0),
+        Index::PreIndex => (1, 1),
+        Index::PostIndex => (0, 1),
+    };
+    if w == 1 && rt >> 12 == u16::from(mem.base) {
+        cx.error(
+            mem.span,
+            "a transfer that writes its base register back cannot move it",
+        );
+        return None;
+    }
+    let u = u16::from(off >= 0);
+    Some(wide(
+        base8 | rn,
+        rt | 0x800 | (p << 10) | (u << 9) | (w << 8) | (off.unsigned_abs() as u16),
+    ))
+}
+
+/// `ldrd` and `strd`, whose Thumb offset is a word count either way.
+fn load_store_dual(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, t: Transfer) -> Option<Vec<Variant>> {
+    if !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
+    encode::arity(cx, ins, &[2, 3])?;
+    let rt = encode::reg_of(cx, &ins.ops[0])?;
+    let mut at = 1;
+    let mut rt2 = rt.wrapping_add(1);
+    if ins.ops.len() == 3 {
+        rt2 = encode::reg_of(cx, &ins.ops[1])?;
+        at = 2;
+    }
+    bad_reg(cx, ins.ops[0].span, rt)?;
+    bad_reg(cx, ins.ops[at.min(ins.ops.len() - 1)].span, rt2)?;
+    let OperandKind::Mem(mem) = ins.ops[at].kind else {
+        cx.error(
+            ins.ops[at].span,
+            format!(
+                "expected a memory operand, found {}",
+                ins.ops[at].describe()
+            ),
+        );
+        return None;
+    };
+    if mem.base == reg::PC && (!t.load || mem.index != Index::Offset) {
+        cx.error(
+            mem.span,
+            "a PC-relative address is a plain load, with no writeback",
+        );
+        return None;
+    }
+    let off = match mem.offset {
+        MemOffset::None => 0,
+        MemOffset::Imm(v) => v,
+        _ => {
+            cx.error(
+                mem.span,
+                "`ldrd` and `strd` take no index register in Thumb",
+            );
+            return None;
+        }
+    };
+    if off % 4 != 0 || off.unsigned_abs() > 1020 {
+        cx.error(
+            mem.span,
+            format!("offset {off} is out of range (-1020 to 1020 in steps of 4)"),
+        );
+        return None;
+    }
+    let (p, w) = match mem.index {
+        Index::Offset => (1, 0),
+        Index::PreIndex => (1, 1),
+        Index::PostIndex => (0, 1),
+    };
+    let u = u16::from(off >= 0);
+    let l = u16::from(t.load);
+    Some(wide(
+        0xe840 | (p << 8) | (u << 7) | (w << 5) | (l << 4) | mem.base as u16,
+        ((rt as u16) << 12) | ((rt2 as u16) << 8) | ((off.unsigned_abs() / 4) as u16),
+    ))
+}
+
+/// `pld`, `pldw` and `pli`, which borrow the load encodings with the
+/// transfer register set to 15.
+fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    unconditional(cx, ins)?;
+    // A preload is 32 bits wide, so a `.n` cannot be honoured.
+    wide_only(cx, ins)?;
+    encode::no_flags(cx, ins)?;
+    encode::arity(cx, ins, &[1])?;
+    let OperandKind::Mem(mem) = ins.ops[0].kind else {
+        cx.error(
+            ins.ops[0].span,
+            format!("expected a memory operand, found {}", ins.ops[0].describe()),
+        );
+        return None;
+    };
+    if mem.index != Index::Offset {
+        cx.error(mem.span, "a preload does not write its base register back");
+        return None;
+    }
+    let (base12, base8) = match ins.mnem {
+        Mnem::Pld => (0xf890u16, 0xf810u16),
+        Mnem::Pldw => (0xf8b0, 0xf830),
+        _ => (0xf990, 0xf910),
+    };
+    let rn = mem.base as u16;
+    match mem.offset {
+        MemOffset::Reg {
+            rm,
+            add,
+            shift,
+            amount,
+            ..
+        } => {
+            index_register(cx, &mem, rm)?;
+            if !add || shift != Shift::Lsl || amount > 3 {
+                cx.error(
+                    mem.span,
+                    "a 32-bit Thumb index register is added, and may be shifted left \
+                     by 0 to 3",
+                );
+                return None;
+            }
+            Some(wide(
+                base8 | rn,
+                0xf000 | ((amount as u16) << 4) | rm as u16,
+            ))
+        }
+        MemOffset::Unindexed(_) => {
+            cx.error(mem.span, "only `ldc` and `stc` take `[rn], {option}`");
+            None
+        }
+        MemOffset::None | MemOffset::Imm(_) => {
+            let off = match mem.offset {
+                MemOffset::Imm(v) => v,
+                _ => 0,
+            };
+            if mem.base == reg::PC {
+                // The literal form keeps the sign in the first halfword.
+                if off.unsigned_abs() > 0xfff {
+                    cx.error(
+                        mem.span,
+                        format!("offset {off} is out of range (-4095 to 4095)"),
+                    );
+                    return None;
+                }
+                let u = u16::from(off >= 0) << 7;
+                return Some(wide(base8 | u | rn, 0xf000 | (off.unsigned_abs() as u16)));
+            }
+            if (0..=0xfff).contains(&off) {
+                return Some(wide(base12 | rn, 0xf000 | off as u16));
+            }
+            if off < -255 {
+                cx.error(
+                    mem.span,
+                    format!("offset {off} is out of range (-255 to 4095)"),
+                );
+                return None;
+            }
+            Some(wide(base8 | rn, 0xfc00 | (off.unsigned_abs() as u16)))
+        }
+    }
 }
 
 /// 16-bit `adr rd, label`: a word count forward from the PC rounded down.
@@ -1073,9 +1785,14 @@ fn literal_load(
     Some(out)
 }
 
-fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {
+/// The 16-bit form of a load or store, if the operands fit one.
+fn narrow_load_store(t: Transfer, rt: Reg, mem: &Mem) -> Option<u16> {
+    if mem.index != Index::Offset {
+        return None;
+    }
     let base = mem.base;
     match mem.offset {
+        MemOffset::Unindexed(_) => None,
         MemOffset::None | MemOffset::Imm(_) => {
             let off = match mem.offset {
                 MemOffset::Imm(v) => v,
@@ -1083,30 +1800,34 @@ fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {
             };
             // Negative or huge offsets have no 16-bit form; the caller's wide
             // path reports the range.
-            let Ok(off) = u32::try_from(off) else {
-                return None;
-            };
-            // The stack forms have their own opcodes and a wider offset.
-            if base == reg::SP && low(rt) && matches!(mnem, Mnem::Ldr | Mnem::Str) {
+            let off = u32::try_from(off).ok()?;
+            if t.size != 4 || t.signed {
+                // Only the word forms reach the stack and the PC.
+            } else if base == reg::SP && low(rt) {
                 if !off.is_multiple_of(4) || off / 4 > 0xff {
                     return None;
                 }
-                let opc: u16 = if mnem == Mnem::Ldr { 0x9800 } else { 0x9000 };
+                let opc: u16 = if t.load { 0x9800 } else { 0x9000 };
                 return Some(opc | ((rt as u16) << 8) | (off / 4) as u16);
+            } else if base == reg::PC && low(rt) && t.load {
+                if !off.is_multiple_of(4) || off / 4 > 0xff {
+                    return None;
+                }
+                return Some(0x4800 | ((rt as u16) << 8) | (off / 4) as u16);
             }
-            if !low(rt) || !low(base) {
+            if !low(rt) || !low(base) || t.signed {
                 return None;
             }
-            let (opc, scale, max): (u16, u32, u32) = match mnem {
-                Mnem::Ldr => (0x6800, 4, 31),
-                Mnem::Str => (0x6000, 4, 31),
-                Mnem::Ldrb => (0x7800, 1, 31),
-                Mnem::Strb => (0x7000, 1, 31),
-                Mnem::Ldrh => (0x8800, 2, 31),
-                Mnem::Strh => (0x8000, 2, 31),
+            let (opc, scale): (u16, u32) = match (t.load, t.size) {
+                (true, 4) => (0x6800, 4),
+                (false, 4) => (0x6000, 4),
+                (true, 1) => (0x7800, 1),
+                (false, 1) => (0x7000, 1),
+                (true, 2) => (0x8800, 2),
+                (false, 2) => (0x8000, 2),
                 _ => return None,
             };
-            if !off.is_multiple_of(scale) || off / scale > max {
+            if !off.is_multiple_of(scale) || off / scale > 31 {
                 return None;
             }
             Some(opc | ((off / scale) as u16) << 6 | ((base as u16) << 3) | rt as u16)
@@ -1116,22 +1837,25 @@ fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {
             add,
             shift,
             amount,
+            shifted,
         } => {
-            if !add || amount != 0 || shift != Shift::Lsl {
+            // An index register written with a shift, even `lsl #0`, has
+            // only the 32-bit form.
+            if !add || amount != 0 || shift != Shift::Lsl || shifted {
                 return None;
             }
             if !low(rt) || !low(base) || !low(rm) {
                 return None;
             }
-            let opc: u16 = match mnem {
-                Mnem::Str => 0x5000,
-                Mnem::Strh => 0x5200,
-                Mnem::Strb => 0x5400,
-                Mnem::Ldrsb => 0x5600,
-                Mnem::Ldr => 0x5800,
-                Mnem::Ldrh => 0x5a00,
-                Mnem::Ldrb => 0x5c00,
-                Mnem::Ldrsh => 0x5e00,
+            let opc: u16 = match (t.load, t.size, t.signed) {
+                (false, 4, _) => 0x5000,
+                (false, 2, _) => 0x5200,
+                (false, 1, _) => 0x5400,
+                (true, 1, true) => 0x5600,
+                (true, 4, _) => 0x5800,
+                (true, 2, false) => 0x5a00,
+                (true, 1, false) => 0x5c00,
+                (true, 2, true) => 0x5e00,
                 _ => return None,
             };
             Some(opc | ((rm as u16) << 6) | ((base as u16) << 3) | rt as u16)
@@ -1139,52 +1863,141 @@ fn narrow_load_store(mnem: Mnem, rt: Reg, mem: &Mem) -> Option<u16> {
     }
 }
 
-fn wide_load_store(
+/// Thumb has no user-mode bank, so no `^` register list.
+fn no_user_bank(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, user: bool) -> Option<()> {
+    if user {
+        cx.error(ins.span, "Thumb has no `^` register list");
+        return None;
+    }
+    Some(())
+}
+
+/// What a 32-bit Thumb block transfer may carry: never the stack pointer,
+/// never the PC in a store, and never both `lr` and `pc` in a load.
+fn check_list(cx: &mut AsmCtx<'_>, span: Span, mask: u16, load: bool) -> Option<()> {
+    if mask & (1 << reg::SP) != 0 {
+        cx.error(span, "`sp` is not allowed in a 32-bit Thumb register list");
+        return None;
+    }
+    if !load && mask & (1 << reg::PC) != 0 {
+        cx.error(span, "`pc` is not allowed in a Thumb store");
+        return None;
+    }
+    if load && mask & (1 << reg::LR) != 0 && mask & (1 << reg::PC) != 0 {
+        cx.error(span, "`lr` and `pc` cannot both be loaded");
+        return None;
+    }
+    Some(())
+}
+
+/// A block transfer of one register, which GNU as writes as the load or
+/// store that means the same thing: `ldmia.w r0!, {r1}` is `ldr r1, [r0], #4`.
+/// Whether `ldm sp, {rt}` reaches the 16-bit stack-relative load or store.
+fn narrow_stack_transfer(ins: &Insn<'_>, rt: Reg) -> bool {
+    want_narrow(ins) && low(rt)
+}
+
+fn single_transfer(
     cx: &mut AsmCtx<'_>,
     ins: &Insn<'_>,
     rt: Reg,
-    base: Reg,
-    off: u16,
+    rn: Reg,
+    load: bool,
+    before: bool,
+    writeback: bool,
 ) -> Option<Vec<Variant>> {
-    let opc: u16 = match ins.mnem {
-        Mnem::Strb => 0xf880,
-        Mnem::Ldrb => 0xf890,
-        Mnem::Strh => 0xf8a0,
-        Mnem::Ldrh => 0xf8b0,
-        Mnem::Str => 0xf8c0,
-        Mnem::Ldr => 0xf8d0,
-        Mnem::Ldrsb => 0xf990,
-        Mnem::Ldrsh => 0xf9b0,
-        _ => return no_encoding(cx, ins),
+    // The address the one register would have moved through, which is what
+    // the load or store then addresses: `ldmia r0!, {r1}` is `ldr r1, [r0],
+    // #4`, and `ldmia r0, {r1}` a plain `[r0]`.
+    let index = match (before, writeback) {
+        (false, true) => Index::PostIndex,
+        (true, true) => Index::PreIndex,
+        _ => Index::Offset,
     };
-    Some(wide(opc | base as u16, ((rt as u16) << 12) | off))
+    let off = if before {
+        -4
+    } else if writeback {
+        4
+    } else {
+        0
+    };
+    let mem = Mem {
+        base: rn,
+        offset: if off == 0 {
+            MemOffset::None
+        } else {
+            MemOffset::Imm(off)
+        },
+        index,
+        align: None,
+        span: ins.span,
+    };
+    let t = Transfer {
+        load,
+        size: 4,
+        signed: false,
+        translate: false,
+    };
+    if want_narrow(ins)
+        && let Some(v) = narrow_load_store(t, rt, &mem)
+    {
+        return Some(narrow(v));
+    }
+    if !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
+    wide_load_store(cx, ins, t, rt, &mem)
 }
 
 fn push_pop(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[1])?;
-    let OperandKind::List(mask) = ins.ops[0].kind else {
+    let OperandKind::List { mask, user } = ins.ops[0].kind else {
         cx.error(ins.ops[0].span, "expected a register list");
         return None;
     };
-    let push = ins.mnem == Mnem::Push;
+    no_user_bank(cx, ins, user)?;
+    stack_transfer(cx, ins, ins.mnem == Mnem::Pop, mask)
+}
+
+/// `push`, `pop`, and the `stmdb sp!` and `ldmia sp!` that mean the same.
+fn stack_transfer(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    load: bool,
+    mask: u16,
+) -> Option<Vec<Variant>> {
+    let push = !load;
     // The 16-bit forms carry r0-r7 plus exactly one of lr (push) or pc (pop).
     let extra = if push { 1 << reg::LR } else { 1 << reg::PC };
-    if mask & !(0xff | extra) != 0 {
+    if want_narrow(ins) && mask & !(0xff | extra) == 0 {
+        let base: u16 = if push { 0xb400 } else { 0xbc00 };
+        let bit = u16::from(mask & extra != 0) << 8;
+        return Some(narrow(base | bit | (mask & 0xff)));
+    }
+    if mask & (1 << reg::SP) != 0 {
         cx.error(
             ins.ops[0].span,
-            format!(
-                "a 16-bit Thumb `{}` can only list r0-r7 and {}",
-                ins.text,
-                if push { "lr" } else { "pc" }
-            ),
+            "the base register cannot be in the list of a transfer that writes it back",
         );
         return None;
     }
-    let base: u16 = if push { 0xb400 } else { 0xbc00 };
-    let bit = u16::from(mask & extra != 0) << 8;
-    Some(narrow(base | bit | (mask & 0xff)))
+    if !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
+    check_list(cx, ins.ops[0].span, mask, !push)?;
+    if let Some(rt) = sole_register(mask) {
+        return single_transfer(cx, ins, rt, reg::SP, !push, push, true);
+    }
+    // `push` is `stmdb sp!` and `pop` is `ldmia sp!`.
+    let hw1 = if push { 0xe92d } else { 0xe8bd };
+    Some(wide(hw1, mask))
+}
+
+/// The single register of a one-element list, if that is what this is.
+fn sole_register(list: u16) -> Option<Reg> {
+    (list.count_ones() == 1).then(|| list.trailing_zeros() as Reg)
 }
 
 fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
@@ -1195,31 +2008,74 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return None;
     };
     let load = matches!(ins.mnem, Mnem::Ldm(_));
-    if mode.before || !mode.increment {
-        cx.error(
-            ins.span,
-            "only the increment-after form of `ldm`/`stm` has a 16-bit Thumb encoding",
-        );
-        return None;
-    }
     let rn = encode::reg_of(cx, &ins.ops[0])?;
-    let OperandKind::List(mask) = ins.ops[1].kind else {
+    let OperandKind::List { mask, user } = ins.ops[1].kind else {
         cx.error(ins.ops[1].span, "expected a register list");
         return None;
     };
-    if !low(rn) || mask & !0xff != 0 {
-        cx.error(ins.span, "a 16-bit Thumb `ldm`/`stm` only reaches r0-r7");
-        return None;
-    }
-    if !ins.ops[0].writeback && (!load || mask & (1 << rn) == 0) {
+    no_user_bank(cx, ins, user)?;
+    let writeback = ins.ops[0].writeback;
+    if mode.before == mode.increment {
         cx.error(
-            ins.ops[0].span,
-            "a 16-bit Thumb `ldm`/`stm` writes back unless the base is in the list",
+            ins.span,
+            "Thumb has only the increment-after and decrement-before block transfers",
         );
         return None;
     }
-    let base: u16 = if load { 0xc800 } else { 0xc000 };
-    Some(narrow(base | ((rn as u16) << 8) | mask))
+    // GNU as writes a stack-pointer transfer as `push` or `pop`, which
+    // reaches the 16-bit encodings.
+    if writeback && rn == reg::SP && load == (!mode.before && mode.increment) {
+        return stack_transfer(cx, ins, load, mask);
+    }
+    not_pc(cx, ins.ops[0].span, rn)?;
+    // The 16-bit form is the increment-after one over r0-r7, whose writeback
+    // is implied by the base not being in the list.
+    if !mode.before && mode.increment {
+        let implied = load && mask & (1 << rn) != 0;
+        if writeback && implied {
+            cx.error(
+                ins.ops[0].span,
+                "the base register cannot be in the list of a transfer that writes it back",
+            );
+            return None;
+        }
+        if want_narrow(ins) && low(rn) && mask & !0xff == 0 && (writeback || implied) {
+            let base: u16 = if load { 0xc800 } else { 0xc000 };
+            return Some(narrow(base | ((rn as u16) << 8) | mask));
+        }
+    }
+    // The 16-bit form's writeback is implied by the list, so only the 32-bit
+    // one can have the base in it and write it back as well.
+    if writeback && mask & (1 << rn) != 0 {
+        cx.error(
+            ins.ops[0].span,
+            "the base register cannot be in the list of a transfer that writes it back",
+        );
+        return None;
+    }
+    check_list(cx, ins.ops[1].span, mask, load)?;
+    if let Some(rt) = sole_register(mask) {
+        // GNU as writes a single-register block transfer as the load or
+        // store that means the same thing, which is how a `.n` reaches a
+        // 16-bit encoding at all. Through the stack pointer with no
+        // writeback its own rewrite only reaches the 16-bit form, and goes
+        // wrong where that does not fit, so the block form stays -- which
+        // is what llvm-mc writes for every one of these.
+        let narrow_only = rn == reg::SP && !writeback;
+        if !narrow_only || narrow_stack_transfer(ins, rt) {
+            return single_transfer(cx, ins, rt, rn, load, mode.before, writeback);
+        }
+    }
+    if !want_wide(ins) {
+        return no_encoding(cx, ins);
+    }
+    let base: u16 = match (load, mode.before) {
+        (false, false) => 0xe880,
+        (true, false) => 0xe890,
+        (false, true) => 0xe900,
+        (true, true) => 0xe910,
+    };
+    Some(wide(base | (u16::from(writeback) << 5) | rn as u16, mask))
 }
 
 // ---- 32-bit arithmetic -----------------------------------------------------
@@ -1227,16 +2083,27 @@ fn block_transfer(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     let ops = ins.ops;
+    for op in ops {
+        bad_regs(cx, op)?;
+    }
     match ins.mnem {
         Mnem::Mul => {
-            encode::arity(cx, ins, &[3])?;
+            // `mul rd, rn` shares the destination with the second source.
+            encode::arity(cx, ins, &[2, 3])?;
             let rd = encode::reg_of(cx, &ops[0])?;
             let rn = encode::reg_of(cx, &ops[1])?;
-            let rm = encode::reg_of(cx, &ops[2])?;
+            let rm = if ops.len() == 3 {
+                encode::reg_of(cx, &ops[2])?
+            } else {
+                rd
+            };
             // `muls rdm, rn, rdm` is the 16-bit form, and `mul` in an `it`
-            // block, where it does not set the flags.
-            if sets_flags16(ins) && want_narrow(ins) && low(rd) && low(rn) && rd == rm {
-                return Some(narrow(0x4340 | ((rn as u16) << 3) | rd as u16));
+            // block, where it does not set the flags. Multiplication
+            // commutes, so either source may be the destination.
+            if sets_flags16(ins) && want_narrow(ins) && low(rn) && low(rm) && (rd == rm || rd == rn)
+            {
+                let other = if rd == rm { rn } else { rm };
+                return Some(narrow(0x4340 | ((other as u16) << 3) | rd as u16));
             }
             if ins.set_flags || !want_wide(ins) {
                 return no_encoding(cx, ins);
@@ -1247,6 +2114,7 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             ))
         }
         Mnem::Mla | Mnem::Mls => {
+            wide_only(cx, ins)?;
             encode::no_flags(cx, ins)?;
             encode::arity(cx, ins, &[4])?;
             let rd = encode::reg_of(cx, &ops[0])?;
@@ -1260,6 +2128,7 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             ))
         }
         _ => {
+            wide_only(cx, ins)?;
             encode::no_flags(cx, ins)?;
             encode::arity(cx, ins, &[4])?;
             let lo = encode::reg_of(cx, &ops[0])?;
@@ -1280,35 +2149,113 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     }
 }
 
-fn clz(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+// ---- status registers and the compare-and-branch ---------------------------
+
+fn status_read(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
+    wide_only(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
     let rd = encode::reg_of(cx, &ins.ops[0])?;
-    let rm = encode::reg_of(cx, &ins.ops[1])?;
+    bad_reg(cx, ins.ops[0].span, rd)?;
+    let rd = rd as u16;
+    let name = ins.ops[1].word.clone().unwrap_or_default();
+    if let Some((r, m1, m)) = encode::banked(&name) {
+        return Some(wide(
+            0xf3e0 | ((r as u16) << 4) | m1 as u16,
+            0x8000 | (rd << 8) | 0x20 | ((m as u16) << 4),
+        ));
+    }
+    let r = match name.as_str() {
+        "cpsr" | "apsr" => 0,
+        "spsr" => 1,
+        _ => {
+            cx.error(
+                ins.ops[1].span,
+                "expected `cpsr`, `apsr`, `spsr` or a banked register",
+            );
+            return None;
+        }
+    };
+    Some(wide(0xf3ef | (r << 4), 0x8000 | (rd << 8)))
+}
+
+fn status_write(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    unconditional(cx, ins)?;
+    wide_only(cx, ins)?;
+    encode::no_flags(cx, ins)?;
+    encode::arity(cx, ins, &[2])?;
+    let spec = ins.ops[0].word.clone().unwrap_or_default();
+    if let Some((r, m1, m)) = encode::banked(&spec) {
+        let rn = encode::reg_of(cx, &ins.ops[1])?;
+        bad_reg(cx, ins.ops[1].span, rn)?;
+        let rn = rn as u16;
+        return Some(wide(
+            0xf380 | ((r as u16) << 4) | rn,
+            0x8000 | ((m1 as u16) << 8) | 0x20 | ((m as u16) << 4),
+        ));
+    }
+    let (r, mask) = encode::psr_fields(cx, &ins.ops[0], &spec)?;
+    let Some(rn) = ins.ops[1].reg() else {
+        cx.error(
+            ins.ops[1].span,
+            "the Thumb encoding of `msr` takes a register, not an immediate",
+        );
+        return None;
+    };
+    bad_reg(cx, ins.ops[1].span, rn)?;
     Some(wide(
-        0xfab0 | rm as u16,
-        0xf080 | ((rd as u16) << 8) | rm as u16,
+        0xf380 | ((r as u16) << 4) | rn as u16,
+        0x8000 | ((mask as u16) << 8),
     ))
 }
 
-fn unary(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+/// `cbz`/`cbnz`'s six-bit forward offset, which sits in two pieces.
+///
+/// A branch to the next instruction, which the architecture prohibits,
+/// becomes a no-op rather than an error, as `md_apply_fix` writes it.
+fn scatter_cbz(w: u64, v: i64) -> u64 {
+    if v == -2 {
+        return 0xbf00;
+    }
+    let v = v as u64;
+    w | ((v & 0x3e) << 2) | ((v & 0x40) << 3)
+}
+
+/// `cbz rn, label` and `cbnz rn, label`, which reach forward only, have no
+/// relocation, and so no 32-bit form to relax into: GNU as reports a branch
+/// out of range rather than widening them.
+fn compare_branch(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[2])?;
-    let rd = encode::reg_of(cx, &ins.ops[0])?;
-    let rm = encode::reg_of(cx, &ins.ops[1])?;
-    if !low(rd) || !low(rm) || !want_narrow(ins) {
-        return no_encoding(cx, ins);
+    let rn = encode::reg_of(cx, &ins.ops[0])?;
+    if !low(rn) {
+        cx.error(ins.ops[0].span, format!("`{}` only tests r0-r7", ins.text));
+        return None;
     }
-    let base: u16 = match ins.mnem {
-        Mnem::Rev => 0xba00,
-        Mnem::Rev16 => 0xba40,
-        Mnem::Revsh => 0xbac0,
-        Mnem::Sxth => 0xb200,
-        Mnem::Sxtb => 0xb240,
-        Mnem::Uxth => 0xb280,
-        _ => 0xb2c0,
+    if ins.width == Width::Wide {
+        cx.error(ins.span, format!("`{}` has no 32-bit encoding", ins.text));
+        return None;
+    }
+    let Some(e) = ins.ops[1].imm() else {
+        cx.error(ins.ops[1].span, "expected a branch target");
+        return None;
     };
-    Some(narrow(base | ((rm as u16) << 3) | rd as u16))
+    let base: u16 = if ins.mnem == Mnem::Cbnz {
+        0xb900
+    } else {
+        0xb100
+    };
+    let kind = FixupKind::pcrel(2, 4)
+        .with_limits(-2, 126)
+        .accepting(|v| v == -2 || ((0..=126).contains(&v) && v % 2 == 0))
+        .with_range_hint("`cbz` and `cbnz` only reach 4 to 130 bytes forward")
+        .scatter(scatter_cbz);
+    Some(vec![fixed(
+        (base | rn as u16).to_le_bytes().to_vec(),
+        e,
+        kind,
+        ins.span,
+    )])
 }
