@@ -22,6 +22,8 @@ fn chosen(asm: &Assembler) -> Vec<&crate::section::Section> {
 }
 
 /// The address the image's first byte is loaded at.
+/// Not API.
+#[doc(hidden)]
 pub fn image_start(asm: &Assembler) -> u64 {
     chosen(asm).iter().map(|s| s.addr).min().unwrap_or(0)
 }

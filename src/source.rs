@@ -15,6 +15,7 @@ pub struct FileId(pub u32);
 /// A half-open byte range `[lo, hi)` in the [`SourceMap`]'s global position
 /// space.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Span {
     pub lo: u32,
     pub hi: u32,
@@ -65,12 +66,14 @@ impl fmt::Debug for Span {
 
 /// A 1-based line and column, ready for display.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub struct LineCol {
     pub line: u32,
     /// 1-based column counted in characters, not bytes.
     pub col: u32,
 }
 
+#[non_exhaustive]
 pub struct SourceFile {
     pub id: FileId,
     pub name: PathBuf,
@@ -147,6 +150,7 @@ impl SourceFile {
 
 /// Owns every source file loaded during a run.
 #[derive(Default)]
+#[non_exhaustive]
 pub struct SourceMap {
     files: Vec<SourceFile>,
     next_start: u32,

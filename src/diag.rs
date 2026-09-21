@@ -4,6 +4,7 @@ use crate::source::{SourceMap, Span};
 use std::fmt::Write as _;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[non_exhaustive]
 pub enum Severity {
     Note,
     Warning,
@@ -31,12 +32,14 @@ impl Severity {
 
 /// An extra span highlighted underneath the primary one.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SubDiag {
     pub span: Span,
     pub msg: String,
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Diagnostic {
     pub severity: Severity,
     pub msg: String,
@@ -82,6 +85,7 @@ impl Diagnostic {
 
 /// Accumulates diagnostics for a whole run.
 #[derive(Default)]
+#[non_exhaustive]
 pub struct DiagBag {
     diags: Vec<Diagnostic>,
     errors: usize,

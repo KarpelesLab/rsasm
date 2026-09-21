@@ -18,10 +18,7 @@ use rsasm::assembler::{Assembler, Options};
 #[allow(dead_code)]
 fn assemble_with(arch: &str, src: &str, debug_source: bool) -> Assembler {
     let arch = rsasm::arch::lookup(arch).expect("backend in this build");
-    let options = Options {
-        debug_source,
-        ..Options::default()
-    };
+    let options = Options::new().with_debug_source(debug_source);
     let mut asm = Assembler::new(arch, options);
     asm.assemble_str("test.s", src);
     asm.finish();

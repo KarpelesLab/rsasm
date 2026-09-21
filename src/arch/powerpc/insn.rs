@@ -130,7 +130,9 @@ pub enum F {
     /// number is written out in full and the low bit dropped, and the
     /// extension bit is again elsewhere: bit 10 for T, 29 and 30 for A and B.
     Xtp,
+    #[allow(dead_code)]
     Xap,
+    #[allow(dead_code)]
     Xbp,
     /// GPR in bits 21:25, where `maddld` keeps its addend.
     Rc,

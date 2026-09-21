@@ -142,6 +142,9 @@ impl Assembler {
 
 /// The number in a register name made of `prefix` and a decimal number up to
 /// `max`, such as `x12`: the shape most backends' DWARF register names have.
+/// Used only by the backends' `dwarf_register`, so a build with none has no
+/// caller for it.
+#[allow(dead_code)]
 pub fn numbered_register(name: &str, prefix: &str, max: u32) -> Option<u32> {
     let digits = name.strip_prefix(prefix)?;
     if digits.is_empty()

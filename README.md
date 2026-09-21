@@ -328,6 +328,38 @@ Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
 $ cargo build --no-default-features --features x86,aarch64
 ```
 
+### As a library
+
+```rust
+use rsasm::assembler::{Assembler, Options};
+use rsasm::lexer::Dialect;
+use rsasm::section::SectionId;
+use rsasm::{arch, output};
+
+let options = Options::new()
+    .with_dialect(Dialect::Gas)
+    .with_include_path("include");
+
+let mut asm = Assembler::new(arch::lookup("x86-64").unwrap(), options);
+asm.assemble_str("example.s", "movq %rbx, %rax\nret\n");
+if !asm.finish() || asm.diags().has_errors() {
+    eprint!("{}", asm.diags().render(asm.source_map(), false));
+} else {
+    let text = asm.section_bytes(SectionId(0));
+    let object = output::elf::build(&asm).unwrap();
+}
+```
+
+Only a small part of the crate is API: `Assembler` and the methods that drive
+it, `Options` and its `with_*` builders, `output::Format` and the writers'
+`build`, `arch::lookup` with the `Architecture` trait, `section::SectionId`,
+the diagnostics types and `lexer::Dialect`. Everything else — the opcode
+tables, the operand parsers, the expression arena, the macro engine, the
+layout — is an implementation detail and is not documented on docs.rs; see
+"What is public API" there for the exact list. `Options` and the other types
+that will keep growing are `#[non_exhaustive]`, so build them with their
+constructors rather than with a struct literal.
+
 ## Dialects
 
 Source syntax is chosen with `-d`, or defaults to what each architecture's

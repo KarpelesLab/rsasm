@@ -23,6 +23,7 @@ pub(crate) fn lookup(name: &str) -> Option<(u32, u8)> {
 }
 
 /// Parses a named system register.
+#[allow(dead_code)]
 pub fn by_name(name: &str) -> Option<u32> {
     lookup(name).map(|(bits, _)| bits)
 }
@@ -47,6 +48,7 @@ fn generic(name: &str) -> Option<u32> {
 }
 
 /// Reads a system-register operand, reporting a diagnostic if it is not one.
+#[allow(dead_code)]
 pub fn operand(cx: &mut AsmCtx<'_>, op: &Operand<'_>) -> Option<u32> {
     register(cx, op, None)
 }
@@ -99,6 +101,7 @@ pub(crate) fn pstate_field(name: &str) -> Option<(u32, u32, i64)> {
 }
 
 /// The `op1`/`op2` pair of a PSTATE field.
+#[allow(dead_code)]
 pub fn pstate(name: &str) -> Option<(u32, u32)> {
     let (word, _, _) = pstate_field(name)?;
     Some(((word >> 16) & 7, (word >> 5) & 7))

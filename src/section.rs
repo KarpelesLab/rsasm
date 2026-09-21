@@ -15,6 +15,7 @@ use crate::symbol::SymbolId;
 pub struct SectionId(pub u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum SectionKind {
     /// Occupies space in the output file.
     Progbits,
@@ -24,6 +25,7 @@ pub enum SectionKind {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
+#[non_exhaustive]
 pub struct SectionFlags {
     pub alloc: bool,
     pub write: bool,
@@ -69,6 +71,7 @@ impl SectionFlags {
 /// Not comparable: the `Scatter` variant holds a function pointer, and
 /// comparing those says nothing useful.
 #[derive(Copy, Clone, Debug, Default)]
+#[non_exhaustive]
 pub enum FieldEncoding {
     /// The value fills the field: it is written as an integer of `size` bytes
     /// in the target's byte order. This is what byte-oriented architectures
@@ -98,6 +101,7 @@ pub enum FieldEncoding {
 /// field. Relocatable output is unaffected, except where a value resolves at
 /// assembly time anyway.
 #[derive(Copy, Clone, Debug, Default)]
+#[non_exhaustive]
 pub enum LinkValue {
     /// `S + A`, or `S + A - P` for a PC-relative field: the value itself,
     /// fitted into the field by its range check and [`FieldEncoding`].
@@ -148,6 +152,7 @@ pub enum LinkValue {
 
 /// How a fixup's value is written into the output.
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub struct FixupKind {
     /// Field width in bytes: 1, 2, 4 or 8.
     pub size: u8,
@@ -239,9 +244,10 @@ pub struct FixupKind {
     /// does not reach its pool needs the pool moved, not the load.
     pub range_hint: Option<&'static str>,
     /// What the relocation computes, for a writer that does not number
-    /// relocations the way [`FixupKind::reloc`] does; see [`RelocClass`].
+    /// relocations the way [`FixupKind::reloc`] does; see the crate's
+    /// `reloc::RelocClass`.
     ///
-    /// The default, [`RelocClass::Plain`], covers every field whose value is
+    /// The default, `RelocClass::Plain`, covers every field whose value is
     /// the target itself, which is all an ELF object ever needs to be told
     /// beyond the number. A backend names a class only where a format may
     /// write the same width and `pcrel` differently: a branch, a GOT load, an
@@ -252,6 +258,7 @@ pub struct FixupKind {
 
 /// The symbol a relocation is written against.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
 pub enum RelocSymbol {
     /// The symbol in the expression, except that a local label is replaced
     /// by its section plus an offset, which is what linkers expect and what
@@ -469,6 +476,7 @@ impl FixupKind {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Fixup {
     /// Byte offset within the fragment's bytes.
     pub offset: u32,
@@ -479,6 +487,7 @@ pub struct Fixup {
 
 /// One possible encoding of a fragment.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct Variant {
     pub bytes: Vec<u8>,
     pub fixups: Vec<Fixup>,
@@ -494,6 +503,7 @@ impl Variant {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum FragKind {
     /// Literal bytes. Instructions that can be encoded several ways list all
     /// candidates smallest-first; layout raises `chosen` until every fixup
@@ -535,6 +545,7 @@ pub enum FragKind {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Fragment {
     pub kind: FragKind,
     pub span: Span,
@@ -575,6 +586,7 @@ impl Fragment {
     }
 }
 
+#[non_exhaustive]
 pub struct Section {
     pub id: SectionId,
     pub name: Name,
@@ -608,7 +620,7 @@ pub struct Section {
     /// backend's, which is the case in any file without `.arch`.
     pub arch_marks: Vec<(u32, u32)>,
     /// The mapping symbol in force where the section ends so far, or `None`
-    /// before anything has been marked; see [`crate::mapping`].
+    /// before anything has been marked; see the crate's `mapping` module.
     pub map_state: Option<&'static str>,
     /// The mapping symbols recorded so far, placed once the layout is known.
     pub map_events: Vec<crate::mapping::MapEvent>,
@@ -628,6 +640,8 @@ pub struct Section {
 }
 
 impl Section {
+    /// Not API.
+    #[doc(hidden)]
     pub fn new(id: SectionId, name: Name, kind: SectionKind, flags: SectionFlags) -> Section {
         Section {
             id,
@@ -652,6 +666,8 @@ impl Section {
     }
 
     /// Records that fragments from here on are emitted by backend `slot`.
+    /// Not API.
+    #[doc(hidden)]
     pub fn mark_arch(&mut self, slot: u32) {
         // Bytes emitted after the switch must not merge into a fragment
         // emitted before it, or one fragment would have two byte orders.
@@ -669,6 +685,8 @@ impl Section {
     }
 
     /// The backend slot that emitted fragment `fi`.
+    /// Not API.
+    #[doc(hidden)]
     pub fn arch_slot(&self, fi: usize) -> u32 {
         match self
             .arch_marks
@@ -686,10 +704,14 @@ impl Section {
 
     /// Prevents further merging into the current data fragment, so that the
     /// next fragment index refers to a real position.
+    /// Not API.
+    #[doc(hidden)]
     pub fn seal(&mut self) {
         self.open_data = None;
     }
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn push(&mut self, frag: Fragment) -> u32 {
         self.open_data = None;
         self.nop_state = None;
@@ -701,6 +723,8 @@ impl Section {
     /// Appends raw bytes, merging into the previous data fragment when that is
     /// safe. Merging keeps fragment counts (and therefore layout cost) low for
     /// data-heavy files.
+    /// Not API.
+    #[doc(hidden)]
     pub fn emit_bytes(&mut self, bytes: &[u8], span: Span) {
         if let Some(i) = self.open_data
             && let FragKind::Bytes { variants, .. } = &mut self.frags[i].kind
@@ -721,6 +745,8 @@ impl Section {
     }
 
     /// Appends `size` bytes to be filled in later from `expr`.
+    /// Not API.
+    #[doc(hidden)]
     pub fn emit_fixup(&mut self, size: u8, expr: ExprRef, kind: FixupKind, span: Span) {
         let placeholder = vec![0u8; size as usize];
         let (idx, base) = match self.open_data {
@@ -757,6 +783,8 @@ impl Section {
     }
 
     /// Appends a pre-encoded instruction with one or more size variants.
+    /// Not API.
+    #[doc(hidden)]
     pub fn emit_variants(&mut self, variants: Vec<Variant>, span: Span) -> u32 {
         debug_assert!(
             !variants.is_empty(),

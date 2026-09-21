@@ -272,6 +272,7 @@ impl Architecture for AArch64 {
 
 /// True if `name` is a register, so the generic parser does not treat a
 /// register name as a symbol.
+#[allow(dead_code)]
 pub fn is_register(name: &str) -> bool {
     reg::is_register(name) || table::is_register(name)
 }

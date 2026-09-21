@@ -114,6 +114,8 @@ impl Class {
 /// Mostly a property of the machine, not of the ELF class: i386 and ARM use
 /// `REL` while PowerPC, SPARC, RISC-V, AArch64 and x86-64 use `RELA`. MIPS is
 /// the exception that needs the class: o32 is `REL` and n64 `RELA`.
+/// Not API.
+#[doc(hidden)]
 pub fn uses_rela(machine: u16, elf64: bool) -> bool {
     match machine {
         3 | 40 => false, // EM_386, EM_ARM
@@ -124,6 +126,8 @@ pub fn uses_rela(machine: u16, elf64: bool) -> bool {
 
 /// Whether an object for `arch` is ELF64, which is decided by the target's
 /// initial mode rather than wherever the source leaves it.
+/// Not API.
+#[doc(hidden)]
 pub fn is_elf64(arch: &dyn crate::arch::Architecture) -> bool {
     arch.pointer_bytes(&arch.initial_state()) == 8
 }

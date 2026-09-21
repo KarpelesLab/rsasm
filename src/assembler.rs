@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 /// A relocation the linker must apply.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Relocation {
     pub section: SectionId,
     /// Offset within the section.
@@ -31,29 +32,46 @@ pub struct Relocation {
     pub kind: u32,
     /// The same relocation described in terms no format owns, which is what
     /// a writer that numbers relocations differently reads; see
-    /// [`crate::reloc`]. Not API.
+    /// the crate's `reloc` module. Not API.
     #[doc(hidden)]
     pub desc: RelocDesc,
 }
 
+/// How a source file is read and what is made of it.
+///
+/// Built with [`Options::new`] and the `with_*` methods; the struct is
+/// `#[non_exhaustive]` so that a later release can describe something new
+/// without breaking callers.
+///
+/// ```
+/// use rsasm::assembler::Options;
+/// use rsasm::lexer::Dialect;
+///
+/// let options = Options::new()
+///     .with_dialect(Dialect::Nasm)
+///     .with_relocatable(false)
+///     .with_base_addr(0x7c00);
+/// assert_eq!(options.dialect(), Dialect::Nasm);
+/// ```
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Options {
     /// Produce a relocatable object (emit relocations) rather than resolving
     /// every reference to a final address.
-    pub relocatable: bool,
+    pub(crate) relocatable: bool,
     /// Base address for absolute output.
-    pub base_addr: u64,
+    pub(crate) base_addr: u64,
     /// Directories searched by `.include`.
-    pub include_paths: Vec<PathBuf>,
-    pub dialect: Dialect,
-    pub syntax: Option<Syntax>,
+    pub(crate) include_paths: Vec<PathBuf>,
+    pub(crate) dialect: Dialect,
+    pub(crate) syntax: Option<Syntax>,
     /// The DWARF version asked for on the command line, which the line table
     /// and `.debug_frame` follow unless the source asks for version 5 with
     /// `.file 0`.
-    pub dwarf_version: Option<u8>,
+    pub(crate) dwarf_version: Option<u8>,
     /// Describe the assembly source itself in a line table and a
     /// compilation unit, as `-g` asks GNU as and llvm-mc to.
-    pub debug_source: bool,
+    pub(crate) debug_source: bool,
     /// The object format being written, which the source can see: Mach-O
     /// names its sections differently, counts `.align` in bits rather than
     /// bytes, and decides what a linker is told by rules of its own; COFF
@@ -61,7 +79,7 @@ pub struct Options {
     /// relocate, and starts its sections with alignments of its own. Flat
     /// output leaves this at its default, since `relocatable` already says
     /// there is no object.
-    pub format: crate::output::Format,
+    pub(crate) format: crate::output::Format,
 }
 
 impl Default for Options {
@@ -76,6 +94,119 @@ impl Default for Options {
             debug_source: false,
             format: crate::output::Format::Elf,
         }
+    }
+}
+
+impl Options {
+    /// The defaults: a relocatable ELF object based at 0, read as GNU as
+    /// reads it, with no debug information and no `.include` path.
+    pub fn new() -> Options {
+        Options::default()
+    }
+
+    /// Whether to emit relocations rather than resolve every reference to a
+    /// final address. Flat output (`bin`, `ihex`) needs `false`.
+    pub fn with_relocatable(mut self, yes: bool) -> Options {
+        self.relocatable = yes;
+        self
+    }
+
+    /// The address the first section is loaded at, for absolute output.
+    pub fn with_base_addr(mut self, addr: u64) -> Options {
+        self.base_addr = addr;
+        self
+    }
+
+    /// Adds one directory to the `.include` search path.
+    pub fn with_include_path(mut self, dir: impl Into<PathBuf>) -> Options {
+        self.include_paths.push(dir.into());
+        self
+    }
+
+    /// Adds several directories to the `.include` search path, in order.
+    pub fn with_include_paths<I>(mut self, dirs: I) -> Options
+    where
+        I: IntoIterator,
+        I::Item: Into<PathBuf>,
+    {
+        self.include_paths.extend(dirs.into_iter().map(Into::into));
+        self
+    }
+
+    /// The source dialect. [`Architecture::default_dialect`] names the one a
+    /// target is usually written in.
+    ///
+    /// [`Architecture::default_dialect`]: crate::arch::Architecture::default_dialect
+    pub fn with_dialect(mut self, dialect: Dialect) -> Options {
+        self.dialect = dialect;
+        self
+    }
+
+    /// The initial operand syntax, where the target has more than one.
+    /// Left alone, each backend starts in the syntax its reference
+    /// assembler starts in.
+    pub fn with_syntax(mut self, syntax: Syntax) -> Options {
+        self.syntax = Some(syntax);
+        self
+    }
+
+    /// The DWARF version to write, 2 to 5. The source may still ask for
+    /// version 5 with `.file 0`.
+    pub fn with_dwarf_version(mut self, version: u8) -> Options {
+        self.dwarf_version = Some(version);
+        self
+    }
+
+    /// Describe the assembly source itself in DWARF, as `-g` asks GNU as to.
+    pub fn with_debug_source(mut self, yes: bool) -> Options {
+        self.debug_source = yes;
+        self
+    }
+
+    /// The object format being written, which some directives can see.
+    pub fn with_format(mut self, format: crate::output::Format) -> Options {
+        self.format = format;
+        self
+    }
+
+    /// Whether relocations are emitted; see [`Options::with_relocatable`].
+    pub fn relocatable(&self) -> bool {
+        self.relocatable
+    }
+
+    /// The base address for absolute output.
+    pub fn base_addr(&self) -> u64 {
+        self.base_addr
+    }
+
+    /// The `.include` search path, in the order it is searched.
+    pub fn include_paths(&self) -> &[PathBuf] {
+        &self.include_paths
+    }
+
+    /// The source dialect.
+    pub fn dialect(&self) -> Dialect {
+        self.dialect
+    }
+
+    /// The initial operand syntax, if one was asked for.
+    pub fn syntax(&self) -> Option<Syntax> {
+        self.syntax
+    }
+
+    /// The DWARF version asked for, if any.
+    pub fn dwarf_version(&self) -> Option<u8> {
+        self.dwarf_version
+    }
+
+    /// Whether the assembly source itself is described in DWARF.
+    pub fn debug_source(&self) -> bool {
+        self.debug_source
+    }
+
+    /// The object format being written.
+    pub fn format(&self) -> crate::output::Format {
+        self.format
     }
 }
 
@@ -114,22 +245,45 @@ pub(crate) struct Cond {
     pub(crate) span: Span,
 }
 
+/// The assembler: source in, sections and relocations out.
+///
+/// Drive it with [`Assembler::assemble_str`], [`Assembler::assemble_path`] or
+/// [`Assembler::assemble_file`], then [`Assembler::finish`], then hand it to
+/// one of the writers in [`crate::output`] or read a section back with
+/// [`Assembler::section_bytes`].
+///
+/// The fields are the crate's own working state and are not API, however
+/// visible they have to be for rsasm's own tests; use the methods.
 pub struct Assembler {
+    /// Not API.
+    #[doc(hidden)]
     pub sm: SourceMap,
+    /// Not API.
+    #[doc(hidden)]
     pub interner: Interner,
-    pub pool: LitPool,
+    pub(crate) pool: LitPool,
+    /// Not API.
+    #[doc(hidden)]
     pub diags: DiagBag,
-    pub exprs: ExprArena,
+    pub(crate) exprs: ExprArena,
+    /// Not API.
+    #[doc(hidden)]
     pub symbols: SymbolTable,
+    /// Not API.
+    #[doc(hidden)]
     pub sections: Vec<Section>,
+    /// Not API.
+    #[doc(hidden)]
     pub relocs: Vec<Relocation>,
     section_ids: HashMap<Name, SectionId>,
-    pub cur: SectionId,
+    pub(crate) cur: SectionId,
     /// Where `.previous` goes back to.
     previous: Option<SectionId>,
     section_stack: Vec<(SectionId, Option<SectionId>)>,
+    /// Not API.
+    #[doc(hidden)]
     pub arch: Box<dyn Architecture>,
-    pub arch_state: ArchState,
+    pub(crate) arch_state: ArchState,
     /// Every backend that has been active, in the order `.arch` made them
     /// so, with the state each was left in; a section's
     /// [`Section::arch_marks`] index this. Slot 0 is the backend the
@@ -138,6 +292,8 @@ pub struct Assembler {
     arch_slots: Vec<Option<(Box<dyn Architecture>, ArchState)>>,
     /// The active backend's slot in `arch_slots`.
     arch_slot: u32,
+    /// Not API.
+    #[doc(hidden)]
     pub options: Options,
     /// Bumped whenever the lexing rules may have changed, which only an
     /// `.arch` switch does, so a file being read knows to take them again
@@ -179,7 +335,7 @@ pub struct Assembler {
     /// What CC-RX `.SECTION` and `.ORG` said about each section.
     pub(crate) ccrx_sections: HashMap<SectionId, crate::dialect_cc::RxSection>,
     /// Line table rows and call frame information, written out after layout.
-    pub dwarf: crate::dwarf::DwarfState,
+    pub(crate) dwarf: crate::dwarf::DwarfState,
     /// The sections whose end layout rounded up to their alignment; see
     /// `Assembler::pad_section_tails`.
     pub(crate) tail_pads: Vec<SectionId>,
@@ -193,7 +349,9 @@ pub struct Assembler {
     /// The literals each section's next pool will hold; see
     /// [`crate::literals`].
     pub(crate) literal_pools: HashMap<SectionId, Vec<crate::arch::LiteralRequest>>,
-    /// The mapping symbols of the finished object; see [`crate::mapping`].
+    /// The mapping symbols of the finished object; see the crate's `mapping`
+    /// module. Not API.
+    #[doc(hidden)]
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
@@ -322,19 +480,44 @@ impl Assembler {
 
     // ---- sections ---------------------------------------------------------
 
+    /// The diagnostics reported so far. Render them with
+    /// [`DiagBag::render`] and [`Assembler::source_map`].
+    pub fn diags(&self) -> &DiagBag {
+        &self.diags
+    }
+
+    /// The files read so far, which a diagnostic's span points into.
+    pub fn source_map(&self) -> &SourceMap {
+        &self.sm
+    }
+
+    /// The options the assembler was created with, as
+    /// [`Assembler::new`] received them.
+    pub fn options(&self) -> &Options {
+        &self.options
+    }
+
+    /// Not API.
+    #[doc(hidden)]
     pub fn section(&self, id: SectionId) -> &Section {
         &self.sections[id.0 as usize]
     }
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn section_mut(&mut self, id: SectionId) -> &mut Section {
         &mut self.sections[id.0 as usize]
     }
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn cur_section(&mut self) -> &mut Section {
         let id = self.cur;
         &mut self.sections[id.0 as usize]
     }
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn get_or_create_section(
         &mut self,
         name: Name,
@@ -479,6 +662,8 @@ impl Assembler {
     }
 
     /// The name to show for a symbol in diagnostics.
+    /// Not API.
+    #[doc(hidden)]
     pub fn display_name(&self, id: SymbolId) -> String {
         let s = self.symbols.get(id);
         match s.local_number {
@@ -1338,6 +1523,8 @@ impl Assembler {
     /// The last backend for the target's machine to be active, and its state,
     /// which is what describes the object's contents in its header (see
     /// [`ArchState::used`]).
+    /// Not API.
+    #[doc(hidden)]
     pub fn target_state(&self) -> (&dyn Architecture, &ArchState) {
         let machine = self.target().elf_machine();
         let slot = (0..self.arch_slots.len())
@@ -1631,6 +1818,8 @@ impl Assembler {
 
     // ---- expressions ------------------------------------------------------
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn parse_expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
         let mut p = expr::ExprParser {
             arena: &mut self.exprs,
@@ -1645,6 +1834,8 @@ impl Assembler {
         p.parse(cur)
     }
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn expect_end(&mut self, cur: &mut Cursor<'_>) {
         if !cur.at_end() && !cur.is_empty() {
             let span = cur.remaining_span();
@@ -1653,6 +1844,8 @@ impl Assembler {
     }
 
     /// Evaluates an expression against the current symbol table.
+    /// Not API.
+    #[doc(hidden)]
     pub fn eval(&mut self, e: ExprRef) -> Result<Value, EvalError> {
         let Assembler { exprs, symbols, .. } = self;
         let mut env = Env {
@@ -1665,12 +1858,16 @@ impl Assembler {
 
     /// Evaluates an expression without recording symbol uses, so it can be
     /// called from the output writers, which only have `&Assembler`.
+    /// Not API.
+    #[doc(hidden)]
     pub fn eval_ref(&self, e: ExprRef) -> Result<Value, EvalError> {
         let mut env = expr::SymbolEnv::new(&self.exprs, &self.symbols);
         expr::eval(&self.exprs, e, &mut env)
     }
 
     /// Evaluates an expression to a number, if it resolves to one.
+    /// Not API.
+    #[doc(hidden)]
     pub fn eval_const(&self, e: ExprRef) -> Option<i64> {
         self.resolve_value(self.eval_ref(e).ok()?)
     }
@@ -1679,6 +1876,8 @@ impl Assembler {
     ///
     /// A difference of two labels counts: `len = end - start` is a constant
     /// even though neither end of it is.
+    /// Not API.
+    #[doc(hidden)]
     pub fn symbol_number(&self, id: SymbolId) -> Option<i64> {
         let v = self.eval_ref_symbol(id).ok()?;
         if let Some(n) = v.as_abs() {
@@ -1689,6 +1888,8 @@ impl Assembler {
 
     /// The section and offset a symbol resolves to, for symbols defined by
     /// `.set` in terms of a label.
+    /// Not API.
+    #[doc(hidden)]
     pub fn symbol_target_section(&self, id: SymbolId) -> Option<(SectionId, u64)> {
         let v = self.eval_ref_symbol(id).ok()?;
         let (Some(p), None) = (v.plus, v.minus) else {
@@ -1711,6 +1912,8 @@ impl Assembler {
     }
 
     /// Evaluates an expression that must be a plain number right now.
+    /// Not API.
+    #[doc(hidden)]
     pub fn eval_absolute(&mut self, e: ExprRef, what: &str) -> Option<i64> {
         match self.eval(e) {
             Ok(v) => match v.as_abs() {
@@ -1750,6 +1953,8 @@ impl Assembler {
 
     // ---- emitting ---------------------------------------------------------
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn emit_bytes(&mut self, bytes: &[u8], span: Span) {
         if self.check_nobits(span) {
             return;
@@ -1783,6 +1988,8 @@ impl Assembler {
     }
 
     /// Symbols that were referenced but never given a definition anywhere.
+    /// Not API.
+    #[doc(hidden)]
     pub fn report_undefined_locals(&mut self) {
         let missing: Vec<(SymbolId, u32)> = self.symbols.undefined_locals().collect();
         for (id, n) in missing {

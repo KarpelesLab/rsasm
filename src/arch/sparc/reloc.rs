@@ -1,6 +1,7 @@
 //! ELF relocation types for SPARC (`R_SPARC_*`), shared by the 32- and 64-bit
 //! ABIs: `elf32-sparc` and `elf64-sparc` number them the same way.
 
+#[allow(dead_code)]
 pub const NONE: u32 = 0;
 pub const ABS8: u32 = 1;
 pub const ABS16: u32 = 2;

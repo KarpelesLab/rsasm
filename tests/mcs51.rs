@@ -22,11 +22,9 @@ use std::collections::BTreeMap;
 /// Assembles `src` the way `rsasm -a 8051 -f bin` does.
 fn assemble(src: &str) -> Assembler {
     let a = arch::lookup("8051").expect("backend is compiled in");
-    let options = Options {
-        dialect: a.default_dialect(),
-        relocatable: false,
-        ..Options::default()
-    };
+    let options = Options::new()
+        .with_dialect(a.default_dialect())
+        .with_relocatable(false);
     let mut asm = Assembler::new(a, options);
     asm.assemble_str("test.s", src);
     asm.finish();

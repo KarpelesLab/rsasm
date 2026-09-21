@@ -242,10 +242,7 @@ fn flat_binary_resolves_references_across_sections() {
 #[test]
 fn flat_binary_reports_undefined_symbols() {
     let arch = rsasm::arch::lookup("x86-64").unwrap();
-    let options = rsasm::assembler::Options {
-        relocatable: false,
-        ..rsasm::assembler::Options::default()
-    };
+    let options = rsasm::assembler::Options::new().with_relocatable(false);
     let mut asm = rsasm::assembler::Assembler::new(arch, options);
     asm.assemble_str("t.s", ".quad nosuch\n");
     asm.finish();

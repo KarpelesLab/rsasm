@@ -643,6 +643,7 @@ impl EvalCtx for SymbolEnv<'_> {
 /// Used where a width has to be chosen before addresses are known: an
 /// immediate or displacement that folds to a constant can pick the shortest
 /// encoding, while anything symbolic falls back to the widest one.
+#[allow(dead_code)]
 pub fn const_fold(arena: &ExprArena, r: ExprRef) -> Option<i64> {
     struct NoSymbols;
     impl EvalCtx for NoSymbols {

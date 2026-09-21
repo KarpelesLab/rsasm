@@ -63,6 +63,7 @@ impl Statement {
         Cursor::new(&self.toks[self.args.min(self.toks.len())..])
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.labels.is_empty() && self.body.is_none()
     }
@@ -187,6 +188,7 @@ impl Parser {
 /// lexer. Without the lexer's configuration no backend's mnemonics are known,
 /// so in the 8-bit dialect every first-column word that is not a directive is
 /// a label.
+#[allow(dead_code)]
 pub fn build_statement(
     toks: Vec<Token>,
     dialect: Dialect,

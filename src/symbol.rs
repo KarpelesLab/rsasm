@@ -10,6 +10,7 @@ use std::collections::HashMap;
 pub struct SymbolId(pub u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Binding {
     Local,
     Global,
@@ -17,6 +18,7 @@ pub enum Binding {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
 pub enum SymType {
     #[default]
     NoType,
@@ -28,6 +30,7 @@ pub enum SymType {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
 pub enum Visibility {
     #[default]
     Default,
@@ -37,6 +40,7 @@ pub enum Visibility {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum SymbolValue {
     /// Referenced but never defined: the linker must supply it.
     Undefined,
@@ -49,6 +53,7 @@ pub enum SymbolValue {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Symbol {
     pub name: Name,
     pub value: SymbolValue,
@@ -81,6 +86,7 @@ impl Symbol {
 }
 
 #[derive(Default)]
+#[non_exhaustive]
 pub struct SymbolTable {
     syms: Vec<Symbol>,
     by_name: HashMap<Name, SymbolId>,
@@ -100,6 +106,8 @@ struct LocalSlots {
 }
 
 impl SymbolTable {
+    /// Not API.
+    #[doc(hidden)]
     pub fn new() -> SymbolTable {
         SymbolTable::default()
     }
@@ -116,6 +124,8 @@ impl SymbolTable {
         &self.syms[id.0 as usize]
     }
 
+    /// Not API.
+    #[doc(hidden)]
     pub fn get_mut(&mut self, id: SymbolId) -> &mut Symbol {
         &mut self.syms[id.0 as usize]
     }
@@ -132,6 +142,8 @@ impl SymbolTable {
     }
 
     /// Finds `name`, creating an undefined entry if it is new.
+    /// Not API.
+    #[doc(hidden)]
     pub fn intern(&mut self, name: Name, span: Span) -> SymbolId {
         if let Some(&id) = self.by_name.get(&name) {
             return id;
@@ -159,6 +171,8 @@ impl SymbolTable {
     ///
     /// It is deliberately not registered by name: `.text` as a section symbol
     /// and `.text` as a user-written label are different things.
+    /// Not API.
+    #[doc(hidden)]
     pub fn intern_section(&mut self, name: Name, section: SectionId) -> SymbolId {
         self.push(Symbol {
             name,
@@ -183,6 +197,8 @@ impl SymbolTable {
     /// the file is read, and it matters where the reference assembler decides
     /// something as it reads: GNU as folds `size = end - start` to a constant
     /// only if both labels were already defined at that line.
+    /// Not API.
+    #[doc(hidden)]
     pub fn mark_defined(&mut self, id: SymbolId) {
         self.definitions += 1;
         self.syms[id.0 as usize].def_order = self.definitions;
@@ -195,6 +211,8 @@ impl SymbolTable {
     }
 
     /// Resolves a backward reference `Nb` to the most recent `N:`.
+    /// Not API.
+    #[doc(hidden)]
     pub fn local_backward(&self, n: u32, _span: Span) -> Option<SymbolId> {
         let slots = self.locals.get(&n)?;
         if slots.defined == 0 {
@@ -206,12 +224,16 @@ impl SymbolTable {
     /// Resolves a forward reference `Nf` to the *next* `N:` to be defined,
     /// creating a placeholder symbol for it if that definition has not been
     /// seen yet.
+    /// Not API.
+    #[doc(hidden)]
     pub fn local_forward(&mut self, n: u32, span: Span, interner: &mut Interner) -> SymbolId {
         let idx = self.locals.entry(n).or_default().defined;
         self.local_slot(n, idx, span, interner)
     }
 
     /// Claims the slot for the next `N:` definition.
+    /// Not API.
+    #[doc(hidden)]
     pub fn local_define_slot(&mut self, n: u32, span: Span, interner: &mut Interner) -> SymbolId {
         let idx = self.locals.entry(n).or_default().defined;
         let id = self.local_slot(n, idx, span, interner);
@@ -252,6 +274,8 @@ impl SymbolTable {
     }
 
     /// Numeric local labels that were referenced forward but never defined.
+    /// Not API.
+    #[doc(hidden)]
     pub fn undefined_locals(&self) -> impl Iterator<Item = (SymbolId, u32)> + '_ {
         self.locals
             .iter()

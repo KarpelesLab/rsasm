@@ -34,18 +34,16 @@ fn main() {
     let flat = std::env::args().nth(3).as_deref() == Some("bin");
     let mut asm = Assembler::new(
         arch,
-        Options {
-            dialect,
-            relocatable: !flat,
-            ..Options::default()
-        },
+        Options::new().with_dialect(dialect).with_relocatable(!flat),
     );
     asm.assemble_str("<stdin>", &src);
     let ok = asm.finish();
-    if !ok || asm.diags.has_errors() {
+    if !ok || asm.diags().has_errors() {
         print!(
             "RSASM-ERROR: {}",
-            asm.diags.render(&asm.sm, false).replace('\n', " | ")
+            asm.diags()
+                .render(asm.source_map(), false)
+                .replace('\n', " | ")
         );
         println!();
         std::process::exit(1);

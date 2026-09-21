@@ -5,8 +5,8 @@
 //! the file is spelled: `#` starts a comment on x86 but an immediate on m68k,
 //! `|` a comment on m68k but an operator elsewhere. A batch tokenizer would
 //! have to guess; a pull lexer simply asks the config again for every token,
-//! and the [`crate::parser::Parser`] reads a file one statement at a time so
-//! the directive has run before the next statement is lexed.
+//! and the crate's parser reads a file one statement at a time so the
+//! directive has run before the next statement is lexed.
 
 use crate::diag::{DiagBag, Diagnostic};
 use crate::intern::{Interner, Name};
@@ -14,6 +14,7 @@ use crate::source::{FileId, SourceMap, Span};
 
 /// Overall source-language flavour. Controls lexing and the directive set.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
 pub enum Dialect {
     /// GNU as: `#` and `//` comments, `;` separates statements, `.directives`.
     #[default]
@@ -35,7 +36,7 @@ pub enum Dialect {
     /// Renesas CC-RL, the assembler of the RL78 compiler package: dotted
     /// `.DB`/`.CSEG` directives, `$IF`-style control instructions, both
     /// `0x10` and `10H` numbers, and C escapes in quoted strings. See
-    /// [`crate::dialect`] for the manual it follows.
+    /// the crate's `dialect` module for the manual it follows.
     CcRl,
     /// Renesas CC-RH, the assembler of the RH850 compiler package. The same
     /// language family as CC-RL, with prefix-only numbers, a different
@@ -50,8 +51,8 @@ pub enum Dialect {
     /// Macro Assembler AS reads Intel 8080 source: `$12`, `12H` and `%1010`
     /// numbers, `;` comments, `$` and `*` for the location counter, `<` and
     /// `>` for an address's low and high byte, `DB`/`DEFB`/`.byte` data, and
-    /// `ORG` to say where the code is loaded. See [`crate::dialect`] for how
-    /// the references differ and which one each rule follows.
+    /// `ORG` to say where the code is loaded. See the crate's `dialect`
+    /// module for how the references differ and which one each rule follows.
     EightBit,
 }
 
@@ -138,6 +139,8 @@ impl Dialect {
 }
 
 /// Lexical rules in force for the next token.
+/// Not API.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct LexConfig {
     pub dialect: Dialect,
@@ -377,12 +380,16 @@ impl Default for LexConfig {
 }
 
 /// Direction of a numeric local-label reference (`1f` / `1b`).
+/// Not API.
+#[doc(hidden)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum LocalDir {
     Forward,
     Backward,
 }
 
+/// Not API.
+#[doc(hidden)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Punct {
     Comma,
@@ -455,6 +462,8 @@ impl Punct {
 
 /// Byte strings from string literals, shared across every file in a run so a
 /// `TokKind::Str` index stays valid after the lexer that produced it is gone.
+/// Not API.
+#[doc(hidden)]
 #[derive(Default)]
 pub struct LitPool {
     strings: Vec<Vec<u8>>,
@@ -476,6 +485,8 @@ impl LitPool {
     }
 }
 
+/// Not API.
+#[doc(hidden)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TokKind {
     Eof,
@@ -517,6 +528,8 @@ fn suffix_radix(run: &str) -> Option<u32> {
 
 /// The diagnostic for a [`TokKind::BadNumber`] read where a number was
 /// expected: names the first character that is not a digit, and the base.
+/// Not API.
+#[doc(hidden)]
 pub fn explain_bad_number(text: &str) -> String {
     let (radix, digits) = match text.get(..2).map(str::to_ascii_lowercase).as_deref() {
         Some("0x") => (16, &text[2..]),
@@ -536,6 +549,8 @@ pub fn explain_bad_number(text: &str) -> String {
     }
 }
 
+/// Not API.
+#[doc(hidden)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Token {
     pub kind: TokKind,
@@ -563,6 +578,8 @@ impl Token {
     }
 }
 
+/// Not API.
+#[doc(hidden)]
 pub struct Lexer<'a> {
     src: &'a str,
     bytes: &'a [u8],
@@ -1450,6 +1467,8 @@ impl<'a> Lexer<'a> {
 /// `t`, `o`, `q`, `b`, `y`) or neither, with underscores anywhere. Where both
 /// a prefix and a suffix could apply, the prefix wins if everything after it
 /// is a digit of its radix: `0b101` is binary, `0b1h` hex.
+/// Not API.
+#[doc(hidden)]
 pub fn nasm_number(text: &str) -> Option<u64> {
     let b = text.as_bytes();
     let radix_letter = |c: u8| -> Option<u32> {
