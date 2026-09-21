@@ -273,7 +273,13 @@ compare_object() { # key arch dialect cmd name source
   # AVR objects with their `e_flags`, which name the core and say the object
   # is prepared for linker relaxation; their local symbols are the labels
   # relocations name, which canon.sh already reads by section and offset.
-  case "$1" in arm | thumb) full=--full ;; avr*) full=--flags ;; esac
+  # GNU as for AVR writes uninitialized bytes into the record addresses in
+  # `.avr.prop`, which differ from run to run; the linker takes those fields
+  # from the relocations, so they are blanked before the comparison.
+  case "$1" in
+    arm | thumb) full=--full ;;
+    avr*) full="--flags --zero-relocated .avr.prop=4" ;;
+  esac
   d=$(mktemp -d)
   printf '%s\n' "$6" > "$d/in.s"
   if [ ! -x "$bin/$tool" ]; then
