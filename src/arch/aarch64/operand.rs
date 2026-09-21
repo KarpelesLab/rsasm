@@ -255,6 +255,10 @@ impl Operand<'_> {
             OperandKind::Imm(e) => return Some(e),
             // An instruction that understands relocation operators matches on
             // `Reloc` itself; reaching here means this one does not.
+            // Except Darwin's spelling, which llvm-mc takes anywhere a label
+            // can go and leaves to the relocation to make sense of; see
+            // `Architecture::modifier_class`.
+            OperandKind::Reloc(_, e) if cx.find_modifier_for(e).is_some() => return Some(e),
             OperandKind::Reloc(op, _) => {
                 cx.error(
                     self.span,
@@ -456,6 +460,20 @@ fn immediate(cx: &mut AsmCtx<'_>, toks: &[Token]) -> Option<(Option<RelocOp>, Ex
     if !cur.at_end() {
         cx.error(cur.peek().span, "unexpected token after an operand");
         return None;
+    }
+    // Darwin spells `:lo12:sym` as `sym@PAGEOFF`, `:got_lo12:sym` as
+    // `sym@GOTPAGEOFF` and `:got:sym` as `sym@GOTPAGE`; `sym@PAGE` is what
+    // `adrp` takes anyway. The modifier stays on the expression, so the
+    // relocation can still be told which spelling it came from.
+    if op.is_none()
+        && let Some(m) = cx.find_modifier_for(e)
+    {
+        op = match cx.name(m) {
+            "pageoff" => Some(RelocOp::Lo12),
+            "gotpageoff" => Some(RelocOp::GotLo12),
+            "gotpage" => Some(RelocOp::Got),
+            _ => None,
+        };
     }
     Some((op, e))
 }

@@ -17,6 +17,7 @@ use crate::assembler::{Assembler, Relocation};
 use crate::expr::{self, EvalError, ExprKind, ExprRef, Value};
 use crate::intern::Name;
 use crate::lexer::LocalDir;
+use crate::reloc::RelocDesc;
 use crate::section::{
     FixupKind, FragKind, Fragment, LinkValue, RelocSymbol, SectionId, SectionKind,
 };
@@ -62,17 +63,37 @@ impl Assembler {
     /// if errors were reported.
     pub fn finish(&mut self) -> bool {
         self.flush_all_literals();
+        self.bind_section_names();
         self.report_undefined_locals();
         self.check_cc_bare_labels();
         self.pad_section_tails();
+        // Which references a Mach-O object resolves depends on where its
+        // atoms start, which is settled once every label has been read.
+        if self.macho_object() {
+            self.macho.atoms = crate::output::macho::atoms(self);
+            if let Some(open) = self.macho.data_regions.iter().find(|r| r.end.is_none()) {
+                let span = open.span;
+                self.diags.error(
+                    span,
+                    "`.data_region` is never ended with `.end_data_region`",
+                );
+            }
+        }
 
         if !self.settle_layout() {
             return false;
         }
         // DWARF is written from the settled layout, into sections of its own
         // that nothing in the code refers to, so the layout of the code
-        // cannot change when it runs again to place them.
-        if self.emit_dwarf() && !self.settle_layout() {
+        // cannot change when it runs again to place them. So are a target's
+        // records of where the code was padded, and the unwind data a COFF
+        // object's `.seh_*` directives describe, which counts the bytes of a
+        // prologue.
+        let dwarf = self.emit_dwarf();
+        if (self.emit_layout_records() || dwarf) && !self.settle_layout() {
+            return false;
+        }
+        if self.emit_coff_unwind() && !self.settle_layout() {
             return false;
         }
 
@@ -87,6 +108,41 @@ impl Assembler {
         }
         self.materialize();
         !self.diags.has_errors()
+    }
+
+    /// Makes a name that no symbol is defined by, but a section is, stand for
+    /// that section: `.long .debug_abbrev` is a reference to the section
+    /// symbol, in GNU as and llvm-mc alike, however far ahead of the section
+    /// it is written. Clang's DWARF refers to its sections this way. A name
+    /// declared global or weak stays the linker's to find.
+    fn bind_section_names(&mut self) {
+        let sections: HashMap<Name, SectionId> =
+            self.sections.iter().map(|s| (s.name, s.id)).collect();
+        // A name only reaches the symbol table once something evaluates it,
+        // which for most references is after this; so the expressions are
+        // what say which section names are used.
+        let mut used: Vec<(Name, SectionId, Span)> = Vec::new();
+        for node in &self.exprs.nodes {
+            if let ExprKind::Sym(n) = node.kind
+                && let Some(&section) = sections.get(&n)
+                && !used.iter().any(|(m, ..)| *m == n)
+            {
+                used.push((n, section, node.span));
+            }
+        }
+        for (name, section, span) in used {
+            let id = self.symbols.intern(name, span);
+            let sym = self.symbols.get(id);
+            if sym.is_defined() || sym.binding != Binding::Local {
+                continue;
+            }
+            let sym = self.symbols.get_mut(id);
+            sym.value = SymbolValue::Label { section, frag: 0 };
+            sym.ty = crate::symbol::SymType::Section;
+            if self.section(section).sym.is_none() {
+                self.section_mut(section).sym = Some(id);
+            }
+        }
     }
 
     /// Runs layout to a fixed point. Returns false, after reporting it, if it
@@ -187,6 +243,82 @@ impl Assembler {
                 Span::DUMMY,
             ));
         }
+    }
+
+    /// Adds the section a target's assembler writes about where the settled
+    /// layout padded its code, if it writes one; see
+    /// [`Architecture::layout_records`](crate::arch::Architecture::layout_records).
+    /// Returns whether a section was added.
+    fn emit_layout_records(&mut self) -> bool {
+        use crate::arch::{LayoutPlace, PlaceKind};
+        if !self.options.relocatable {
+            return false;
+        }
+        let mut places = Vec::new();
+        for (si, s) in self.sections.iter().enumerate() {
+            if !(s.flags.exec && s.flags.alloc) {
+                continue;
+            }
+            for f in &s.frags {
+                let offset = f.offset + f.size();
+                let section = SectionId(si as u32);
+                let (kind, fill) = match &f.kind {
+                    FragKind::Align { align, fill, .. } if *align > 1 => (
+                        PlaceKind::Align(align.trailing_zeros()),
+                        fill.first().copied().unwrap_or(0),
+                    ),
+                    FragKind::Org { target, fill, .. } => {
+                        let addend = self.eval_ref(*target).map_or(0, |v| v.addend);
+                        (PlaceKind::Org(addend), *fill)
+                    }
+                    _ => continue,
+                };
+                places.push(LayoutPlace {
+                    kind,
+                    section,
+                    offset,
+                    fill,
+                });
+            }
+        }
+        let Some(records) = self.target().layout_records(&places) else {
+            return false;
+        };
+        let name = self.interner.intern(records.name);
+        let id = self.get_or_create_section(name, SectionKind::Progbits, Default::default(), 1);
+        self.section_mut(id).mark_arch(0);
+        let reloc = self.target().data_reloc(4, false).unwrap_or(0);
+        let kind = FixupKind::data(4).with_reloc(reloc);
+        let mut fixups = Vec::new();
+        for (at, index) in records.refs {
+            let place = places[index];
+            let sym = self.section_symbol(place.section);
+            let base = self.exprs.alloc(ExprKind::SymId(sym), Span::DUMMY);
+            let off = self.exprs.int(place.offset, Span::DUMMY);
+            let expr = self.exprs.alloc(
+                ExprKind::Binary(crate::expr::BinOp::Add, base, off),
+                Span::DUMMY,
+            );
+            fixups.push(crate::section::Fixup {
+                offset: at,
+                expr,
+                kind,
+                span: Span::DUMMY,
+            });
+        }
+        let s = self.section_mut(id);
+        s.seal();
+        s.push(Fragment::new(
+            FragKind::Bytes {
+                variants: vec![crate::section::Variant {
+                    bytes: records.bytes,
+                    fixups,
+                }],
+                chosen: 0,
+            },
+            Span::DUMMY,
+        ));
+        true
     }
 
     /// Walks every section assigning fragment offsets, recomputing the sizes
@@ -782,9 +914,12 @@ impl Assembler {
         }
         let mut addr = self.options.base_addr;
         for s in &mut self.sections {
+            // An empty section is not aligned: a linker drops it from the
+            // image, alignment and all, rather than pad for nothing.
+            let align = if s.size == 0 { 1 } else { s.align.max(1) };
             addr = match s.origin {
                 Some(origin) => origin,
-                None => addr.next_multiple_of(s.align.max(1)),
+                None => addr.next_multiple_of(align),
             };
             s.addr = addr;
             addr += s.size;
@@ -996,11 +1131,13 @@ impl Assembler {
             | LinkValue::LinkerOnly(_) => {}
         }
         // A modifier on a plain reference (`.long foo@PLT`) only picks the
-        // relocation in an object; in a flat image it decides the value.
+        // relocation in an object; in a flat image it decides the value. One
+        // that takes part of the value (AVR's `lo8()`) does so as the field
+        // is written, whichever the output.
         if flat && let Some(m) = self.find_modifier(e) {
             let name = self.interner.get(m);
             match self.frag_arch(section.0 as usize, fi).0.flat_modifier(name) {
-                FlatModifier::Plain => {}
+                FlatModifier::Plain | FlatModifier::Field { .. } => {}
                 FlatModifier::PcRelative if kind.pcrel => {}
                 FlatModifier::PcRelative => {
                     let target = self.eval(e).ok().and_then(|v| self.resolve_value(v))?;
@@ -1189,7 +1326,7 @@ impl Assembler {
         let m = self.find_modifier(e)?;
         let name = self.interner.get(m);
         let arch = self.frag_arch(section.0 as usize, fi).0;
-        (arch.flat_modifier(name) == FlatModifier::LinkerOnly).then(|| {
+        matches!(arch.flat_modifier(name), FlatModifier::LinkerOnly).then(|| {
             format!("`@{name}` names something only a linker creates; a flat binary has none")
         })
     }
@@ -1208,6 +1345,14 @@ impl Assembler {
         if kind.object_reloc {
             return true;
         }
+        // A Mach-O object decides by atoms, not by binding; see
+        // `crate::output::macho::defers_to_linker`.
+        if self.macho_object() {
+            // A modifier names something only the linker makes, such as a
+            // GOT slot, however near the symbol is.
+            return self.find_modifier(e).is_some()
+                || crate::output::macho::defers_to_linker(self, target, section, fi as u32);
+        }
         let (arch, _) = self.frag_arch(section.0 as usize, fi);
         let modifier = self.find_modifier(e).map(|m| self.interner.get(m));
         let reloc = modifier
@@ -1216,6 +1361,19 @@ impl Assembler {
         let f = &self.section(section).frags[fi];
         let relaxable = f.relaxable
             || matches!(&f.kind, FragKind::Bytes { variants, .. } if variants.len() > 1);
+        // Nothing is preempted in a COFF object: Windows has no symbol
+        // interposition, so llvm-mc resolves a reference to a symbol in the
+        // fixup's own section, weak ones included — a weak definition there
+        // is an alias the reference can be bound to right here. Except to a
+        // function (`.def f; .type 32; .endef`): the MSVC linker's
+        // incremental linking and control flow guard find the calls between
+        // functions by their relocations, so llvm-mc keeps every one it can.
+        if self.options.format.is_coff() {
+            let describable = crate::output::coff::machine(self.target())
+                .and_then(|m| crate::output::coff::reloc::map(m, kind.class, reloc))
+                .is_some();
+            return (describable || relaxable) && crate::coff::is_function(self, target);
+        }
         // A field no relocation can describe has to be filled in here, unless
         // the instruction has a larger form to move to that one can.
         if reloc == 0 && !relaxable {
@@ -1310,17 +1468,31 @@ impl Assembler {
             {
                 return None;
             }
-            let target = self.resolve_value(v)?;
+            let mut target = self.resolve_value(v)?;
             let base = self.section(section).addr as i64;
             let mask = !(kind.pc_align.max(1) as i64 - 1);
+            // A plain number, on a target where it is an offset into the
+            // section rather than an address, is resolved in an object with
+            // no relocation, so a linker placing the section keeps the
+            // distance: a flat image measures it from the section's start
+            // too.
+            let offset = v.plus.is_none()
+                && v.minus.is_none()
+                && !self
+                    .frag_arch(section.0 as usize, fi)
+                    .0
+                    .pcrel_number_is_address();
+            if offset {
+                target += base;
+            }
             // A reference within its own section is one the assembler
             // resolves before any linker places the section, so the PC is
             // rounded from the section's start, as GNU as rounds it; that
             // differs only for a section a linker puts at an address that is
             // not itself a multiple of the rounding.
-            let here = if v
-                .plus
-                .is_some_and(|p| self.symbol_section(p) == Some(section))
+            let here = if offset
+                || v.plus
+                    .is_some_and(|p| self.symbol_section(p) == Some(section))
             {
                 base + ((at as i64 + kind.adjust as i64) & mask)
             } else {
@@ -1335,6 +1507,11 @@ impl Assembler {
         if let (Some(p), Some(m)) = (v.plus, v.minus) {
             let (ps, ms) = (self.symbol_section(p), self.symbol_section(m));
             if ps.is_some() && (ps == ms || !self.options.relocatable) {
+                // Unless the linker may move them apart: a Mach-O object
+                // keeps a difference between two atoms for the linker.
+                if self.macho_object() && !crate::output::macho::folds_difference(self, p, m) {
+                    return None;
+                }
                 return self.resolve_value(v);
             }
             return None;
@@ -1360,6 +1537,15 @@ impl Assembler {
             self.target().elf_machine(),
             crate::output::elf::is_elf64(self.target()),
         );
+        // COFF keeps every addend in the field, and numbers its relocations
+        // its own way; the translation happens here, where a field that COFF
+        // cannot describe still has a span to blame.
+        let coff = self
+            .options
+            .format
+            .is_coff()
+            .then(|| crate::output::coff::machine(self.target()))
+            .flatten();
         for si in 0..self.sections.len() {
             let id = SectionId(si as u32);
             for fi in 0..self.sections[si].frags.len() {
@@ -1428,7 +1614,13 @@ impl Assembler {
                                 symbol: Some(label),
                                 addend: 0,
                                 kind: kind.reloc,
+                                desc: RelocDesc::of(&kind),
                             });
+                        }
+                        // A Mach-O field is filled in by the writer, which
+                        // alone knows what each relocation will name.
+                        None if self.macho_object() => {
+                            relocs.extend(self.macho_relocation(e, &kind, id, fi, at, span));
                         }
                         None => {
                             let leftover = self.relocated_field(e, &kind, id, fi, at);
@@ -1443,6 +1635,15 @@ impl Assembler {
                                 }
                             }
                             for mut r in self.build_relocation(e, &kind, id, fi, at, span) {
+                                if let Some(machine) = coff {
+                                    if !self
+                                        .coff_relocation(machine, &mut r, &kind, si, fi, off, span)
+                                    {
+                                        continue;
+                                    }
+                                    relocs.push(r);
+                                    continue;
+                                }
                                 let (arch, _) = self.frag_arch(si, fi);
                                 if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
                                     // A byte or word field has no room for a
@@ -1528,6 +1729,8 @@ impl Assembler {
         let effects = self
             .find_modifier(e)
             .filter(|_| self.options.dialect != crate::lexer::Dialect::Nasm)
+            // A COFF object has no GOT for a modifier to imply.
+            .filter(|_| !self.options.format.is_coff())
             .map(|m| {
                 let name = self.interner.get(m).to_string();
                 self.frag_arch(si, fi).0.modifier_symbols(&name)
@@ -1569,6 +1772,7 @@ impl Assembler {
                 symbol: Some(symbol),
                 addend,
                 kind: reloc,
+                desc: RelocDesc::of(&kind),
             });
             v.minus = None;
             kind.reloc = add;
@@ -1650,9 +1854,22 @@ impl Assembler {
             return Vec::new();
         }
 
-        // A modifier anywhere in the expression selects the relocation.
+        // A modifier anywhere in the expression selects the relocation. The
+        // COFF-only ones (`@IMGREL`, `@SECREL32`) name what the field holds
+        // rather than a relocation number, which no psABI has for them, so
+        // they come through as a class the COFF writer reads.
+        let coff_class = self
+            .options
+            .format
+            .is_coff()
+            .then(|| {
+                self.find_modifier(e)
+                    .and_then(|m| crate::coff::modifier_class(self.interner.get(m)))
+            })
+            .flatten();
         let reloc = self
             .find_modifier(e)
+            .filter(|_| coff_class.is_none())
             .and_then(|m| {
                 let name = self.interner.get(m).to_string();
                 self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
@@ -1695,12 +1912,17 @@ impl Assembler {
             self.relocation_symbol(t, kind, si, fi, names_symbol, &mut addend, &mut reloc)
         });
 
+        let mut desc = RelocDesc::of(kind);
+        if let Some(class) = coff_class {
+            desc.class = class;
+        }
         let mut relocs = vec![Relocation {
             section,
             offset: at,
             symbol,
             addend,
             kind: reloc,
+            desc,
         }];
         relocs.extend(subtrahend);
         relocs
@@ -1734,10 +1956,16 @@ impl Assembler {
         // function, whose instruction set a linker reads from it.
         let sym = self.symbols.get(target);
         let keep = arch.keeps_reloc_symbol(sym.target_flags, sym.ty);
+        // NASM's rule holds for its COFF objects too. Otherwise COFF keeps
+        // the local symbols the source named, and llvm-mc relocates against
+        // them by name; only the assembler's own labels, which never reach
+        // the symbol table, go through their section.
         let by_section = !keep
             && if self.options.dialect == crate::lexer::Dialect::Nasm {
                 !names_symbol
                     && (binding == Binding::Local || self.symbols.get(target).is_defined())
+            } else if self.options.format.is_coff() {
+                !crate::coff::keeps_symbol(self, target)
             } else {
                 match binding {
                     Binding::Local => true,
@@ -1821,7 +2049,15 @@ impl Assembler {
                         // for them, which a data section can hold too.
                         if fill.is_empty() && (exec || nop_state.is_some()) {
                             let (arch, state) = self.frag_arch(si, fi);
-                            arch.nop_fill(nop_state.as_ref().unwrap_or(state), size as u64)
+                            let state = nop_state.as_ref().unwrap_or(state);
+                            // A COFF object follows llvm-mc, whose no-ops are
+                            // not GNU as's; see `output::coff::nop_fill`.
+                            self.options
+                                .format
+                                .is_coff()
+                                .then(|| crate::output::coff::nop_fill(arch, state, size))
+                                .flatten()
+                                .unwrap_or_else(|| arch.nop_fill(state, size as u64))
                         } else {
                             let pattern: &[u8] = if fill.is_empty() { &[0] } else { fill };
                             pattern.iter().copied().cycle().take(size).collect()

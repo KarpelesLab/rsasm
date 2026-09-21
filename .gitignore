@@ -11,3 +11,4 @@
 
 # Python bytecode from the tools.
 __pycache__/
+/Cargo.lock

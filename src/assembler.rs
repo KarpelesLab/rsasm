@@ -10,6 +10,7 @@ use crate::intern::{Interner, Name};
 use crate::lexer::{Dialect, LexConfig, LitPool, LocalDir, Punct};
 use crate::macros::{self, MacroDef};
 use crate::parser::{Body, LabelDef, Parser, Statement};
+use crate::reloc::RelocDesc;
 use crate::section::{FragKind, Fragment, Section, SectionFlags, SectionId, SectionKind};
 use crate::source::{FileId, SourceMap, Span};
 use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
@@ -26,8 +27,13 @@ pub struct Relocation {
     /// symbol 0.
     pub symbol: Option<SymbolId>,
     pub addend: i64,
-    /// Architecture-specific relocation type.
+    /// Architecture-specific relocation type, in ELF's numbering.
     pub kind: u32,
+    /// The same relocation described in terms no format owns, which is what
+    /// a writer that numbers relocations differently reads; see
+    /// [`crate::reloc`]. Not API.
+    #[doc(hidden)]
+    pub desc: RelocDesc,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +54,14 @@ pub struct Options {
     /// Describe the assembly source itself in a line table and a
     /// compilation unit, as `-g` asks GNU as and llvm-mc to.
     pub debug_source: bool,
+    /// The object format being written, which the source can see: Mach-O
+    /// names its sections differently, counts `.align` in bits rather than
+    /// bytes, and decides what a linker is told by rules of its own; COFF
+    /// has directives of its own, keeps relocation addends in the bytes they
+    /// relocate, and starts its sections with alignments of its own. Flat
+    /// output leaves this at its default, since `relocatable` already says
+    /// there is no object.
+    pub format: crate::output::Format,
 }
 
 impl Default for Options {
@@ -60,6 +74,7 @@ impl Default for Options {
             syntax: None,
             dwarf_version: None,
             debug_source: false,
+            format: crate::output::Format::Elf,
         }
     }
 }
@@ -182,6 +197,10 @@ pub struct Assembler {
     pub mapping_symbols: Vec<crate::mapping::MappingSymbol>,
     /// The NASM dialect's preprocessor and assembler state.
     pub(crate) nasm: crate::nasm::State,
+    /// What COFF output needs that ELF has no room for; see [`crate::coff`].
+    pub(crate) coff: crate::coff::State,
+    /// What the source said that only a Mach-O object records.
+    pub(crate) macho: crate::output::macho::State,
     /// The backends whose [`Architecture::prelude`] has been assembled.
     pub(crate) arch_preludes: Vec<&'static str>,
     /// Where each assembled prelude's text lies in the source map, as
@@ -240,6 +259,8 @@ impl Assembler {
             literal_pools: HashMap::new(),
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
+            coff: crate::coff::State::default(),
+            macho: crate::output::macho::State::default(),
             arch_preludes: Vec::new(),
             arch_prelude_text: Vec::new(),
         };
@@ -251,7 +272,11 @@ impl Assembler {
                 asm.ccrx_defines.push((name.to_string(), "1".to_string()));
             }
         }
-        asm.cur = asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1);
+        asm.cur = if asm.options.format == crate::output::Format::MachO {
+            asm.macho_section("__TEXT", "__text", None)
+        } else {
+            asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1)
+        };
         if asm.options.dialect == Dialect::Nasm {
             // NASM operands are Intel's, and its ELF writer aligns `.text` to
             // 16; its standard macros are defined before any source is read.
@@ -323,10 +348,19 @@ impl Assembler {
         let id = SectionId(self.sections.len() as u32);
         let mut s = Section::new(id, name, kind, flags);
         // The backend active where a section is first named decides its
-        // starting alignment, as the reference for that backend would.
-        let default = self
-            .arch
-            .section_align(&self.arch_state, self.interner.get(name), &flags);
+        // starting alignment, as the reference for that backend would. In a
+        // COFF or Mach-O object the format decides instead: llvm-mc aligns
+        // the three sections COFF always has to four bytes on every machine,
+        // gives a COFF section the source names none of its own, and starts
+        // every Mach-O section unaligned.
+        let default = if self.options.format.is_coff() {
+            crate::output::coff::default_align(self.interner.get(name))
+        } else if self.options.format == crate::output::Format::MachO {
+            1
+        } else {
+            self.arch
+                .section_align(&self.arch_state, self.interner.get(name), &flags)
+        };
         s.align = align.max(default).max(1);
         s.mark_arch(self.arch_slot);
         self.sections.push(s);
@@ -365,6 +399,14 @@ impl Assembler {
 
     /// Resolves one of the shorthand section directives.
     pub(crate) fn standard_section(&mut self, name: &str) -> SectionId {
+        if self.options.format == crate::output::Format::MachO
+            && let Some(s) = crate::output::macho::shorthand(name)
+        {
+            let id = self.macho_section(s.segment, s.section, Some((s.ty, s.attrs, s.reserved2)));
+            let section = self.section_mut(id);
+            section.align = section.align.max(s.align);
+            return id;
+        }
         let (kind, flags, align) = match name {
             ".text" => (SectionKind::Progbits, SectionFlags::text(), 1),
             ".data" => (SectionKind::Progbits, SectionFlags::data(), 1),
@@ -513,6 +555,21 @@ impl Assembler {
             config.line_comment = c.anywhere.to_vec();
             config.line_start_comment = c.line_start.to_vec();
             self.arch.tune_lexer(&mut config);
+            // COFF names carry `@`: MSVC's mangled C++ names, clang's
+            // `__xmm@...` constants, `@feat.00`. A relocation modifier is then
+            // split off the end of a name by the expression parser.
+            if self.options.format.is_coff() {
+                config.at_in_idents = true;
+            }
+            // Darwin's arm64 assembly comments with `;`, which everywhere
+            // else separates statements: `bl _f ; call it`.
+            if self.options.format == crate::output::Format::MachO
+                && crate::output::macho::Cpu::for_arch(self.arch.as_ref())
+                    == Some(crate::output::macho::Cpu::Arm64)
+            {
+                config.stmt_sep.retain(|&c| c != ';');
+                config.line_comment.push(";");
+            }
         }
         if self.options.dialect == Dialect::EightBit {
             config.mnemonic = self.arch.mnemonics();
@@ -1523,6 +1580,18 @@ impl Assembler {
         if self.exprs.len() == mark {
             return;
         }
+        // A symbol exists from its first mention, not only from when an
+        // expression naming it is first evaluated. Only a Mach-O object can
+        // tell the difference: it lists its local symbols in the order they
+        // came to exist, as llvm-mc does.
+        if self.options.format == crate::output::Format::MachO {
+            for i in mark..self.exprs.len() {
+                if let ExprKind::Sym(name) = self.exprs.nodes[i].kind {
+                    let span = self.exprs.nodes[i].span;
+                    self.symbols.intern(name, span);
+                }
+            }
+        }
         if self.options.dialect.is_cc() || self.options.dialect == Dialect::EightBit {
             self.bind_set_values(mark);
         }
@@ -1767,6 +1836,7 @@ impl Assembler {
         // A relaxable instruction ends GNU as's fragment, and with it the
         // record of which instruction set later padding is for.
         let settled = variants.len() == 1;
+        self.cur_section().has_instructions = true;
         let idx = self.cur_section().emit_variants(variants, span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
         if settled && self.arch.pads_as_last_instruction() {
@@ -1834,6 +1904,7 @@ impl Assembler {
             options,
             sections,
             cur,
+            sm,
             ..
         } = self;
         let dialect = options.dialect;
@@ -1846,11 +1917,13 @@ impl Assembler {
             symbols,
             state: arch_state,
             dialect,
+            format: options.format,
             bit_dot,
             sections,
             section: *cur,
             relaxable: false,
             requests: Vec::new(),
+            sources: sm,
         };
         let variants = arch.assemble(&mut cx, &req);
         let relaxable = cx.relaxable;
@@ -1858,10 +1931,13 @@ impl Assembler {
         // A symbol a relocation modifier implies exists from where the
         // modifier is read, so it takes its place in the symbol table ahead
         // of the targets that layout interns later.
-        // NASM declares every external symbol, and makes nothing of the kind.
-        let nasm = self.options.dialect == crate::lexer::Dialect::Nasm;
+        // NASM declares every external symbol, and makes nothing of the kind;
+        // nor does a Mach-O or COFF object, which have no
+        // `_GLOBAL_OFFSET_TABLE_` for one to name.
+        let nasm = self.options.dialect == crate::lexer::Dialect::Nasm
+            || self.options.format == crate::output::Format::MachO;
         for f in variants.iter().flatten().flat_map(|v| &v.fixups) {
-            if nasm {
+            if nasm || self.options.format.is_coff() {
                 break;
             }
             if let Some(m) = self.find_modifier(f.expr) {

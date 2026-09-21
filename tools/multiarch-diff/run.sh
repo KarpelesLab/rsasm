@@ -50,12 +50,17 @@ mipsel|mc mipsel|.text
 sparc|mc sparc|.text
 m68k|xas m68k-elf-as|.text
 68000|xas m68k-elf-as -m68000|.text
+68040|xas m68k-elf-as -m68040|.text
+cpu32|xas m68k-elf-as -mcpu32|.text
+5475|xas m68k-elf-as -mcpu=5475|.text
 sh|xas sh-elf-as|.text
 shl|xas sh-elf-as -little|.text
 rx|xas rx-elf-as|P
 rl78|xas rl78-elf-as|.text
 v850|xas v850-elf-as|.text
 rh850|xas v850-elf-as -mv850e3v5|.text
+avr|xas avr-elf-as|.text
+avr5|xas avr-elf-as -mmcu=avr5|.text
 "
 
 command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found" >&2; exit 0; }

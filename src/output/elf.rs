@@ -276,8 +276,20 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // its standard macros make it the initial section; a data-only NASM
     // program still has an (empty) `.text` in its object.
     let nasm_text = asm.options.dialect == crate::lexer::Dialect::Nasm;
+    // A section with nothing in it but a label is written too, as both
+    // references write it: the label needs a section to be in, and a
+    // relocation against it one to name.
+    let labelled: std::collections::HashSet<SectionId> = asm
+        .symbols
+        .iter()
+        .filter_map(|(_, sym)| match sym.value {
+            SymbolValue::Label { section, .. } => Some(section),
+            _ => None,
+        })
+        .collect();
     for s in &asm.sections {
-        let keep_empty = nasm_text && s.id == SectionId(0) && asm.interner.get(s.name) == ".text";
+        let keep_empty = (nasm_text && s.id == SectionId(0) && asm.interner.get(s.name) == ".text")
+            || labelled.contains(&s.id);
         if s.size == 0 && s.frags.is_empty() && !keep_empty {
             continue;
         }
@@ -605,7 +617,11 @@ fn collect_symbols(
         } else {
             raw
         };
-        if !sym.is_defined() && !sym.used {
+        // A symbol declared global and never defined is written even if
+        // nothing refers to it, as both references write it: it makes the
+        // linker pull in whatever defines it, which is what the
+        // `.globl __do_copy_data` avr-gcc and Clang emit is for.
+        if !sym.is_defined() && !sym.used && sym.binding != Binding::Global {
             continue;
         }
         // A `.L` label is local to the assembly, by the ELF convention GNU as

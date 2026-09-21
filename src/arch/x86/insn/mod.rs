@@ -10,11 +10,21 @@
 //! integer instruction set several times over.
 
 pub mod avx;
+pub(crate) mod avx10;
 pub mod avx512;
+pub(crate) mod avx512x;
 pub mod base;
+pub(crate) mod bmi;
+pub(crate) mod cmpalias;
+pub(crate) mod fma;
+pub(crate) mod fp16;
+pub(crate) mod lenalias;
 pub mod mmx;
 pub mod sse;
+pub(crate) mod sys;
+pub(crate) mod vexext;
 pub mod x87;
+pub(crate) mod xop;
 
 use super::reg::{Reg, RegClass};
 use std::collections::HashMap;
@@ -31,6 +41,8 @@ pub enum Vk {
     /// The AVX-512 opmask registers `k0`-`k7`, as an ordinary operand rather
     /// than as a `{k1}` writemask decorator.
     K,
+    /// The AMX tile registers `tmm0`-`tmm7`.
+    Tmm,
 }
 
 impl Vk {
@@ -39,6 +51,8 @@ impl Vk {
     pub fn width(self) -> u8 {
         match self {
             Vk::Mm | Vk::K => 8,
+            // A tile has no fixed size, and neither has its memory operand.
+            Vk::Tmm => 0,
             Vk::Xmm => 16,
             Vk::Ymm => 32,
             Vk::Zmm => 64,
@@ -52,6 +66,7 @@ impl Vk {
             Vk::Ymm => RegClass::Ymm,
             Vk::Zmm => RegClass::Zmm,
             Vk::K => RegClass::Mask,
+            Vk::Tmm => RegClass::Tmm,
         }
     }
 
@@ -91,8 +106,12 @@ pub enum Op {
     Vm(Vk, u8),
     /// The non-destructive source VEX and EVEX carry in `vvvv`.
     Nds(Vk),
+    /// A general register of this width in `vvvv`, as BMI's `andn` and
+    /// `shlx` take one.
+    NdsR(u8),
     /// A register named by the top four bits of a trailing immediate byte, as
-    /// `vblendvps` does with its selector.
+    /// `vblendvps` does with its selector. Beside an `Imm(1)`, as in XOP's
+    /// `vpermil2ps`, the two share the byte: the immediate is its low nibble.
     Is4(Vk),
     /// A gather/scatter memory operand, whose SIB index is a vector register
     /// of this class rather than a GPR.
@@ -135,7 +154,7 @@ pub enum Op {
 impl Op {
     pub fn width(self) -> u8 {
         match self {
-            Op::Rm(w) | Op::R(w) | Op::M(w) | Op::Imm(w) | Op::IndirectRm(w) => w,
+            Op::Rm(w) | Op::R(w) | Op::M(w) | Op::Imm(w) | Op::IndirectRm(w) | Op::NdsR(w) => w,
             Op::Imm8s => 1,
             Op::Rel(w) => w,
             Op::One | Op::Three => 0,
@@ -221,6 +240,15 @@ pub const INTEL_ONLY: u32 = 1 << 16;
 /// register in ModRM.reg, as in `movd %xmm0, %rax`, whose r/m operand is
 /// register-only in that form.
 pub const R_IN_RM: u32 = 1 << 17;
+/// The destination register must differ from both sources. AVX-512FP16's
+/// complex multiplications read their operands in pairs of elements and
+/// would overwrite one half before reading the other; GNU as refuses the
+/// overlap, where llvm-mc assembles it, and rsasm follows GNU as.
+pub(crate) const DISTINCT_DEST: u32 = 1 << 18;
+/// The memory operand is always written with a SIB byte, and so cannot be
+/// RIP-relative: AMX's tile loads and stores take their stride from the
+/// index register, and have no encoding without one.
+pub(crate) const SIBMEM: u32 = 1 << 19;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -263,17 +291,33 @@ pub enum Tuple {
     Ovm,
     /// Tuple1 Scalar: one element, sized by `EVEX.W` (4 or 8 bytes).
     T1s,
-    /// Tuple1 Scalar with a fixed byte or word element (`vpbroadcastb`/`w`).
+    /// Tuple1 Scalar with a fixed byte, word or dword element: `vpbroadcastb`
+    /// and `w`, and the single-precision scalars whose `EVEX.W` sizes a
+    /// general register instead (`vcvtss2usi %xmm0, %rax`).
     T1s8,
     T1s16,
+    T1s32,
+    /// And a fixed quadword, for the double-precision scalar converted to a
+    /// 32-bit register (`vcvtsd2usi %xmm0, %eax`), whose `W` is 0.
+    T1s64,
     /// Tuple4: four elements, sized by `EVEX.W` — the `32x4`/`64x4` inserts,
     /// extracts and broadcasts.
     T4,
     /// `vmovddup`: 8 bytes at 128 bits, the whole register above that.
     Dup,
-    // The manual defines a few more (Tuple1 Fixed, Tuple2, Tuple8, Mem128)
-    // for instruction sets not in the table yet; they belong here when a row
-    // needs one.
+    /// Mem128: always sixteen bytes, whatever the vector length. The shifts
+    /// that take their count from an `xmm` register read one of these.
+    M128,
+    /// Tuple2 and Tuple8: two or eight elements, sized by `EVEX.W` — the
+    /// `32x2`/`64x2` and `32x8` sub-vector broadcasts, inserts and extracts.
+    T2,
+    T8,
+    /// Full, Half and Quarter Vector with word elements: AVX-512FP16's packed
+    /// forms, whose broadcast repeats a two-byte half-precision float, and
+    /// its conversions that widen half or a quarter of the register.
+    Fvw,
+    Hvw,
+    Qvw,
 }
 
 impl Tuple {
@@ -299,6 +343,10 @@ impl Tuple {
                     vbytes / 2
                 }
             }
+            Tuple::Fvw | Tuple::Hvw | Tuple::Qvw if broadcast => 2,
+            Tuple::Fvw => vbytes,
+            Tuple::Hvw => vbytes / 2,
+            Tuple::Qvw => vbytes / 4,
             Tuple::Fvm => vbytes,
             Tuple::Hvm => vbytes / 2,
             Tuple::Qvm => vbytes / 4,
@@ -306,7 +354,12 @@ impl Tuple {
             Tuple::T1s => elem,
             Tuple::T1s8 => 1,
             Tuple::T1s16 => 2,
+            Tuple::T1s32 => 4,
+            Tuple::T1s64 => 8,
+            Tuple::T2 => elem * 2,
             Tuple::T4 => elem * 4,
+            Tuple::T8 => elem * 8,
+            Tuple::M128 => 16,
             Tuple::Dup => {
                 if vbytes == 16 {
                     8
@@ -319,7 +372,10 @@ impl Tuple {
 
     /// True if this tuple's memory operand may carry a `{1toN}` broadcast.
     pub fn broadcastable(self) -> bool {
-        matches!(self, Tuple::Fv | Tuple::Hv)
+        matches!(
+            self,
+            Tuple::Fv | Tuple::Hv | Tuple::Fvw | Tuple::Hvw | Tuple::Qvw
+        )
     }
 }
 
@@ -338,14 +394,17 @@ pub struct Def {
     pub opsize: u8,
     pub flags: u32,
     pub enc: Enc,
-    /// VEX/EVEX opcode map: 1 = `0F`, 2 = `0F 38`, 3 = `0F 3A`.
+    /// VEX/EVEX opcode map: 1 = `0F`, 2 = `0F 38`, 3 = `0F 3A`, and the
+    /// EVEX-only 5 and 6. Maps 8 to 10 are AMD's XOP space: a VEX row there
+    /// is written with XOP's `8F` escape in place of VEX's `C4`.
     pub map: u8,
     /// Vector length in bits: 128, 256 or 512, for the VEX/EVEX `L` bits.
     pub vlen: u16,
     pub tuple: Tuple,
-    /// 3DNow! selects the operation with a byte *after* the ModRM and any
-    /// displacement, where an immediate would go. It is not an immediate: the
-    /// source never writes it, and it is part of the opcode.
+    /// A byte the source never writes, emitted *after* the ModRM, any
+    /// displacement and any immediate. 3DNow! selects the operation with one,
+    /// and the named compare predicates (`cmpeqps`) fold their immediate into
+    /// the mnemonic the same way.
     pub suffix: Option<u8>,
 }
 
@@ -405,6 +464,25 @@ impl Def {
     pub fn vex_w(&self) -> bool {
         self.opsize == 64
     }
+
+    /// The `N` of the `{1toN}` this row's memory operand broadcasts with, or
+    /// `None` if it cannot broadcast: the element count of the memory the
+    /// full-width form would read.
+    pub(crate) fn broadcast_count(&self) -> Option<u32> {
+        if !self.tuple.broadcastable() {
+            return None;
+        }
+        let vbytes = self.vlen as u32 / 8;
+        Some(match self.tuple {
+            // A half-vector source is half the register, in dword elements.
+            Tuple::Hv => vbytes / 2 / 4,
+            // Half-precision elements are words.
+            Tuple::Fvw => vbytes / 2,
+            Tuple::Hvw => vbytes / 2 / 2,
+            Tuple::Qvw => vbytes / 4 / 2,
+            _ => vbytes / if self.vex_w() { 8 } else { 4 },
+        })
+    }
 }
 
 pub fn d(ops: Vec<Op>, opcode: &[u8], modrm: ModRm, opsize: u8) -> Def {
@@ -459,7 +537,18 @@ fn build() -> Tbl {
     mmx::install(&mut t);
     sse::install(&mut t);
     avx::install(&mut t);
+    vexext::install(&mut t);
+    bmi::install(&mut t);
+    sys::install(&mut t);
+    xop::install(&mut t);
     avx512::install(&mut t);
+    avx512x::install(&mut t);
+    vexext::install_late(&mut t);
+    fma::install(&mut t);
+    fp16::install(&mut t);
+    avx10::install(&mut t);
+    cmpalias::install(&mut t);
+    lenalias::install(&mut t);
     t
 }
 
@@ -551,10 +640,26 @@ mod tests {
                 );
                 continue;
             }
-            assert!((1..=3).contains(&d.map), "`{m}`: bad map in {d:?}");
+            // Maps 5 and 6 are EVEX-only, and hold AVX-512FP16; 8 to 10 are
+            // XOP's, which only VEX-style rows use.
+            let map_ok = match d.enc {
+                Enc::Evex => matches!(d.map, 1..=3 | 5 | 6),
+                _ => matches!(d.map, 1..=3 | 8..=10),
+            };
+            assert!(map_ok, "`{m}`: bad map in {d:?}");
             assert_eq!(d.opcode.len(), 1, "`{m}`: VEX/EVEX opcode is one byte");
             assert!(matches!(d.vlen, 128 | 256 | 512), "`{m}`: bad length");
-            assert!(d.suffix.is_none(), "`{m}`: only 3DNow! has a suffix");
+            // A VEX or EVEX suffix byte is an immediate folded into the name
+            // (`vcmpeqps`, `vpcmpltud`, `vpcomgeb`, `vpclmullqhqdq`), or
+            // `tilerelease`'s fixed ModRM; 3DNow! is the only legacy family
+            // with one.
+            assert!(
+                d.suffix.is_none()
+                    || ["vcmp", "vpcmp", "vpcom", "vpclmul", "tilerelease"]
+                        .iter()
+                        .any(|p| m.starts_with(p)),
+                "`{m}`: unexpected suffix byte"
+            );
             if d.enc == Enc::Vex {
                 assert!(d.vlen != 512 && d.tuple == Tuple::None, "`{m}`: {d:?}");
             }
@@ -582,7 +687,10 @@ mod tests {
             if d.flags & (EVEX_ER | EVEX_SAE) != 0 {
                 assert_eq!(d.enc, Enc::Evex, "`{m}`: {d:?}");
                 // Packed forms need the full 512 bits; scalars ignore L'L.
-                let scalar = matches!(d.tuple, Tuple::T1s | Tuple::None);
+                let scalar = matches!(
+                    d.tuple,
+                    Tuple::T1s | Tuple::T1s16 | Tuple::T1s32 | Tuple::T1s64 | Tuple::None
+                );
                 assert!(d.vlen == 512 || scalar, "`{m}`: {d:?}");
             }
         }

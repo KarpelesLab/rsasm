@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-and the 8-bit Z80, 6502, 8080 and 8051.
+AVR, and the 8-bit Z80, 6502, 8080 and 8051.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm).
 
@@ -25,6 +25,12 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `m68k` | `m68k`, GNU syntax | `m68k-elf-as` |
 | `m68k-mot` | `m68k`, Motorola syntax | `m68k-elf-as --mri` |
 | `m68k-vasm` | `m68k`, Motorola syntax | `vasmm68k_mot -no-opt -devpac` |
+| `m68k-vasm-020` | `m68k`, Motorola syntax | `vasmm68k_mot -no-opt -devpac -m68020 -m68881 -m68851` |
+| `m68k-000` | `68000`, GNU syntax | `m68k-elf-as -m68000` |
+| `m68k-020`, `-030`, `-040`, `-060` | `m68k`, `68030`, `68040`, `68060`, GNU syntax | `m68k-elf-as -m68020` and so on |
+| `m68k-cpu32`, `-fido` | `cpu32`, `fidoa`, GNU syntax | `m68k-elf-as -mcpu32`, `-mcpu=fidoa` |
+| `m68k-5475`, `-54455`, `-5208` | those ColdFire parts, GNU syntax | `m68k-elf-as -mcpu=5475` and so on |
+| each of those with `-mot` | the same, Motorola syntax | the same with `--mri` |
 | `v850` | `v850` | `v850-elf-as` |
 | `rh850` | `rh850` | `v850-elf-as -mv850e3v5` |
 | `rl78` | `rl78` | `rl78-elf-as` |
@@ -44,6 +50,22 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
 | `i8051-sdas` | `8051`, 8-bit syntax | `sdas8051`, linked by `sdld` into Intel HEX |
 | `i8051-hex` | `8051`, 8-bit syntax, `-f ihex` | `asl -cpu 8051`, converted by `p2hex`; the text is compared |
+| `avr` | `avr` | `avr-elf-as`, with no `-mmcu`: the AVR2 set |
+| `avr51` | `avr51` | `avr-elf-as -mmcu=avr51` |
+| `avrxmega` | `atxmega128a1u` | `avr-elf-as -mmcu=atxmega128a1u`, which has the read-modify-write instructions |
+| `avrtiny` | `avrtiny` | `avr-elf-as -mmcu=avrtiny` |
+
+The m68k keys named after a CPU hold corpora generated from GNU's opcode table
+by `tools/fuzz/m68k.py corpus --first`: every form of every instruction, once,
+on the first CPU in its list that has the form, with operands that form takes
+and no earlier form of the same mnemonic does. Two kinds of form are missing
+from them, and say so in a comment: the `fmovem` forms with a dynamic register
+list, which GNU as can only reach as `fmovemx` because an earlier `fmovem` form
+matches first and then refuses the operand, and in Motorola syntax the forms
+GNU as `--mri` reads its own way (see `tools/fuzz/m68k.py`, `mri_skips`).
+Extended and packed float immediates are checked against vasm, in
+`m68k-vasm-020`: GNU as writes the first without the 68881 format's 16 zero
+bits and refuses the second.
 
 ## Comparing objects
 
@@ -68,6 +90,12 @@ They leave out what rsasm deliberately writes differently:
 - A conditional branch on RX or V850 that is left to the linker: GNU as keeps
   it short, trusting the linker to reach; rsasm takes the longest form (see
   `src/arch/rx/branch.rs` and `src/arch/v850/branch.rs`).
+
+AVR objects are compared with their `e_flags` too (`canon.sh --flags`), which
+name the core and carry `EF_AVR_LINKRELAX_PREPARED`, and with `.avr.prop`,
+which is not allocated but is what the linker relaxes the code by. Their
+local symbols are not compared: GNU as names each label a relocation needs,
+`.L1^B1` for a `1:`, and rsasm names the same labels in its own way.
 | `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
 
 ## ARM

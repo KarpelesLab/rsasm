@@ -56,6 +56,12 @@ pub mod superh;
 #[cfg(feature = "k78")]
 pub mod k78;
 
+// Backend internals — the opcode table, the operand parser, the relocation
+// numbers — are the crate's own, not API anyone depends on, so the module is
+// crate-visible and only `lookup` and `NAMES` are used from here.
+#[cfg(feature = "avr")]
+pub(crate) mod avr;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Endian {
     Little,
@@ -133,7 +139,7 @@ impl CommentSyntax {
 
 /// What a relocation modifier makes of a value in a flat binary; see
 /// [`Architecture::flat_modifier`].
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum FlatModifier {
     /// The value itself. `call foo@PLT` in an image with no PLT calls `foo`.
     Plain,
@@ -143,6 +149,18 @@ pub enum FlatModifier {
     PcRelative,
     /// Something only a linker creates, such as a GOT entry; refused.
     LinkerOnly,
+    /// Part of the value, taken as it is written into the field: AVR's
+    /// `lo8(x)` is the low byte of `x`, and `pm(x)` is `x` counted in words,
+    /// which `x` has to be a multiple of `unit` for. Such a modifier is
+    /// arithmetic rather than something only a linker can do, so it applies
+    /// wherever the value is known, in an object as well as in a flat image.
+    /// `write` is the field's [`FieldEncoding::Scatter`] function.
+    ///
+    /// [`FieldEncoding::Scatter`]: crate::section::FieldEncoding::Scatter
+    Field {
+        write: fn(u64, i64) -> u64,
+        unit: u8,
+    },
 }
 
 /// Something a backend asks the core to do to the section, which it cannot do
@@ -333,6 +351,10 @@ pub struct AsmCtx<'a> {
     /// The source dialect, which decides operand spelling as much as lexing:
     /// the same m68k register is `%d0` to GNU as and `d0` in Motorola source.
     pub dialect: crate::lexer::Dialect,
+    /// The object format being written, for
+    /// [`AsmCtx::fixed_label_distance`]. Not API.
+    #[doc(hidden)]
+    pub format: crate::output::Format,
     /// [`Architecture::bit_addressing`] for the active backend, which decides
     /// whether `P1.3` in an expression is a bit address.
     pub bit_dot: bool,
@@ -348,6 +370,10 @@ pub struct AsmCtx<'a> {
     /// What the statement needs done to the section beyond its own bytes;
     /// see [`Request`].
     pub requests: Vec<Request>,
+    /// Read-only: the source text, for an operand no token can carry, such as
+    /// an m68k floating-point immediate (`#1.5`), which lexes as `1`, `.`,
+    /// `5`.
+    pub sources: &'a crate::source::SourceMap,
 }
 
 impl AsmCtx<'_> {
@@ -469,40 +495,109 @@ impl AsmCtx<'_> {
     /// not a constant, or an instruction relaxation may resize between the
     /// two breaks it, even where layout later finds nothing to change.
     pub fn fixed_distance(&self, from: (SectionId, u32), to: (SectionId, u32)) -> Option<i64> {
-        if from.0 != to.0 {
+        fixed_distance(self.sections, self.exprs, self.symbols, from, to)
+    }
+
+    /// [`AsmCtx::fixed_distance`] between two labels, for a value the object
+    /// may still have to leave to the linker: in a Mach-O object the two also
+    /// have to be in one atom, since the linker may move atoms apart, and
+    /// llvm-mc leaves a difference that spans two to it. Positions carry the
+    /// order the label was defined in ([`crate::symbol::Symbol::def_order`]),
+    /// or `u32::MAX` for `.`, since of several labels at one place only those
+    /// after a linker-visible one are in its atom.
+    #[doc(hidden)]
+    pub fn fixed_label_distance(
+        &self,
+        from: (SectionId, u32, u32),
+        to: (SectionId, u32, u32),
+    ) -> Option<i64> {
+        if self.format == crate::output::Format::MachO
+            && crate::output::macho::atom_starts_between(self.interner, self.symbols, from, to)
+        {
             return None;
         }
-        let (lo, hi, sign) = if from.1 <= to.1 {
-            (from.1, to.1, 1)
-        } else {
-            (to.1, from.1, -1)
-        };
-        let frags = &self.sections[from.0.0 as usize].frags;
-        let mut total = 0i64;
-        for f in frags.get(lo as usize..hi as usize)? {
-            if f.relaxable {
-                return None;
-            }
-            total += match &f.kind {
-                FragKind::Bytes { variants, .. } if variants.len() == 1 => {
-                    variants[0].bytes.len() as i64
-                }
-                FragKind::Space { size, .. } => self.constant(*size).filter(|n| *n >= 0)?,
-                FragKind::Leb128 { value, signed, .. } => {
-                    let v = self.constant(*value)?;
-                    let n = if *signed {
-                        crate::layout::sleb128(v).len()
-                    } else {
-                        crate::layout::uleb128(v as u64).len()
-                    };
-                    n as i64
-                }
-                FragKind::Align { align, .. } if *align <= 1 => 0,
-                _ => return None,
-            };
-        }
-        Some(sign * total)
+        self.fixed_distance((from.0, from.1), (to.0, to.1))
     }
+}
+
+/// [`AsmCtx::fixed_distance`], for callers outside a backend.
+pub(crate) fn fixed_distance(
+    sections: &[crate::section::Section],
+    exprs: &ExprArena,
+    symbols: &SymbolTable,
+    from: (SectionId, u32),
+    to: (SectionId, u32),
+) -> Option<i64> {
+    if from.0 != to.0 {
+        return None;
+    }
+    let (lo, hi, sign) = if from.1 <= to.1 {
+        (from.1, to.1, 1)
+    } else {
+        (to.1, from.1, -1)
+    };
+    let constant = |e| crate::expr::SymbolEnv::new(exprs, symbols).constant(e);
+    let frags = &sections[from.0.0 as usize].frags;
+    let mut total = 0i64;
+    for f in frags.get(lo as usize..hi as usize)? {
+        if f.relaxable {
+            return None;
+        }
+        total += match &f.kind {
+            FragKind::Bytes { variants, .. } if variants.len() == 1 => {
+                variants[0].bytes.len() as i64
+            }
+            FragKind::Space { size, .. } => constant(*size).filter(|n| *n >= 0)?,
+            FragKind::Leb128 { value, signed, .. } => {
+                let v = constant(*value)?;
+                let n = if *signed {
+                    crate::layout::sleb128(v).len()
+                } else {
+                    crate::layout::uleb128(v as u64).len()
+                };
+                n as i64
+            }
+            FragKind::Align { align, .. } if *align <= 1 => 0,
+            _ => return None,
+        };
+    }
+    Some(sign * total)
+}
+
+/// An alignment or `.org` in a code section, as the layout finally placed
+/// it; see [`Architecture::layout_records`].
+#[derive(Copy, Clone, Debug)]
+pub struct LayoutPlace {
+    pub kind: PlaceKind,
+    pub section: SectionId,
+    /// The offset just past the padding, where what follows it starts.
+    pub offset: u64,
+    /// The fill byte the source gave, or 0 where it gave none.
+    pub fill: u8,
+}
+
+/// What made a [`LayoutPlace`].
+#[derive(Copy, Clone, Debug)]
+pub enum PlaceKind {
+    /// `.align` or one of its relatives, or the padding that rounds a
+    /// section up to its alignment, which is a power of two: this is the
+    /// exponent.
+    Align(u32),
+    /// `.org`, or an assignment to `.`, with the constant part of its target
+    /// (4 in `. = . + 4`, 0 in `.org label`).
+    Org(i64),
+}
+
+/// A section of records about the finished layout; see
+/// [`Architecture::layout_records`].
+#[derive(Clone, Debug)]
+pub struct LayoutRecords {
+    pub name: &'static str,
+    pub bytes: Vec<u8>,
+    /// The four-byte fields in `bytes` that hold where a place is, each as its
+    /// offset and the index of the place: absolute references, which an
+    /// object relocates against the place's section.
+    pub refs: Vec<(u32, usize)>,
 }
 
 /// See [`Architecture::modifier_symbols`].
@@ -562,14 +657,40 @@ pub trait Architecture {
         self.modifier_reloc(name, kind.size, kind.pcrel)
     }
 
-    /// What a source-level `@` modifier means in a flat binary, where there is
-    /// no relocation for it to choose and no linker to build what it names.
-    /// Only asked about modifiers on fixups whose [`FixupKind::link`] is
-    /// plain; the default refuses them all.
+    /// The format-neutral class a source-level `@` modifier gives the
+    /// relocation of a fixup of `kind`, for a writer that does not number
+    /// relocations as ELF does; see [`crate::reloc`]. `None`, the default,
+    /// refuses the modifier there.
+    #[doc(hidden)]
+    fn modifier_class(
+        &self,
+        _name: &str,
+        _kind: &crate::section::FixupKind,
+    ) -> Option<crate::reloc::RelocClass> {
+        None
+    }
+
+    /// What a source-level relocation modifier means where the value is
+    /// known: in a flat binary, which has no relocation for it to choose and
+    /// no linker to build what it names, and for a
+    /// [`FlatModifier::Field`] modifier in an object too. Only asked about
+    /// modifiers on fixups whose [`FixupKind::link`] is plain; the default
+    /// refuses them all.
     ///
     /// [`FixupKind::link`]: crate::section::FixupKind::link
     fn flat_modifier(&self, _name: &str) -> FlatModifier {
         FlatModifier::LinkerOnly
+    }
+
+    /// Relocation modifiers this target's GNU as writes around the whole of
+    /// a data directive's value as a call, `.word pm(main)`, rather than as
+    /// the `main@pm` suffix the GNU syntax otherwise uses. Only AVR has them.
+    /// A name is one only where a `(` follows it, so a symbol of the same
+    /// name still works; [`Architecture::modifier_reloc`] then says which
+    /// relocation it picks and [`Architecture::flat_modifier`] what it
+    /// computes.
+    fn expr_modifiers(&self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Comment characters in GNU-style source. Ignored for the NASM dialect,
@@ -644,8 +765,10 @@ pub trait Architecture {
     /// symbol, rather than an offset into the current section.
     ///
     /// The references split on this. GNU as on x86, m68k, RL78 and RX takes
-    /// the address; GNU as on SuperH and V850, and llvm-mc everywhere except
-    /// x86, measure from the start of the section.
+    /// the address; GNU as on SuperH, V850 and AVR, and llvm-mc everywhere
+    /// except x86, measure from the start of the section, and resolve the
+    /// branch, so a flat image measures it from there too. The 8-bit targets,
+    /// which write no objects, take the address.
     fn pcrel_number_is_address(&self) -> bool {
         false
     }
@@ -880,6 +1003,18 @@ pub trait Architecture {
         Interwork::AsWritten
     }
 
+    /// A section describing where the code sections were padded, for a
+    /// linker that deletes code and has to keep those places where they
+    /// belong: GNU as for AVR, preparing an object for linker relaxation,
+    /// writes every `.align` and `.org` in a code section to `.avr.prop`.
+    /// Given each of them in every executable section, section by section in
+    /// order (the padding that rounds a section's end up to its alignment
+    /// included), the backend returns the section to add, or `None` — the
+    /// default — to add none. Only asked for relocatable output.
+    fn layout_records(&self, _places: &[LayoutPlace]) -> Option<LayoutRecords> {
+        None
+    }
+
     /// Padding for `.align` in an executable section: real no-ops where the
     /// architecture has them, so padding stays executable.
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8>;
@@ -1025,6 +1160,10 @@ pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     if let Some(a) = k78::lookup(&lower) {
         return Some(a);
     }
+    #[cfg(feature = "avr")]
+    if let Some(a) = avr::lookup(&lower) {
+        return Some(a);
+    }
     let _ = lower;
     None
 }
@@ -1063,6 +1202,8 @@ pub fn available() -> Vec<&'static str> {
     v.extend_from_slice(superh::NAMES);
     #[cfg(feature = "k78")]
     v.extend_from_slice(k78::NAMES);
+    #[cfg(feature = "avr")]
+    v.extend_from_slice(avr::NAMES);
     v
 }
 

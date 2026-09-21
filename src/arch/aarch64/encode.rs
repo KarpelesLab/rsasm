@@ -4,6 +4,7 @@
 use super::reloc;
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
+use crate::reloc::RelocClass;
 use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
 
@@ -65,6 +66,7 @@ pub fn fixup_b() -> FixupKind {
     FixupKind::pcrel(4, 0)
         .with_field(28, 4)
         .with_reloc(reloc::JUMP26)
+        .with_class(RelocClass::Branch)
         .scatter(scatter_imm26)
 }
 
@@ -117,6 +119,7 @@ pub fn fixup_adrp() -> FixupKind {
     FixupKind::data(4)
         .with_field(33, 1)
         .with_reloc(reloc::ADR_PREL_PG_HI21)
+        .with_class(RelocClass::Page)
         .link(LinkValue::Page(12))
         .scatter(scatter_adrp)
 }
@@ -131,6 +134,7 @@ fn scatter_adrp(w: u64, v: i64) -> u64 {
 pub fn fixup_got_page() -> FixupKind {
     fixup_adrp()
         .with_reloc(reloc::ADR_GOT_PAGE)
+        .with_class(RelocClass::GotPage)
         .link(LinkValue::LinkerOnly("a GOT entry"))
 }
 
@@ -157,6 +161,7 @@ pub fn fixup_lo12_add() -> FixupKind {
     FixupKind::data(4)
         .with_field(64, 1)
         .with_reloc(reloc::ADD_ABS_LO12_NC)
+        .with_class(RelocClass::PageOff)
         .scatter(scatter_imm12)
 }
 
@@ -174,13 +179,16 @@ pub fn fixup_lo12_ldst(scale: u32) -> FixupKind {
     FixupKind::data(4)
         .with_field(64, 1 << scale.min(4))
         .with_reloc(reloc)
+        .with_class(RelocClass::PageOff)
         .scatter(f)
 }
 
-/// `ldr x0, [x0, :got_lo12:sym]`.
-pub fn fixup_got_lo12() -> FixupKind {
-    fixup_lo12_ldst(3)
+/// `ldr x0, [x0, :got_lo12:sym]`, or with `scale` 2 Darwin's
+/// `ldr w0, [x0, sym@GOTPAGEOFF]`.
+pub fn fixup_got_lo12(scale: u32) -> FixupKind {
+    fixup_lo12_ldst(scale)
         .with_reloc(reloc::LD64_GOT_LO12_NC)
+        .with_class(RelocClass::GotPageOff)
         .link(LinkValue::LinkerOnly("a GOT entry"))
 }
 

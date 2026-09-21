@@ -120,6 +120,12 @@ impl Architecture for Retro {
         None
     }
 
+    /// `JR 110H` jumps to address 0x110: with no object for a number to be
+    /// an offset into, it can only be an address.
+    fn pcrel_number_is_address(&self) -> bool {
+        true
+    }
+
     fn nop_fill(&self, _state: &ArchState, len: u64) -> Vec<u8> {
         // Padding inside a code section has to be executable, so it is the
         // machine's real no-op rather than zero. On the 6502 zero is `BRK`.

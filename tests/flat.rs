@@ -3041,3 +3041,608 @@ msg:    .long   1
         )),
     },
 ];
+
+#[cfg(feature = "avr")]
+#[test]
+fn avr_images_match_a_linked_reference() {
+    check("avr", AVR);
+}
+
+/// Assembled with GNU as for its default core and linked with GNU ld.
+#[cfg(feature = "avr")]
+const AVR: &[Case] = &[
+    Case {
+        name: "relative branches in both directions",
+        base: 0x0,
+        src: r#"        .text
+back:   nop
+        breq    back
+        brne    fwd
+        brbs    3, back
+        brbc    6, fwd
+        rjmp    back
+        rcall   fwd
+        nop
+fwd:    ret
+
+"#,
+        image: Some((
+            18,
+            &[(0, "00 00 f1 f3 29 f4 e3 f3 1e f4 fa cf 01 d0 00 00 08 95")],
+        )),
+    },
+    Case {
+        name: "the far ends of each branch's reach",
+        base: 0x0,
+        src: r#"        .text
+start:  breq    far7
+        .space  124
+far7:   brne    start2
+        .space  2
+start2: nop
+        rjmp    far13
+        .space  4092
+far13:  rcall   start
+        nop
+
+"#,
+        image: Some((
+            4230,
+            &[
+                (0, "f1 f1 00 00 00 00 00 00 00 00 00 00 00 00 00 00"),
+                (
+                    0x70,
+                    "00 00 00 00 00 00 00 00 00 00 00 00 00 00 09 f4 00 00 00 00 fe c7 00 00 00 00 00 00 00 00 00 00",
+                ),
+                (0x1080, "00 00 be d7 00 00"),
+            ],
+        )),
+    },
+    Case {
+        name: "data referring to code and to data",
+        base: 0x0,
+        src: r#"        .text
+entry:  nop
+        rjmp    entry
+isr:    reti
+        .data
+        .byte   0
+        .word   pm(isr), gs(entry)
+        .word   entry, isr, var
+        .long   isr, var
+        .byte   lo8(isr), hi8(isr), hlo8(isr), hh8(isr)
+        .byte   lo8(var), hi8(var)
+        .long   entry - .
+var:    .word   0
+
+"#,
+        image: Some((
+            37,
+            &[(
+                0,
+                "00 00 fe cf 18 95 00 02 00 00 00 00 00 04 00 23 00 04 00 00 00 23 00 00 00 04 00 00 00 23 00 e1 ff ff ff 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "I/O addresses and small constants from symbols",
+        base: 0x0,
+        src: r#"        .text
+        .set    PORTB, 0x18
+        .set    SREG, 0x3f
+        .set    off, 12
+        in      r0, SREG
+        out     PORTB, r1
+        cbi     PORTB, 3
+        sbi     PORTB + 1, 7
+        sbic    PORTB - 2, 0
+        adiw    r24, off
+        sbiw    r28, off + 1
+        ldd     r0, Y+off
+        std     Z+off, r1
+        lds     r0, var
+        sts     var + 1, r2
+        ret
+        .data
+var:    .word   0
+
+"#,
+        image: Some((
+            30,
+            &[(
+                0,
+                "0f b6 18 ba c3 98 cf 9a b0 99 0c 96 2d 97 0c 84 14 86 00 90 1c 00 20 92 1d 00 08 95 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "a location counter in operands is past the instruction",
+        base: 0x0,
+        src: r#"        .text
+        rjmp    .
+        rjmp    . + 2
+        breq    . - 4
+        rcall   . + 0
+        nop
+        nop
+
+"#,
+        image: Some((12, &[(0, "00 c0 01 c0 f1 f3 00 d0 00 00 00 00")])),
+    },
+    Case {
+        name: "alignment and .org between a branch and its target",
+        base: 0x0,
+        src: r#"        .text
+        rjmp    1f
+        nop
+        .balign 8
+1:      breq    2f
+        .balign 16, 0xff
+        .org    0x40
+2:      ret
+
+"#,
+        image: Some((
+            80,
+            &[
+                (0, "03 c0 00 00 00 00 00 00 d9 f0 ff ff ff ff ff ff"),
+                (0x40, "08 95 00 00 00 00 00 00 00 00 00 00 00 00 00 00"),
+            ],
+        )),
+    },
+    Case {
+        name: "a small device with no jmp: rjmp vectors and the 8K wrap-around",
+        base: 0x0,
+        src: r#"        .arch   attiny13
+        .text
+        rjmp    reset
+        rjmp    reset
+reset:  sbi     0x17, 0
+loop:   sbi     0x18, 0
+        cbi     0x18, 0
+        sbiw    r24, 1
+        brne    loop
+        rjmp    reset
+
+"#,
+        image: Some((
+            16,
+            &[(0, "01 c0 00 c0 b8 9a c0 9a c0 98 01 97 e1 f7 fa cf")],
+        )),
+    },
+    Case {
+        name: "pm() of an odd address",
+        base: 0x0,
+        src: r#"        .text
+        .data
+        .byte   1
+odd:    .byte   2
+        .word   odd
+        ldi     r16, lo8(odd)
+
+"#,
+        image: Some((6, &[(0, "01 02 01 00 01 e0")])),
+    },
+    Case {
+        name: "refused: a branch out of reach of another section",
+        base: 0x0,
+        src: r#"        .text
+        breq    other
+        .section .text.far, "ax", @progbits
+        .space  0x200
+other:  ret
+
+"#,
+        image: None,
+    },
+    Case {
+        name: "branches and calls between sections, in both directions",
+        base: 0x0,
+        src: r#"        .text
+start:  rcall   helper
+        breq    helper
+        brcs    near
+        rjmp    tail
+        .section .text.helper, "ax", @progbits
+helper: brne    start
+near:   rjmp    start
+tail:   ret
+
+"#,
+        image: Some((14, &[(0, "03 d0 11 f0 10 f0 02 c0 d9 f7 fa cf 08 95")])),
+    },
+    Case {
+        name: "at a base address, with data after the code",
+        base: 0x0,
+        src: r#"        .text
+entry:  ldi     r30, lo8(table)
+        ldi     r31, hi8(table)
+        ldi     r24, pm_lo8(entry)
+        ldi     r25, pm_hi8(entry)
+        ldi     r26, lo8(pm(isr))
+        ldi     r27, hi8(pm(isr))
+        rjmp    entry
+isr:    reti
+        .data
+table:  .word   pm(entry), pm(isr), gs(isr)
+        .word   table, entry
+        .byte   lo8(table), hi8(table), hlo8(table)
+
+"#,
+        image: Some((
+            29,
+            &[(
+                0,
+                "e0 e1 f0 e0 80 e0 90 e0 a7 e0 b0 e0 f9 cf 18 95 00 00 07 00 07 00 10 00 00 00 10 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "the same at a high base",
+        base: 0x1f00,
+        src: r#"        .text
+entry:  ldi     r30, lo8(table)
+        ldi     r31, hi8(table)
+        ldi     r24, pm_lo8(entry)
+        ldi     r25, pm_hi8(entry)
+        ldi     r20, lo8(-(table))
+        ldi     r21, hi8(-(table))
+        ldi     r22, pm_lo8(-(isr))
+        ldi     r23, pm_hi8(-(isr))
+        rcall   isr
+isr:    reti
+        .data
+table:  .word   pm(entry), pm(isr)
+        .long   table, isr
+
+"#,
+        image: Some((
+            32,
+            &[(
+                0,
+                "e4 e1 ff e1 80 e8 9f e0 4c ee 50 ee 67 e7 70 ef 00 d0 18 95 80 0f 89 0f 14 1f 00 00 12 1f 00 00",
+            )],
+        )),
+    },
+    Case {
+        name: "ldi modifiers on sums and differences",
+        base: 0x0,
+        src: r#"        .text
+a:      ldi     r16, lo8(b - a)
+        ldi     r17, hi8(b + 0x100)
+        ldi     r18, lo8(pm(b + 2))
+        ldi     r19, lo8(-(b - 2))
+        subi    r30, lo8(-(b))
+        sbci    r31, hi8(-(b))
+        .space  0x300
+b:      ret
+
+"#,
+        image: Some((
+            782,
+            &[
+                (0, "0c e0 14 e0 27 e8 36 ef e4 5f fc 4f 00 00 00 00"),
+                (0x300, "00 00 00 00 00 00 00 00 00 00 00 00 08 95"),
+            ],
+        )),
+    },
+    Case {
+        name: "a data word referring to a label at an odd address",
+        base: 0x0,
+        src: r#"        .data
+        .byte   1
+odd:    .byte   2
+        .word   odd
+        .long   odd + 1
+
+"#,
+        image: Some((8, &[(0, "01 02 01 00 02 00 00 00")])),
+    },
+    Case {
+        name: "refused: pm() of a label at an odd address",
+        base: 0x0,
+        src: r#"        .data
+        .byte   1
+odd:    .byte   2
+        .word   pm(odd)
+
+"#,
+        image: None,
+    },
+    Case {
+        name: "rcall out of reach wraps around, as GNU ld wraps it for avr2, avr25 and avr4",
+        base: 0x0,
+        src: r#"        .text
+        rcall   far
+        .space  0x1000
+far:    ret
+"#,
+        image: Some((
+            4100,
+            &[
+                (0, "00 d8 00 00 00 00 00 00 00 00 00 00 00 00 00 00"),
+                (0x1000, "00 00 08 95"),
+            ],
+        )),
+    },
+];
+
+#[cfg(feature = "avr")]
+#[test]
+fn avr5_images_match_a_linked_reference() {
+    check("avr5", AVR5);
+}
+
+/// Assembled with GNU as `-mmcu=avr5` and linked with GNU ld `-m avr5`.
+#[cfg(feature = "avr")]
+const AVR5: &[Case] = &[
+    Case {
+        name: "an interrupt vector table",
+        base: 0x0,
+        src: r#"        .section .vectors, "ax", @progbits
+        .globl  __vectors
+__vectors:
+        jmp     __init
+        jmp     __bad_interrupt
+        jmp     __vector_2
+        jmp     __bad_interrupt
+        .text
+__init: clr     r1
+        out     0x3f, r1
+        ldi     r28, lo8(0x08ff)
+        ldi     r29, hi8(0x08ff)
+        out     0x3e, r29
+        out     0x3d, r28
+        call    main
+        jmp     _exit
+__bad_interrupt:
+        jmp     __vectors
+__vector_2:
+        push    r0
+        in      r0, 0x3f
+        push    r0
+        pop     r0
+        out     0x3f, r0
+        pop     r0
+        reti
+main:   ldi     r24, lo8(msg)
+        ldi     r25, hi8(msg)
+        rcall   puts
+        ret
+puts:   movw    r30, r24
+1:      ld      r24, Z+
+        tst     r24
+        breq    2f
+        rjmp    1b
+2:      ret
+_exit:  cli
+3:      rjmp    3b
+        .section .progmem.data, "a", @progbits
+msg:    .asciz  "hello"
+
+"#,
+        image: Some((
+            84,
+            &[(
+                0,
+                "11 24 1f be cf ef d8 e0 de bf cd bf 0e 94 13 00 0c 94 1d 00 0c 94 1f 00 0f 92 0f b6 0f 92 0f 90 0f be 0f 90 18 95 8e e4 90 e0 01 d0 08 95 fc 01 81 91 88 23 09 f0 fc cf 08 95 f8 94 ff cf 0c 94 00 00 0c 94 0a 00 0c 94 0c 00 0c 94 0a 00 68 65 6c 6c 6f 00",
+            )],
+        )),
+    },
+    Case {
+        name: "refused: rjmp out of reach on a device with more than 8K",
+        base: 0x0,
+        src: r#"        .text
+        rjmp    far
+        .space  0x1000
+far:    ret
+"#,
+        image: None,
+    },
+];
+
+#[cfg(feature = "avr")]
+#[test]
+fn avr51_images_match_a_linked_reference() {
+    check("avr51", AVR51);
+}
+
+/// Assembled with GNU as `-mmcu=avr51` and linked with GNU ld `-m avr51`.
+#[cfg(feature = "avr")]
+const AVR51: &[Case] = &[
+    Case {
+        name: "jmp and call into another section",
+        base: 0x0,
+        src: r#"        .text
+        .globl  _start
+_start: jmp     main
+        call    helper
+        call    far + 2
+        .section .text.helper, "ax", @progbits
+helper: ret
+main:   jmp     _start
+far:    nop
+        ret
+
+"#,
+        image: Some((
+            22,
+            &[(
+                0,
+                "0c 94 07 00 0e 94 06 00 0e 94 0a 00 08 95 0c 94 00 00 00 00 08 95",
+            )],
+        )),
+    },
+    Case {
+        name: "ldi on every byte of a code and a data address",
+        base: 0x0,
+        src: r#"        .text
+start:  ldi     r16, lo8(var)
+        ldi     r17, hi8(var)
+        ldi     r18, hh8(var)
+        ldi     r19, hlo8(var)
+        ldi     r20, hhi8(var)
+        ldi     r21, lo8(-(var))
+        ldi     r22, hi8(-(var))
+        ldi     r23, hh8(-(var))
+        ldi     r24, hhi8(-(var))
+        ldi     r30, pm_lo8(func)
+        ldi     r31, pm_hi8(func)
+        ldi     r26, pm_hh8(func)
+        ldi     r27, lo8(pm(func))
+        ldi     r28, hi8(pm(func))
+        ldi     r29, hh8(pm(func))
+        ldi     r30, lo8(gs(func))
+        ldi     r31, hi8(gs(func))
+        ldi     r16, pm_lo8(-(func))
+        ldi     r17, pm_hi8(-(func))
+        ldi     r18, lo8(-(pm(func)))
+        andi    r20, lo8(var + 3)
+        cpi     r21, hi8(var - 1)
+        ret
+        .space  0x1234
+func:   ret
+        .data
+        .space  0x52
+var:    .byte   1
+
+"#,
+        image: Some((
+            4791,
+            &[
+                (
+                    0,
+                    "06 eb 12 e1 20 e0 30 e0 40 e0 5a e4 6d ee 7f ef 8f ef e1 e3 f9 e0 a0 e0 b1 e3 c9 e0 d0 e0 e1 e3 f9 e0 0f ec 16 ef 2f ec 49 7b 52 31 08 95 00 00",
+                ),
+                (0x1260, "00 00 08 95 00 00 00 00 00 00 00 00 00 00 00 00"),
+                (0x12b0, "00 00 00 00 00 00 01"),
+            ],
+        )),
+    },
+    Case {
+        name: "refused: an ldi constant that is an address above 255",
+        base: 0x0,
+        src: r#"        .text
+        ldi     r19, var
+        .space  0x200
+var:    ret
+
+"#,
+        image: None,
+    },
+    Case {
+        name: "jmp and call beyond 64K",
+        base: 0x0,
+        src: r#"        .text
+        jmp     high
+        call    high + 2
+        .space  0x12340
+high:   ret
+        nop
+
+"#,
+        image: Some((
+            74572,
+            &[
+                (0, "0c 94 a4 91 0e 94 a5 91 00 00 00 00 00 00 00 00"),
+                (0x12340, "00 00 00 00 00 00 00 00 08 95 00 00"),
+            ],
+        )),
+    },
+    Case {
+        name: "the third byte of an address beyond 64K",
+        base: 0x0,
+        src: r#"        .text
+        ldi     r16, hh8(high)
+        ldi     r17, hh8(pm(high))
+        ldi     r18, pm_hh8(high)
+        ldi     r19, hlo8(high)
+        ldi     r20, hh8(-(high))
+        ldi     r21, pm_hh8(-(high))
+        ret
+        .space  0x2a000
+high:   ret
+
+"#,
+        image: Some((
+            172048,
+            &[
+                (0, "02 e0 11 e0 21 e0 32 e0 4d ef 5e ef 08 95 00 00"),
+                (0x2a000, "00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 95"),
+            ],
+        )),
+    },
+    Case {
+        name: "refused: breq out of reach",
+        base: 0x0,
+        src: r#"        .text
+        breq    far
+        .space  0x80
+far:    ret
+"#,
+        image: None,
+    },
+];
+
+#[cfg(feature = "avr")]
+#[test]
+fn avr6_images_match_a_linked_reference() {
+    check("avr6", AVR6);
+}
+
+/// Assembled with GNU as `-mmcu=avr6` and linked with GNU ld `-m avr6 --no-stubs`.
+#[cfg(feature = "avr")]
+const AVR6: &[Case] = &[Case {
+    name: "jmp and call at a base address",
+    base: 0x0,
+    src: r#"        .text
+        jmp     target
+        call    target + 4
+        .space  0x100
+target: ret
+        nop
+        nop
+
+"#,
+    image: Some((
+        270,
+        &[
+            (0, "0c 94 84 00 0e 94 86 00 00 00 00 00 00 00 00 00"),
+            (0x100, "00 00 00 00 00 00 00 00 08 95 00 00 00 00"),
+        ],
+    )),
+}];
+
+#[cfg(feature = "avr")]
+#[test]
+fn avrtiny_images_match_a_linked_reference() {
+    check("avrtiny", AVRTINY);
+}
+
+/// Assembled with GNU as `-mmcu=avrtiny` and linked with GNU ld `-m avrtiny`.
+#[cfg(feature = "avr")]
+const AVRTINY: &[Case] = &[
+    Case {
+        name: "AVR-tiny direct load and store",
+        base: 0x0,
+        src: r#"        .text
+        .set    var, 0x60
+        lds     r16, var
+        sts     var + 1, r17
+        lds     r31, 0xbf
+        ret
+
+"#,
+        image: Some((8, &[(0, "00 a5 11 ad ff a6 08 95")])),
+    },
+    Case {
+        name: "refused: rcall out of reach, which GNU ld does not wrap for this core",
+        base: 0x0,
+        src: r#"        .text
+        rcall   far
+        .space  0x1000
+far:    ret
+"#,
+        image: None,
+    },
+];

@@ -749,6 +749,22 @@ fn install_integer(t: &mut Tbl) {
             ],
         );
     }
+    // `extractps` also writes a 64-bit register, zero-extended, with no
+    // `REX.W`.
+    add(
+        t,
+        "extractps",
+        vec![
+            d(
+                vec![Op::R(8), Op::V(Vk::Xmm), Op::Imm(1)],
+                &[0x0f, 0x3a, 0x17],
+                ModRm::Reg,
+                0,
+            )
+            .pfx(0x66)
+            .flags(R_IN_RM),
+        ],
+    );
     for (mnem, op, w, opsize) in [("pinsrd", 0x22u8, 4u8, 0u8), ("pinsrq", 0x22, 8, 64)] {
         add(
             t,
@@ -766,8 +782,10 @@ fn install_integer(t: &mut Tbl) {
     }
 }
 
-/// `pextrb`/`pinsrb`: a byte element travels through a 32-bit register or a
-/// single byte of memory, never through an 8-bit register.
+/// `pextrb`/`pinsrb`: a byte element travels through a 32- or 64-bit register
+/// or a single byte of memory, never through an 8-bit register. The 64-bit
+/// register takes no `REX.W`: the upper half is zeroed either way. Unlike
+/// `pextrw`'s `0F C5`, the extract's register is its r/m operand.
 fn install_byte_elements(t: &mut Tbl) {
     add(
         t,
@@ -779,7 +797,16 @@ fn install_byte_elements(t: &mut Tbl) {
                 ModRm::Reg,
                 0,
             )
-            .pfx(0x66),
+            .pfx(0x66)
+            .flags(R_IN_RM),
+            d(
+                vec![Op::R(8), Op::V(Vk::Xmm), Op::Imm(1)],
+                &[0x0f, 0x3a, 0x14],
+                ModRm::Reg,
+                0,
+            )
+            .pfx(0x66)
+            .flags(R_IN_RM),
             d(
                 vec![Op::M(1), Op::V(Vk::Xmm), Op::Imm(1)],
                 &[0x0f, 0x3a, 0x14],
@@ -795,6 +822,13 @@ fn install_byte_elements(t: &mut Tbl) {
         vec![
             d(
                 vec![Op::V(Vk::Xmm), Op::R(4), Op::Imm(1)],
+                &[0x0f, 0x3a, 0x20],
+                ModRm::Reg,
+                0,
+            )
+            .pfx(0x66),
+            d(
+                vec![Op::V(Vk::Xmm), Op::R(8), Op::Imm(1)],
                 &[0x0f, 0x3a, 0x20],
                 ModRm::Reg,
                 0,

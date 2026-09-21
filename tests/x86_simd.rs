@@ -1,10 +1,13 @@
 //! x86-64 SIMD encoding tests: MMX, 3DNow!, SSE through SSE4.2, AVX, AVX2,
-//! FMA and AVX-512.
+//! FMA, AVX-512 and its subsets, FP16, the VEX and XOP extensions, BMI, AMX
+//! and the newer system instructions.
 //!
 //! Every expected byte string here was produced by an oracle — llvm-mc 22.1
-//! unless a comment says GNU as 2.46 — and never by rsasm itself. The
-//! differential corpora in tools/mc-diff/x86-64.txt and
-//! tools/gas-diff/instructions.txt cover far more; this file pins the cases
+//! unless a comment says GNU as 2.46; the extension tests from
+//! `fma_orders_and_the_named_predicates_fold_into_the_opcode` on were taken
+//! where GNU as 2.47 and llvm-mc 22 agree, or from GNU as 2.47 where a comment
+//! says so — and never by rsasm itself. The differential corpora in
+//! tools/mc-diff and tools/gas-diff cover far more; this file pins the cases
 //! that exercise a distinct piece of the encoder, so a regression names the
 //! piece that broke.
 #![cfg(feature = "x86")]
@@ -830,4 +833,382 @@ fn a_broadcast_spelling_outside_a_decorator_is_still_a_bad_number() {
         e.contains("invalid digit `t` for base-10 literal `1to16`"),
         "{e}"
     );
+}
+
+#[test]
+fn fma_orders_and_the_named_predicates_fold_into_the_opcode() {
+    // FMA's opcode is a base per operation plus the operand order; the
+    // compare and carry-less multiply names supply the immediate, which sits
+    // where an immediate would and so counts toward a RIP-relative bias.
+    enc("vfmadd132ps %xmm1, %xmm2, %xmm3", "c4 e2 69 98 d9");
+    enc("vfnmsub231sd 8(%rax), %xmm2, %xmm3", "c4 e2 e9 bf 58 08");
+    enc(
+        "vfmsubadd213pd %zmm25, %zmm2, %zmm3{%k1}",
+        "62 92 ed 49 a7 d9",
+    );
+    enc(
+        "vfmadd231ps (%rax){1to16}, %zmm2, %zmm3",
+        "62 f2 6d 58 b8 18",
+    );
+    enc(
+        "vfmadd132sd {rz-sae}, %xmm1, %xmm2, %xmm3",
+        "62 f2 ed 78 99 d9",
+    );
+    enc("cmpneqsd %xmm1, %xmm2", "f2 0f c2 d1 04");
+    enc(
+        "cmpltps x(%rip), %xmm1\nx: ret",
+        "0f c2 0d 00 00 00 00 01 c3",
+    );
+    enc("vcmpnge_uqpd %ymm1, %ymm2, %ymm3", "c5 ed c2 d9 19");
+    enc(
+        "vcmptrue_usps 0x40(%rax), %zmm2, %k3{%k4}",
+        "62 f1 6c 4c c2 58 01 1f",
+    );
+    enc("vpcmpnequb %zmm1, %zmm2, %k1", "62 f3 6d 48 3e c9 04");
+    enc("vpcmpltq (%rax){1to8}, %zmm2, %k5", "62 f3 ed 58 1f 28 01");
+    enc("vpclmulhqlqdq %xmm1, %xmm2, %xmm3", "c4 e3 69 44 d9 01");
+    enc("pclmullqhqdq (%rax), %xmm2", "66 0f 3a 44 10 10");
+}
+
+#[test]
+fn avx512bw_dq_tuples_scale_the_displacement_by_the_access() {
+    // An `xmm` shift count is sixteen bytes at every length (Mem128); the
+    // `64x2` and `32x8` sub-vectors are two and eight elements (Tuple2/8).
+    enc("vpsllw %xmm1, %zmm2, %zmm3", "62 f1 6d 48 f1 d9");
+    enc("vpsraw 0x10(%rax), %zmm2, %zmm3", "62 f1 6d 48 e1 58 01");
+    enc("vpsrlq 0x10(%rax), %zmm2, %zmm3", "62 f1 ed 48 d3 58 01");
+    enc(
+        "vinserti64x2 $1, 0x10(%rax), %zmm2, %zmm3",
+        "62 f3 ed 48 38 58 01 01",
+    );
+    enc(
+        "vextractf32x8 $1, %zmm2, 0x20(%rax)",
+        "62 f3 7d 48 1b 50 01 01",
+    );
+    enc("vbroadcasti64x2 0x10(%rax), %zmm1", "62 f2 fd 48 5a 48 01");
+    enc("vbroadcastf32x2 0x8(%rax), %ymm1", "62 f2 7d 28 19 48 01");
+    enc("vpmovm2b %k3, %zmm17", "62 e2 7e 48 28 cb");
+    enc("vpmovq2m %ymm20, %k2", "62 b2 fe 28 39 d4");
+    enc("vcvtsd2usi 0x8(%rax), %eax", "62 f1 7f 08 79 40 01");
+}
+
+#[test]
+fn a_length_spelling_or_a_broadcast_names_an_ambiguous_memory_width() {
+    // A narrowing conversion's memory source could be either length; AT&T
+    // puts the length on the mnemonic, and a `{1toN}` implies it.
+    enc("vfpclasspsz $3, 0x40(%rax), %k1", "62 f3 7d 48 66 48 01 03");
+    enc("vfpclasspdx $3, 0x10(%rax), %k1", "62 f3 fd 08 66 48 01 03");
+    enc("vcvtpd2psy 0x20(%rax), %xmm1", "c5 fd 5a 48 20");
+    enc("vcvtpd2ps (%rax){1to4}, %xmm1", "62 f1 fd 38 5a 08");
+    enc("vcvtqq2ps (%rax){1to8}, %ymm1", "62 f1 fc 58 5b 08");
+    enc("vcvtqq2phz 0x40(%rax), %xmm1", "62 f5 fc 48 5b 48 01");
+}
+
+#[test]
+fn avx512_late_subsets() {
+    enc("vpshldvw 0x40(%rax), %zmm1, %zmm2", "62 f2 f5 48 70 50 01");
+    enc(
+        "vpshrdd $3, (%rax){1to16}, %zmm1, %zmm2",
+        "62 f3 75 58 73 10 03",
+    );
+    enc("vpcompressw %zmm1, 0x2(%rax)", "62 f2 fd 48 63 48 01");
+    enc("vpexpandb 0x1(%rax), %zmm1", "62 f2 7d 48 62 48 01");
+    enc("vpopcntq (%rax){1to8}, %zmm1", "62 f2 fd 58 55 08");
+    enc("vp2intersectd %zmm1, %zmm2, %k0", "62 f2 6f 48 68 c1");
+    enc(
+        "vcvtne2ps2bf16 (%rax){1to16}, %zmm1, %zmm2",
+        "62 f2 77 58 72 10",
+    );
+    enc("vdpbf16ps 0x40(%rax), %zmm1, %zmm2", "62 f2 76 48 52 50 01");
+    enc(
+        "vgf2p8affineqb $1, (%rax){1to8}, %zmm1, %zmm2",
+        "62 f3 f5 58 ce 10 01",
+    );
+    enc("vaesenc 0x40(%rax), %zmm1, %zmm2", "62 f2 75 48 dc 50 01");
+    enc("vpclmulqdq $0x11, %ymm1, %ymm2, %ymm3", "c4 e3 6d 44 d9 11");
+}
+
+#[test]
+fn fp16_lives_in_maps_5_and_6_with_word_elements() {
+    // Half-precision broadcasts repeat a word, and the widening conversions
+    // read half or a quarter of the register in words.
+    enc(
+        "vaddph 0x4(%rax){1to32}, %zmm1, %zmm2",
+        "62 f5 74 58 58 50 02",
+    );
+    enc("vaddsh 0x2(%rax), %xmm1, %xmm2", "62 f5 76 08 58 50 01");
+    enc("vfmadd132ph (%rax), %ymm1, %ymm2", "62 f6 75 28 98 10");
+    enc(
+        "vcvtph2qq 0x4(%rax), %zmm1",
+        "62 f5 7d 48 7b 88 04 00 00 00",
+    );
+    enc("vcvtph2pd (%rax){1to8}, %zmm1", "62 f5 7c 58 5a 08");
+    enc(
+        "vcvtph2dq 0x10(%rax), %zmm1",
+        "62 f5 7d 48 5b 88 10 00 00 00",
+    );
+    enc("vcvtsh2usi 0x2(%rax), %rax", "62 f5 fe 08 79 40 01");
+    enc("vmovw %xmm1, %eax", "62 f5 7d 08 7e c8");
+    enc("vmovsh %xmm1, 0x2(%rax)", "62 f5 7e 08 11 48 01");
+    enc("vfmulcph %zmm1, %zmm2, %zmm3", "62 f6 6e 48 d6 d9");
+    enc("vcmpeqph %zmm1, %zmm2, %k1", "62 f3 6c 48 c2 c9 00");
+}
+
+#[test]
+fn pseudo_prefixes_choose_the_encoding() {
+    // AVX-VNNI's mnemonics are AVX-512's, which both references prefer.
+    enc("vpdpbusd %xmm1, %xmm2, %xmm3", "62 f2 6d 08 50 d9");
+    enc("{vex} vpdpbusd %xmm1, %xmm2, %xmm3", "c4 e2 69 50 d9");
+    enc("{vex3} vaddps %xmm1, %xmm2, %xmm3", "c4 e1 68 58 d9");
+    enc("{evex} vaddps %xmm1, %xmm2, %xmm3", "62 f1 6c 08 58 d9");
+}
+
+#[test]
+fn bmi_tbm_and_lwp_put_a_general_register_in_vvvv() {
+    enc("andn %rax, %rbx, %rcx", "c4 e2 e0 f2 c8");
+    enc("andnl (%rax), %ebx, %ecx", "c4 e2 60 f2 08");
+    enc("shlx %rcx, (%rax), %rdx", "c4 e2 f1 f7 10");
+    enc("blsr %r9, %r10", "c4 c2 a8 f3 c9");
+    enc("pdep %r8, %r9, %r10", "c4 42 b3 f5 d0");
+    enc("rorx $3, %eax, %ebx", "c4 e3 7b f0 d8 03");
+    enc("bextr $0x1234, %rax, %rbx", "8f ea f8 10 d8 34 12 00 00");
+    enc("blcfill %r9, %r10", "8f c9 a8 01 c9");
+    enc("llwpcb %eax", "8f e9 78 12 c0");
+    enc("lwpins $1, (%rax), %rbx", "8f ea e0 12 00 01 00 00 00");
+}
+
+#[test]
+fn xop_and_fma4_let_w_choose_the_memory_operand() {
+    // Between registers XOP takes W0 and FMA4 W1, as both references do.
+    enc("vpcmov %ymm1, %ymm2, %ymm3, %ymm4", "8f e8 64 a2 e2 10");
+    enc("vpcmov (%rax), %ymm2, %ymm3, %ymm4", "8f e8 e4 a2 20 20");
+    enc("vpcmov %ymm2, (%rax), %ymm3, %ymm4", "8f e8 64 a2 20 20");
+    enc("vprotb $3, %xmm1, %xmm2", "8f e8 78 c0 d1 03");
+    enc("vprotd %xmm1, (%rax), %xmm2", "8f e9 70 92 10");
+    enc("vprotd (%rax), %xmm1, %xmm2", "8f e9 f0 92 10");
+    enc("vpcomltb %xmm1, %xmm2, %xmm3", "8f e8 68 cc d9 00");
+    enc("vfrczps %ymm1, %ymm2", "8f e9 7c 80 d1");
+    enc("vfmaddps %xmm1, %xmm2, %xmm3, %xmm4", "c4 e3 e1 68 e1 20");
+    enc("vfmaddps (%rax), %xmm2, %xmm3, %xmm4", "c4 e3 e1 68 20 20");
+    enc("vfmaddps %xmm2, (%rax), %xmm3, %xmm4", "c4 e3 61 68 20 20");
+    enc(
+        "vpermil2ps $2, %ymm1, %ymm2, %ymm3, %ymm4",
+        "c4 e3 65 48 e2 12",
+    );
+}
+
+#[test]
+fn vex_crypto_and_conversion_extensions() {
+    enc("vcvtph2ps (%rax), %ymm1", "c4 e2 7d 13 08");
+    enc("vcvtps2ph $4, %zmm1, (%rax)", "62 f3 7d 48 1d 08 04");
+    enc("sha256rnds2 %xmm0, %xmm1, %xmm2", "0f 38 cb d1");
+    enc("sha1rnds4 $3, %xmm1, %xmm2", "0f 3a cc d1 03");
+    enc("vsha512rnds2 %xmm1, %ymm2, %ymm3", "c4 e2 6f cb d9");
+    enc("vsm3rnds2 $1, %xmm1, %xmm2, %xmm3", "c4 e3 69 de d9 01");
+    enc("vsm4key4 %ymm1, %ymm2, %ymm3", "c4 e2 6e da d9");
+    enc("vpdpwsud %ymm1, %ymm2, %ymm3", "c4 e2 6e d2 d9");
+    enc("vbcstnesh2ps (%rax), %ymm1", "c4 e2 7d b1 08");
+}
+
+#[test]
+fn amx_always_writes_a_sib_byte() {
+    enc("tileloadd (%rax), %tmm1", "c4 e2 7b 4b 0c 20");
+    enc("tilestored %tmm2, 8(%rsp,%r12,4)", "c4 a2 7a 4b 54 a4 08");
+    enc("tdpbssd %tmm1, %tmm2, %tmm3", "c4 e2 73 5e da");
+    enc("tilezero %tmm5", "c4 e2 7b 49 e8");
+    enc("tilerelease", "c4 e2 78 49 c0");
+    enc("ldtilecfg (%rax)", "c4 e2 78 49 00");
+}
+
+#[test]
+fn system_extensions() {
+    // The address-sized register of `movdir64b` asks for `67` when it is
+    // narrower than the mode's addresses. The implicit-register spellings of
+    // `monitor` and friends are GNU as's (2.47); llvm-mc refuses them.
+    enc("incsspq %rax", "f3 48 0f ae e8");
+    enc("rdsspd %r9d", "f3 41 0f 1e c9");
+    enc("wrussq %rax, (%rbx)", "66 48 0f 38 f5 03");
+    enc("endbr64", "f3 0f 1e fa");
+    enc("rstorssp (%rax)", "f3 0f 01 28");
+    enc("movdir64b (%ecx), %eax", "67 66 0f 38 f8 01");
+    enc("movdir64b (%rcx), %rax", "66 0f 38 f8 01");
+    enc("enqcmds (%rcx), %r9", "f3 44 0f 38 f8 09");
+    enc("monitor %rax, %ecx, %edx", "0f 01 c8");
+    enc("mwait %eax, %ecx", "0f 01 c9");
+    enc("umonitor %eax", "67 f3 0f ae f0");
+    enc("tpause %eax, %edx, %eax", "66 0f ae f0");
+    enc("hreset $1", "f3 0f 3a f0 c0 01");
+    enc("aesenc128kl (%rax), %xmm1", "f3 0f 38 dc 08");
+    enc("aesencwide256kl 8(%rax)", "f3 0f 38 d8 50 08");
+    enc("encodekey128 %eax, %ebx", "f3 0f 38 fa d8");
+    enc("xsave64 (%rax)", "48 0f ae 20");
+    enc("cmpaxadd %eax, %ebx, (%rcx)", "c4 e2 79 e7 19");
+    enc("aadd %r9, (%r10)", "4d 0f 38 fc 0a");
+    enc("rdpid %rax", "f3 0f c7 f8");
+    enc("senduipi %r10", "f3 41 0f c7 f2");
+    enc("ptwriteq (%rax)", "f3 48 0f ae 20");
+}
+
+#[test]
+fn byte_extracts_put_their_register_in_rm() {
+    // `pextrb`, `vpextrb` and `extractps` once put the register in ModRM.reg,
+    // which `%xmm0` with `%eax` could not show.
+    enc("pextrb $1, %xmm2, %eax", "66 0f 3a 14 d0 01");
+    enc("vpextrb $1, %xmm2, %rax", "c4 e3 79 14 d0 01");
+    enc("extractps $1, %xmm2, %rax", "66 0f 3a 17 d0 01");
+    enc("vmovntps %ymm1, (%rax)", "c5 fc 2b 08");
+}
+
+#[test]
+fn intel_syntax_extensions() {
+    // Under `{1toN}` the size keyword names the element; the rounding
+    // operand follows the register operands and precedes an immediate.
+    intel(
+        "vfmadd132ps zmm3{k1}{z}, zmm2, zmmword ptr [rax]",
+        "62 f2 6d c9 98 18",
+    );
+    intel(
+        "vaddph zmm2, zmm1, word ptr [rax+0x4]{1to32}",
+        "62 f5 74 58 58 50 02",
+    );
+    intel("vcvtph2qq zmm1, word ptr [rax]{1to8}", "62 f5 7d 58 7b 08");
+    intel("vcvtpd2ps xmm1, ymmword ptr [rax]", "c5 fd 5a 08");
+    intel("vcvtpd2ps xmm1, qword ptr [rax]{1to4}", "62 f1 fd 38 5a 08");
+    intel(
+        "vfpclassps k1, zmmword ptr [rax], 3",
+        "62 f3 7d 48 66 08 03",
+    );
+    intel("vpcmpnequb k1, zmm2, zmm1", "62 f3 6d 48 3e c9 04");
+    intel("vaddps zmm3, zmm2, zmm1, {rn-sae}", "62 f1 6c 18 58 d9");
+    intel("vcmpps k1, zmm2, zmm1, {sae}, 1", "62 f1 6c 18 c2 c9 01");
+    intel("vcvtsi2sd xmm2, xmm1, {rz-sae}, rax", "62 f1 f7 78 2a d0");
+    intel("{vex} vpdpbusd xmm3, xmm2, xmm1", "c4 e2 69 50 d9");
+    intel("tileloadd tmm1, [rax+rbx*2]", "c4 e2 7b 4b 0c 58");
+    intel("tdpbssd tmm3, tmm2, tmm1", "c4 e2 73 5e da");
+    intel("andn rcx, rbx, qword ptr [rax]", "c4 e2 e0 f2 08");
+    intel("shlx rdx, qword ptr [rax], rcx", "c4 e2 f1 f7 10");
+    intel(
+        "vpcmov ymm4, ymm3, ymm2, ymmword ptr [rax]",
+        "8f e8 e4 a2 20 20",
+    );
+    intel(
+        "vfmaddps xmm4, xmm3, xmmword ptr [rax], xmm2",
+        "c4 e3 61 68 20 20",
+    );
+    intel("movdir64b eax, [ecx]", "67 66 0f 38 f8 01");
+    intel("cmpaxadd dword ptr [rcx], ebx, eax", "c4 e2 79 e7 19");
+    intel(
+        "vbroadcasti64x2 zmm1, xmmword ptr [rax+0x10]",
+        "62 f2 fd 48 5a 48 01",
+    );
+    // GNU as 2.47; llvm-mc refuses the implicit operands.
+    intel("monitor rax, ecx, edx", "0f 01 c8");
+}
+
+#[test]
+fn extensions_in_32_bit_mode() {
+    enc32(
+        "vaddph 0x4(%eax){1to32}, %zmm1, %zmm2",
+        "62 f5 74 58 58 50 02",
+    );
+    enc32("vfmadd231ps (%eax), %ymm1, %ymm2", "c4 e2 75 b8 10");
+    enc32("andnl (%eax), %ebx, %ecx", "c4 e2 60 f2 08");
+    enc32("vpcmov %xmm1, %xmm2, %xmm3, %xmm4", "8f e8 60 a2 e2 10");
+    enc32("movdir64b (%ecx), %eax", "66 0f 38 f8 01");
+    enc32("monitor %eax, %ecx, %edx", "0f 01 c8");
+    enc32("umonitor %ax", "67 f3 0f ae f0");
+    enc32("rdpid %eax", "f3 0f c7 f8");
+    enc32("vcvtsd2usi 0x8(%eax), %eax", "62 f1 7f 08 79 40 01");
+    enc32("encodekey128 %eax, %ebx", "f3 0f 38 fa d8");
+}
+
+#[test]
+fn extension_operands_both_references_refuse() {
+    for (src, needle) in [
+        (
+            "vcvtpd2ps (%rax), %xmm1",
+            "as in `vcvtpd2psx` or `vcvtpd2psy`",
+        ),
+        (
+            "vfpclassps $1, (%rax), %k1",
+            "needs the size of its memory operand",
+        ),
+        ("vcvtqq2ph (%rax), %xmm1", "as in `vcvtqq2phx`"),
+        (
+            "vcmpeqps %zmm1, %zmm2, %k1{%k2}{z}",
+            "mask register destination",
+        ),
+        ("vmovaps %zmm1, (%rax){%k1}{z}", "`{z}` cannot be used"),
+        ("vaddps %zmm1, {rn-sae}, %zmm2, %zmm3", "misplaced"),
+        ("vcmpps {sae}, $1, %zmm1, %zmm2, %k1", "misplaced"),
+        ("vcvtsi2sd {rz-sae}, %rax, %xmm1, %xmm2", "misplaced"),
+        (
+            "tdpbssd %tmm1, %tmm1, %tmm2",
+            "tile registers must be different",
+        ),
+        ("tileloadd foo(%rip), %tmm1", "relative to `rip`"),
+        ("{vex} vaddps %zmm1, %zmm2, %zmm3", "no VEX encoding"),
+        (
+            "vpermil2ps $16, %ymm1, %ymm2, %ymm3, %ymm4",
+            "must be 0 to 15",
+        ),
+        ("vmovntps %ymm1, (%rax){%k1}", "takes no writemask"),
+    ] {
+        rejects(src, needle);
+    }
+    // GNU as 2.47 refuses these, where llvm-mc assembles them.
+    rejects(
+        "vfmulcph %zmm1, %zmm2, %zmm1",
+        "must differ from both sources",
+    );
+    rejects("vpdpbusd %zmm1, %zmm2, %zmm17{z}", "requires a writemask");
+}
+
+#[test]
+fn avx10_2_rows_share_the_avx512_shapes() {
+    // The VEX-only integer additions keep VEX for plain operands and take
+    // EVEX for a writemask; `vmpsadbw`'s EVEX form moved to `F3`.
+    enc("vpdpbuud %zmm1, %zmm2, %zmm3", "62 f2 6c 48 50 d9");
+    enc("vpdpbuud %xmm1, %xmm2, %xmm3", "c4 e2 68 50 d9");
+    enc("vpdpbuud %xmm1, %xmm2, %xmm3{%k1}", "62 f2 6c 09 50 d9");
+    enc(
+        "vmpsadbw $1, %xmm1, %xmm2, %xmm3{%k1}",
+        "62 f3 6e 09 42 d9 01",
+    );
+    enc(
+        "vminmaxps $1, (%rax){1to16}, %zmm1, %zmm2",
+        "62 f3 75 58 52 10 01",
+    );
+    enc(
+        "vminmaxsh $1, 0x2(%rax), %xmm1, %xmm2",
+        "62 f3 74 08 53 50 01 01",
+    );
+    enc("vcomxsd 0x8(%rax), %xmm1", "62 f1 ff 08 2f 48 01");
+    enc("vucomxsh {sae}, %xmm1, %xmm2", "62 f5 7e 18 2e d1");
+    enc("vcvttps2dqs (%rax){1to16}, %zmm1", "62 f5 7c 58 6d 08");
+    enc("vcvttps2qqs 0x20(%rax), %zmm1", "62 f5 7d 48 6d 48 01");
+    enc("vcvttpd2dqsy 0x20(%rax), %xmm1", "62 f5 fc 28 6d 48 01");
+    enc("vcvttsd2sis 0x8(%rax), %eax", "62 f5 7f 08 6d 40 01");
+    enc("vcvtph2ibs {rn-sae}, %zmm1, %zmm2", "62 f5 7c 18 69 d1");
+    enc("vaddbf16 0x40(%rax), %zmm1, %zmm2", "62 f5 75 48 58 50 01");
+    enc(
+        "vfmadd132bf16 (%rax){1to32}, %zmm1, %zmm2",
+        "62 f6 74 58 98 10",
+    );
+    enc(
+        "vfpclassbf16z $1, 0x40(%rax), %k1",
+        "62 f3 7f 48 66 48 01 01",
+    );
+    enc("vcvtph2bf8 %zmm1, %ymm2", "62 f2 7e 48 74 d1");
+    enc("vcvtph2hf8x 0x10(%rax), %xmm1", "62 f5 7e 08 18 48 01");
+    enc("vcvt2ph2bf8 %zmm1, %zmm2, %zmm3", "62 f2 6f 48 74 d9");
+    enc("vcvtbiasph2hf8 %zmm1, %zmm2, %ymm3", "62 f5 6c 48 18 d9");
+    enc("vcvthf82ph 0x20(%rax), %zmm1", "62 f5 7f 48 1e 48 01");
+    enc("vmovd %xmm1, %xmm2", "62 f1 7e 08 7e d1");
+    enc("vmovw %xmm1, %xmm2", "62 f5 7e 08 6e d1");
+    enc("vmovrsq 0x40(%rax), %zmm1", "62 f5 fe 48 6f 48 01");
+    enc("movrs (%rax), %rbx", "48 0f 38 8b 18");
+    enc("prefetchrst2 (%rax)", "0f 18 20");
+    // After the immediate, not before it.
+    rejects("vminmaxpd {sae}, $3, %zmm1, %zmm2, %zmm3", "misplaced");
 }

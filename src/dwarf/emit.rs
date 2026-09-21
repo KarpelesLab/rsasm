@@ -715,10 +715,10 @@ impl Assembler {
             b.u8(DW_LNE_END_SEQUENCE);
             return;
         };
-        if line_delta != 0 {
-            b.u8(DW_LNS_ADVANCE_LINE);
-            b.sleb(line_delta);
-        }
+        // Even an advance of 0: GNU as sizes the row before it knows the
+        // delta, and always writes one.
+        b.u8(DW_LNS_ADVANCE_LINE);
+        b.sleb(line_delta);
         if delta > 50000 {
             self.set_address(b, at, ptr);
         } else {

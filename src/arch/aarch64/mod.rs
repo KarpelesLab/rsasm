@@ -135,6 +135,33 @@ impl Architecture for AArch64 {
         }
     }
 
+    /// Darwin's page modifiers, each valid only on the field its name
+    /// describes: `@PAGE` on an `adrp`, `@PAGEOFF` on the offset that
+    /// completes it, and the `@GOT` pair for a load through the GOT.
+    fn modifier_class(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> Option<crate::reloc::RelocClass> {
+        use crate::reloc::RelocClass;
+        let class = match name {
+            "page" => RelocClass::Page,
+            "pageoff" => RelocClass::PageOff,
+            "gotpage" => RelocClass::GotPage,
+            "gotpageoff" => RelocClass::GotPageOff,
+            // In data, `sym@GOT` is the address of the symbol's slot.
+            "got" if kind.class == RelocClass::Plain && !kind.pcrel => {
+                return Some(RelocClass::Got);
+            }
+            _ => return None,
+        };
+        match kind.class {
+            // llvm-mc branches to the symbol whatever page modifier it has.
+            RelocClass::Branch => Some(RelocClass::Branch),
+            k => (k == class).then_some(class),
+        }
+    }
+
     /// llvm-mc's conventions, as for every AArch64 encoding: code and
     /// addresses counted in bytes, where GNU as counts instructions.
     fn dwarf(&self, _state: &ArchState) -> DwarfTarget {

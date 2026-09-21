@@ -75,7 +75,11 @@ NASM_SHA256=1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148
 #   mips64-elf            MIPS, 32/64-bit, both byte orders
 #   sparc64-elf           SPARC V8 and V9
 #   x86_64-elf            x86-64, i386
-BINUTILS_TARGETS="m68k-elf v850-elf rl78-elf rx-elf sh-elf avr-elf msp430-elf z80-elf arm-none-eabi aarch64-elf riscv64-elf powerpc64-linux-gnu mips64-elf sparc64-elf x86_64-elf"
+# And the PE/COFF pair, GNU as's second opinion on the objects `-f win64` and
+# `-f win32` write; llvm-mc is the first (see tools/coff-diff):
+#   x86_64-w64-mingw32    x86-64 COFF
+#   i686-w64-mingw32      i386 COFF
+BINUTILS_TARGETS="m68k-elf v850-elf rl78-elf rx-elf sh-elf avr-elf msp430-elf z80-elf arm-none-eabi aarch64-elf riscv64-elf powerpc64-linux-gnu mips64-elf sparc64-elf x86_64-elf x86_64-w64-mingw32 i686-w64-mingw32"
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 # RSASM_ORACLES overrides the install directory, so several checkouts or a CI

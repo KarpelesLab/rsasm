@@ -259,13 +259,23 @@ fn install_float(t: &mut Tbl) {
     add(
         t,
         "vextractps",
-        vec![vex(
-            vec![Op::Rm(4), Op::V(Vk::Xmm), Op::Imm(1)],
-            0x66,
-            &[0x0f, 0x3a, 0x17],
-            128,
-            false,
-        )],
+        vec![
+            vex(
+                vec![Op::Rm(4), Op::V(Vk::Xmm), Op::Imm(1)],
+                0x66,
+                &[0x0f, 0x3a, 0x17],
+                128,
+                false,
+            ),
+            vex(
+                vec![Op::R(8), Op::V(Vk::Xmm), Op::Imm(1)],
+                0x66,
+                &[0x0f, 0x3a, 0x17],
+                128,
+                false,
+            )
+            .flags(R_IN_RM),
+        ],
     );
 }
 
@@ -447,7 +457,7 @@ fn install_moves(t: &mut Tbl) {
                 t,
                 mnem,
                 vec![vex(
-                    vec![Op::M(l as u8 / 8), Op::V(vk(l))],
+                    vec![Op::M((l / 8) as u8), Op::V(vk(l))],
                     pfx,
                     esc,
                     l,
@@ -782,7 +792,16 @@ fn install_integer(t: &mut Tbl) {
                 &[0x0f, 0x3a, 0x14],
                 128,
                 false,
-            ),
+            )
+            .flags(R_IN_RM),
+            vex(
+                vec![Op::R(8), Op::V(Vk::Xmm), Op::Imm(1)],
+                0x66,
+                &[0x0f, 0x3a, 0x14],
+                128,
+                false,
+            )
+            .flags(R_IN_RM),
             vex(
                 vec![Op::M(1), Op::V(Vk::Xmm), Op::Imm(1)],
                 0x66,
@@ -798,6 +817,13 @@ fn install_integer(t: &mut Tbl) {
         vec![
             vex(
                 vec![Op::R(4), Op::V(Vk::Xmm), Op::Imm(1)],
+                0x66,
+                &[0x0f, 0xc5],
+                128,
+                false,
+            ),
+            vex(
+                vec![Op::R(8), Op::V(Vk::Xmm), Op::Imm(1)],
                 0x66,
                 &[0x0f, 0xc5],
                 128,
@@ -834,7 +860,8 @@ fn install_integer(t: &mut Tbl) {
         ),
         ("vpinsrw", &[0x0f, 0xc4], Op::R(4), Op::M(2)),
     ] {
-        for src in [reg, mem] {
+        // A 64-bit register is as good as a 32-bit one, and takes no `W`.
+        for src in [reg, Op::R(8), mem] {
             add(
                 t,
                 mnem,

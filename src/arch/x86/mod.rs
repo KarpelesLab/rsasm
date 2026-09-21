@@ -141,6 +141,23 @@ impl Architecture for X86 {
         }
     }
 
+    /// Mach-O's one x86-64 modifier is `@GOTPCREL`: a load through the GOT in
+    /// a RIP-relative operand, or in data the address of the GOT slot
+    /// relative to the field. A branch cannot go through one.
+    fn modifier_class(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> Option<crate::reloc::RelocClass> {
+        use crate::reloc::RelocClass;
+        match (name, kind.class) {
+            (_, RelocClass::Branch) => None,
+            ("gotpcrel", RelocClass::GotLoad) if self.bits == 64 => Some(RelocClass::GotLoad),
+            ("gotpcrel", _) if self.bits == 64 => Some(RelocClass::Got),
+            _ => None,
+        }
+    }
+
     /// GNU as creates `_GLOBAL_OFFSET_TABLE_` for every modifier but `@PLT`,
     /// `@PLTOFF` and `@SIZE`, and marks the target of a TLS one thread-local.
     fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
@@ -357,10 +374,16 @@ enum PrefixKind {
     Data(u8),
     /// `addr16`/`addr32`: the address size override, with its size.
     Addr(u8),
+    /// `{vex}`, `{vex3}`, `{evex}`: which encoding to choose. Emits nothing.
+    Encoding(encode::EncodingPrefix),
 }
 
 fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
+    use encode::EncodingPrefix as E;
     Some(match mnemonic {
+        "{vex}" | "{vex2}" => PrefixKind::Encoding(E::Vex),
+        "{vex3}" => PrefixKind::Encoding(E::Vex3),
+        "{evex}" => PrefixKind::Encoding(E::Evex),
         "lock" => PrefixKind::Lock,
         "rep" | "repe" | "repz" => PrefixKind::Rep(0xf3),
         "repne" | "repnz" => PrefixKind::Rep(0xf2),
@@ -396,6 +419,16 @@ fn assemble_inner(
             PrefixKind::Lock => prefixes.lock = true,
             PrefixKind::Rep(r) => prefixes.rep = Some(r),
             PrefixKind::Segment(s) => prefixes.seg = Some(s),
+            PrefixKind::Encoding(e) => {
+                if req.cursor().at_end() {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` needs an instruction after it"),
+                    );
+                    return None;
+                }
+                prefixes.encoding = Some(e);
+            }
             // A size prefix names the size it switches to, so the mode's own
             // size is refused as redundant, and long mode has no 32-bit
             // operand or 16-bit address prefix to write.
@@ -508,13 +541,19 @@ fn assemble_inner(
 
     // The table is written in Intel order, so AT&T operands are reversed —
     // except for `enter` and `bound`, whose AT&T operands GNU as has always
-    // taken in Intel order, and llvm-mc with it.
+    // taken in Intel order, and llvm-mc with it, and for the instructions
+    // that only name their implicit registers, which GNU as lists in the same
+    // order in both syntaxes.
     let named = |name: &str| {
         mnemonic
             .strip_prefix(name)
             .is_some_and(|s| matches!(s, "" | "b" | "w" | "l" | "q"))
     };
-    if syntax == Syntax::Att && !named("enter") && !named("bound") {
+    let implicit = matches!(
+        mnemonic,
+        "monitor" | "monitorx" | "mwait" | "mwaitx" | "tpause" | "umwait"
+    );
+    if syntax == Syntax::Att && !named("enter") && !named("bound") && !implicit {
         ops.reverse();
     }
     // `imul $imm, %reg` multiplies the register in place: it is the
@@ -582,6 +621,13 @@ fn assemble_inner(
             rounding = Some((ctl, o.span));
         }
     }
+    if let Some(pos) = ops.iter().position(|o| o.rounding().is_some())
+        && cx.dialect != crate::lexer::Dialect::Nasm
+        && !rounding_in_place(&ops, pos, syntax)
+    {
+        cx.error(ops[pos].span, "the rounding-control operand is misplaced");
+        return None;
+    }
     ops.retain(|o| o.rounding().is_none());
 
     // NASM's default optimizer loads a 64-bit register from a non-negative
@@ -607,6 +653,32 @@ fn assemble_inner(
     if matches.is_empty() {
         report_no_match(cx, req, mnemonic, &resolved, &ops);
         return None;
+    }
+    // A `{1toN}` says how long the vector is where a memory operand alone
+    // cannot, as in `vcvtpd2ps (%rax){1to4}, %xmm0`. A count no row has is
+    // left for the encoder to report.
+    if let Some(n) = ops.iter().find_map(|o| o.decor.broadcast.map(|b| b.count))
+        && matches.iter().any(|d| d.broadcast_count() == Some(n))
+    {
+        matches.retain(|d| d.broadcast_count() == Some(n));
+    }
+    // `{vex}` and `{evex}` narrow the choice to one encoding. That is the only
+    // way to reach the VEX forms of AVX-VNNI and AVX-IFMA, whose mnemonics
+    // AVX-512 already spells.
+    if let Some(want) = prefixes.encoding {
+        let enc = match want {
+            encode::EncodingPrefix::Evex => Enc::Evex,
+            _ => Enc::Vex,
+        };
+        matches.retain(|d| d.enc == enc);
+        if matches.is_empty() {
+            let name = if enc == Enc::Evex { "EVEX" } else { "VEX" };
+            cx.error(
+                req.span,
+                format!("`{mnemonic}` has no {name} encoding for these operands"),
+            );
+            return None;
+        }
     }
 
     // NASM loads a 64-bit register from a symbol with the full `movabs`
@@ -638,6 +710,24 @@ fn assemble_inner(
         cx.error(
             req.span,
             format!("`{mnemonic}` needs the size of its memory operand, as in `dword ptr [...]`"),
+        );
+        return None;
+    }
+    // AT&T has no size keyword, so a vector instruction whose memory operand
+    // could be any of several lengths — the narrowing conversions, and
+    // `vfpclassps` — is spelled with an `x`, `y` or `z` on the end instead.
+    // Nothing else can be ambiguous there: an AT&T suffix already names the
+    // width, and every other form is pinned by a register operand.
+    if syntax == Syntax::Att
+        && matches.iter().all(|d| d.enc != Enc::Legacy)
+        && ambiguous_memory_size(bits, &matches, &ops)
+    {
+        cx.error(
+            req.span,
+            format!(
+                "`{mnemonic}` needs the size of its memory operand, \
+                 as in `{mnemonic}x` or `{mnemonic}y`"
+            ),
         );
         return None;
     }
@@ -761,6 +851,36 @@ fn prefer_evex_when_required<'d>(
         return matches;
     }
     matches.into_iter().filter(|d| d.enc == Enc::Evex).collect()
+}
+
+/// True if a `{rn-sae}` or `{sae}` operand at `pos` (in Intel order) is where
+/// GNU as accepts one.
+///
+/// In AT&T syntax it comes first, or after one immediate or one general
+/// register (`vcvtsi2sd %rax, {rz-sae}, %xmm1, %xmm2`), and a general register
+/// cannot be the first register written after it. Intel syntax writes it
+/// after the register and memory operands and before any immediate, with at
+/// most one general register behind it. llvm-mc is stricter in Intel syntax,
+/// where it wants the mirror of the AT&T order.
+fn rounding_in_place(ops: &[Operand], pos: usize, syntax: Syntax) -> bool {
+    let gpr = |o: &Operand| o.reg().is_some_and(|r| r.is_gpr());
+    let imm = |o: &Operand| matches!(o.kind, OperandKind::Imm(_));
+    let (before, after) = (&ops[..pos], &ops[pos + 1..]);
+    if before.iter().any(imm) {
+        return false;
+    }
+    match syntax {
+        Syntax::Att => {
+            // `after` is what the source wrote before the decorator.
+            let last_reg = ops.iter().rposition(|o| o.reg().is_some());
+            after.len() <= 1
+                && after.iter().all(|o| imm(o) || gpr(o))
+                && !last_reg.is_some_and(|i| i < pos && gpr(&ops[i]))
+        }
+        Syntax::Intel => {
+            after.iter().all(|o| imm(o) || gpr(o)) && after.iter().filter(|o| gpr(o)).count() <= 1
+        }
+    }
 }
 
 /// Swaps in a later VEX form when it encodes shorter than the preferred one.
@@ -929,9 +1049,17 @@ fn resolve_mnemonic(mnemonic: &str, syntax: Syntax) -> Option<Resolved> {
     }
     // Only an instruction that comes in more than one size takes a suffix:
     // `cwtl` and `lodsl` already name theirs, so `cwtll` is no instruction.
-    // An AVX-512 row's size is its `EVEX.W`, which no suffix selects.
+    // An AVX-512 row's size is its `EVEX.W`, which no suffix selects, unless
+    // the row's `W` sizes a general register, as `vcvtusi2sd`'s does.
+    let gpr_sized = |d: &Def| {
+        d.ops
+            .iter()
+            .any(|o| matches!(o, Op::Rm(x) | Op::R(x) if *x == w))
+    };
     if defs.iter().all(|d| d.opsize == defs[0].opsize)
-        || !defs.iter().any(|d| d.enc != Enc::Evex && d.opsize == w * 8)
+        || !defs
+            .iter()
+            .any(|d| d.opsize == w * 8 && (d.enc != Enc::Evex || gpr_sized(d)))
     {
         return None;
     }
@@ -1114,6 +1242,7 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
             !nasm_int3 && cx.constant(*e) == Some(if *pat == Op::One { 1 } else { 3 })
         }
         Op::V(k) | Op::Nds(k) | Op::Is4(k) => o.reg().is_some_and(|r| k.accepts(r)),
+        Op::NdsR(w) => o.reg().is_some_and(|r| r.is_gpr() && r.size == w),
         Op::Vm(k, msz) => match &o.kind {
             OperandKind::Reg(r) => k.accepts(*r),
             OperandKind::Mem(_) => {
@@ -1122,6 +1251,7 @@ fn op_matches(cx: &mut AsmCtx<'_>, bits: u8, def: &Def, pat: &Op, o: &Operand) -
                 let w = if o.decor.broadcast.is_some() {
                     match def.tuple {
                         insn::Tuple::Hv => 4,
+                        insn::Tuple::Fvw | insn::Tuple::Hvw | insn::Tuple::Qvw => 2,
                         _ if def.vex_w() => 8,
                         _ => 4,
                     }
@@ -1299,7 +1429,7 @@ fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
         ExprKind::Binary(op, l, r) => {
             if op == BinOp::Sub
                 && let (Some(to), Some(from)) = (label_position(cx, l), label_position(cx, r))
-                && let Some(d) = cx.fixed_distance(from, to)
+                && let Some(d) = cx.fixed_label_distance(from, to)
             {
                 return cx.exprs.int(d as u64, node.span);
             }
@@ -1322,17 +1452,22 @@ fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
     }
 }
 
-/// Where a label an expression names was defined, or where `.` is.
-fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::SectionId, u32)> {
+/// Where a label an expression names was defined, or where `.` is, with the
+/// order it was defined in; see [`AsmCtx::fixed_label_distance`].
+fn label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(crate::section::SectionId, u32, u32)> {
     let node = cx.exprs.get(e);
     let id = match node.kind {
-        ExprKind::Here => return Some(cx.here()),
+        ExprKind::Here => {
+            let (section, frag) = cx.here();
+            return Some((section, frag, u32::MAX));
+        }
         ExprKind::SymId(id) => id,
         ExprKind::Sym(name) => cx.symbols.lookup(name)?,
         ExprKind::LocalRef(n, LocalDir::Backward) => cx.symbols.local_backward(n, node.span)?,
         _ => return None,
     };
-    cx.label_position(id)
+    let (section, frag) = cx.label_position(id)?;
+    Some((section, frag, cx.symbols.get(id).def_order))
 }
 
 /// True when an unsized memory operand leaves more than one width possible.
@@ -1347,12 +1482,17 @@ fn ambiguous_memory_size(bits: u8, matches: &[&Def], ops: &[Operand]) -> bool {
         Op::Rm(w) | Op::M(w) | Op::Moffs(w) | Op::IndirectRm(w) | Op::StrSrc(w) | Op::StrDst(w) => {
             w
         }
+        v @ Op::Vm(..) => v.width(),
         _ => 0,
     };
     // A 64-bit operation outside long mode is no rival.
-    let mut usable = matches
-        .iter()
-        .filter(|d| bits == 64 || d.opsize != 64 || d.flags & DEF64 != 0);
+    let mut usable = matches.iter().filter(|d| {
+        // A VEX or EVEX `W1` is no 64-bit operation unless it sizes a
+        // general register, as `vcvtsi2sd`'s does.
+        let vector_w =
+            d.enc != Enc::Legacy && !d.ops.iter().any(|o| matches!(o, Op::Rm(_) | Op::R(_)));
+        bits == 64 || d.opsize != 64 || d.flags & DEF64 != 0 || vector_w
+    });
     let Some(first) = usable.next().map(|d| width(d)) else {
         return false;
     };

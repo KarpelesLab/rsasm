@@ -232,3 +232,38 @@
         movew   #0x2700, %sr            | m68k: `#` is an immediate, `|` a comment
         .arch   sh
         mov     #1, r0                  ! SuperH: `!` is the comment
+=== one 680x0 file for three CPUs, and x86 between them
+.arch 68040
+        move16  %a0@+,%a1@+
+        fsaddx  %fp0,%fp1
+        cinva   %ic
+.arch x86-64
+        ret
+.arch cpu32
+        bgnd
+        fmovex  %fp2,%fp3
+.arch 5475
+        mvsw    %d0,%d1
+        mov3ql  #-1,%d2
+        fmoved  %fp0,%fp1
+=== AVR's `$` separates statements where x86's is an immediate, and `;` comments
+.arch x86-64
+        movl    $1, %eax ; movl $2, %ebx        # `;` separates on x86
+.arch avr
+        ldi     r16, 1 $ ldi r17, 2             ; `$` separates on AVR, `;` comments
+# a first-column comment
+        ret
+.arch x86-64
+        ret
+=== an AVR core with more instructions, between RL78 and SuperH
+.arch rl78
+        mov     a, #0FFH                        ; RL78 reads `0FFH`
+.arch avr5
+        ldi     r24, lo8(0x1234)
+        ldi     r25, hi8(0x1234)
+        movw    r30, r24
+        call    0x100
+.arch sh
+        mov     #1, r0                          ! SuperH
+        rts
+        nop
