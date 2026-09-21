@@ -27,9 +27,15 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
 # arch | rsasm target | llvm triple | the machine's corpus in tools/mc-diff
+#      [| the flags llvm-mc needs for that corpus]
+#
+# The arm64 flags are the ones tools/mc-diff passes for `aarch64`: the corpus
+# it shares has SIMD, SVE and SME in it, and llvm-mc enables neither for a
+# bare triple. rsasm assembles every extension its backend has, whatever the
+# object format.
 ARCHES="
 x86-64|x86_64-apple-macos|x86_64-apple-macos|x86-64
-arm64|arm64-apple-macos|arm64-apple-macos|aarch64
+arm64|arm64-apple-macos|arm64-apple-macos|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
 "
 
 for tool in llvm-mc llvm-readobj llvm-objdump; do
@@ -47,11 +53,11 @@ pass=0
 fail=0
 identical=0
 
-compare() { # arch, rsasm target, triple, name, source
-  local arch=$1 target=$2 triple=$3 name=$4 src=$5 m r d
+compare() { # arch, rsasm target, triple, flags, name, source
+  local arch=$1 target=$2 triple=$3 flags=$4 name=$5 src=$6 m r d
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
-  if llvm-mc -triple="$triple" -filetype=obj -o "$d/m.o" "$d/in.s" 2> "$d/merr"; then
+  if llvm-mc -triple="$triple" $flags -filetype=obj -o "$d/m.o" "$d/in.s" 2> "$d/merr"; then
     m=$("$here/canon.sh" "$d/m.o")
   else
     m="refused"
@@ -83,7 +89,7 @@ compare() { # arch, rsasm target, triple, name, source
 }
 
 # Runs `compare` over each `=== name` snippet of a file.
-snippets() { # file, arch, rsasm target, triple
+snippets() { # file, arch, rsasm target, triple, flags
   local file=$1 snippet="" name="" line
   shift
   while IFS= read -r line; do
@@ -100,7 +106,7 @@ snippets() { # file, arch, rsasm target, triple
 }
 
 # Runs `compare` over each line of a file.
-lines() { # file, arch, rsasm target, triple
+lines() { # file, arch, rsasm target, triple, flags
   local file=$1 line
   shift
   while IFS= read -r line; do
@@ -110,9 +116,9 @@ lines() { # file, arch, rsasm target, triple
   done < "$file"
 }
 
-run_arch() { # arch, rsasm target, triple, mc-diff corpus
+run_arch() { # arch, rsasm target, triple, mc-diff corpus, llvm-mc flags
   local arch=$1 mc="$root/tools/mc-diff/$4" before=$((pass + fail)) own
-  set -- "$1" "$2" "$3"
+  set -- "$1" "$2" "$3" "${5-}"
   [ -f "$here/$arch.txt" ] && lines "$here/$arch.txt" "$@"
   [ -f "$here/$arch-programs.txt" ] && snippets "$here/$arch-programs.txt" "$@"
   own=$((pass + fail - before))
@@ -125,12 +131,12 @@ run_arch() { # arch, rsasm target, triple, mc-diff corpus
 }
 
 wanted="${*:-}"
-while IFS='|' read -r arch target triple mc; do
+while IFS='|' read -r arch target triple mc flags; do
   [ -z "$arch" ] && continue
   if [ -n "$wanted" ]; then
     case " $wanted " in *" $arch "*) ;; *) continue ;; esac
   fi
-  run_arch "$arch" "$target" "$triple" "$mc"
+  run_arch "$arch" "$target" "$triple" "$mc" "${flags:-}"
 done <<< "$ARCHES"
 
 echo "--- $pass matched, $fail differed ($identical of the objects byte for byte)"

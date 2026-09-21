@@ -27,6 +27,13 @@
 //! Once the layout is known, a symbol with another after it at the same
 //! address is dropped, and so is one at the very end of its section: that is
 //! what GNU as's `check_mapping_symbols` leaves.
+//!
+//! They are an ELF convention — the ARM and AArch64 psABIs define them, and
+//! only the ELF writer emits them — so a COFF or Mach-O object has none of
+//! this, not even the alignment an instruction would raise its section to:
+//! llvm-mc leaves `__text` at the alignment the source asked for. A flat
+//! image keeps it, because what it is compared against is the ELF object
+//! linked.
 
 use crate::arch::{ArchState, Architecture};
 use crate::assembler::Assembler;
@@ -63,9 +70,24 @@ pub struct MappingSymbol {
 
 impl Assembler {
     /// The current backend's mapping symbols for its code and for data, if
-    /// the target has any.
+    /// the target has any and the object being written is one that has them.
     fn mapping_names(&self) -> Option<(&'static str, u64, &'static str)> {
-        mapping_names(self.arch.as_ref(), &self.arch_state)
+        self.mapping_names_for(&self.arch_state)
+    }
+
+    /// [`Self::mapping_names`] for another instruction-set state, which the
+    /// no-ops padding a section's tail are in.
+    pub(crate) fn mapping_names_for(
+        &self,
+        state: &ArchState,
+    ) -> Option<(&'static str, u64, &'static str)> {
+        if matches!(
+            self.options.format,
+            crate::output::Format::Coff | crate::output::Format::MachO
+        ) {
+            return None;
+        }
+        mapping_names(self.arch.as_ref(), state)
     }
 
     /// Whether the current section is one GNU as keeps mapping symbols out of
@@ -121,7 +143,7 @@ impl Assembler {
     /// An alignment padded with no-ops is about to be pushed as the next
     /// fragment.
     pub(crate) fn map_code_align(&mut self, state: &ArchState) {
-        let Some(names) = mapping_names(self.arch.as_ref(), state) else {
+        let Some(names) = self.mapping_names_for(state) else {
             return;
         };
         if !self.is_debug_section() {
