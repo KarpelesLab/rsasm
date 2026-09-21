@@ -2066,6 +2066,8 @@ fn ldst_pair(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 // ---- system ----------------------------------------------------------------
 
+/// `hint #n`, the instruction every no-operand alias in the generated table
+/// is one of; the named spellings go through [`hint_alias`].
 fn hint(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[1]).then_some(())?;
     let imm = i.imm(cx, 0, 0, 127, "a hint number")? as u32;
@@ -2181,7 +2183,6 @@ fn sys_alias(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             );
             return None;
         }
-        // Left out, the register is `xzr`, as GNU as writes it.
         (None, sysreg::Xt::Needs) => {
             cx.error(
                 i.span,
@@ -2189,6 +2190,8 @@ fn sys_alias(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             );
             return None;
         }
+        // A name that takes no register, or may have none, has `xzr` in the
+        // field, which is what GNU as writes there.
         (None, _) => 31,
         (Some(_), _) => {
             let r = i.gpr(cx, 1)?;
