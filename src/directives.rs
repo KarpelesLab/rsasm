@@ -298,6 +298,7 @@ impl Assembler {
             options,
             sections,
             cur: section,
+            sm,
             ..
         } = self;
         let dialect = options.dialect;
@@ -316,6 +317,7 @@ impl Assembler {
             section: *section,
             relaxable: false,
             requests: Vec::new(),
+            sources: sm,
         };
         if arch.directive(&mut cx, text, &mut cur) {
             let requests = std::mem::take(&mut cx.requests);
@@ -1160,15 +1162,26 @@ impl Assembler {
             }
             // A bare name is whatever is written without spaces, since names
             // like `68000`, `78k0` and `x86-64` are not single identifiers.
+            // GNU as for m68k lists extensions after commas, `68000,68881`,
+            // so the whole run is offered first and the name before the first
+            // comma after that.
             _ if !tok.is_eol() && !tok.is_punct(Punct::Comma) => {
+                let mut first = None;
                 let mut last = cur.advance();
-                while !cur.peek().is_eol()
-                    && !cur.peek().is_punct(Punct::Comma)
-                    && !cur.peek().preceded_by_space
-                {
+                while !cur.peek().is_eol() && !cur.peek().preceded_by_space {
+                    if cur.peek().is_punct(Punct::Comma) && first.is_none() {
+                        first = Some((cur.pos(), last));
+                    }
                     last = cur.advance();
                 }
-                self.sm.span_text(tok.span.to(last.span)).to_string()
+                let whole = self.sm.span_text(tok.span.to(last.span)).to_string();
+                match first {
+                    Some((pos, before)) if crate::arch::lookup(&whole).is_none() => {
+                        cur.set_pos(pos);
+                        self.sm.span_text(tok.span.to(before.span)).to_string()
+                    }
+                    _ => whole,
+                }
             }
             _ => {
                 self.diags.error(tok.span, "expected an architecture name");

@@ -126,17 +126,28 @@ fn far(cond: u8, target: ExprRef, span: Span) -> Variant {
     }
 }
 
-/// `Bcc`, `BRA` (`cond` 0) or `BSR` (`cond` 1).
-pub fn bcc(cond: u8, size: BranchSize, cpu: Cpu, target: ExprRef, span: Span) -> Vec<Variant> {
+/// `Bcc`, `BRA` (`cond` 0) or `BSR` (`cond` 1). `constant` says the target
+/// is a number rather than a label.
+pub(crate) fn bcc(
+    cond: u8,
+    size: BranchSize,
+    cpu: Cpu,
+    target: ExprRef,
+    constant: bool,
+    span: Span,
+) -> Vec<Variant> {
     let op = 0x60 | cond;
     match size {
+        // A number is no distance relaxation can settle, and GNU as jumps to
+        // it absolutely: `jra 0x100` is `jmp 0x100`.
+        BranchSize::Relax if constant => vec![far(cond, target, span)],
         BranchSize::Short => short(op, target, span).to_vec(),
         BranchSize::Word => vec![word(op, target, span)],
         BranchSize::Long => vec![long(op, target, span)],
         BranchSize::Relax => {
             let mut v = short(op, target, span).to_vec();
             v.push(word(op, target, span));
-            v.push(if cpu >= Cpu::M68020 {
+            v.push(if cpu.long_branch_for(cond) {
                 long(op, target, span)
             } else {
                 far(cond, target, span)
@@ -146,10 +157,48 @@ pub fn bcc(cond: u8, size: BranchSize, cpu: Cpu, target: ExprRef, span: Span) ->
     }
 }
 
-/// `DBcc`: always a 16-bit displacement, measured from the displacement word.
-pub fn dbcc(cond: u8, reg: u8, target: ExprRef, span: Span) -> Vec<Variant> {
+/// `DBcc`: a 16-bit displacement, measured from the displacement word.
+///
+/// A label out of that reach, or in another section, gets what GNU as
+/// emulates it with: the `DBcc` skips over a short branch around a long one,
+///
+/// ```text
+///     dbcc  dn,1f       ; 5xc8 0004
+///     bra.s 2f          ; 6006
+/// 1:  bra.l target      ; 60ff xxxx xxxx, or jmp target (4ef9) on a 68000
+/// 2:
+/// ```
+///
+/// A number is the displacement's word alone, since no relaxation can place
+/// it. GNU as writes that word as zero and emits no relocation for it at all,
+/// leaving a branch to the next word; rsasm relocates it.
+pub(crate) fn dbcc(
+    cond: u8,
+    reg: u8,
+    cpu: Cpu,
+    target: ExprRef,
+    constant: bool,
+    span: Span,
+) -> Vec<Variant> {
     let w = 0x50c8 | (cond as u16) << 8 | reg as u16;
     let mut v = word(0, target, span);
     v.bytes[..2].copy_from_slice(&w.to_be_bytes());
-    vec![v]
+    if constant {
+        return vec![v];
+    }
+    let mut bytes = w.to_be_bytes().to_vec();
+    bytes.extend_from_slice(&[0x00, 0x04, 0x60, 0x06]);
+    let kind = if cpu.long_branch() {
+        bytes.extend_from_slice(&[0x60, 0xff]);
+        FixupKind::pcrel(4, 0).with_reloc(reloc::R_68K_PC32)
+    } else {
+        bytes.extend_from_slice(&[0x4e, 0xf9]);
+        FixupKind::data(4).with_reloc(reloc::R_68K_32)
+    };
+    bytes.extend_from_slice(&[0; 4]);
+    let long = Variant {
+        bytes,
+        fixups: vec![fixup(8, target, kind, span)],
+    };
+    vec![v, long]
 }
