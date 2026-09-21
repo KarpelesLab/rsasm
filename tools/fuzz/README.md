@@ -17,12 +17,35 @@ $ tools/fuzz/x86.py fuzz --count 200000 --out findings.tsv --limit 50
 $ tools/fuzz/x86.py check --mode 32 lines.txt          # one instruction per line
 ```
 
-Instructions come from a table of forms written from the Intel SDM, not from
-rsasm's own tables: the general-purpose set, system instructions, the x87 set
-and a slice of SSE/AVX. Operands are drawn per mode, including 16-bit ModRM
-addressing, SIB forms, address-size overrides, segment overrides, boundary
-immediates, external symbols and branches that need relaxation. `--mutations`
-(default 0.25) is the fraction of cases deliberately made invalid.
+Instructions come from forms that are not rsasm's own tables. The
+general-purpose set, system instructions, the x87 set and a slice of SSE/AVX
+are written from the Intel SDM in `x86.py`. Operands are drawn per mode,
+including 16-bit ModRM addressing, SIB forms, address-size overrides, segment
+overrides, boundary immediates, external symbols and branches that need
+relaxation. `--mutations` (default 0.25) is the fraction of cases deliberately
+made invalid.
+
+The SIMD and newer extensions — AVX-512 and every subset, FP16, AVX10.2, the
+VEX additions, FMA4, XOP, BMI, TBM, AMX, CET, Key Locker and the system
+instructions after them — are read from GNU binutils' expanded opcode table
+(`opcodes/i386-tbl.h` in the source tree `tools/oracles/build.sh` unpacks),
+which `gnutbl.py` decodes; `simd.py` turns each row into a form. Their cases
+pick a vector length the row allows, the EVEX-only registers, a memory
+operand whose displacement lands on and off every disp8\*N scale, and, where
+the row takes them, a writemask, `{z}`, a `{1toN}` broadcast and embedded
+rounding or `{sae}`; a mutated case gets a decorator that should be refused.
+`--forms base|simd|all` (default `all`) chooses the set; `all` gives the two
+halves of the cases.
+
+`gnutbl.py` doubles as a way to look a row up:
+
+```console
+$ tools/fuzz/gnutbl.py 'vpdpbusd|vaddph'       # by mnemonic
+$ tools/fuzz/gnutbl.py --cpu AVX512_FP16        # by CPU flag
+```
+
+`check.sh` assembles instructions from standard input one at a time with all
+three assemblers and prints each result, which is handy for a handful of lines.
 
 Every case goes in a section of its own, so one run of each assembler covers a
 batch of 200; a batch with errors is reassembled without the rejected cases.
@@ -51,6 +74,16 @@ llvm-mc on are forms only GNU as accepts and nothing is written in: Intel
 `jmp seg, off` with two operands and `callw` in Intel syntax, `arpl` with a
 32-bit register, `fcoml %st(1)`, suffixed `loopel` and `cmpxchg8bq`, and
 64-bit-mode quirks such as Intel `sysret` being ambiguous without a size.
+
+In the SIMD forms the known splits are llvm-mc's: it ignores a `{z}` with no
+writemask, takes an index-only VSIB address in 16-bit mode, rounds
+`vp2intersectd`'s odd mask register down, refuses some AT&T length spellings
+(`vcvtph2bf8y`) and the Xeon Phi prefetches in Intel syntax, assembles the
+FP16 complex multiplications with a repeated register, reads an unsized
+`vcvtsi2ss` memory operand outside long mode as ambiguous, and still takes
+`{sae}` on some 256-bit AVX10.2 conversions. For the EVEX `vmovq` load and
+store the two pick different, equally valid opcodes, and rsasm follows
+llvm-mc, as the corpora note.
 
 ## Environment
 

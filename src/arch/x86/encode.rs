@@ -2,8 +2,8 @@
 //! displacement and immediate.
 
 use super::insn::{
-    ADDR16, ADDR32, DEF64, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO64,
-    NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, Tuple, Vk, WAIT,
+    ADDR16, ADDR32, DEF64, DISTINCT_DEST, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK,
+    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -26,6 +26,19 @@ pub struct Prefixes {
     /// address size override whether or not the operands need it.
     pub data: bool,
     pub addr: bool,
+    /// A `{vex}`, `{vex3}` or `{evex}` pseudo-prefix.
+    pub(crate) encoding: Option<EncodingPrefix>,
+}
+
+/// The encoding a pseudo-prefix asks for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum EncodingPrefix {
+    /// `{vex}` (or `{vex2}`): VEX, in whichever length fits.
+    Vex,
+    /// `{vex3}`: VEX in its three-byte form even where two bytes would do.
+    Vex3,
+    /// `{evex}`: EVEX even where VEX would do.
+    Evex,
 }
 
 /// Which operand fills which encoding slot, worked out from the pattern.
@@ -175,7 +188,7 @@ fn assign_roles<'o>(def: &Def, ops: &'o [Operand]) -> Roles<'o> {
             // goes to r/m instead: that is how the shift-by-immediate forms
             // of `psllw` and friends are built.
             Op::V(_) if roles.rm.is_none() => roles.rm = Some(o),
-            Op::Nds(_) => roles.nds = o.reg(),
+            Op::Nds(_) | Op::NdsR(_) => roles.nds = o.reg(),
             Op::Is4(_) => roles.is4 = o.reg(),
             Op::R(_)
                 if takes_reg_field
@@ -416,6 +429,26 @@ pub fn encode(
     let rm_reg = roles.rm.and_then(rm_register);
     let plus_reg = def.flags & PLUSREG != 0;
 
+    if def.flags & DISTINCT_DEST != 0
+        && let Some(dst) = roles.reg
+        && [roles.nds, rm_reg].contains(&Some(dst))
+    {
+        cx.error(
+            span,
+            "the destination register must differ from both sources",
+        );
+        return None;
+    }
+    // AMX's tile arithmetic reads and writes whole tiles in place, so no two
+    // of its three tiles may be the same.
+    if let (Some(a), Some(b), Some(c)) = (roles.reg, roles.nds, rm_reg)
+        && a.class == RegClass::Tmm
+        && (a == b || a == c || b == c)
+    {
+        cx.error(span, "all three tile registers must be different");
+        return None;
+    }
+
     // VEX and EVEX store their extension bits inverted so that outside 64-bit
     // mode an unextended prefix still decodes, there, as the `LES`/`LDS`/
     // `BOUND` opcode it overlays. Setting one would produce a different
@@ -520,12 +553,17 @@ pub fn encode(
             let pp = pp_bits(def.pfx);
             let w = def.vex_w();
             // The two-byte form has no room for X, B or W, and only reaches
-            // the `0F` map; anything else has to spell the prefix out.
-            if def.map == 1 && !w && !ext_x && !ext_b {
+            // the `0F` map; anything else has to spell the prefix out, and so
+            // does `{vex3}`.
+            let short = prefixes.encoding != Some(EncodingPrefix::Vex3);
+            if short && def.map == 1 && !w && !ext_x && !ext_b {
                 bytes.push(0xc5);
                 bytes.push(((!ext_r as u8) << 7) | ((!vvvv & 0xf) << 3) | (l << 2) | pp);
             } else {
-                bytes.push(0xc4);
+                // XOP is the three-byte VEX layout behind `8F`, which stays
+                // `POP r/m` because its maps start at 8: a real `POP` has a
+                // zero reg field where XOP's inverted `RXB` and map sit.
+                bytes.push(if def.map >= 8 { 0x8f } else { 0xc4 });
                 bytes.push(
                     ((!ext_r as u8) << 7)
                         | ((!ext_x as u8) << 6)
@@ -625,20 +663,28 @@ pub fn encode(
                     }
                 },
             };
-            let Some(rm_operand) = roles.rm else {
-                cx.error(span, "internal: encoding needs an r/m operand");
-                return None;
-            };
-            encode_rm(
-                cx,
-                bits,
-                &mut bytes,
-                &mut disp_fixup,
-                reg_field,
-                rm_operand,
-                mem.as_ref(),
-                disp_scale,
-            )?;
+            match roles.rm {
+                Some(rm_operand) => encode_rm(
+                    cx,
+                    bits,
+                    &mut bytes,
+                    &mut disp_fixup,
+                    reg_field,
+                    rm_operand,
+                    mem.as_ref(),
+                    disp_scale,
+                    def.flags & SIBMEM != 0,
+                )?,
+                // A lone register in ModRM.reg, with r/m unused and zero, as
+                // AMX's `tilezero` is encoded.
+                None if def.enc == Enc::Vex && def.ops.len() == 1 && roles.reg.is_some() => {
+                    bytes.push(0xc0 | (reg_field << 3));
+                }
+                None => {
+                    cx.error(span, "internal: encoding needs an r/m operand");
+                    return None;
+                }
+            }
         }
     }
 
@@ -674,7 +720,21 @@ pub fn encode(
     }
 
     // ---- immediate --------------------------------------------------------
-    for (e, width) in roles.imm.into_iter().chain(roles.imm2) {
+    // An `is4` register and a small immediate share one byte (XOP's
+    // `vpermil2ps`): the register in the top nibble, the value in the bottom.
+    let mut imm = roles.imm;
+    if let (Some(r), Some((e, 1))) = (roles.is4, roles.imm) {
+        let Some(v) = cx.constant(e).filter(|v| (0..=15).contains(v)) else {
+            cx.error(
+                cx.exprs.span(e),
+                "this immediate shares its byte with a register and must be 0 to 15",
+            );
+            return None;
+        };
+        bytes.push(((r.num & 0xf) << 4) | v as u8);
+        imm = None;
+    }
+    for (e, width) in imm.into_iter().chain(roles.imm2) {
         let offset = bytes.len() as u32;
         let folded = cx.constant(e);
         match folded {
@@ -711,7 +771,7 @@ pub fn encode(
     }
 
     // `is4`: a whole immediate byte whose top nibble names a register.
-    if let Some(r) = roles.is4 {
+    if let (Some(r), None) = (roles.is4, roles.imm) {
         bytes.push((r.num & 0xf) << 4);
     }
 
@@ -964,24 +1024,37 @@ fn check_decorators(
         cx.error(d.span, "`{z}` requires a writemask register");
         return None;
     }
+    // A result written to an opmask has nothing for `{z}` to zero: the
+    // writemask already clears the bits it leaves out.
+    if d.zeroing && def.ops.first() == Some(&Op::V(Vk::K)) {
+        cx.error(
+            d.span,
+            "`{z}` cannot be used with a mask register destination",
+        );
+        return None;
+    }
+    // Nor does a store to memory, or a gather, whose mask is its own
+    // bookkeeping.
+    let stores = matches!(
+        def.ops.first(),
+        Some(Op::M(_) | Op::Vm(..) | Op::Vsib(_) | Op::Rm(_))
+    ) && roles.rm.is_some_and(|o| o.is_mem());
+    if d.zeroing && (stores || def.flags & NEEDS_MASK != 0) {
+        cx.error(d.span, "`{z}` cannot be used on this instruction");
+        return None;
+    }
     if let Some(b) = d.broadcast {
         let bspan = b.span;
         if !has_mem {
             cx.error(bspan, "a broadcast decorator needs a memory operand");
             return None;
         }
-        if !def.tuple.broadcastable() {
+        let Some(n) = def.broadcast_count() else {
             cx.error(bspan, "this instruction does not support broadcast");
             return None;
-        }
+        };
         // N is redundant — it is the register's element count — so it is
         // recomputed and the source's spelling checked against it.
-        let vbytes = def.vlen as u32 / 8;
-        let n = match def.tuple {
-            // A half-vector source is half the register, in dword elements.
-            Tuple::Hv => vbytes / 2 / 4,
-            _ => vbytes / if def.vex_w() { 8 } else { 4 },
-        };
         if b.count != n {
             cx.error(bspan, format!("this operand broadcasts as `{{1to{n}}}`"));
             return None;
@@ -1031,6 +1104,7 @@ fn encode_rm(
     rm_operand: &Operand,
     mem: Option<&Mem>,
     disp_scale: u32,
+    force_sib: bool,
 ) -> Option<()> {
     // Register direct.
     if let Some(r) = rm_register(rm_operand) {
@@ -1051,6 +1125,13 @@ fn encode_rm(
 
     // RIP-relative: mod=00, rm=101, always a 32-bit displacement.
     if m.rip_relative {
+        if force_sib {
+            cx.error(
+                m.span,
+                "this instruction cannot address memory relative to `rip`",
+            );
+            return None;
+        }
         if bits != 64 {
             cx.error(m.span, "RIP-relative addressing requires 64-bit mode");
             return None;
@@ -1118,7 +1199,7 @@ fn encode_rm(
     let base_low = base.map_or(0, |b| b.num & 7);
     // rsp/r12 as a base always needs SIB; rbp/r13 always needs a displacement.
     // A VSIB index also forces SIB, since that is where it lives.
-    let need_sib = m.index.is_some() || base.is_none() || base_low == 0b100;
+    let need_sib = force_sib || m.index.is_some() || base.is_none() || base_low == 0b100;
     let base_forces_disp = base.is_some() && base_low == 0b101;
 
     // index-only addressing encodes disp32 with mod=00.
@@ -1323,6 +1404,7 @@ pub fn nop_bytes(bits: u8, len: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::insn::Tuple;
     use super::*;
 
     #[test]

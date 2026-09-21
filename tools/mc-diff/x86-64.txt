@@ -17,12 +17,11 @@
 #   {sae}, disp8*N at several tuple types, xmm16-xmm31 (R', V', X), EVEX VSIB
 #   Opmask instructions: kmov, kand/kandn/kor/kxnor/kxor/kadd, knot, kortest,
 #   ktest, kshift, kunpck
+#   The rest of AVX-512 and the extensions after AVX2 are in x86-64-simd.txt,
+#   x86-64-simd-intel.txt and i386-simd.txt, generated from GNU's opcode table.
 #
 # --- not covered ---
-#   AVX-512 CD, ER, PF, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ, IFMA, FP16, BF16
-#   AMX, APX (REX2 / extended EVEX), XOP, FMA4, TBM, SHA, GFNI, VAES,
-#   VPCLMULQDQ, KL, and the AVX-512 128/256-bit forms of the conversion and
-#   vpmov* rows beyond the ones exercised below
+#   APX (REX2 / extended EVEX), AVX10.2, AVX-512 4FMAPS/4VNNIW
 #
 # --- deliberate divergences from llvm-mc ---
 #   llvm-mc swaps the two sources of a commutative VEX instruction when that
