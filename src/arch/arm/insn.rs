@@ -376,12 +376,17 @@ pub struct Resolved {
 /// Returns `None` if no split yields a known mnemonic, which the caller
 /// reports as an unknown instruction.
 pub fn resolve(text: &str) -> Option<Resolved> {
-    // The width hint is unambiguous: nothing in the table contains a dot.
+    // The width hint is the last dotted part; everything from the first dot
+    // is the data type a vector instruction carries, which is part of its
+    // name: `vcvt` + `eq` + `.f32.u32`.
     let (head, width) = match text.rsplit_once('.') {
-        Some((h, "n")) => (h, Width::Narrow),
-        Some((h, "w")) => (h, Width::Wide),
-        Some(_) => return None,
-        None => (text, Width::Any),
+        Some((h, "n")) if !h.is_empty() => (h, Width::Narrow),
+        Some((h, "w")) if !h.is_empty() => (h, Width::Wide),
+        _ => (text, Width::Any),
+    };
+    let (stem, types) = match head.split_once('.') {
+        Some((s, t)) => (s, Some(t)),
+        None => (head, None),
     };
 
     let mk = |mnem: Mnem, cond: u8, cond_written: bool, set_flags: bool| Resolved {
@@ -391,28 +396,33 @@ pub fn resolve(text: &str) -> Option<Resolved> {
         set_flags,
         width,
     };
+    // The name to look up is the stem with the type suffix put back on.
+    let named = |base: &str| match types {
+        None => lookup(base),
+        Some(t) => lookup(&format!("{base}.{t}")),
+    };
 
     // An exact match always wins, so `bl`, `mrs` and `mls` are never taken
     // apart into a shorter mnemonic plus a suffix.
-    if let Some(m) = lookup(head) {
+    if let Some(m) = named(stem) {
         return Some(mk(m, AL, false, false));
     }
 
     // Condition first: `bls` is `b` + `ls`, not `bl` + `s`. The base may still
     // carry an `s`, giving the UAL order `add` + `s` + `eq`. The split is
     // checked because the mnemonic is user text and need not be ASCII.
-    if let Some((base, suffix)) = head
+    if let Some((base, suffix)) = stem
         .len()
         .checked_sub(2)
-        .and_then(|at| head.split_at_checked(at))
+        .and_then(|at| stem.split_at_checked(at))
         && !base.is_empty()
         && let Some(cond) = condition(suffix)
     {
-        if let Some(m) = lookup(base) {
+        if let Some(m) = named(base) {
             return Some(mk(m, cond, true, false));
         }
         if let Some(base) = base.strip_suffix('s')
-            && let Some(m) = lookup(base)
+            && let Some(m) = named(base)
             && m.allows_s()
         {
             return Some(mk(m, cond, true, true));
@@ -420,8 +430,8 @@ pub fn resolve(text: &str) -> Option<Resolved> {
     }
 
     // A bare `s`: `movs`, `bics`, `adds`.
-    if let Some(base) = head.strip_suffix('s')
-        && let Some(m) = lookup(base)
+    if let Some(base) = stem.strip_suffix('s')
+        && let Some(m) = named(base)
         && m.allows_s()
     {
         return Some(mk(m, AL, false, true));

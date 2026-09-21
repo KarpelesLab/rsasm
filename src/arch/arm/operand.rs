@@ -19,6 +19,52 @@ use crate::expr::ExprRef;
 use crate::lexer::{Punct, TokKind};
 use crate::source::Span;
 
+/// Which bank a vector register comes from: 32 single-precision `s`
+/// registers, 32 double-precision `d` registers over the same bytes, and 16
+/// quadword `q` registers over pairs of those.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum VecKind {
+    S,
+    D,
+    Q,
+}
+
+impl VecKind {
+    pub fn letter(self) -> char {
+        match self {
+            VecKind::S => 's',
+            VecKind::D => 'd',
+            VecKind::Q => 'q',
+        }
+    }
+}
+
+/// One vector register, and the lane of it an operand may name.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct VecReg {
+    pub kind: VecKind,
+    pub n: u8,
+    /// `d0[1]`: which element of the register, which only a scalar operand
+    /// or a structure transfer takes.
+    pub lane: Option<u32>,
+}
+
+/// The vector register a name spells, if it is one.
+pub fn vec_register(name: &str) -> Option<(VecKind, u8)> {
+    let (kind, rest) = match name.as_bytes().first()? {
+        b's' => (VecKind::S, &name[1..]),
+        b'd' => (VecKind::D, &name[1..]),
+        b'q' => (VecKind::Q, &name[1..]),
+        _ => return None,
+    };
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u8 = rest.parse().ok()?;
+    let last = if kind == VecKind::Q { 15 } else { 31 };
+    (n <= last).then_some((kind, n))
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Shift {
     Lsl,
@@ -132,6 +178,18 @@ pub enum OperandKind {
     Literal(ExprRef),
     /// `{expr}`: `nop`'s hint number and the coprocessor opcode of `cdp`.
     Braced(ExprRef),
+    /// A VFP or NEON register, perhaps with a lane index.
+    Vec(VecReg),
+    /// `{d0-d3}`, `{s0, s1}` or `{d0[2], d1[2]}`: a run of vector registers,
+    /// held as the first of them and how many there are. `spaced` is the
+    /// `{d0, d2}` the structure transfers take, whose registers step by two.
+    VecList {
+        kind: VecKind,
+        first: u8,
+        count: u8,
+        lane: Option<u32>,
+        spaced: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +206,14 @@ pub struct Operand {
 }
 
 impl Operand {
+    /// The vector register this operand is, if it is one.
+    pub fn vec(&self) -> Option<VecReg> {
+        match self.kind {
+            OperandKind::Vec(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn reg(&self) -> Option<Reg> {
         match self.kind {
             OperandKind::Reg(r) => Some(r),
@@ -171,6 +237,8 @@ impl Operand {
             OperandKind::List { .. } => "a register list".into(),
             OperandKind::Literal(_) => "a literal pool value".into(),
             OperandKind::Braced(_) => "a value in braces".into(),
+            OperandKind::Vec(v) => format!("register `{}{}`", v.kind.letter(), v.n),
+            OperandKind::VecList { .. } => "a vector register list".into(),
         }
     }
 }
@@ -270,6 +338,41 @@ impl Parser<'_, '_> {
         })
     }
 
+    /// A vector register and the lane it may name, if that is what comes
+    /// next. `None` means it was not one; an error inside the lane index is
+    /// reported and returns `Some(None)`'s outer `None`.
+    fn eat_vec_register(&mut self, cur: &mut Cursor<'_>) -> Option<Option<VecReg>> {
+        let TokKind::Ident(name) = cur.peek().kind else {
+            return Some(None);
+        };
+        let Some((kind, n)) = vec_register(&self.cx.interner.get(name).to_ascii_lowercase()) else {
+            return Some(None);
+        };
+        cur.advance();
+        let mut lane = None;
+        if cur.check_punct(Punct::LBracket) {
+            let span = cur.advance().span;
+            let e = self.cx.expr_parser().parse(cur)?;
+            let Some(v) = self.cx.constant(e) else {
+                self.cx
+                    .error(span, "a lane index must be a constant expression");
+                return None;
+            };
+            if !(0..16).contains(&v) {
+                self.cx
+                    .error(span, format!("lane {v} is out of range (0 to 15)"));
+                return None;
+            }
+            if cur.eat_punct(Punct::RBracket).is_none() {
+                let span = cur.peek().span;
+                self.cx.error(span, "expected `]` after a lane index");
+                return None;
+            }
+            lane = Some(v as u32);
+        }
+        Some(Some(VecReg { kind, n, lane }))
+    }
+
     fn eat_register(&mut self, cur: &mut Cursor<'_>) -> Option<Reg> {
         let TokKind::Ident(name) = cur.peek().kind else {
             return None;
@@ -296,6 +399,15 @@ impl Parser<'_, '_> {
         }
         if cur.check_punct(Punct::LBracket) {
             return self.parse_mem(cur);
+        }
+        if let Some(v) = self.eat_vec_register(cur)? {
+            let writeback = cur.eat_punct(Punct::Bang).is_some();
+            return Some(Operand {
+                kind: OperandKind::Vec(v),
+                span: start.to(cur.nth(0).span),
+                word: None,
+                writeback,
+            });
         }
         if let Some(r) = self.eat_register(cur) {
             let writeback = cur.eat_punct(Punct::Bang).is_some();
@@ -330,6 +442,9 @@ impl Parser<'_, '_> {
         if cur.eat_punct(Punct::RBrace).is_some() {
             self.cx.error(start, "empty register list");
             return None;
+        }
+        if let Some(v) = self.eat_vec_register(cur)? {
+            return self.parse_vec_list(cur, start, v);
         }
         // `{5}` is not a register list at all: it is the hint number of
         // `nop` and the coprocessor option of `cdp` and `ldc`.
@@ -397,6 +512,75 @@ impl Parser<'_, '_> {
         let user = cur.eat_punct(Punct::Caret).is_some();
         Some(Operand {
             kind: OperandKind::List { mask, user },
+            span: start.to(cur.nth(0).span),
+            word: None,
+            writeback: false,
+        })
+    }
+
+    /// The rest of `{d0-d3}`, `{s0, s1}` or `{d0[2], d2[2]}`, having read
+    /// the first register. A list is a run, written either as a range or as
+    /// each register in turn, and the structure transfers also take one
+    /// whose registers step by two.
+    fn parse_vec_list(
+        &mut self,
+        cur: &mut Cursor<'_>,
+        start: Span,
+        first: VecReg,
+    ) -> Option<Operand> {
+        let mut last = first;
+        let mut count = 1u8;
+        let mut step = 1u8;
+        if cur.eat_punct(Punct::Minus).is_some() {
+            let span = cur.peek().span;
+            let Some(hi) = self.eat_vec_register(cur)? else {
+                self.cx.error(span, "expected a register after `-`");
+                return None;
+            };
+            if hi.kind != first.kind || hi.n < first.n {
+                self.cx
+                    .error(span, "a register range runs from low to high");
+                return None;
+            }
+            count = hi.n - first.n + 1;
+            last = hi;
+        }
+        while cur.eat_punct(Punct::Comma).is_some() {
+            let span = cur.peek().span;
+            let Some(next) = self.eat_vec_register(cur)? else {
+                self.cx.error(span, "expected a register in the list");
+                return None;
+            };
+            if next.kind != first.kind || next.lane != first.lane {
+                self.cx
+                    .error(span, "a vector register list holds one kind of register");
+                return None;
+            }
+            if count == 1 && next.n == last.n + 2 {
+                step = 2;
+            }
+            if next.n != last.n + step {
+                self.cx
+                    .error(span, "a vector register list is a run of registers");
+                return None;
+            }
+            last = next;
+            count += 1;
+        }
+        if cur.eat_punct(Punct::RBrace).is_none() {
+            let span = cur.peek().span;
+            self.cx
+                .error(span, "expected `,` or `}` in a register list");
+            return None;
+        }
+        Some(Operand {
+            kind: OperandKind::VecList {
+                kind: first.kind,
+                first: first.n,
+                count,
+                lane: first.lane,
+                spaced: step == 2,
+            },
             span: start.to(cur.nth(0).span),
             word: None,
             writeback: false,

@@ -13,7 +13,7 @@
 //! `.n` and `.w` narrow the choice of.
 
 use super::insn::{AL, Width};
-use super::operand::{Index, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
+use super::operand::{Index, MemOffset, Operand, OperandKind, Shift, ShiftAmt, VecKind, VecReg};
 use super::reg::{self, Reg};
 use super::table::{self, Field, Form, Op, Set};
 use super::{Insn, THUMB_BITS};
@@ -129,6 +129,12 @@ struct Walk<'a, 'b, 'c> {
     /// The second half of a register pair the source left out, which is
     /// still one of the registers the instruction uses.
     implied: Option<Reg>,
+    /// The vector register read last, for the forms that write it twice and
+    /// for the second half of a `vmov` pair.
+    vec: Option<VecReg>,
+    /// Whether a NEON form's registers are quadword, once one of them has
+    /// said so.
+    quad: Option<bool>,
     /// Whether to report the first thing that does not fit.
     report: bool,
     failed: bool,
@@ -248,6 +254,59 @@ impl Walk<'_, '_, '_> {
         Some(())
     }
 
+    /// A vector register of the kind the form wants, and the field it goes
+    /// in. A quadword register is held as the first of the two `d`
+    /// registers it covers.
+    fn vec_register(&mut self, kind: u8, field: Field) -> Option<VecReg> {
+        let Some(op) = self.op().cloned() else {
+            return self.fail(|| "expected a vector register".into());
+        };
+        let Some(v) = op.vec() else {
+            let what = op.describe();
+            return self.fail(|| format!("expected a vector register, found {what}"));
+        };
+        let want = match kind {
+            0 => VecKind::S,
+            2 => VecKind::Q,
+            // Kind 3 is the double-or-quad a NEON form picks with bit 6 of
+            // its own word: every such operand of one instruction has to be
+            // the same width, and the first one written settles it.
+            3 => match self.quad {
+                Some(true) => VecKind::Q,
+                Some(false) => VecKind::D,
+                None => match v.kind {
+                    VecKind::Q => VecKind::Q,
+                    _ => VecKind::D,
+                },
+            },
+            _ => VecKind::D,
+        };
+        if v.kind != want {
+            let letter = want.letter();
+            return self.fail(|| format!("expected a `{letter}` register here"));
+        }
+        if v.lane.is_some() {
+            return self.fail(|| "this operand takes a whole register, not a lane".into());
+        }
+        if kind == 3 {
+            self.quad = Some(want == VecKind::Q);
+            if want == VecKind::Q {
+                self.word |= 1 << 6;
+            }
+        }
+        // A quadword register is held as the number of the first of the two
+        // `d` registers it covers.
+        let n = if want == VecKind::Q { v.n * 2 } else { v.n };
+        if u32::from(n) >= 1 << width_of(field) {
+            let name = format!("{}{}", want.letter(), v.n);
+            return self.fail(|| format!("`{name}` is out of range for this instruction"));
+        }
+        place(&mut self.word, field, u32::from(n));
+        self.vec = Some(v);
+        self.take();
+        Some(v)
+    }
+
     /// A bare word operand — a coprocessor register, a barrier option, the
     /// interrupt flags — as it was written.
     fn word_operand(&mut self) -> Option<String> {
@@ -273,6 +332,8 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
         at: 0,
         prev: None,
         implied: None,
+        vec: None,
+        quad: None,
         regs: form.regs,
         shift: None,
         lsb: 0,
@@ -507,7 +568,13 @@ fn step(w: &mut Walk<'_, '_, '_>, form: &Form, op: Op) -> Option<()> {
             w.take();
         }
         Op::Writeback(lsb) => {
-            if w.prev.is_some_and(|i| w.ins.ops[i].writeback) {
+            let wrote = w.prev.is_some_and(|i| w.ins.ops[i].writeback);
+            if lsb == 255 {
+                // The form always writes back, so the `!` has to be there.
+                if !wrote {
+                    return w.fail(|| "this instruction writes its base register back".into());
+                }
+            } else if wrote {
                 w.word |= 1 << lsb;
             }
         }
@@ -552,6 +619,89 @@ fn step(w: &mut Walk<'_, '_, '_>, form: &Form, op: Op) -> Option<()> {
         Op::IdxMem(base, index, shift) => table_branch(w, base, index, shift)?,
         Op::OffMem(base, field, scale) => offset_mem(w, base, field, scale)?,
         Op::CoprocMem => coproc_mem(w)?,
+        Op::Vfp(kind, field) => {
+            w.vec_register(kind, field)?;
+        }
+        Op::VfpSame(kind, field) => {
+            let want = w.vec;
+            let got = w.vec_register(kind, field)?;
+            if want.is_some_and(|v| v.n != got.n) {
+                return w.fail(|| "both operands must be the same register".into());
+            }
+        }
+        Op::VfpNext => {
+            let want = w.vec.map(|v| VecReg { n: v.n + 1, ..v });
+            let Some(op) = w.op().cloned() else {
+                return w.fail(|| "expected the second register of the pair".into());
+            };
+            if op.vec() != want {
+                let letter = want.map_or('s', |v| v.kind.letter());
+                let n = want.map_or(0, |v| v.n);
+                return w.fail(|| format!("the second of the pair must be `{letter}{n}`"));
+            }
+            w.take();
+        }
+        Op::VfpLane(kind, field, lane) => vfp_lane(w, kind, field, lane)?,
+        Op::VfpList(kind, first, count) => vfp_list(w, kind, first, count)?,
+        Op::VfpMem => vfp_mem(w)?,
+        Op::VfpImm(field) => w.immediate(field, 1, 0)?,
+        Op::VfpFix(field) => vfp_fix(w, field)?,
+        Op::NegImm(field) => {
+            // `vshr.s8 d0, d1, #8` empties the field and `#1` fills it.
+            let width = width_of(field);
+            let top = 1i64 << width;
+            let v = w.constant()?;
+            if v < 1 || v > top {
+                return w.fail(|| format!("a shift here is 1 to {top}, not {v}"));
+            }
+            place(&mut w.word, field, (top - v) as u32);
+            w.take();
+        }
+        Op::SizeImm(field, base) => {
+            let mut got = 0;
+            let mut shift = 0;
+            for (lsb, bits) in field {
+                got |= ((w.word >> lsb) & ((1 << bits) - 1)) << shift;
+                shift += u32::from(*bits);
+            }
+            let want = i64::from(u32::from(base) << got);
+            let v = w.constant()?;
+            if v != want {
+                return w.fail(|| format!("this operand is `{want}` here, not `{v}`"));
+            }
+            w.take();
+        }
+        Op::Scalar => scalar(w)?,
+        Op::VfpTwice(kind, first, second) => {
+            let v = w.vec_register(kind, first)?;
+            let n = if v.kind == VecKind::Q { v.n * 2 } else { v.n };
+            place(&mut w.word, second, u32::from(n));
+        }
+        Op::NeonImm(class, size) => {
+            neon_immediate(w, class, u32::from(size), form.set == Set::T32)?;
+        }
+        Op::TblList(first, count) => tbl_list(w, first, count)?,
+        Op::Fixed(want) => {
+            let v = w.constant()?;
+            if v != i64::from(want) {
+                return w.fail(|| format!("this operand is `{want}` here, not `{v}`"));
+            }
+            w.take();
+        }
+        Op::Zero => {
+            let v = w.constant()?;
+            if v != 0 {
+                return w.fail(|| "this operand is the constant zero".into());
+            }
+            w.take();
+        }
+        Op::Named(name) => {
+            let got = w.word_operand()?;
+            if got != name {
+                return w.fail(|| format!("expected `{name}`, found `{got}`"));
+            }
+            w.take();
+        }
     }
     Some(())
 }
@@ -746,6 +896,334 @@ fn coproc_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
         w.word |= 1 << 23;
     }
     w.word |= (off.unsigned_abs() / 4) as u32;
+    w.take();
+    Some(())
+}
+
+/// Whether every byte of `imm` is all ones or all zeroes, which is the one
+/// pattern a 64-bit `vmov` immediate can hold.
+fn bits_same_in_bytes(imm: u32) -> bool {
+    (0..4).all(|i| {
+        let byte = (imm >> (i * 8)) & 0xFF;
+        byte == 0 || byte == 0xFF
+    })
+}
+
+/// That pattern as the four bits the encoding holds.
+fn squash_bits(imm: u32) -> u32 {
+    (imm & 1) | ((imm >> 7) & 2) | ((imm >> 14) & 4) | ((imm >> 21) & 8)
+}
+
+/// The low `size` bits of `hi:lo`, inverted.
+fn invert_size(lo: &mut u32, hi: &mut u32, size: u32) {
+    match size {
+        8 => *lo = !*lo & 0xFF,
+        16 => *lo = !*lo & 0xFFFF,
+        64 => {
+            *hi = !*hi;
+            *lo = !*lo;
+        }
+        _ => *lo = !*lo,
+    }
+}
+
+/// `cmode` and the eight immediate bits for `vmov` and `vmvn`, following
+/// `neon_cmode_for_move_imm`: the value is a byte somewhere in the element,
+/// a byte with ones below it, or a byte pattern repeated over the element.
+/// `op` starts as 1 for `vmvn` and the encoding may flip it.
+fn cmode_for_move(mut lo: u32, hi: u32, op: &mut u32, size: u32) -> Option<(u32, u32)> {
+    if size == 64 {
+        if bits_same_in_bytes(hi) && bits_same_in_bytes(lo) {
+            if *op == 1 {
+                return None;
+            }
+            *op = 1;
+            return Some((0xE, (squash_bits(hi) << 4) | squash_bits(lo)));
+        }
+        if hi != lo {
+            return None;
+        }
+    }
+    if size >= 32 {
+        if lo == lo & 0x0000_00FF {
+            return Some((0x0, lo));
+        } else if lo == lo & 0x0000_FF00 {
+            return Some((0x2, lo >> 8));
+        } else if lo == lo & 0x00FF_0000 {
+            return Some((0x4, lo >> 16));
+        } else if lo == lo & 0xFF00_0000 {
+            return Some((0x6, lo >> 24));
+        } else if lo == (lo & 0x0000_FF00) | 0x0000_00FF {
+            return Some((0xC, (lo >> 8) & 0xFF));
+        } else if lo == (lo & 0x00FF_0000) | 0x0000_FFFF {
+            return Some((0xD, (lo >> 16) & 0xFF));
+        }
+        if lo & 0xFFFF != lo >> 16 {
+            return None;
+        }
+        lo &= 0xFFFF;
+    }
+    if size >= 16 {
+        if lo == lo & 0x0000_00FF {
+            return Some((0x8, lo));
+        } else if lo == lo & 0x0000_FF00 {
+            return Some((0xA, lo >> 8));
+        }
+        if lo & 0xFF != lo >> 8 {
+            return None;
+        }
+        lo &= 0xFF;
+    }
+    if lo == lo & 0xFF {
+        // There is no `vmvn` of a byte: it would be a `vmov` of the
+        // complement, which is what the caller falls back to.
+        if *op == 1 {
+            return None;
+        }
+        return Some((0xE, lo));
+    }
+    None
+}
+
+/// `cmode` and the immediate bits for `vorr` and `vbic`, following
+/// `neon_cmode_for_logic_imm`. A byte-sized immediate is the halfword that
+/// repeats it, which leaves nothing but zero in range.
+fn cmode_for_logic(mut imm: u32, mut size: u32) -> Option<(u32, u32)> {
+    if size == 8 {
+        imm |= imm << 8;
+        size = 16;
+    }
+    if size >= 32 {
+        if imm == imm & 0x0000_00FF {
+            return Some((0x1, imm));
+        } else if imm == imm & 0x0000_FF00 {
+            return Some((0x3, imm >> 8));
+        } else if imm == imm & 0x00FF_0000 {
+            return Some((0x5, imm >> 16));
+        } else if imm == imm & 0xFF00_0000 {
+            return Some((0x7, imm >> 24));
+        }
+        if imm & 0xFFFF != imm >> 16 {
+            return None;
+        }
+        imm &= 0xFFFF;
+    }
+    if imm == imm & 0x0000_00FF {
+        Some((0x9, imm))
+    } else if imm == imm & 0x0000_FF00 {
+        Some((0xB, imm >> 8))
+    } else {
+        None
+    }
+}
+
+/// The NEON modified immediate. One encoding holds every immediate the
+/// vector moves and the vector logic take: four bits of `cmode` and one
+/// `op` bit say which of the patterns the eight immediate bits stand for,
+/// and GNU as picks them from the value written -- turning a `vmov` into a
+/// `vmvn` of the complement, or the other way round, when only one of the
+/// two has the pattern.
+fn neon_immediate(w: &mut Walk<'_, '_, '_>, class: u8, size: u32, thumb: bool) -> Option<()> {
+    let value = w.constant()? as u64;
+    let mut lo = value as u32;
+    let mut hi = if size == 64 { (value >> 32) as u32 } else { 0 };
+    let (cmode, immbits, op) = if class < 2 {
+        if size < 32 && lo & !((1 << size) - 1) != 0 {
+            return w.fail(|| "immediate has bits set outside the element size".into());
+        }
+        let mut op = u32::from(class == 1);
+        match cmode_for_move(lo, hi, &mut op, size) {
+            Some((cmode, bits)) => (cmode, bits, op),
+            None => {
+                // The complement may have a pattern where the value has
+                // none, which turns a `vmov` into a `vmvn` and back.
+                invert_size(&mut lo, &mut hi, size);
+                op ^= 1;
+                match cmode_for_move(lo, hi, &mut op, size) {
+                    Some((cmode, bits)) => (cmode, bits, op),
+                    None => {
+                        return w.fail(|| "no vector immediate holds this value".into());
+                    }
+                }
+            }
+        }
+    } else {
+        if size == 64 && hi != lo {
+            return w.fail(|| "a 64-bit immediate here repeats its low word".into());
+        }
+        if class >= 4 {
+            // `vand` is `vbic` of the complement, and `vorn` is `vorr` of
+            // it; both are spellings GNU as takes and never prints.
+            invert_size(&mut lo, &mut hi, size);
+        }
+        // `vbic` and `vand` are `vorr` and `vorn` with the `op` bit set.
+        let op = u32::from(class == 3 || class == 4);
+        match cmode_for_logic(lo, size) {
+            Some((cmode, bits)) => (cmode, bits, op),
+            None => return w.fail(|| "no vector immediate holds this value".into()),
+        }
+    };
+    w.word |= cmode << 8;
+    w.word |= op << 5;
+    w.word |= immbits & 0xF;
+    w.word |= ((immbits >> 4) & 7) << 16;
+    // The top bit of the immediate is bit 24 of an A32 word, and a T32 NEON
+    // instruction has a top byte of its own, where it is bit 28.
+    w.word |= ((immbits >> 7) & 1) << if thumb { 28 } else { 24 };
+    w.take();
+    Some(())
+}
+
+/// A NEON scalar, `d0[1]`. The register and the lane share bits 0-3 and
+/// bit 5: the element size in bits 20-21 says how many of those bits the
+/// register takes, and the lane sits above it.
+fn scalar(w: &mut Walk<'_, '_, '_>) -> Option<()> {
+    let Some(v) = w.op().cloned().and_then(|o| o.vec()) else {
+        return w.fail(|| "expected a scalar, as in `d0[1]`".into());
+    };
+    let Some(lane) = v.lane else {
+        return w.fail(|| "this operand names a lane, as in `d0[1]`".into());
+    };
+    if v.kind != VecKind::D {
+        return w.fail(|| "a scalar is a lane of a `d` register".into());
+    }
+    let size = (w.word >> 20) & 3;
+    let regs = 4 << size;
+    if u32::from(v.n) >= regs {
+        return w.fail(|| format!("a {}-bit scalar lives in d0 to d{}", 8 << size, regs - 1));
+    }
+    let lanes = 8 >> size;
+    if lane >= lanes {
+        return w.fail(|| format!("this register holds {lanes} lanes of that size"));
+    }
+    let raw = u32::from(v.n) | (lane << (size + 2));
+    w.word |= raw & 0xF;
+    w.word |= (raw >> 4) << 5;
+    w.vec = Some(v);
+    w.take();
+    Some(())
+}
+
+/// `vtbl`'s table, `{d0-d3}`: one to four `d` registers, the count held one
+/// less than it is written.
+fn tbl_list(w: &mut Walk<'_, '_, '_>, first: Field, count: Field) -> Option<()> {
+    let Some(op) = w.op().cloned() else {
+        return w.fail(|| "expected a register list".into());
+    };
+    let OperandKind::VecList {
+        kind: VecKind::D,
+        first: reg,
+        count: n,
+        lane: None,
+        spaced: false,
+    } = op.kind
+    else {
+        let what = op.describe();
+        return w.fail(|| format!("expected a list of `d` registers, found {what}"));
+    };
+    if n < 1 || u32::from(n - 1) >= 1 << width_of(count) {
+        return w.fail(|| "a table holds one to four registers".into());
+    }
+    if u32::from(reg) + u32::from(n) > 32 {
+        return w.fail(|| "this list runs past `d31`".into());
+    }
+    place(&mut w.word, first, u32::from(reg));
+    place(&mut w.word, count, u32::from(n - 1));
+    w.take();
+    Some(())
+}
+
+/// A vector register with a lane index, `d0[1]`.
+fn vfp_lane(w: &mut Walk<'_, '_, '_>, kind: u8, field: Field, lane: Field) -> Option<()> {
+    let Some(v) = w.op().cloned().and_then(|o| o.vec()) else {
+        return w.fail(|| "expected a vector register with a lane".into());
+    };
+    let want = if kind == 0 { VecKind::S } else { VecKind::D };
+    let Some(index) = v.lane else {
+        return w.fail(|| "this operand names a lane, as in `d0[1]`".into());
+    };
+    if v.kind != want {
+        let letter = want.letter();
+        return w.fail(|| format!("expected a `{letter}` register here"));
+    }
+    if u32::from(v.n) >= 1 << width_of(field) || index >= 1 << width_of(lane) {
+        return w.fail(|| format!("`{}{}[{index}]` has no encoding here", want.letter(), v.n));
+    }
+    place(&mut w.word, field, u32::from(v.n));
+    place(&mut w.word, lane, index);
+    w.vec = Some(v);
+    w.take();
+    Some(())
+}
+
+/// `{s0-s3}` or `{d0-d3}`: the first register and how many there are.
+fn vfp_list(w: &mut Walk<'_, '_, '_>, kind: u8, first: Field, count: Field) -> Option<()> {
+    let Some(op) = w.op().cloned() else {
+        return w.fail(|| "expected a vector register list".into());
+    };
+    let OperandKind::VecList {
+        kind: got,
+        first: reg,
+        count: n,
+        lane: None,
+        spaced: false,
+    } = op.kind
+    else {
+        let what = op.describe();
+        return w.fail(|| format!("expected a vector register list, found {what}"));
+    };
+    let want = if kind == 0 { VecKind::S } else { VecKind::D };
+    if got != want {
+        let letter = want.letter();
+        return w.fail(|| format!("this list holds `{letter}` registers"));
+    }
+    if u32::from(reg) >= 1 << width_of(first) || u32::from(n) >= 1 << width_of(count) {
+        return w.fail(|| "this register list is too long".into());
+    }
+    place(&mut w.word, first, u32::from(reg));
+    place(&mut w.word, count, u32::from(n));
+    w.take();
+    Some(())
+}
+
+/// `vldr` and `vstr` address `[rn, #±imm8*4]`, and write no base back.
+fn vfp_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
+    let Some(op) = w.op().cloned() else {
+        return w.fail(|| "expected a memory operand".into());
+    };
+    let OperandKind::Mem(mem) = op.kind else {
+        let what = op.describe();
+        return w.fail(|| format!("expected a memory operand, found {what}"));
+    };
+    if mem.index != Index::Offset {
+        return w.fail(|| "this instruction does not write its base register back".into());
+    }
+    let off = match mem.offset {
+        MemOffset::None => 0,
+        MemOffset::Imm(v) => v,
+        _ => return w.fail(|| "this instruction takes no index register".into()),
+    };
+    if off % 4 != 0 || off.unsigned_abs() > 1020 {
+        return w.fail(|| format!("offset {off} is out of range (-1020 to 1020 in steps of 4)"));
+    }
+    w.word |= u32::from(mem.base) << 16;
+    if off >= 0 {
+        w.word |= 1 << 23;
+    }
+    w.word |= (off.unsigned_abs() / 4) as u32;
+    w.take();
+    Some(())
+}
+
+/// A `vcvt` fixed-point size, which the field holds as `32 - n` or `16 - n`
+/// by the bit in the form's own word that says which.
+fn vfp_fix(w: &mut Walk<'_, '_, '_>, field: Field) -> Option<()> {
+    let from = if w.word & (1 << 7) != 0 { 32 } else { 16 };
+    let v = w.constant()?;
+    if v < 1 || v > from {
+        return w.fail(|| format!("a fixed-point size is 1 to {from}, not {v}"));
+    }
+    place(&mut w.word, field, (from - v) as u32);
     w.take();
     Some(())
 }

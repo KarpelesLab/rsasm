@@ -59,6 +59,8 @@ TABLES = [
     ("static const struct opcode16 thumb_opcodes[] =", "t16"),
     ("static const struct opcode32 thumb32_opcodes[] =", "t32"),
     ("static const struct sopcode32 generic_coprocessor_opcodes[] =", "cop"),
+    ("static const struct sopcode32 coprocessor_opcodes[] =", "vfp"),
+    ("static const struct opcode32 neon_opcodes[] =", "neon"),
 ]
 
 ENTRY = re.compile(
@@ -80,6 +82,10 @@ FEATURES = {
     "ARM_EXT_V6T2", "ARM_EXT_V6Z", "ARM_EXT_V7", "ARM_EXT_DIV",
     "ARM_EXT_ADIV", "ARM_EXT_MP", "ARM_EXT_SEC", "ARM_EXT_VIRT",
     "ARM_EXT2_V6T2_V8M",
+    # The floating-point unit, up to VFPv4: what `-mfpu=neon-vfpv4` gives.
+    "FPU_VFP_EXT_V1xD", "FPU_VFP_EXT_V1", "FPU_VFP_EXT_V2", "FPU_VFP_EXT_V3",
+    "FPU_VFP_EXT_V3xD", "FPU_VFP_EXT_FMA", "FPU_VFP_EXT_FP16",
+    "FPU_NEON_EXT_V1", "FPU_NEON_EXT_FMA",
 }
 
 # Mnemonics a hand-written encoder owns, because the bytes depend on more
@@ -100,6 +106,12 @@ HAND = set("""
 # ...and the flag-setting spellings of the same, which the mnemonic patterns
 # expand to.
 HAND |= {n + "s" for n in HAND}
+# The NEON instructions whose operands are more than fields: the modified
+# immediate, whose `cmode` the assembler picks from the value written, and the
+# structure transfers, whose register list, alignment and index are one
+# tangle of fields. `super::neon` owns those.
+NEON_HAND = ("%E", "%A", "%B", "%C")
+
 # `tstp` and its relatives set the flags into the PSR on an ARMv2; GNU as has
 # no syntax for them and only the disassembler prints them.
 DIS = {"tstp", "teqp", "cmpp", "cmnp"}
@@ -189,6 +201,15 @@ for _srs in ("srsia", "srsib", "srsda", "srsdb"):
 # one that takes a mode.
 WORD_FIX = {("cps", "Arm"): 1 << 17}
 
+# `vqshrun` and `vqrshrun` have the unsigned bit set, which their rows do not
+# say: the disassembler prints them from a row that matches either value of
+# it. The bit is 24 in A32 and 28 in T32, since a T32 NEON instruction is the
+# A32 word with its top byte translated rather than copied.
+for _un in ("vqshrun", "vqrshrun"):
+    for _size in (16, 32, 64):
+        WORD_FIX[("%s.s%d" % (_un, _size), "Arm")] = 1 << 24
+        WORD_FIX[("%s.s%d" % (_un, _size), "T32")] = 1 << 28
+
 # The T32 forms of the one-register operations hold `Rm` twice, and the
 # disassembler reads only the copy at bits 16-19.
 for _dup in ("rev", "rev16", "revsh", "rbit", "clz"):
@@ -197,6 +218,11 @@ for _dup in ("rev", "rev16", "revsh", "rbit", "clz"):
 # Forms GNU as assembles that no row of the disassembler's table describes,
 # because it prints them as another instruction. `do_pkhtb` turns a `pkhtb`
 # with no shift into `pkhbt rd, rm, rn`, in both instruction sets.
+# The NEON registers of a three-register instruction.
+VD = ((12, 4), (22, 1))
+VN = ((16, 4), (7, 1))
+VM = ((0, 4), (5, 1))
+
 EXTRA = [
     ("pkhtb", "Arm", 0x06800010, True,
      (("Reg", 12, 4), ("Reg", 0, 4), ("Reg", 16, 4))),
@@ -245,7 +271,7 @@ def read_entries(src):
                     "mask": int(m.group(3), 0),
                     "fmt": fmt,
                     "set": which,
-                    "feats": set(re.findall(r"ARM_EXT\w*", m.group(1))),
+                    "feats": set(re.findall(r"(?:ARM_EXT|ARM_CEXT|FPU_)\w*", m.group(1))),
                 }
             )
     return out
@@ -259,7 +285,7 @@ def split_fmt(fmt):
     return parts[0], ops.split("@")[0].strip()
 
 
-def expand_mnemonic(mnem, val):
+def expand_mnemonic(mnem, val, mask=0):
     """Every concrete spelling a mnemonic pattern stands for, as
     (name, opcode word, takes a condition).
 
@@ -267,15 +293,18 @@ def expand_mnemonic(mnem, val):
     `%<field>?abc` selects a letter by the field's value, so each of those is
     two or more instructions sharing one row. A `.w` or `.n` in the name is
     the width the disassembler prints, which the encoder decides for itself."""
-    out = [("", val, False)]
+    # Each entry carries the bits the conditionals have settled, since a row
+    # may test one bit twice (`%16?us%7?31%7?26` is `s16`, `s32`, `u16` and
+    # `u32`, not sixteen spellings).
+    out = [("", val, False, mask)]
     i = 0
     while i < len(mnem):
         if mnem[i] != "%":
-            out = [(n + mnem[i], v, c) for n, v, c in out]
+            out = [(n + mnem[i], v, c, m) for n, v, c, m in out]
             i += 1
             continue
         if mnem[i:i + 2] == "%c":
-            out = [(n, v, True) for n, v, c in out]
+            out = [(n, v, True, m) for n, v, _, m in out]
             i += 2
             continue
         # The letters the disassembler works out from the whole instruction
@@ -297,11 +326,42 @@ def expand_mnemonic(mnem, val):
                 "I": [""],
             }[code]
             out = [
-                (n + t, v, c or code == "C")
-                for n, v, c in out
+                (n + t, v, c or code == "C", m)
+                for n, v, c, m in out
                 for t in tails
                 if code != "w" or n.endswith("ldr") or t in ("", "b", "h")
             ]
+            continue
+        m = MULTI.match(mnem, i)
+        if m and m.group(2) == "?":
+            # A selector whose bits are not next to each other: the NEON
+            # fixed-point `vcvt`, whose direction is bit 24 over bit 8.
+            pieces = multi_field(m.group(1))
+            i = m.end()
+            bits = sum(w for _, w in pieces)
+            letters = mnem[i:i + (1 << bits)]
+            i += 1 << bits
+            ones = 0
+            for lsb, width in pieces:
+                ones |= ((1 << width) - 1) << lsb
+            nxt = []
+            for n, v, c, mk in out:
+                if mk & ones == ones:
+                    value, shift = 0, 0
+                    for lsb, width in pieces:
+                        value |= ((v >> lsb) & ((1 << width) - 1)) << shift
+                        shift += width
+                    nxt.append((n + letters[(1 << bits) - value - 1], v, c,
+                                mk))
+                    continue
+                for value in range(1 << bits):
+                    w, left = v, value
+                    for lsb, width in pieces:
+                        w |= (left & ((1 << width) - 1)) << lsb
+                        left >>= width
+                    nxt.append((n + letters[(1 << bits) - value - 1], w, c,
+                                mk | ones))
+            out = nxt
             continue
         m = FIELD.match(mnem, i)
         if not m:
@@ -316,31 +376,103 @@ def expand_mnemonic(mnem, val):
             ch, i = mnem[i], i + 1
             ones = ((1 << bits) - 1) << lo
             on, off = (ones, 0) if code == "'" else (0, ones)
-            out = [(n + ch, v | on, c) for n, v, c in out] + [
-                (n, v | off, c) for n, v, c in out
-            ]
+            nxt = []
+            for n, v, c, m in out:
+                if m & ones == ones:
+                    nxt.append((n + ch if v & ones == on else n, v, c, m))
+                else:
+                    nxt.append((n + ch, v | on, c, m | ones))
+                    nxt.append((n, v | off, c, m | ones))
+            out = nxt
         elif code == "?":
             letters = mnem[i:i + (1 << bits)]
             i += 1 << bits
+            ones = ((1 << bits) - 1) << lo
             nxt = []
-            for value in range(1 << bits):
-                # print_insn_arm indexes c[(1 << width) - value], counting
-                # back from the end of the letters.
-                ch = letters[(1 << bits) - value - 1]
-                nxt += [(n + ch, v | (value << lo), c) for n, v, c in out]
+            # print_insn_arm indexes c[(1 << width) - value], counting back
+            # from the end of the letters.
+            def letter(value):
+                return letters[(1 << bits) - value - 1]
+            for n, v, c, m in out:
+                if m & ones == ones:
+                    nxt.append((n + letter((v & ones) >> lo), v, c, m))
+                    continue
+                for value in range(1 << bits):
+                    nxt.append((n + letter(value), v | (value << lo), c,
+                                m | ones))
+            out = nxt
+        elif code in "STU":
+            # `%<field>S<limit>`: the element width the field picks, written
+            # into the mnemonic. `S` counts from 8 bits, `T` from 16 and `U`
+            # from 32, and the limit digit says which values are legal --
+            # its top two bits the lowest and its bottom two the highest.
+            base = 8 << "STU".index(code)
+            limit = int(mnem[i], 16)
+            i += 1
+            low, high = limit >> 2, limit & 3
+            ones = ((1 << bits) - 1) << lo
+            nxt = []
+            for n, v, c, m in out:
+                if m & ones == ones:
+                    value = (v & ones) >> lo
+                    if low <= value <= high:
+                        nxt.append((n + str(base << value), v, c, m))
+                    continue
+                for value in range(low, high + 1):
+                    nxt.append((n + str(base << value), v | (value << lo), c,
+                                m | ones))
             out = nxt
         elif code == "c":
             # A condition in a field of its own, which the mnemonic carries
             # as a suffix either way.
-            out = [(n, v, True) for n, v, _ in out]
+            out = [(n, v, True, m) for n, v, _, m in out]
         else:
             raise Unsupported("mnemonic %r" % mnem)
-    return [(n.replace(".w", "").replace(".n", "").strip(), v, c) for n, v, c in out]
+    return [
+        (n.replace(".w", "").replace(".n", "").strip(), v, c)
+        for n, v, c, _ in out
+    ]
 
 
 def field(lo, hi):
     return ((lo, hi - lo + 1),)
 
+
+# `%12-15,22D`: a value in several pieces, written from its own low bits up.
+MULTI = re.compile(r"%(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)+)(.)")
+
+
+def multi_field(spec):
+    out = []
+    for part in spec.split(","):
+        if "-" in part:
+            lo, hi = (int(x) for x in part.split("-"))
+            out.append((min(lo, hi), abs(hi - lo) + 1))
+        else:
+            out.append((int(part), 1))
+    return tuple(out)
+
+
+# Where each VFP register field lives. A single-precision number is the
+# four-bit field with its low bit beside it; a double-precision one has the
+# extra bit on top. `print_insn_coprocessor`'s `%y<n>` and `%z<n>` codes.
+VFP_REG = {
+    "y0": (0, ((5, 1), (0, 4))),
+    "y1": (0, ((22, 1), (12, 4))),
+    "y2": (0, ((7, 1), (16, 4))),
+    "y4": (0, ((5, 1), (0, 4))),
+    "z0": (1, ((0, 4), (5, 1))),
+    "z1": (1, ((12, 4), (22, 1))),
+    "z2": (1, ((16, 4), (7, 1))),
+}
+# A register list: the first register, then how many there are. A
+# double-precision list counts in pairs of halves, so its length field starts
+# one bit up and the bit below says whether this is the deprecated `fldmx`.
+VFP_LIST = {
+    "y3": (0, ((22, 1), (12, 4)), ((0, 8),)),
+    "z3": (1, ((12, 4), (22, 1)), ((1, 7),)),
+    "B": (1, ((12, 4), (22, 1)), ((1, 7),)),
+}
 
 # The lsb and width fields of `bfc`/`bfi` (%E) and `sbfx`/`ubfx` (%F). A32
 # keeps each whole; T32 splits the lsb over hw2[14:12] and hw2[7:6].
@@ -374,6 +506,12 @@ def parse_ops(text, which, val=0, mask=0):
         if text[i] in ", ":
             i += 1
             continue
+        if text[i] == "!":
+            # A `!` the row writes out is a writeback the form always does,
+            # and whose bit its own word already holds.
+            ops.append(("Writeback", 255))
+            i += 1
+            continue
         if text[i] == "[":
             i = parse_mem(text, i, ops, which)
             continue
@@ -397,9 +535,49 @@ def parse_ops(text, which, val=0, mask=0):
             continue
         if text[i] != "%":
             raise Unsupported("literal %r in %r" % (text[i], text))
+        m = MULTI.match(text, i)
+        if m:
+            i = m.end()
+            pieces, code = multi_field(m.group(1)), m.group(2)
+            if code in "DQR":
+                ops.append(("Vfp", {"D": 1, "Q": 2, "R": 3}[code], pieces))
+            elif code == "r":
+                ops.append(("Reg", pieces[0][0], pieces[0][1]))
+            else:
+                raise Unsupported("multi-field %%%s" % code)
+            continue
+        if text[i + 1] in "yz" and text[i + 2].isdigit():
+            code, i = text[i + 1:i + 3], i + 3
+            if code in VFP_LIST:
+                kind, first, count = VFP_LIST[code]
+                ops.append(("VfpList", kind, first, count))
+            else:
+                kind, pieces = VFP_REG[code]
+                ops.append(("Vfp", kind, pieces))
+                if code == "y4":
+                    # The `%y4` pair is written out as both registers.
+                    ops.append(("VfpNext",))
+            # A lane may follow, written `[imm]`.
+            m = re.compile(r"\[%\{I:%([\d,-]+)d%\}\]").match(text, i)
+            if m:
+                i = m.end()
+                ops[-1] = ("VfpLane", kind, pieces, multi_field(m.group(1)))
+            continue
         if text[i + 1].isdigit():
             lo, hi, code = bitfield()
+            if code in "STU" and which == "neon":
+                # The element width as an operand: `vshll.s8 q0, d0, #8`
+                # takes the width the type suffix already named.
+                limit = text[i]
+                i += 1
+                ops.append(("SizeImm", field(lo, hi), 8 << "STU".index(code)))
+                continue
             skip_unique()
+            if code == "e" and which == "neon":
+                # A shift amount the field holds counting down: `vshr.s8 d0,
+                # d1, #1` is the largest value the field can take.
+                ops.append(("NegImm", field(lo, hi)))
+                continue
             if code in "rRS":
                 ops.append(("Reg", lo, hi - lo + 1))
             elif code == "T":
@@ -416,7 +594,18 @@ def parse_ops(text, which, val=0, mask=0):
             continue
         code = text[i + 1]
         i += 2
-        if code == "e":
+        if which == "neon" and code in "DFE":
+            if code == "D":
+                # A scalar, `d0[1]`, whose register and lane share one
+                # field: the element size says where the line falls.
+                ops.append(("Scalar",))
+            elif code == "F":
+                # `vtbl`'s table: a run of `d` registers, one to four.
+                ops.append(("TblList", ((16, 4), (7, 1)), ((8, 2),)))
+            else:
+                # The modified immediate, which `super::neon` owns.
+                raise Unsupported("the NEON modified immediate")
+        elif code == "e":
             # `smc`, `hvc` and A32 `udf`: bits 8-19 above bits 0-3.
             ops.append(("Imm", ((0, 4), (8, 12)), 1, 0))
         elif code == "V":
@@ -451,7 +640,10 @@ def parse_ops(text, which, val=0, mask=0):
             else:
                 ops.append(("Shifted",))
         elif code == "A":
-            ops.append(("CoprocMem",))
+            ops.append(("VfpMem",) if which == "vfp" else ("CoprocMem",))
+        elif code == "B" and which == "vfp":
+            kind, first, count = VFP_LIST["B"]
+            ops.append(("VfpList", kind, first, count))
         elif code in "xX":
             pass  # a disassembler warning, not an operand
         else:
@@ -523,6 +715,31 @@ def parse_braced(text, i, ops, which):
     end = text.index("%}", i)
     body, i = text[i + 4:end], end + 2
     if kind == "I":
+        if which == "neon":
+            m = re.fullmatch(r"#%(\d+)-(\d+)([STU])([0-9a-f])", body)
+            if m:
+                # The element width, which the type suffix named too.
+                lo, hi = int(m.group(1)), int(m.group(2))
+                ops.append(("SizeImm", field(min(lo, hi), max(lo, hi)),
+                            8 << "STU".index(m.group(3))))
+                return i
+            m = re.fullmatch(r"#%(\d+)-(\d+)e", body)
+            if m:
+                # A shift the field counts down from its own width.
+                lo, hi = int(m.group(1)), int(m.group(2))
+                ops.append(("NegImm", field(min(lo, hi), max(lo, hi))))
+                return i
+        if body == "#0.0":
+            ops.append(("Zero",))
+            return i
+        m = re.fullmatch(r"#%([\d,-]+)E", body)
+        if m:
+            ops.append(("VfpImm", multi_field(m.group(1))))
+            return i
+        m = re.fullmatch(r"#%([\d,-]+)k", body)
+        if m:
+            ops.append(("VfpFix", multi_field(m.group(1))))
+            return i
         if body == "#%e":
             ops.append(("Imm", ((0, 4), (8, 12)), 1, 0))
             return i
@@ -550,6 +767,20 @@ def parse_braced(text, i, ops, which):
             ops.append(("Imm", field(lo, hi), scale, bias))
         return i
     if kind == "R":
+        m = re.fullmatch(r"d%([\d,-]+)d\[%([\d,-]+)d\]", body)
+        if m:
+            ops.append(("VfpLane", 1, multi_field(m.group(1)),
+                        multi_field(m.group(2))))
+            return i
+        m = re.fullmatch(r"%([\d,-]+)D\[%([\d,-]+)d\]", body)
+        if m:
+            ops.append(("VfpLane", 1, multi_field(m.group(1)),
+                        multi_field(m.group(2))))
+            return i
+        if body in ("fpsid", "fpscr", "fpexc", "fpinst", "fpinst2",
+                    "mvfr0", "mvfr1", "mvfr2"):
+            ops.append(("Named", body))
+            return i
         m = re.fullmatch(r"cr%(\d+)-(\d+)d", body)
         if m:
             ops.append(("CReg", int(m.group(1))))
@@ -722,7 +953,12 @@ def trailing_shift(ops):
 # word with the condition field left at `al`, halfword by halfword.
 SETS = {
     "arm": ["Arm"], "t16": ["T16"], "t32": ["T32"], "cop": ["Arm", "T32"],
+    "vfp": ["Arm", "T32"], "neon": ["Arm", "T32"],
 }
+
+# A T32 NEON instruction is the A32 word with its top byte translated, which
+# is the mapping print_insn_neon undoes to share one table between the two.
+NEON_T32 = {0xF2: 0xEF, 0xF3: 0xFF, 0xF4: 0xF9}
 
 # Spellings GNU as takes as another instruction in the table: the stack
 # orders of `rfe` and `srs`, which are `ia` and `db` under other names, and
@@ -736,6 +972,67 @@ ALIASES = [
 ]
 
 
+# NEON spellings GNU as takes that the disassembler prints as another
+# instruction. Each is derived from the form it shares an encoding with, so
+# the bits still come from the disassembler's own table.
+def derived(forms):
+    """The extra forms, given the ones the tables gave."""
+    out = []
+    for f in forms:
+        name, ops = f["name"], f["ops"]
+        stem, _, size = name.partition(".")
+        kinds = tuple(o[0] for o in ops)
+        # `vcle` is `vcge` with its sources the other way round, and so are
+        # `vclt`, `vacle` and `vaclt`. GNU as swaps the operands and the
+        # disassembler prints the instruction it made.
+        swap = {"vcge": "vcle", "vcgt": "vclt",
+                "vacge": "vacle", "vacgt": "vaclt"}
+        if stem in swap and kinds == ("Vfp", "Vfp", "Vfp"):
+            a, b = ops[1], ops[2]
+            out.append(dict(f, name="%s.%s" % (swap[stem], size),
+                            ops=(ops[0], (a[0], a[1], b[2]),
+                                 (b[0], b[1], a[2]))))
+        # The immediate shift left is one encoding whatever the type suffix
+        # says, and `vshll` by the element size likewise.
+        if stem == "vshl" and size.startswith("s") and "Imm" in kinds:
+            for letter in "iu":
+                out.append(dict(f, name="vshl.%s%s" % (letter, size[1:])))
+        if stem == "vshll" and size.startswith("i") and "SizeImm" in kinds:
+            for letter in "su":
+                out.append(dict(f, name="vshll.%s%s" % (letter, size[1:])))
+        # `vzip.32` and `vuzp.32` on `d` registers are both `vtrn.32`, which
+        # is what GNU as assembles them as.
+        if name == "vtrn.32" and kinds == ("Vfp", "Vfp") and ops[0][1] == 3:
+            for other in ("vzip.32", "vuzp.32"):
+                out.append(dict(f, name=other,
+                                ops=tuple((o[0], 1, o[2]) for o in ops)))
+    return out
+
+
+# The modified immediate: one encoding for `vmov`, `vmvn`, `vorr`, `vbic`
+# and the two pseudo-instructions `vand` and `vorn`, whose `cmode` GNU as
+# works out from the value written. The base word is the one the
+# disassembler's rows share with `cmode` and `op` cleared, and
+# `super::generic` fills those in the way `neon_cmode_for_move_imm` and
+# `neon_cmode_for_logic_imm` do.
+for _which, _base in (("Arm", 0xF2800010), ("T32", 0xEF800010)):
+    for _class, _name in enumerate(
+            ("vmov", "vmvn", "vorr", "vbic", "vand", "vorn")):
+        for _size in range(4):
+            _spell = "%s.i%d" % (_name, 8 << _size)
+            EXTRA.append((_spell, _which, _base, False,
+                          (("Vfp", 3, VD), ("NeonImm", _class, 8 << _size))))
+            if _class >= 2:
+                # The logic instructions also take the destination twice.
+                EXTRA.append((_spell, _which, _base, False,
+                              (("Vfp", 3, VD), ("VfpSame", 3, VD),
+                               ("NeonImm", _class, 8 << _size))))
+    # `vmov dd, dm` is `vorr dd, dm, dm`, which is what GNU as assembles it
+    # as and what the disassembler prints it back as.
+    EXTRA.append(("vmov", _which, (_base & 0xFF000000) | 0x00200110, False,
+                  (("Vfp", 3, VD), ("VfpTwice", 3, VN, VM))))
+
+
 def build(entries, insns):
     """The forms, and the audit trail: one line per row saying where it
     went."""
@@ -745,13 +1042,20 @@ def build(entries, insns):
         why = None
         if any((e["set"], e["val"], e["mask"]) == row for row in DIS_ROWS):
             why = "disassembly only"
+        elif "<" in optext:
+            # The disassembler's angle brackets are not syntax: `vmsr <impl
+            # def r0>` is how it prints a register GNU as has no name for.
+            why = "disassembly only"
         elif e["feats"] and not (e["feats"] & FEATURES):
             why = "out of scope: %s" % ",".join(sorted(e["feats"]))
+        elif e["set"] == "neon" and (optext in NEON_HAND
+                                     or optext.endswith("%E")):
+            why = "hand-written"
         if why:
             audit.append("%-4s %08x %-24s -- %s" % (e["set"], e["val"], mnem, why))
             continue
         try:
-            names = expand_mnemonic(mnem, e["val"])
+            names = expand_mnemonic(mnem, e["val"], e["mask"])
         except Unsupported as exc:
             audit.append("%-4s %08x %-24s -- ?? %s" % (e["set"], e["val"], mnem, exc))
             continue
@@ -771,7 +1075,14 @@ def build(entries, insns):
                 # condition on it.
                 if which == "Arm" and w >> 28 == 0xF:
                     has_cond = False
-                if e["set"] == "cop" and which == "T32" and cond:
+                if e["set"] == "neon" and which == "T32":
+                    # The conditional rows -- `vdup` from a core register --
+                    # are the coprocessor space, where T32 leaves `al` in
+                    # the condition field; the rest have a top byte of
+                    # their own.
+                    w, has_cond = NEON_T32.get(w >> 24, (w >> 24)
+                                               | 0xE0) << 24 | (w & 0xFFFFFF), False
+                elif e["set"] in ("cop", "vfp") and which == "T32" and cond:
                     # Thumb has no condition field: a T32 coprocessor
                     # instruction is the A32 word with `al` left in it.
                     w, has_cond = word | 0xE000_0000, False
@@ -785,8 +1096,21 @@ def build(entries, insns):
                      % (e["set"], e["val"], mnem,
                         " ".join(n for n, _, _ in mine)))
     for form in forms:
+        # A vector register field an instruction holds twice is one operand
+        # written twice, which has to be the same register both times.
+        seen, ops = set(), []
+        for op in form["ops"]:
+            if op[0] == "Vfp" and op[2] in seen:
+                ops.append(("VfpSame",) + op[1:])
+            else:
+                if op[0] == "Vfp":
+                    seen.add(op[2])
+                ops.append(op)
+        form["ops"] = tuple(ops)
+    for form in forms:
         if form["set"] in STREX.get(form["name"], ()):
             form["ops"] = tuple(form["ops"]) + (("FirstDistinct",),)
+    forms += derived(forms)
     for name, which, word, cond, ops in EXTRA:
         forms.append({"name": name, "set": which, "word": word, "cond": cond,
                       "ops": ops})
@@ -853,6 +1177,9 @@ pub enum Op {
     OptImm(Field),
     /// `nop`'s hint number, which may be left out and needs its braces.
     Hint(Field),
+    /// A VFP eight-bit floating-point immediate, which this assembler takes
+    /// only as the number the field holds.
+    VfpImm(Field),
     /// The `#lsb` of a bitfield instruction.
     Lsb(Field),
     /// Its `#width`, held as the most significant bit it reaches.
@@ -881,7 +1208,8 @@ pub enum Op {
     /// The first register the form reads must differ from every other one:
     /// `do_strex`'s rule that the status register is none of the others.
     FirstDistinct,
-    /// `!` on the register before it, the bit at `lsb`.
+    /// `!` on the register before it, the bit at `lsb`; 255 where the form
+    /// always writes back and its own word says so.
     Writeback(u8),
     /// The `a`, `i` and `f` letters of `cpsie` and `cpsid`, the `f` bit at
     /// `lsb`.
@@ -896,6 +1224,51 @@ pub enum Op {
     OffMem(u8, Field, u8),
     /// The addressing modes of `ldc` and `stc`.
     CoprocMem,
+    /// A vector register: 0 single-precision, 1 double, 2 quadword, 3 either
+    /// double or quadword by the bit the form's own encoding picks.
+    Vfp(u8, Field),
+    /// The same vector register as the operand that filled this field
+    /// already: `vcvt.f32.s16 s0, s0, #4` writes it twice.
+    VfpSame(u8, Field),
+    /// The vector register after the one before it, which carries no bits:
+    /// the second half of a `vmov` pair.
+    VfpNext,
+    /// A vector register with a lane index, `d0[1]`.
+    VfpLane(u8, Field, Field),
+    /// `{d0-d3}` or `{s0-s3}`: the first register, then how many.
+    VfpList(u8, Field, Field),
+    /// `[rn, #±imm8*4]`, the address of `vldr` and `vstr`.
+    VfpMem,
+    /// A `vcvt` fixed-point size, which the field holds as `32 - n` or
+    /// `16 - n` by the bit that says which.
+    VfpFix(Field),
+    /// A shift amount the field counts down from its own width: `vshr.s8
+    /// d0, d1, #1` fills the field, and `#8` leaves it empty.
+    NegImm(Field),
+    /// The element width as an operand, which the field already holds: the
+    /// value is `base << field`, `base` being 8, 16 or 32.
+    SizeImm(Field, u8),
+    /// A NEON scalar, `d0[1]`: bits 0-3 and bit 5 hold the register and the
+    /// lane together, and the element size in bits 20-21 says where the
+    /// line between them falls.
+    Scalar,
+    /// `vtbl`'s table list, `{d0-d3}`: the first register, then how many
+    /// there are less one.
+    TblList(Field, Field),
+    /// An operand that has to be exactly this constant: the `#0` the NEON
+    /// comparisons take.
+    Fixed(u32),
+    /// One vector register written into two fields: `vmov d0, d1` is
+    /// `vorr d0, d1, d1`.
+    VfpTwice(u8, Field, Field),
+    /// The NEON modified immediate, as the instruction that takes it (0
+    /// `vmov`, 1 `vmvn`, 2 `vorr`, 3 `vbic`, 4 `vand`, 5 `vorn`) and the
+    /// element size in bits.
+    NeonImm(u8, u8),
+    /// The literal `#0.0` that `vcmp` compares against.
+    Zero,
+    /// A named system register: `fpscr` and its neighbours.
+    Named(&'static str),
     /// `srs`'s base register, which may be left out and must be `sp`: the
     /// register goes at the first position and the `!` bit at the second.
     SpBase(u8, u8),
@@ -962,7 +1335,33 @@ def rust_op(op):
         return "Op::SatShift(%d, %d, %d, %d, %d)" % op[1:]
     if k in ("Coproc", "CReg", "Writeback", "IntFlags", "Endian"):
         return "Op::%s(%d)" % (k, op[1])
-    if k in ("Barrier", "ApsrNzcv", "CoprocMem", "Distinct", "FirstDistinct"):
+    if k == "NeonImm":
+        return "Op::NeonImm(%d, %d)" % (op[1], op[2])
+    if k == "VfpTwice":
+        return "Op::VfpTwice(%d, %s, %s)" % (op[1], rust_field(op[2]),
+                                             rust_field(op[3]))
+    if k in ("Vfp", "VfpSame"):
+        return "Op::%s(%d, %s)" % (k, op[1], rust_field(op[2]))
+    if k == "VfpLane":
+        return "Op::VfpLane(%d, %s, %s)" % (op[1], rust_field(op[2]),
+                                            rust_field(op[3]))
+    if k == "VfpList":
+        return "Op::VfpList(%d, %s, %s)" % (op[1], rust_field(op[2]),
+                                            rust_field(op[3]))
+    if k == "SizeImm":
+        return "Op::SizeImm(%s, %d)" % (rust_field(op[1]), op[2])
+    if k == "TblList":
+        return "Op::TblList(%s, %s)" % (rust_field(op[1]), rust_field(op[2]))
+    if k == "Fixed":
+        return "Op::Fixed(%d)" % op[1]
+    if k == "Scalar":
+        return "Op::Scalar"
+    if k in ("VfpFix", "VfpImm", "NegImm"):
+        return "Op::%s(%s)" % (k, rust_field(op[1]))
+    if k == "Named":
+        return 'Op::Named("%s")' % op[1]
+    if k in ("Barrier", "ApsrNzcv", "CoprocMem", "Distinct", "FirstDistinct",
+             "VfpNext", "VfpMem", "Zero"):
         return "Op::%s" % k
     if k == "IdxMem":
         return "Op::IdxMem(%d, %d, %d)" % (op[1], op[2], op[3])
