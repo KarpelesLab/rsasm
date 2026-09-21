@@ -29,7 +29,8 @@
 # interworking rules are what `-march=armv7ve` gives; without a `-march` GNU
 # as assumes an ARMv4T-era CPU. `armv7ve` is ARMv7-A with the security,
 # virtualization and divide extensions, which together are the whole set this
-# backend claims -- `smc`, `hvc`, `sdiv` and the banked `msr` need them. Its
+# backend claims -- `smc`, `hvc`, `sdiv` and the banked `msr` need them, and
+# `-mfpu=neon-vfpv4` adds the floating-point unit and NEON. Its
 # snippets are assembled after `.syntax unified`, GNU as's default being the
 # older divided syntax, and rsasm knowing only the unified one; the
 # `-relocs` snippets say so themselves, since they are whole programs.
@@ -124,8 +125,8 @@ i8080|i8080|8bit|asl -cpu 8080|p2bin
 i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
-arm|arm|gas|arm-none-eabi-as -march=armv7ve|elf:.text
-thumb|thumb|gas|arm-none-eabi-as -march=armv7ve -mthumb|elf:.text
+arm|arm|gas|arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4|elf:.text
+thumb|thumb|gas|arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4 -mthumb|elf:.text
 powerpc64|powerpc64|gas|powerpc64-linux-gnu-as -a64 -mbig -mfuture|elf:.text
 powerpc64le|powerpc64le|gas|powerpc64-linux-gnu-as -a64 -mlittle -mfuture|elf:.text|powerpc64
 powerpc|powerpc|gas|powerpc64-linux-gnu-as -a32 -mbig -mfuture|elf:.text

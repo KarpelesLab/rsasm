@@ -33,8 +33,8 @@ x86-64-simd|x86-64|x86_64|
 x86-64-simd-intel|x86-64|x86_64||.intel_syntax noprefix
 i386-simd|i386|i386|
 aarch64|aarch64|aarch64|
-arm|arm|armv7|
-thumb|thumb|thumbv7|
+arm|arm|armv7|-mattr=+neon,+vfp4,+fp16
+thumb|thumb|thumbv7|-mattr=+neon,+vfp4,+fp16
 riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c
 riscv64|riscv64|riscv64|-mattr=+m,+a,+f,+d,+c
 powerpc|powerpc|powerpc|
