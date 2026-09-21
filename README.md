@@ -53,14 +53,14 @@ assembler, not against rsasm's own idea of the manual. See
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512F | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 8100 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
 | AArch64 | `aarch64` | llvm-mc | 480 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
-| m68k (68000–68020), GNU and Motorola syntax | `m68k` `68000` `68010` | GNU as, vasm | 809 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
@@ -110,9 +110,23 @@ but 18 forms where both manuals show MAME to be wrong.
   describe the assembly source itself; see [Debug information](#debug-information)
 - each target's own comment syntax, so ARM's `@`, AArch64's `//` and SPARC's
   `!` work, and `#` stays an immediate prefix where it is one
+- the x86 instruction-set extensions both GNU as and llvm-mc assemble: AVX-512
+  and all its subsets (BW, DQ, CD, IFMA, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ,
+  VP2INTERSECT, BF16, FP16, ER, PF) with writemasks, `{z}`, `{1toN}`, rounding
+  and disp8\*N at every tuple type, AVX10.2, the VEX additions (F16C, FMA,
+  GFNI, VAES, VPCLMULQDQ, SHA, SHA512, SM3, SM4, AVX-VNNI, AVX-IFMA,
+  AVX-NE-CONVERT, AVX-VNNI-INT8/16), FMA4 and XOP, BMI1/2, TBM, LWP, AMX, CET,
+  Key Locker, and the newer system instructions; the named compare predicates
+  (`vcmpneq_oqps`, `vpcmpnltuq`), AT&T length spellings (`vcvtpd2psx`) and the
+  `{vex}`, `{vex3}` and `{evex}` pseudo-prefixes
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
+- the whole 680x0 family as GNU as knows it: the 68881/68882 FPU with float
+  immediates in every size (`#1.5` in Motorola source, `#0r1.5` in GNU's), the
+  68851 and on-chip MMUs, `cas2`, `callm`, `move16`, CPU32 and ColdFire,
+  chosen by GNU as's CPU names (`-a 68040`, `.arch 5475`, `.arch 68000,68881`),
+  with what the chosen CPU lacks refused by a message naming what it needs
 - MSP430 objects as GNU as writes them for a linker that relaxes code: every
   reference from code relocated, differences of code labels as
   `R_MSP430_SYM_DIFF` pairs (in the line table too), the `.MSP430.attributes`
@@ -142,6 +156,10 @@ but 18 forms where both manuals show MAME to be wrong.
   (`@TLVP`, `@TLVPPAGE`), DWARF and call frame information (`-g`, `.loc` and
   `.cfi_*` are refused, and with them compact unwind), indirect symbol tables
   (`.indirect_symbol`), `LC_VERSION_MIN_*` and linker options
+- x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
+  `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
+  instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
+  and SGX, VMX, SVM, MPX and VIA PadLock
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
@@ -174,6 +192,14 @@ but 18 forms where both manuals show MAME to be wrong.
   80251 and the rest); address spaces for `DATA`, `BIT`, `CODE` and the other
   defining words, which define plain values; and ASM51's controls
   (`$MOD51`, `$NOMOD51`), segments and relocatable output
+- m68k: the ColdFire MAC and EMAC units; the suppressed registers `zpc`,
+  `za0`-`za7` and `zd0`-`zd7`, and FPU coprocessor numbers other than 1
+  (`.fopt id=`); vasm's `MACHINE`, `FPU` and `CHIP` directives (use `.arch`);
+  vasm's sized `fbcc.w`, which GNU as does not take either (`fbcc` is 16
+  bits, `fbcc.l` 32); and CPU32's `tbl*` table lookups, for which no reference
+  here has an encoding. On ColdFire, an instruction as written that the core
+  dropped is refused where GNU as substitutes one it kept (`addil #5,%a0@`,
+  which GNU as writes as `addql`), since rsasm substitutes nothing
 - Z80: the `DD CB d op,r` forms that also write a register, which vasm
   refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
   `.byte`, `.word` and `.space`, or the 8-bit dialect)
@@ -185,7 +211,7 @@ separately. Nothing is, at the moment.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
-backend. Two such choices are worth knowing about:
+backend. Three such choices are worth knowing about:
 
 - **Which references are left to the linker.** A PC-relative reference to a
   global or weak symbol is relocated even when the symbol is in the same
@@ -207,6 +233,12 @@ backend. Two such choices are worth knowing about:
   compressed instructions, 4 for m68k `.text`, `.data` and `.bss`, and 1
   otherwise, including on x86, where GNU as is followed and llvm-mc's `.text`
   is 4.
+- **m68k floating-point immediates.** Both references write a single or
+  double precision `#1.5` the same way. An extended-precision one GNU as 2.47
+  writes without the 16 zero bits of the 68881 format — its own `.extend`
+  directive and disassembler have them — and a packed-decimal one it refuses;
+  vasm writes both correctly, from a C `double`, and so does rsasm. The m68k
+  backend follows GNU as otherwise.
 
 ## Usage
 
@@ -632,27 +664,29 @@ Eight differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
-  16-bit mode, in AT&T and Intel syntax. 4,175 of 4,175 match.
+  16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 12,217 of 12,217 match across eighteen target variants. For RISC-V
+  supports. 16,693 of 16,693 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
-- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k, SuperH, RX, RL78,
-  V850/RH850, MSP430 and the Z80, vasm for Motorola syntax and for the Z80
-  and the 6502, cc65's ca65 for the 6502, AS for the 8080 and AS and SDCC's
-  sdas8051 for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL,
-  CC-RH and CC-RX source paired with its GNU-syntax equivalent. For ARM and
-  Thumb it compares whole objects, local and mapping symbols included,
-  against GNU as, the reference for literal pools and interworking; for
-  PowerPC's vector and POWER8–10 instructions it is GNU as's second opinion,
-  and the check on the forms only GNU as accepts. `tools/oracles/build.sh`
-  builds the references from checksum-pinned sources. 17,246 of 17,246
-  match across thirty-one variants.
+- `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
+  model, with corpora generated from GNU's own opcode table so that every
+  form in it is assembled), SuperH, RX, RL78, V850/RH850, MSP430 and the
+  Z80, vasm for Motorola syntax and for the Z80 and the 6502, cc65's ca65
+  for the 6502, AS for the 8080 and AS and SDCC's sdas8051 for the 8051 (its
+  Intel HEX against AS's `p2hex`), plus CC-RL, CC-RH and CC-RX source paired
+  with its GNU-syntax equivalent. For ARM and Thumb it compares whole
+  objects, local and mapping symbols included, against GNU as, the reference
+  for literal pools and interworking; for PowerPC's vector and POWER8–10
+  instructions it is GNU as's second opinion, and the check on the forms only
+  GNU as accepts. `tools/oracles/build.sh` builds the references from
+  checksum-pinned sources. 20,180 of 20,180 match across fifty-one
+  variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 174 of 174 match across twenty-six variants.
+  distances between sections. 175 of 175 match across twenty-six variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries and as ELF objects, relocations and global
@@ -671,18 +705,29 @@ independent assembler, and compare the bytes:
   those of `tools/mc-diff`. 1,573 of 1,573 match, and every object both write
   is also identical byte for byte.
 
-The x86 and MSP430 backends are also fuzzed: `tools/fuzz/x86.py` generates random
-instructions from a table of forms written from the Intel manual, in all three
-modes and both syntaxes, some of them deliberately invalid, and compares
-rsasm's bytes, relocations and accept/reject decision with GNU as's and
-llvm-mc's. Where the two references disagree, rsasm follows GNU as, apart
-from the few cases the corpora note; a run of 600,000 instructions finds no
-case where rsasm differs from both. `tools/fuzz/msp430.py` does the same
-against GNU as alone for the 430, 430X and 430Xv2, and 200,000 cases find no
-difference but the deviations the backend documents. The 8051 is fuzzed with
-whole programs: `tools/fuzz/mcs51.py` assembles them with AS and sdas8051
-too, and 80,000 programs find no case where rsasm differs from the references
-outside the places this README describes. See `tools/fuzz/README.md`.
+The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
+instructions, in all three modes and both syntaxes, some of them deliberately
+invalid, and compares rsasm's bytes, relocations and accept/reject decision
+with GNU as's and llvm-mc's. The general-purpose forms are written from the
+Intel manual; the SIMD and newer extensions are read from GNU's expanded
+opcode table, every row of them, with writemasks, broadcasts, rounding and
+displacements at every disp8\*N scale. The x86 SIMD tables were derived from
+that same table (`tools/fuzz/gnutbl.py` decodes it). Where the two references
+disagree, rsasm follows GNU as, apart from the few cases the corpora note;
+runs of 600,000 general-purpose and 240,000 mixed instructions find no case
+where rsasm differs from both. The m68k backend is fuzzed the same way:
+`tools/fuzz/m68k.py` draws instructions from GNU's own opcode table, read out
+of the binutils source, for each CPU model in GNU and Motorola syntax against
+GNU as, and in Motorola syntax against vasm; runs of 400,000 and 100,000
+instructions find nothing. The table rsasm encodes those forms from,
+`src/arch/m68k/table.rs`, is written from the same source by
+`tools/tables/m68k.py`. `tools/fuzz/msp430.py` does the same against GNU as
+alone for the MSP430's 430, 430X and 430Xv2 instruction sets, and 200,000
+cases find no difference but the deviations the backend documents. The 8051
+is fuzzed with whole programs:
+`tools/fuzz/mcs51.py` assembles them with AS and sdas8051 too, and 80,000
+programs find no case where rsasm differs from the references outside the
+places this README describes. See `tools/fuzz/README.md`.
 
 PowerPC's AltiVec, VSX and POWER8–10 instructions are fuzzed the same way by
 `tools/fuzz/powerpc.py`, which draws its forms from the operand kinds in GNU

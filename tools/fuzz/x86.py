@@ -57,6 +57,8 @@ import subprocess
 import sys
 import tempfile
 
+import simd
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
@@ -1175,6 +1177,17 @@ def apply_mutation(m, case, gen):
 SEG_PREFIXES = ["es", "cs", "ss", "ds", "fs", "gs"]
 
 
+def generate_simd(rng, mode, syntax, forms, mutation_ratio):
+    """A case from the SIMD forms read from GNU's table (see simd.py)."""
+    for _ in range(100):
+        form = rng.choice(forms)
+        try:
+            return form.generate(rng, mode, syntax, mutation_ratio)
+        except simd.Unusable:
+            continue
+    raise RuntimeError("no usable SIMD form")
+
+
 def generate(rng, mode, syntax, forms, mutation_ratio):
     gen = Gen(rng, mode, syntax)
     mutate_this = rng.random() < mutation_ratio
@@ -1401,6 +1414,81 @@ def vex_commute(g, m, ctx):
                 and len(mp[0]) + 1 == len(gp[0]))
 
 
+def gas_error(res, text):
+    return res[0] == "err" and text in res[1]
+
+
+def mc_lone_zeroing(g, m, ctx):
+    """llvm-mc drops a `{z}` written without a writemask; GNU as refuses it."""
+    line = " ".join(ctx["lines"])
+    refused = gas_error(g, "zeroing-masking only allowed with write mask") or \
+        gas_error(g, "junk `{z}'")
+    return bool(refused and ok_parts(m) and "{z}" in line
+                and not re.search(r"\{%?k[0-7]\}", line))
+
+
+def unsized_gpr_scalar(g, m, ctx):
+    """An Intel `vcvtsi2ss xmm, xmm, [mem]` outside 64-bit mode: GNU as reads the
+    memory as 32 bits, the only size there, where llvm-mc calls it ambiguous."""
+    return bool(ctx["syntax"] == "intel" and ctx["mode"] != 64 and ok_parts(g)
+                and m[0] == "err" and "ambiguous" in m[1]
+                and re.match(r"vcvtu?si2s[sdh]\b", ctx["lines"][0]))
+
+
+def mc_16bit_vsib(g, m, ctx):
+    """In 16-bit mode llvm-mc takes a gather's index-only VSIB address, with its
+    32-bit displacement; GNU as refuses it."""
+    return bool(ctx["mode"] == 16 and gas_error(g, "is not a valid base/index expression")
+                and ok_parts(m))
+
+
+def vp2intersect_group(g, m, ctx):
+    """`vp2intersectd` writes a pair of masks named by an even `k`; given an odd one
+    GNU as encodes it as written, with a warning, and llvm-mc rounds it down."""
+    gp, mp = ok_parts(g), ok_parts(m)
+    return bool(gp and mp and ctx["lines"][0].startswith("vp2intersect")
+                and len(gp[0]) == len(mp[0])
+                and sum(a != b for a, b in zip(gp[0], mp[0])) == 1)
+
+
+def mc_length_suffix(g, m, ctx):
+    """llvm-mc knows the AT&T `x`/`y`/`z` length spellings of the half-precision and
+    bfloat16 conversions only for some operands; GNU as takes them all."""
+    word = ctx["lines"][0].split()[0]
+    return bool(ok_parts(g) and m[0] == "err"
+                and re.fullmatch(r"v(cvt\w+|fpclass\w+)[xyz]", word)
+                and re.search(r"(ph|bf16|phx|[bh]f8s?|u?dqs)[xyz]$", word))
+
+
+def mc_intel_refused(g, m, ctx):
+    """Forms llvm-mc's Intel parser refuses outright: the Xeon Phi gather and scatter
+    prefetches, and `rstorssp`/`clrssbsy` with a `qword ptr`."""
+    word = ctx["lines"][0].split()[0]
+    return bool(ctx["syntax"] == "intel" and ok_parts(g) and m[0] == "err"
+                and (re.match(r"v(gather|scatter)pf", word) or word in ("rstorssp", "clrssbsy")))
+
+
+def mc_ymm_rounding(g, m, ctx):
+    """llvm-mc still takes `{sae}` on some 256-bit AVX10.2 conversions, from the draft
+    of AVX10.2 that had rounding at every length; GNU as refuses it."""
+    line = ctx["lines"][0]
+    return bool(g[0] == "err" and ok_parts(m) and re.search(r"\{(r[nduz]-)?sae\}", line)
+                and "ymm" in line and "zmm" not in line)
+
+
+def distinct_dest(g, m, ctx):
+    """The FP16 complex multiplications: GNU as refuses a destination that is also a
+    source; llvm-mc assembles it."""
+    return bool(gas_error(g, "must be distinct") and ok_parts(m))
+
+
+def evex_vmovq_load(g, m, ctx):
+    """For an EVEX `vmovq` to or from memory GNU as picks `66 W1 6E`/`7E` where llvm-mc
+    picks `F3 7E`/`66 D6`. Both are valid; rsasm follows llvm-mc there."""
+    gp, mp = ok_parts(g), ok_parts(m)
+    return bool(gp and mp and ctx["lines"][0].startswith("vmovq") and b"\x62" in gp[0][:2])
+
+
 # Differences between the two references that are conventions or quirks rather
 # than something to fix. Each is (name, predicate(gas, mc, context), preferred):
 # the context has the case's mode, syntax, mnemonic group and source lines, and
@@ -1422,6 +1510,15 @@ KNOWN_SPLITS = [
     ("disp16-wrap", disp16_wrap, None),
     ("symbolic-accumulator", symbolic_accumulator, None),
     ("vex-commute", vex_commute, "gas"),
+    ("mc-lone-zeroing", mc_lone_zeroing, "gas"),
+    ("unsized-gpr-scalar", unsized_gpr_scalar, "gas"),
+    ("mc-16bit-vsib", mc_16bit_vsib, "gas"),
+    ("vp2intersect-group", vp2intersect_group, "gas"),
+    ("mc-length-suffix", mc_length_suffix, "gas"),
+    ("mc-intel-refused", mc_intel_refused, "gas"),
+    ("distinct-dest", distinct_dest, "gas"),
+    ("mc-ymm-rounding", mc_ymm_rounding, "gas"),
+    ("evex-vmovq", evex_vmovq_load, None),
 ]
 
 
@@ -1437,7 +1534,7 @@ def is_apx(res, ctx):
     """64-bit GPR instructions that both references read as APX (an EVEX `62` where a
     legacy opcode belongs): `setb %ebx`, `rol %ecx, %ecx`. rsasm has no APX."""
     p = ok_parts(res)
-    return bool(p and ctx["mode"] == 64 and ctx["mnem"] != "simd"
+    return bool(p and ctx["mode"] == 64 and not ctx["mnem"].startswith("simd")
                 and p[0][opcode_start(p[0]):][:1] == b"\x62")
 
 
@@ -1479,11 +1576,15 @@ def run_batch(job):
 def fuzz(args):
     import multiprocessing
 
-    forms = build_forms()
+    forms = build_forms() if args.forms != "simd" else []
+    extra = simd.forms() if args.forms != "base" else []
+    if args.forms == "simd" and not extra:
+        sys.exit("--forms simd needs the binutils source from tools/oracles/build.sh")
     if args.only:
         rx = re.compile(args.only)
         forms = [f for f in forms if rx.search(f.mnem) or rx.search(f.group)]
-        if not forms:
+        extra = [f for f in extra if rx.search(f.mnem) or rx.search(f.group)]
+        if not forms and not extra:
             sys.exit(f"--only {args.only!r} matches no form")
     modes = [16, 32, 64] if args.mode == "all" else [int(args.mode)]
     syntaxes = ["att", "intel"] if args.syntax == "all" else [args.syntax]
@@ -1493,8 +1594,14 @@ def fuzz(args):
     for mode in modes:
         for syntax in syntaxes:
             cases = []
+            # The SIMD forms outnumber the rest several times over, so the two
+            # sets share the cases evenly rather than by form count.
+            simd_here = [f for f in extra if mode in f.modes and syntax in f.syntaxes]
             for _ in range(per):
-                c = generate(rng, mode, syntax, forms, args.mutations)
+                if simd_here and (not forms or rng.random() < 0.5):
+                    c = generate_simd(rng, mode, syntax, simd_here, args.mutations)
+                else:
+                    c = generate(rng, mode, syntax, forms, args.mutations)
                 cases.append((c.lines(), c.signature(), c.form.group, c.form_key()))
             for i in range(0, len(cases), args.batch):
                 jobs.append((mode, syntax, cases[i:i + args.batch]))
@@ -1601,7 +1708,10 @@ def main():
     z.add_argument("--count", type=int, default=6000, help="total cases, split across modes")
     z.add_argument("--mode", default="all", choices=("16", "32", "64", "all"))
     z.add_argument("--syntax", default="all", choices=("att", "intel", "all"))
-    z.add_argument("--only", help="regex on the mnemonic (or group: jcc, setcc, x87, simd)")
+    z.add_argument("--only", help="regex on the mnemonic (or group: jcc, setcc, x87, simd, "
+                   "simd:avx512_fp16 ...)")
+    z.add_argument("--forms", default="all", choices=("base", "simd", "all"),
+                   help="the hand-written forms, the SIMD forms read from GNU's table, or both")
     z.add_argument("--mutations", type=float, default=0.25,
                    help="fraction of cases mutated to be invalid")
     z.add_argument("--batch", type=int, default=200)

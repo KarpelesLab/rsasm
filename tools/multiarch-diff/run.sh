@@ -50,6 +50,9 @@ mipsel|mc mipsel|.text
 sparc|mc sparc|.text
 m68k|xas m68k-elf-as|.text
 68000|xas m68k-elf-as -m68000|.text
+68040|xas m68k-elf-as -m68040|.text
+cpu32|xas m68k-elf-as -mcpu32|.text
+5475|xas m68k-elf-as -mcpu=5475|.text
 sh|xas sh-elf-as|.text
 shl|xas sh-elf-as -little|.text
 rx|xas rx-elf-as|P

@@ -19,6 +19,8 @@ pub enum RegClass {
     Zmm,
     /// AVX-512 opmask registers `k0`-`k7`.
     Mask,
+    /// AMX tile registers `tmm0`-`tmm7`.
+    Tmm,
     Mmx,
     Control,
     Debug,
@@ -161,6 +163,11 @@ static REGS: &[Entry] = &{
         e("k2", Mask, 2, 8, false), e("k3", Mask, 3, 8, false),
         e("k4", Mask, 4, 8, false), e("k5", Mask, 5, 8, false),
         e("k6", Mask, 6, 8, false), e("k7", Mask, 7, 8, false),
+        // AMX tile registers, whose size is set by the tile configuration.
+        e("tmm0", Tmm, 0, 0, false), e("tmm1", Tmm, 1, 0, false),
+        e("tmm2", Tmm, 2, 0, false), e("tmm3", Tmm, 3, 0, false),
+        e("tmm4", Tmm, 4, 0, false), e("tmm5", Tmm, 5, 0, false),
+        e("tmm6", Tmm, 6, 0, false), e("tmm7", Tmm, 7, 0, false),
         // The top of the x87 stack. `st(1)`-`st(7)` are spelled with an index
         // in parentheses, which the operand parsers read as one register.
         e("st", St, 0, 10, false),

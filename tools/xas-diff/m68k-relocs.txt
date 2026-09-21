@@ -139,3 +139,67 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+=== FPU and MMU operands referring to symbols
+        .text
+        .globl  glob
+start:
+        fmovex  ext,%fp0
+        faddd   ext+8,%fp1
+        fmoves  %fp2,ext
+        fmovex  ext(%pc),%fp3
+        fmovex  ext(%pc,%d0:l),%fp4
+        fmovel  #ext,%fpcr
+        fbeq    ext
+        fbnel   glob
+        fjgt    ext
+        fdbne   %d0,ext
+        ftrapeql #ext
+        pmove   ext,%tc
+        pbbs    ext
+        pdbbc   %d1,ext
+        callm   #ext,(%a0)
+        cas2l   %d0:%d1,%d2:%d3,(%a0):(%a1)
+        movepw  %d0,8(%a1)
+glob:   rts
+        .data
+        .long   ext
+=== DBcc to other sections and undefined symbols
+        .text
+        dbra    %d0,ext
+        dbne    %d1,other
+        dbeq    %d2,here
+here:   rts
+        .section .text.b,"ax",@progbits
+other:  rts
+=== refused: an FPU instruction without an FPU
+        .arch   68000
+        faddx   %fp0,%fp1
+=== refused: a 68851 instruction on a 68040
+        .arch   68040
+        pmove   %tc,%a0@
+=== refused: move16 on a 68030
+        .arch   68030
+        move16  %a0@+,%a1@+
+=== refused: callm beyond the 68020
+        .arch   68030
+        callm   #0,%a0@
+=== refused: a ColdFire instruction on a 68060
+        .arch   68060
+        mvsw    %d0,%d1
+=== refused: a movec register the CPU does not have
+        .arch   68010
+        movec   %d0,%cacr
+=== .arch picks the CPU, as -march and -mcpu do
+        .arch   68040
+        move16  ext,%a0@
+        cinva   %ic
+        pflush  %a1@
+        fsaddx  %fp0,%fp1
+=== .arch with an extension after a comma
+        .arch   68000,68881
+        faddx   %fp0,%fp1
+        fbeq    ext
+        jra     ext
+=== .cpu names a part rather than an architecture
+        .cpu    68332
+        bgnd
