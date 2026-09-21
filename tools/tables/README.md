@@ -1,8 +1,18 @@
 # Generated instruction tables
 
-Two backends have tables no one wrote: they are derived from a reference and
-checked against it.
+Several backends have tables no one wrote: they are derived from a reference
+and checked against it.
 
+- `arm.py` reads the five instruction tables in binutils'
+  `opcodes/arm-dis.c` -- A32, 16-bit Thumb, 32-bit Thumb, coprocessor and
+  NEON -- and writes `src/arch/arm/table.rs`. Every row is accounted for: it
+  becomes a form, a hand-written encoder owns its mnemonic, it is a spelling
+  only the disassembler prints, or its architecture is out of scope; a row
+  that is none of those is an error. `tools/tables/arm.py audit` prints one
+  line per row saying which. What the disassembler's table does not say --
+  which registers an operand may hold, and the element sizes a NEON type
+  has -- comes from the operand kinds of gas's own `insns[]` in
+  `gas/config/tc-arm.c`, or is written out in the script with the reason.
 - `powerpc.py` reads binutils' `opcodes/ppc-opc.c` and writes
   `src/arch/powerpc/vector.rs` and the generated blocks of the PowerPC
   corpora; see its own `--help`.
@@ -19,6 +29,9 @@ checked against it.
   `tools/xas-diff/aarch64.txt` (where it does not know the name).
 
 ```console
+$ tools/tables/arm.py table                     # rewrite src/arch/arm/table.rs
+$ tools/tables/arm.py check                     # exit 1 if it is out of date
+$ tools/tables/arm.py audit                     # one line per row of the tables
 $ tools/tables/aarch64.py table --jobs 32       # about ten minutes
 $ tools/tables/aarch64.py check                 # exit 1 if it is out of date
 $ tools/tables/aarch64.py fit --only '^fmov$' --dump forms.txt

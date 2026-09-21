@@ -143,7 +143,7 @@ pub enum Mnem {
     /// mask field for an even condition; see `thumb::it_block`.
     It(u8),
     /// An instruction from the generated table, held as the index of its
-    /// first form in [`super::table::FORMS`]; see [`super::generic`].
+    /// first form in [`super::table::FORMS`]; `super::generic` encodes it.
     Ext(u16),
 }
 

@@ -105,22 +105,28 @@ name the core and carry `EF_AVR_LINKRELAX_PREPARED`, and with `.avr.prop`,
 which is not allocated but is what the linker relaxes the code by. Their
 local symbols are not compared: GNU as names each label a relocation needs,
 `.L1^B1` for a `1:`, and rsasm names the same labels in its own way.
-| `arm` / `thumb` | `arm` / `thumb`, whole objects | `arm-none-eabi-as -march=armv7-a` (`-mthumb`) |
+| `arm` / `thumb` | `arm` / `thumb`, statements and whole objects | `arm-none-eabi-as -march=armv7ve -mfpu=neon-vfpv4` (`-mthumb`) |
 | `aarch64` | `aarch64`, and whole objects for the pools | `aarch64-elf-as` with every extension it names; see [AArch64](#aarch64) |
 
 ## ARM
 
 llvm-mc checks ARM and Thumb encodings in `tools/mc-diff`, but the source
 people write for ARM was written against GNU as, and for literal pools,
-mapping symbols and interworking the two disagree. So the `arm` and `thumb`
-corpora here, `arm-relocs.txt` and `thumb-relocs.txt`, compare whole objects
+mapping symbols and interworking the two disagree. So `arm.txt` and
+`thumb.txt` here are GNU as's own opinion of the encodings -- the
+instructions the security, virtualization and divide extensions add, the
+banked registers, the shifted operands llvm-mc wants a `#` on, and the whole
+floating-point and NEON set -- and the `arm-relocs.txt` and
+`thumb-relocs.txt` corpora compare whole objects
 against GNU as with `tools/mc-diff/canon.sh --full`: as for every other
 target, each allocated section's header and bytes and every relocation, and
 also `e_flags` and every symbol, local ones and mapping symbols included. A
 snippet named `refused: ...` matches when both assemblers reject it.
 
-GNU as is run with `-march=armv7-a`: without it, it assumes a CPU with no
-Thumb-2 and no `blx`. Every snippet starts with `.syntax unified`, because
+GNU as is run with `-march=armv7ve -mfpu=neon-vfpv4`: without a `-march` it
+assumes a CPU with no Thumb-2 and no `blx`, and `armv7ve` is ARMv7-A with
+the security, virtualization and divide extensions, which together are the
+whole set this backend claims. The FPU option adds VFPv4 and NEON. Every snippet starts with `.syntax unified`, because
 GNU as reads Thumb in the older divided syntax unless told otherwise, and
 rsasm only knows the unified one.
 

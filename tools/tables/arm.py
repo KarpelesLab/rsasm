@@ -1305,7 +1305,7 @@ def build(entries, insns):
 HEADER = '''//! The ARM instruction table, generated from GNU binutils 2.47.
 //!
 //! Do not edit: `tools/tables/arm.py table` writes this file from the
-//! disassembler's own tables in `opcodes/arm-dis.c`. [`super::generic`]
+//! disassembler's own tables in `opcodes/arm-dis.c`. `super::generic`
 //! encodes from it, and the script's doc comment says which instructions
 //! are here and which a hand-written encoder owns.
 
