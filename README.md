@@ -43,7 +43,7 @@ Prebuilt binaries for Linux, macOS and Windows are attached to each
 ## Status
 
 Early, but broad. The pipeline is complete end to end — lex, parse, encode,
-lay out, relax, relocate, write — with fifteen backends behind it.
+lay out, relax, relocate, write — with sixteen backends behind it.
 
 ### Architectures
 
@@ -64,6 +64,7 @@ assembler, not against rsasm's own idea of the manual. See
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
+| TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 3699 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
 | Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1935 |
@@ -143,6 +144,11 @@ but 18 forms where both manuals show MAME to be wrong.
   objects prepared for linker relaxation, with every branch relocated, local
   labels in the relocations, `EF_AVR_LINKRELAX_PREPARED` in `e_flags`, and
   `.align` and `.org` in code recorded in `.avr.prop`
+- MSP430 objects as GNU as writes them for a linker that relaxes code: every
+  reference from code relocated, differences of code labels as
+  `R_MSP430_SYM_DIFF` pairs (in the line table too), the `.MSP430.attributes`
+  section and the `__crt0_*` references; and GNU as's polymorphic branches
+  (`beq`, `bgt`, `jump`, …) in their long form
 - diagnostics with source snippets that name the real limit, and assembly that
   continues past the first error
 
@@ -199,6 +205,9 @@ but 18 forms where both manuals show MAME to be wrong.
   instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
   like); relocation modifiers other than `@l`, `@h`, `@ha`, `@pcrel` and
   `@got@pcrel` (`@toc@ha`, `@got`, `@higher`)
+- MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
+  warnings and insertion, the silicon errata options, assembly-time
+  relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
 - RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
   as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
   `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
@@ -246,10 +255,11 @@ backend. Three such choices are worth knowing about:
   section, since the linker may bind the name elsewhere; a local one, or a
   local `.set` alias of a global one, is resolved. That is what both
   references do on nearly every target. The exceptions follow GNU as for
-  x86, m68k, SuperH, RL78 and AVR (a jump GNU as relaxes to a global symbol
-  is resolved on x86; only weak symbols are left to the linker on m68k;
-  nothing in the same section is on SuperH and RL78; and everything is on
-  AVR, where the linker may delete code between a branch and its target). On ARM GNU as is followed for
+  x86, m68k, SuperH, RL78, AVR and MSP430 (a jump GNU as relaxes to a global
+  symbol is resolved on x86; only weak symbols are left to the linker on
+  m68k; nothing in the same section is on SuperH and RL78; and everything is
+  on AVR and MSP430, whose linkers may delete code between a branch and its
+  target). On ARM GNU as is followed for
   whole objects: a `bl` to a local label is resolved, and made a `blx` where
   the label is a Thumb function, where llvm-mc relocates every `bl`.
 - **Default section alignment.** Sections start with the alignment the
@@ -296,7 +306,7 @@ rsasm [options] <input.s>...
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
 `riscv`, `powerpc`, `mips`, `sparc`, `retro` (the Z80, 6502, 8080 and 8051),
-`m68k`, `superh`, `rx`, `rl78`, `v850`, `k78` and `avr`:
+`m68k`, `superh`, `rx`, `rl78`, `v850`, `k78`, `avr` and `msp430`:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -595,14 +605,14 @@ line, and a unit naming the file.
 
 The two references agree on the formats and disagree on nearly everything
 inside them, so each target follows the one that checks its encodings: GNU as
-for x86, m68k, SuperH, RX, RL78, V850 and AVR, and llvm-mc for the rest. That
+for x86, m68k, SuperH, RX, RL78, V850, AVR and MSP430, and llvm-mc for the rest. That
 decides, among other things, the default version (3 for GNU as, 4 for
 llvm-mc, 5 for either once a `.file 0` appears), how a path splits into a
 directory, whether a column carries over to the next `.loc`, which directives
 end a pending `.loc`, how CIEs are shared, and how padding and relocations are
 written. Each backend supplies its DWARF register numbers and names, return
 address column, alignment factors, initial instructions and FDE encoding; RX,
-RL78 and V850, whose GNU as has no CFI, refuse `.cfi_*` as it does. For `-g`,
+RL78, V850 and MSP430, whose GNU as has no CFI, refuse `.cfi_*` as it does. For `-g`,
 GNU as places an instruction from a macro on the line that called it, one
 from `.rept` or `.irp` on its line in the block, and one from an included file
 on its line there; llvm-mc puts every instruction in the main file at the
@@ -791,7 +801,7 @@ independent assembler, and compare the bytes:
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
   model, with corpora generated from GNU's own opcode table so that every
   form in it is assembled), SuperH, RX, RL78,
-  V850/RH850, AVR and the Z80, vasm for Motorola syntax and for the Z80 and the
+  V850/RH850, AVR, MSP430 and the Z80, vasm for Motorola syntax and for the Z80 and the
   6502, cc65's ca65 for the 6502, AS for the 8080 and AS and SDCC's sdas8051
   for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
@@ -800,13 +810,13 @@ independent assembler, and compare the bytes:
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 17,151 of 17,151 match across fifty-one
+  from checksum-pinned sources. 22,704 of 22,704 match across fifty-six
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 157 of 157 match across twenty-nine variants.
+  distances between sections. 205 of 205 match across thirty-one variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
@@ -818,7 +828,7 @@ independent assembler, and compare the bytes:
   against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
-  Clang. 1,177 of 1,177 match across twenty-four target variants.
+  Clang. 1,260 of 1,260 match across twenty-six target variants.
 - `tools/coff-diff/run.sh` for [PE/COFF objects](#pecoff), against llvm-mc 22
   for x86-64, i386 and ARM64 as whole objects — every section's
   characteristics and bytes, every symbol with its auxiliary records, every
@@ -848,7 +858,10 @@ of the binutils source, for each CPU model in GNU and Motorola syntax against
 GNU as, and in Motorola syntax against vasm; runs of 400,000 and 100,000
 instructions find nothing. The table rsasm encodes those forms from,
 `src/arch/m68k/table.rs`, is written from the same source by
-`tools/tables/m68k.py`. The 8051 is fuzzed with whole programs:
+`tools/tables/m68k.py`. `tools/fuzz/msp430.py` does the same against GNU as
+alone for the MSP430's 430, 430X and 430Xv2 instruction sets, and 200,000
+cases find no difference but the deviations the backend documents. The 8051
+is fuzzed with whole programs:
 `tools/fuzz/mcs51.py` assembles them with AS and sdas8051 too, and 80,000
 programs find no case where rsasm differs from the references outside the
 places this README describes. AVR is too: `tools/fuzz/avr.py` generates

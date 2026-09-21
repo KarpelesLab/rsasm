@@ -87,6 +87,28 @@ FP16 complex multiplications with a repeated register, reads an unsized
 store the two pick different, equally valid opcodes, and rsasm follows
 llvm-mc, as the corpora note.
 
+## MSP430
+
+`msp430.py` does the same for the MSP430 backend against `msp430-elf-as`
+from `tools/oracles/build.sh`, for the 430, 430X and 430Xv2 instruction sets:
+random instructions in every addressing mode and size, MSP430X extension-word
+and address instructions, `rpt`, jumps to numbers and labels, the polymorphic
+branches, and a share of deliberately invalid cases. Each case refers to a
+label of its own and to an undefined symbol, so relocations are compared as
+well as bytes.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/msp430.py fuzz --count 100000 --seed 6
+$ tools/fuzz/msp430.py fuzz --isa 430x --only '^(mova|calla)$'
+$ tools/fuzz/msp430.py check --isa 430 lines.txt
+```
+
+There is one reference, so a finding is any case the two treat differently
+that is not one of rsasm's recorded deviations (`DEVIATIONS` and `ACCEPTED`
+in the script, and the backend's documentation). Runs of 100,000 cases with
+seeds 6 and 7 find none.
+
 ## Environment
 
 | Variable | Default |
@@ -94,6 +116,7 @@ llvm-mc, as the corpora note.
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
+| `RSASM_ORACLES` | `target/oracles` under the repository root, for `msp430.py` |
 
 ## AArch64
 

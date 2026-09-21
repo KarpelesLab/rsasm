@@ -40,7 +40,8 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # first one present is used.
 #
 # RISC-V is linked with --no-relax: the linker would otherwise shorten `call`
-# sequences, which is an optimization rsasm does not attempt. PowerPC64 is
+# sequences, which is an optimization rsasm does not attempt. So is MSP430,
+# whose GNU ld relaxes by default and turns a `br` it can reach into a `jmp`. PowerPC64 is
 # linked with --no-toc-optimize for the same reason. A linker flag written as
 # a linker-script command, `OUTPUT_ARCH(sparc)`, goes into the script: that
 # is the only way to have the V9 GNU ld write a 32-bit SPARC image.
@@ -76,6 +77,8 @@ sh|sh|sh|sh-elf-as||sh-elf-ld||0x10000
 shl|sh|shl|sh-elf-as|-little|sh-elf-ld|-EL|0x10000
 rx|rx|rx|rx-elf-as||rx-elf-ld||0x10000
 rl78|rl78|rl78|rl78-elf-as||rl78-elf-ld||0x2000
+msp430|msp430|msp430|msp430-elf-as|-mcpu=430 -mP|msp430-elf-ld|--no-relax|0x1000
+msp430x|msp430,msp430x|msp430x|msp430-elf-as|-mcpu=430x -mP|msp430-elf-ld|--no-relax|0x4000
 v850|v850|v850|v850-elf-as||v850-elf-ld||0x100000
 rh850|v850,rh850|rh850|v850-elf-as|-mv850e3v5|v850-elf-ld||0x100000
 avr|avr|avr|avr-elf-as||avr-elf-ld||0x0

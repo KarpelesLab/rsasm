@@ -1105,10 +1105,11 @@ impl<'a> Lexer<'a> {
     /// hex. NASM reads a `0b` prefix before it looks for a suffix and rejects
     /// the same text, so it keeps prefix-first order.
     fn suffixed_literal_ahead(&self) -> bool {
-        if !matches!(
+        let renesas = matches!(
             self.config.dialect,
             Dialect::Renesas | Dialect::CcRl | Dialect::CcRx | Dialect::EightBit
-        ) {
+        );
+        if !renesas && !self.config.radix_suffix {
             return false;
         }
         let mut p = self.pos;
@@ -1118,7 +1119,14 @@ impl<'a> Lexer<'a> {
             p += 1;
         }
         let run = &self.src[self.pos..p];
-        suffix_radix(run).is_some()
+        match suffix_radix(run) {
+            // GNU as ports built with suffix numbers (RL78, MSP430) look for an
+            // `h` before a `0b` prefix, so `0b1h` is 0xb1; a `0x` prefix still
+            // wins, and makes `0x1fh` an error.
+            Some(16) if !renesas => self.peek_at(1) | 0x20 == b'b',
+            Some(_) => renesas,
+            None => false,
+        }
     }
 
     fn lex_number(

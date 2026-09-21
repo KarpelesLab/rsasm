@@ -903,6 +903,11 @@ impl Assembler {
         };
 
         let text = self.interner.get(name).to_string();
+        // GNU as for MSP430 refers to the C runtime's set-up routine for the
+        // section as soon as it is named; see `Architecture::section_symbols`.
+        for sym in self.target().section_symbols(&text) {
+            self.refer_to_symbol(sym, tok.span);
+        }
         let mut kind = if text.starts_with(".bss") {
             SectionKind::Nobits
         } else {
@@ -1173,6 +1178,9 @@ impl Assembler {
         sym.ty = SymType::Object;
         if !local {
             sym.binding = Binding::Global;
+        }
+        for sym in self.target().common_symbols() {
+            self.refer_to_symbol(sym, nspan);
         }
         true
     }
