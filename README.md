@@ -54,7 +54,7 @@ assembler, not against rsasm's own idea of the manual. See
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | AARCH64_CASES |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21730 |
 | ARM A32 / Thumb | `arm` `thumb` | llvm-mc, GNU as | 446 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
@@ -126,6 +126,12 @@ but 18 forms where both manuals show MAME to be wrong.
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols
+- AArch64 the same way: literal pools (`ldr x0, =0x123456789`, `ldr w0, =sym`,
+  `.ltorg`, `.pool`) with `$x`/`$d` mapping symbols, and the system
+  instructions with every operand name GNU as knows — `dc`, `ic`, `at`,
+  `tlbi`, `sys`/`sysl`, 1,619 `mrs`/`msr` registers and the PSTATE fields.
+  Mapping symbols are an ELF convention, so a COFF or Mach-O object has none
+  of them, and nothing raises a section's alignment for them there
 - the whole 680x0 family as GNU as knows it: the 68881/68882 FPU with float
   immediates in every size (`#1.5` in Motorola source, `#0r1.5` in GNU's), the
   68851 and on-chip MMUs, `cas2`, `callm`, `move16`, CPU32 and ColdFire,
@@ -181,9 +187,11 @@ but 18 forms where both manuals show MAME to be wrong.
   its tiles, `zt0`, the multi-vector and strided register lists, predicates as
   counters and `psel`; and the general-purpose instructions no SIMD mnemonic
   shares, which have never been there: the atomics (`ldxr`, `casp`,
-  `ldadd`…), pointer authentication, memory tagging and `bti`. `movprfx` is
-  assembled but its sequence is not checked, where llvm-mc refuses an
-  instruction that does not use the prefixed register and GNU as warns
+  `ldadd`…), memory tagging, and the pointer-authentication instructions that
+  name a register (`pacia x0, x1`) rather than the `paciasp`-style hints,
+  which are there. `movprfx` is assembled but its sequence is not checked,
+  where llvm-mc refuses an instruction that does not use the prefixed
+  register and GNU as warns
 - PowerPC: POWER10's matrix-multiply accelerator (`xvi8ger4` and the other
   MMA instructions), POWER11's `xxaes*` and `xxgfmul128*`, decimal floating
   point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
@@ -777,7 +785,7 @@ independent assembler, and compare the bytes:
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. MC_TOTAL of MC_TOTAL match across twenty-one target variants. For RISC-V
+  supports. 37,354 of 37,354 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -788,16 +796,17 @@ independent assembler, and compare the bytes:
   for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
-  the reference for literal pools and interworking; for PowerPC's vector and
+  the reference for literal pools and interworking, and for AArch64's literal
+  pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 16,562 of 16,562 match across fifty
+  from checksum-pinned sources. 17,151 of 17,151 match across fifty-one
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
   sections laid end to end, against `rsasm -f bin`. That is what checks the
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
-  distances between sections. 154 of 154 match across twenty-nine variants.
+  distances between sections. 157 of 157 match across twenty-nine variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
@@ -820,7 +829,7 @@ independent assembler, and compare the bytes:
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,573 of 1,573 match, and every object both write
+  those of `tools/mc-diff`. 1,597 of 1,597 match, and every object both write
   is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
@@ -855,8 +864,8 @@ AArch64's SIMD, floating-point and SVE table is derived from llvm-mc rather
 than written: `tools/tables/aarch64.py` disassembles random instruction words
 to find every form llvm-mc prints, measures where each operand's bits go by
 assembling the form with one operand changed at a time, and checks every form
-against llvm-mc before writing `src/arch/aarch64/table_data.rs` (5,631 forms) and
-the corpora that check it, `tools/mc-diff/aarch64-{simd,sve}-words.txt` (16,852
+against llvm-mc before writing `src/arch/aarch64/table_data.rs` (5,879 forms) and
+the corpora that check it, `tools/mc-diff/aarch64-{simd,sve}-words.txt` (17,600
 lines, compared a batch at a time). `tools/tables/aarch64.py check` says
 whether they are still what llvm-mc gives. The backend is fuzzed by
 `tools/fuzz/aarch64.py`, whose cases are llvm-mc's or GNU objdump's
@@ -871,6 +880,27 @@ always `.d`, and an immediate outside the element's signed range, such as
 `mov z0.h, #-65408` — and takes the ones only GNU as reads: `fcmp s0, 0` for
 `#0.0`, and a register list `{z0.h - z1.s}` of two element sizes is refused
 as llvm-mc refuses it. `smstart`, `smstop` and `zero {za}` are handwritten.
+
+The system instructions are generated the same way from the other reference:
+`tools/tables/aarch64-sys.py` takes the names from binutils' own tables —
+`opcodes/aarch64-sys-regs.def` and the `aarch64_sys_regs_*` arrays — and
+every encoding from a run of `aarch64-elf-as`, writing
+`src/arch/aarch64/sysreg_data.rs` (1,619 `mrs`/`msr` registers with what each
+allows, 12 PSTATE fields, 284 `dc`/`ic`/`at`/`tlbi` operand names and 73
+aliases of `hint`) and a line per name to whichever corpus can check it:
+`tools/mc-diff/aarch64-sys-words.txt` where llvm-mc gives the same word, and
+`tools/xas-diff/aarch64.txt` where it does not know the name at all, which is
+most of the newer ones. `msr` of a register the architecture says is
+read-only warns, as GNU as warns; neither assembler refuses it.
+
+Literal pools are GNU as's feature, so GNU as is the reference for them:
+`tools/xas-diff/aarch64-relocs.txt` compares whole objects, mapping symbols
+and relocations included, and `tools/flat-diff/aarch64-gas.txt` compares
+linked images. Unlike its own ARM port, and unlike llvm-mc — which turns
+`ldr x0, =1` into `mov x0, #1` and writes its entries in the order they were
+used — GNU as on AArch64 always loads from the pool, groups the entries by
+width, aligns each run and shares an entry between loads of the same value:
+rsasm does what GNU as does.
 
 PowerPC's AltiVec, VSX and POWER8–10 instructions are fuzzed the same way by
 `tools/fuzz/powerpc.py`, which draws its forms from the operand kinds in GNU

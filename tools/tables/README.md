@@ -10,12 +10,21 @@ checked against it.
   set against llvm-mc and writes `src/arch/aarch64/table_data.rs`,
   `table_names.rs` and the corpora `tools/mc-diff/aarch64-simd-words.txt` and
   `aarch64-sve-words.txt`, as below.
+- `aarch64-sys.py` does the same for the system instructions against the
+  other reference: the names come from binutils' `aarch64-sys-regs.def` and
+  the `aarch64_sys_regs_*` tables in `aarch64-opc.c`, and each encoding from
+  assembling that name with `aarch64-elf-as`. It writes
+  `src/arch/aarch64/sysreg_data.rs` and a line per name to
+  `tools/mc-diff/aarch64-sys-words.txt` (where llvm-mc agrees) or
+  `tools/xas-diff/aarch64.txt` (where it does not know the name).
 
 ```console
 $ tools/tables/aarch64.py table --jobs 32       # about ten minutes
 $ tools/tables/aarch64.py check                 # exit 1 if it is out of date
 $ tools/tables/aarch64.py fit --only '^fmov$' --dump forms.txt
 $ tools/tables/aarch64-probe.py 'sshr v0.8b, v1.8b, #3'   # one line, measured
+$ tools/tables/aarch64-sys.py table             # a few seconds
+$ tools/tables/aarch64-sys.py check
 ```
 
 ## How a form is found
