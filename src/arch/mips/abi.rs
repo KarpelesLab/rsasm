@@ -28,6 +28,11 @@
 //! `ri_cprmask[0]`, `[2]` and `[3]` are the other coprocessors' registers,
 //! and stay zero: this backend has no operand that names one. `ri_gp_value`
 //! is zero in both references, which leave it to the linker.
+//!
+//! # The ABI flags
+//!
+//! `.MIPS.abiflags` is what the default CPU needs, changed only by
+//! `.module`; see `Mips::module`.
 
 use super::reg::{Reg, RegClass};
 use crate::arch::{ArchState, AttrBody, AttrSection, Endian};
