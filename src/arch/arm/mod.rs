@@ -9,6 +9,31 @@
 //!
 //! The state's `bits` field carries the choice — 32 for ARM, 16 for Thumb —
 //! because that is what `.code 16` and `.code 32` already mean in ARM sources.
+//!
+//! # Deliberate differences from GNU as
+//!
+//! GNU as is the reference for what this backend writes — its literal pools,
+//! its mapping symbols and its interworking — but not for what it accepts.
+//! Two things it refuses are assembled here, and llvm-mc, which writes the
+//! same object rsasm does for both, is the reference for them instead.
+//!
+//! * A branch to a *local* label in another section that is an odd number of
+//!   halfwords into Thumb code. GNU as's `arm_fix_adjustable` relocates such
+//!   a reference against the label's section, folding the label's offset into
+//!   the addend, and `md_apply_fix` then reads the low two bits of that
+//!   addend as the branch destination's and stops with "misaligned branch
+//!   destination" — although the offset it checked is not the branch's until
+//!   a linker has placed both sections. rsasm names the label, as llvm-mc
+//!   does (see `relocates_with_label` below), and leaves the whole reference
+//!   to the linker, which has both addresses and the `blx` to reach Thumb
+//!   with. The case is in `tools/mc-diff/arm-relocs.txt`.
+//! * A literal pool entry holding a difference of labels, `ldr r0, =l1-l0`,
+//!   where the difference is not already a number. GNU as's
+//!   `parse_big_immediate` takes a constant, a bignum, or a symbol plus an
+//!   addend, and a difference of two labels that the parser cannot fold is
+//!   none of the three, so the line is a syntax error there; once the layout
+//!   is known it is an ordinary number, and rsasm puts it in the pool. The
+//!   case is in `tools/mc-diff/arm-programs.txt`.
 
 pub mod encode;
 pub(crate) mod generic;

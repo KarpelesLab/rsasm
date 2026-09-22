@@ -53,3 +53,15 @@ out:
         mov     r0, r0
         .balign 16
         mov     r0, r0
+=== a literal pool entry holding a difference of labels
+        @ GNU as refuses this one: `parse_big_immediate` takes a constant, a
+        @ bignum or a symbol plus an addend, and a difference of two labels
+        @ that is not already a number is none of the three, so `ldr r0,
+        @ =l1-l0` is a syntax error there. llvm-mc writes the entry, and so
+        @ does rsasm; see the ARM backend's module documentation.
+l0:     nop
+        ldr     r0, =l1-l0
+        bx      lr
+        .space  1000
+l1:     nop
+        .ltorg

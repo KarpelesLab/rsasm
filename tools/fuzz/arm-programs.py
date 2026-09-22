@@ -36,9 +36,9 @@ A case is:
               there are any. Each is shown reduced: statements are dropped
               while the difference stays the same kind.
     known     they differ in a way this fuzzer is not about, each with its
-              reason: `KNOWN` lists the ones told apart by what rsasm said
-              when it refused, and `known_object` the one that shows in the
-              object itself.
+              reason: `KNOWN` and `KNOWN_GAS` list the ones told apart by
+              what the assembler that refused said, and `known_object` the
+              one that shows in the object itself.
 
 `--mutations` (default 0.15) is the fraction of programs given something
 meant to be refused: a pool out of reach, a `=` on a store or an `ldrd`, an
@@ -89,10 +89,13 @@ KNOWN = [("does not fit in the 32-bit word", "literal wider than a word"),
 
 # The other way round: what GNU as refuses and rsasm assembles, matched
 # against GNU as's message. An ARM `bl` or `b` must land on a word boundary,
-# and GNU as checks the offset of a target in another section although only
-# the linker knows where the section goes; rsasm leaves the whole reference
-# to the linker. A label an odd number of halfwords into Thumb code is the
-# way to write one.
+# and GNU as checks the offset that `arm_fix_adjustable` folded into the
+# addend of a reference to a local label in another section, although where
+# that section goes is the linker's; rsasm names the label, as llvm-mc does,
+# and leaves the whole reference to the linker. A label an odd number of
+# halfwords into Thumb code is the way to write one. The ARM backend's module
+# documentation says why this one is deliberate, and
+# tools/mc-diff/arm-relocs.txt holds the case.
 KNOWN_GAS = [("misaligned branch destination",
               "an ARM branch to a target GNU as checks before the linker")]
 
@@ -346,13 +349,12 @@ class Program:
         """A label already placed in the section the next statement goes in,
         for an `adr`, or None.
 
-        Not one that data of an odd length left at an address no instruction
-        can have: GNU as's `adr` adds one to the address of a
-        `.thumb_func` label, where rsasm sets its low bit, and for an odd
-        address those are not the same number. It says nothing about
-        pools."""
-        here = [n for n, s in self.where.items()
-                if s == self.section and n not in self.misaligned]
+        A label that data of an odd length left at an address no instruction
+        can have is one of these: GNU as ORs the Thumb bit of a `.thumb_func`
+        label into the `adr`'s *addend*, which at an odd address is not the
+        same number as ORing it into the finished value, and that is a
+        difference worth generating."""
+        here = [n for n, s in self.where.items() if s == self.section]
         return self.rng.choice(here) if here else None
 
     def code_label(self):
@@ -385,7 +387,10 @@ class Program:
             target = self.here_label()
             if target:
                 kind = "adrl" if not self.thumb and rng.random() < 0.3 else "adr"
-                return f"{kind} {self.reg()}, {target}"
+                # An addend of its own, since GNU as sets the Thumb bit in the
+                # addend and so changes nothing when it is already odd.
+                addend = rng.choice(["", "", "", " + 1", " + 2", " - 1"])
+                return f"{kind} {self.reg()}, {target}{addend}"
         if r < 0.6:
             return rng.choice([
                 f"b {self.code_label()}", f"bl {self.code_label()}",
