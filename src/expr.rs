@@ -714,6 +714,12 @@ pub struct ExprParser<'a> {
     /// The string literals, where a quoted string can stand for a number: in
     /// NASM, `'ab'` is `0x6261`.
     pub strings: Option<&'a crate::lexer::LitPool>,
+    /// Relocation modifiers written as a suffix in parentheses after the term
+    /// they apply to, `sym(GOT)`, which is how ARM's GNU as spells what the
+    /// rest of the GNU syntax spells `sym@GOT`. Empty everywhere the caller
+    /// does not allow one, so that a `(` after a symbol stays whatever else
+    /// it was; see [`ExprParser::paren_modifier`].
+    pub paren_modifiers: &'static [&'static str],
 }
 
 impl<'a> ExprParser<'a> {
@@ -798,8 +804,12 @@ impl<'a> ExprParser<'a> {
         Some(self.parse_postfix(cur, lhs))
     }
 
-    /// Handles `expr@MODIFIER`, the ELF relocation-modifier syntax.
+    /// Handles `expr@MODIFIER`, the ELF relocation-modifier syntax, and the
+    /// `expr(MODIFIER)` ARM writes instead.
     fn parse_postfix(&mut self, cur: &mut Cursor<'_>, mut e: ExprRef) -> ExprRef {
+        if let Some(wrapped) = self.paren_modifier(cur, e) {
+            e = wrapped;
+        }
         while cur.check_punct(Punct::At) {
             let at = cur.advance();
             let tok = cur.peek();
@@ -818,6 +828,46 @@ impl<'a> ExprParser<'a> {
             e = self.arena.alloc(ExprKind::Modifier(name, e), span);
         }
         e
+    }
+
+    /// Handles `sym(GOT)`, the relocation suffix ARM's GNU as reads in place
+    /// of `sym@GOT`; see [`ExprParser::paren_modifiers`]. `None` leaves the
+    /// cursor alone, which is what a `(` that starts something else needs.
+    ///
+    /// GNU as takes the suffix only after a symbol, and only spelled wholly
+    /// in lower or wholly in upper case, since its table holds the two
+    /// spellings and nothing else. A `(name)` that is neither is the error
+    /// `s_arm_elf_cons` gives rather than a symbol followed by a group.
+    fn paren_modifier(&mut self, cur: &mut Cursor<'_>, e: ExprRef) -> Option<ExprRef> {
+        if self.paren_modifiers.is_empty()
+            || !matches!(self.arena.get(e).kind, ExprKind::Sym(_))
+            || !cur.peek().is_punct(Punct::LParen)
+        {
+            return None;
+        }
+        let name = cur.nth(1).ident()?;
+        if !cur.nth(2).is_punct(Punct::RParen) {
+            return None;
+        }
+        let span = cur.peek().span.to(cur.nth(2).span);
+        let text = self.interner.get(name).to_string();
+        let found = self
+            .paren_modifiers
+            .iter()
+            .find(|m| text == **m || text == m.to_ascii_uppercase());
+        cur.advance();
+        cur.advance();
+        cur.advance();
+        let Some(found) = found else {
+            self.diags
+                .error(span, format!("unrecognized relocation suffix `({text})`"));
+            return None;
+        };
+        let found = self.interner.intern(found);
+        Some(
+            self.arena
+                .alloc(ExprKind::Modifier(found, e), self.arena.span(e).to(span)),
+        )
     }
 
     fn interner_get(&self, n: Name) -> String {
@@ -1229,6 +1279,7 @@ mod tests {
                 dialect: Dialect::Gas,
                 bit_dot: false,
                 strings: None,
+                paren_modifiers: &[],
             };
             p.parse(&mut cur)
         };

@@ -461,7 +461,12 @@ impl Assembler {
     /// as reads it in `avr_parse_cons_expression`: only directly after the
     /// directive or a comma, and only where a `(` follows the name.
     ///
+    /// The suffix spelling, ARM's `.word sym(GOT)`, is the expression
+    /// parser's, since it binds to one symbol inside a larger expression;
+    /// see [`Architecture::data_paren_modifiers`].
+    ///
     /// [`Architecture::expr_modifiers`]: crate::arch::Architecture::expr_modifiers
+    /// [`Architecture::data_paren_modifiers`]: crate::arch::Architecture::data_paren_modifiers
     fn parse_data_expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
         let tok = cur.peek();
         let name = tok.ident().and_then(|n| {
@@ -473,7 +478,7 @@ impl Assembler {
                 .copied()
         });
         let Some(name) = name.filter(|_| cur.nth(1).is_punct(Punct::LParen)) else {
-            return self.parse_expr(cur);
+            return self.parse_expr_with_suffixes(cur, self.arch.data_paren_modifiers());
         };
         cur.advance();
         let open = cur.advance();
@@ -582,6 +587,8 @@ impl Assembler {
                     // `x@got` everywhere else.
                     let written = if self.arch.expr_modifiers().contains(&name.as_str()) {
                         format!("`{name}()`")
+                    } else if self.arch.data_paren_modifiers().contains(&name.as_str()) {
+                        format!("`({name})`")
                     } else {
                         format!("`@{name}`")
                     };

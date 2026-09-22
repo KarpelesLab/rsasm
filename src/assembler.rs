@@ -1880,6 +1880,16 @@ impl Assembler {
     /// Not API.
     #[doc(hidden)]
     pub fn parse_expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
+        self.parse_expr_with_suffixes(cur, &[])
+    }
+
+    /// The same, allowing the relocation suffixes `suffixes` names; see
+    /// [`crate::expr::ExprParser::paren_modifiers`].
+    pub(crate) fn parse_expr_with_suffixes(
+        &mut self,
+        cur: &mut Cursor<'_>,
+        suffixes: &'static [&'static str],
+    ) -> Option<ExprRef> {
         let mut p = expr::ExprParser {
             arena: &mut self.exprs,
             interner: &mut self.interner,
@@ -1889,6 +1899,7 @@ impl Assembler {
             dialect: self.options.dialect,
             bit_dot: self.arch.bit_addressing(),
             strings: Some(&self.pool),
+            paren_modifiers: suffixes,
         };
         p.parse(cur)
     }

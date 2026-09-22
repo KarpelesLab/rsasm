@@ -500,3 +500,180 @@ fn it_block_mistakes_are_refused() {
     let e = errors_for("thumb", "it al\nadd r0, r1, r2\n");
     assert!(e.contains("not allowed in an `it` block"), "{e}");
 }
+
+// ---- the position-independent operands ---------------------------------------
+
+/// The relocations of an assembled source, as `(offset, type, addend)`.
+fn relocs(arch: &str, src: &str) -> Vec<(u64, u32, i64)> {
+    let asm = assemble_for(arch, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    asm.relocs
+        .iter()
+        .map(|r| (r.offset, r.kind, r.addend))
+        .collect()
+}
+
+const R_ARM_ABS32: u32 = 2;
+const R_ARM_CALL: u32 = 28;
+const R_ARM_JUMP24: u32 = 29;
+const R_ARM_GOTOFF32: u32 = 24;
+const R_ARM_BASE_PREL: u32 = 25;
+const R_ARM_GOT_BREL: u32 = 26;
+const R_ARM_GOT_PREL: u32 = 96;
+const R_ARM_MOVW_ABS_NC: u32 = 43;
+const R_ARM_MOVT_ABS: u32 = 44;
+const R_ARM_MOVW_PREL_NC: u32 = 45;
+const R_ARM_MOVT_PREL: u32 = 46;
+const R_ARM_THM_MOVW_ABS_NC: u32 = 47;
+const R_ARM_THM_MOVT_PREL: u32 = 50;
+
+/// `.word sym(GOT)` and its relatives, with the addend after the suffix the
+/// way GNU as reads it. `(PLT)` in data is the plain absolute reference: GNU
+/// as asks for `R_ARM_PLT32` there and emits the symbol itself.
+#[test]
+fn the_got_suffixes_in_data() {
+    let src = "        .word sym(GOT)
+        .word sym(GOTOFF) + 4
+        .word sym(GOT_PREL) - 4
+        .word 8 + sym(GOT)
+        .word sym(PLT)
+        .long sym(got)
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![
+            (0, R_ARM_GOT_BREL, 0),
+            (4, R_ARM_GOTOFF32, 4),
+            (8, R_ARM_GOT_PREL, -4),
+            (12, R_ARM_GOT_BREL, 8),
+            (16, R_ARM_ABS32, 0),
+            (20, R_ARM_GOT_BREL, 0),
+        ]
+    );
+}
+
+/// A four-byte reference to `_GLOBAL_OFFSET_TABLE_` is the distance from the
+/// field to the GOT however it was written, so the difference against the
+/// label of the `add` that follows it is the addend the linker wants.
+#[test]
+fn the_address_of_the_global_offset_table() {
+    let src = "f:      nop
+        nop
+        .word _GLOBAL_OFFSET_TABLE_
+        .word _GLOBAL_OFFSET_TABLE_ + 4
+        .word _GLOBAL_OFFSET_TABLE_ - (f + 4)
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![
+            (8, R_ARM_BASE_PREL, 0),
+            (12, R_ARM_BASE_PREL, 4),
+            (16, R_ARM_BASE_PREL, 12),
+        ]
+    );
+}
+
+/// `(plt)` on a branch target leaves the branch exactly as it was: GNU as
+/// writes `R_ARM_CALL` and `R_ARM_JUMP24` for it, and resolves a branch to a
+/// local label in the same section however it was written.
+#[test]
+fn a_plt_suffix_on_a_branch_target() {
+    let src = "f:      bl sym(PLT)
+        b sym(PLT)
+        bl f(PLT)
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![(0, R_ARM_CALL, -8), (4, R_ARM_JUMP24, -8)]
+    );
+    assert_eq!(
+        hex(&text_for("arm", src)),
+        "fe ff ff eb fe ff ff ea fc ff ff eb"
+    );
+}
+
+/// The halves of an address. The field holds the addend, not the half of it:
+/// the relocations are `REL`, so the linker adds the symbol before splitting.
+/// A value that is already a number is split here instead.
+#[test]
+fn the_halves_of_an_address() {
+    let src = "        movw r0, #:lower16:sym
+        movt r0, #:upper16:sym + 4
+        movw r1, #:lower16:0x12345678
+        movt r1, #:upper16:0x12345678
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![(0, R_ARM_MOVW_ABS_NC, 0), (4, R_ARM_MOVT_ABS, 4)]
+    );
+    assert_eq!(
+        hex(&text_for("arm", src)),
+        "00 00 00 e3 04 00 40 e3 78 16 05 e3 34 12 41 e3"
+    );
+}
+
+/// A half of a difference against a label in the same section is the
+/// PC-relative pair, whose addend makes up for the field's own address.
+#[test]
+fn the_halves_of_an_address_measured_from_a_label() {
+    let src = "f:      nop
+        nop
+        movw r0, #:lower16:(sym - f)
+        movt r0, #:upper16:(sym - f)
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![(8, R_ARM_MOVW_PREL_NC, 8), (12, R_ARM_MOVT_PREL, 12)]
+    );
+    assert_eq!(
+        hex(&text_for("arm", src)),
+        "00 f0 20 e3 00 f0 20 e3 08 00 00 e3 0c 00 40 e3"
+    );
+}
+
+/// Thumb has its own four, and the same rules.
+#[test]
+fn the_halves_of_an_address_in_thumb() {
+    let src = "f:      movw r0, #:lower16:sym
+        movt r0, #:upper16:(sym - f)
+";
+    assert_eq!(
+        relocs("thumb", src),
+        vec![(0, R_ARM_THM_MOVW_ABS_NC, 0), (4, R_ARM_THM_MOVT_PREL, 4)]
+    );
+    assert_eq!(hex(&text_for("thumb", src)), "40 f2 00 00 c0 f2 04 00");
+}
+
+/// What GNU as refuses, refused here too: the suffix only where it reads one,
+/// the half that matches the instruction, and an addend the sixteen bits hold.
+#[test]
+fn the_relocation_operands_gnu_as_refuses() {
+    let e = errors_for("arm", " ldr r0, =sym(GOT)\n .ltorg\n");
+    assert!(e.contains("unexpected token"), "{e}");
+    let e = errors_for("arm", " bl sym(GOT)\n");
+    assert!(e.contains("unrecognized relocation suffix"), "{e}");
+    let e = errors_for("arm", " adr r0, sym(PLT)\n");
+    assert!(e.contains("unexpected token"), "{e}");
+    let e = errors_for("arm", " .short sym(GOT)\n");
+    assert!(e.contains("`(got)` is not a relocation modifier"), "{e}");
+    let e = errors_for("arm", " .word sym(GoT)\n");
+    assert!(e.contains("unrecognized relocation suffix"), "{e}");
+    let e = errors_for("arm", " .word sym(TARGET1)\n");
+    assert!(e.contains("unrecognized relocation suffix"), "{e}");
+    let e = errors_for("arm", " movw r0, #:upper16:sym\n");
+    assert!(e.contains("`:upper16:` is not allowed in `movw`"), "{e}");
+    let e = errors_for("arm", " movt r0, #:lower16:sym\n");
+    assert!(e.contains("`:lower16:` is not allowed in `movt`"), "{e}");
+    let e = errors_for("arm", " mov r0, #:lower16:sym\n");
+    assert!(e.contains("found a `:lower16:` value"), "{e}");
+    let e = errors_for("arm", " movw r0, #:lower16:sym + 0x8000\n");
+    assert!(e.contains("does not fit"), "{e}");
+    let e = errors_for("arm", " movw r0, #:lower16:(f - sym)\nf: bx lr\n");
+    assert!(e.contains("cannot be relocated"), "{e}");
+    let e = errors_for("arm", " .word sym(GOT) - .\n");
+    assert!(e.contains("no relocation for a difference"), "{e}");
+}
