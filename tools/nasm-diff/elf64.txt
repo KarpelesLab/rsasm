@@ -114,3 +114,24 @@ _start:
         syscall3 60, 0, 0, 0
         section .bss
 buf:    resb    4
+=== branch widths, segment overrides and an unused extern
+        extern unused
+        extern g
+        global f
+        section .text
+f:
+loop_head:
+        mov     eax, [ss:rel g]
+        mov     ecx, [ss:abs g]
+        mov     edx, [fs:rel g]
+        jmp     short loop_head
+        jz      near loop_head
+        call    near loop_head
+        push    word 0x1234
+        xchg    rax, rax
+        mov     eax, [ds:rbx]
+        mov     eax, [ss:rbp]
+        ret
+        section .rodata
+        section .data
+        db      1

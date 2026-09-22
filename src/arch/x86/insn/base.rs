@@ -9,8 +9,8 @@
 //! row's size, so one row serves all three.
 
 use super::{
-    ADDR16, ADDR32, ATT_ONLY, CONDITIONS, DEF64, Def, IMM64, INTEL_ONLY, ModRm, NO_REX_W, NO64,
-    NO66, NOTACC, ONLY64, Op, PLUSREG, Tbl, WIDTHS, add, d, opsize_bits,
+    ADDR16, ADDR32, ATT_ONLY, CONDITIONS, DEF64, Def, IMM64, INTEL_ONLY, ModRm, NO_REX_W,
+    NO_REX_W_GAS, NO64, NO66, NOTACC, ONLY64, Op, PLUSREG, Tbl, WIDTHS, add, d, opsize_bits,
 };
 
 /// `add`-style group: eight instructions sharing one opcode layout.
@@ -427,9 +427,10 @@ fn install_moves(t: &mut Tbl) {
     );
 
     t.insert("xchg", {
-        // `xchg rax, rax` is spelled `nop`, and `xchg ax, ax` is `66 90`;
-        // both are shorter than the ModRM forms, so they come first. Outside
-        // long mode, where it clears no upper half, so is `xchg eax, eax`.
+        // `xchg rax, rax` is spelled `nop` by GNU as and `48 90` by NASM, and
+        // `xchg ax, ax` is `66 90`; both are shorter than the ModRM forms, so
+        // they come first. Outside long mode, where it clears no upper half,
+        // so is `xchg eax, eax`.
         let mut defs = vec![
             d(
                 vec![Op::Fixed("rax"), Op::Fixed("rax")],
@@ -437,7 +438,7 @@ fn install_moves(t: &mut Tbl) {
                 ModRm::None,
                 64,
             )
-            .flags(NO_REX_W),
+            .flags(NO_REX_W_GAS),
             d(
                 vec![Op::Fixed("eax"), Op::Fixed("eax")],
                 &[0x90],

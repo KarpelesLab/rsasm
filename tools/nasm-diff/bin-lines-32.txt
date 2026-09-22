@@ -154,3 +154,15 @@ daa
 aam
 aad
 into
+jmp short $
+jmp near $
+jz short $
+jz near $
+call near $
+push word 0x20
+push word 0x1234
+push dword 0x12345678
+mov eax, [ds:ebx]
+mov eax, [ss:ebp+1]
+mov eax, [ss:esi*5]
+mov eax, [es:ebx]

@@ -3,7 +3,7 @@
 
 use super::insn::{
     ADDR16, ADDR32, DEF64, DISTINCT_DEST, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK,
-    NO_REX_W, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Vk, WAIT,
+    NO_REX_W, NO_REX_W_GAS, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -362,8 +362,15 @@ pub fn encode(
     let seg_override = match mem.as_ref().and_then(|m| m.seg.map(|s| (m, s))) {
         // An override naming the segment the address uses anyway is left
         // out, as GNU as does: `ss` for a `bp` or `sp` base, `ds` otherwise.
-        // llvm-mc keeps it.
-        Some((m, seg)) if seg.num == if is_string { 3 } else { default_segment(m) } => prefixes.seg,
+        // llvm-mc keeps it, and so does NASM; in the NASM dialect the prefix
+        // the source wrote is a byte of the instruction, and leaving it out
+        // would make the instruction a byte shorter than it was written.
+        Some((m, seg))
+            if cx.dialect != crate::lexer::Dialect::Nasm
+                && seg.num == if is_string { 3 } else { default_segment(m) } =>
+        {
+            prefixes.seg
+        }
         Some((_, seg)) => match segment_prefix(seg) {
             Some(p) => Some(p),
             None => {
@@ -512,8 +519,11 @@ pub fn encode(
                 bytes.push(def.pfx);
             }
 
+            let gas_only =
+                def.flags & NO_REX_W_GAS != 0 && cx.dialect != crate::lexer::Dialect::Nasm;
             let rex_w = def.opsize == 64
                 && def.flags & NO_REX_W == 0
+                && !gas_only
                 && !(bits == 64 && def.flags & DEF64 != 0);
             if def.opsize == 64 && bits != 64 && def.flags & DEF64 == 0 {
                 cx.error(span, "64-bit operands require 64-bit mode");

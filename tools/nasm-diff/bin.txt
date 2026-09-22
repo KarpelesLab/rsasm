@@ -222,3 +222,38 @@ incbin "blob.bin", 1, 2
 %define VALUE 0x33
 --- file blob.bin
 ABCDEF
+=== sections in a flat binary
+section .text
+ret
+section .data
+db 0x11
+section .bss
+resb 4
+section .rodata
+db 0x22
+=== section alignment in a flat binary
+org 0x100
+section .text
+db 1, 2
+section .data align=8
+db 3
+section .rodata
+align 2
+db 4
+section .data
+db 5
+section .bss
+buf: resb 4
+section .rodata
+dw buf, $, $$
+=== branch widths
+start:
+jmp short start
+jmp near start
+jz near start
+times 4 db 0x90
+jmp short fwd
+jz near fwd
+call near fwd
+fwd:
+ret

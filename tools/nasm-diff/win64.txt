@@ -137,3 +137,18 @@ f:      ret
 === extern: dd foo+4 wrt ..imagebase
         extern  foo
         dd foo+4 wrt ..imagebase
+=== section alignment against an align directive
+        section .a align=4
+        db      1
+        align   16
+        db      2
+        section .b rdata align=2
+        db      3
+        section .a align=4
+        db      4
+        section .b
+        db      5
+        section .c code align=1
+        ret
+        section .c align=8
+        ret

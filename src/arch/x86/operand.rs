@@ -212,6 +212,9 @@ pub struct OperandParser<'c, 'a> {
     pub syntax: Syntax,
     /// Address size in bytes implied by the current mode.
     pub addr_size: u8,
+    /// The instruction has a relative form, so `short` and `near` name a
+    /// displacement width here rather than being names of their own.
+    pub relative: bool,
 }
 
 impl OperandParser<'_, '_> {
@@ -614,6 +617,33 @@ impl OperandParser<'_, '_> {
             }
         }
 
+        // NASM names a branch's width in front of the target instead, with
+        // `short` for the one-byte displacement and `near` for the mode's
+        // full-width one. Both are the width of the displacement, so they
+        // land in the same field a size keyword would, and `near` is the
+        // width that gets written rather than the width of the row: two
+        // bytes in 16-bit code.
+        if size_hint.is_none()
+            && self.relative
+            && self.cx.dialect == crate::lexer::Dialect::Nasm
+            && let TokKind::Ident(n) = cur.peek().kind
+        {
+            let text = self.cx.interner.get(n).to_ascii_lowercase();
+            let width = match text.as_str() {
+                "short" => Some(1),
+                "near" => Some(if self.cx.state.bits == 16 { 2 } else { 4 }),
+                _ => None,
+            };
+            let next = cur.nth(1);
+            if let Some(w) = width
+                && !next.is_eol()
+                && !next.is_punct(Punct::Comma)
+            {
+                cur.advance();
+                size_hint = Some(w);
+            }
+        }
+
         // A bare register.
         if let TokKind::Ident(n) = cur.peek().kind {
             let text = self.cx.interner.get(n).to_ascii_lowercase();
@@ -709,6 +739,25 @@ impl OperandParser<'_, '_> {
         })
     }
 
+    /// Reads a `rel` or `abs` inside a memory operand, which says whether an
+    /// address with no register is RIP-relative whatever `default rel` asked
+    /// for. Anything else is left where it is.
+    fn rip_keyword(&mut self, cur: &mut Cursor<'_>, m: &mut Mem, force_abs: &mut bool) {
+        if let TokKind::Ident(n) = cur.peek().kind {
+            match self.cx.interner.get(n).to_ascii_lowercase().as_str() {
+                "rel" => {
+                    cur.advance();
+                    m.rip_relative = true;
+                }
+                "abs" => {
+                    cur.advance();
+                    *force_abs = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// `[ base + index*scale + disp ]`, in any order.
     fn intel_memory(&mut self, cur: &mut Cursor<'_>, start: Span) -> Option<Mem> {
         let open = cur.peek();
@@ -724,19 +773,7 @@ impl OperandParser<'_, '_> {
         // `[rel x]` forces a RIP-relative reference, `[abs x]` an absolute one,
         // overriding `default rel`.
         let mut force_abs = false;
-        if let TokKind::Ident(n) = cur.peek().kind {
-            match self.cx.interner.get(n).to_ascii_lowercase().as_str() {
-                "rel" => {
-                    cur.advance();
-                    m.rip_relative = true;
-                }
-                "abs" => {
-                    cur.advance();
-                    force_abs = true;
-                }
-                _ => {}
-            }
-        }
+        self.rip_keyword(cur, &mut m, &mut force_abs);
 
         // A segment override written inside the brackets, `[es:eax]`, the way
         // NASM spells it.
@@ -751,6 +788,12 @@ impl OperandParser<'_, '_> {
                 cur.advance();
                 m.seg = Some(r);
             }
+        }
+
+        // NASM takes the keyword on either side of a segment override, so
+        // `[ss:rel x]` reads as `[rel ss:x]` does.
+        if !m.rip_relative && !force_abs {
+            self.rip_keyword(cur, &mut m, &mut force_abs);
         }
 
         // Terms are accumulated into a displacement expression as they are

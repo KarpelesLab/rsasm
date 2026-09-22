@@ -159,6 +159,11 @@ pub(crate) struct State {
     pub org: Option<(u64, Span)>,
     /// Sections whose `align=` was given explicitly.
     pub explicit_align: HashSet<SectionId>,
+    /// Sections a `section` directive named in an ELF object, which NASM
+    /// writes out whether or not anything went into them. A COFF object
+    /// reads the same thing off `Assembler::coff`, whose entry a named
+    /// section gets anyway for its characteristics.
+    pub opened: HashSet<SectionId>,
     /// Nesting of expansions, for the recursion limit.
     pub depth: u32,
 }

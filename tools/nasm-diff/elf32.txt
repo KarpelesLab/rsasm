@@ -73,3 +73,20 @@ r:      istruc rec
         at rec.b, dd 2
         iend
         dd      rec_size
+=== branch widths and segment overrides
+        extern unused
+        global f
+        section .text
+f:
+target:
+        mov     eax, [ds:ebx]
+        mov     eax, [ss:ebp+1]
+        mov     eax, [ss:esi*5]
+        jmp     short target
+        jz      near target
+        push    word 0x20
+        push    dword 0x12345678
+        ret
+        section .rodata
+        section .data
+        db      1

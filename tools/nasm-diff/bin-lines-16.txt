@@ -88,3 +88,14 @@ lodsb
 xlatb
 lahf
 sahf
+jmp short $
+jmp near $
+jz short $
+jz near $
+call near $
+push word 0x1234
+push dword 0x12345678
+push dword 0x20
+mov ax, [ds:bx]
+mov ax, [ss:bp]
+mov ax, [cs:si]

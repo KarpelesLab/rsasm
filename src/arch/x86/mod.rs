@@ -518,9 +518,16 @@ fn assemble_inner(
         return None;
     }
 
-    // Parse the operand list.
+    // Parse the operand list. `short` and `near` are only read as the width
+    // of a displacement, so they are offered to the parser for an instruction
+    // that has a relative form and are an unknown name anywhere else, as they
+    // are to NASM.
     let cur = req.cursor();
     let pieces = cur.split_commas();
+    let relative = resolved
+        .defs
+        .iter()
+        .any(|d| d.ops.first().is_some_and(|o| matches!(o, Op::Rel(_))));
     let mut ops: Vec<Operand> = Vec::with_capacity(pieces.len());
     for piece in &pieces {
         if piece.is_empty() {
@@ -532,6 +539,7 @@ fn assemble_inner(
             cx,
             syntax,
             addr_size: if bits == 64 { 8 } else { bits / 8 },
+            relative,
         };
         let o = p.parse(&mut pc)?;
         if !pc.at_end() && !pc.is_empty() {
@@ -759,11 +767,14 @@ fn assemble_inner(
     // An instruction with only immediates is the mode's size when it has a
     // form of that size, and an immediate that does not fit that is not a
     // reason to pick another one: `push $0xffffffff` in 64-bit code is an
-    // error, not a `pushw`, and so is `lret $0x10000` in 32-bit code.
+    // error, not a `pushw`, and so is `lret $0x10000` in 32-bit code. A size
+    // keyword names the size outright, so there is no guess left to report.
     let default_size = default_operand_size(bits, gcc16, stack);
     if resolved.opsize.is_none()
         && !ops.is_empty()
-        && ops.iter().all(|o| matches!(o.kind, OperandKind::Imm(_)))
+        && ops
+            .iter()
+            .all(|o| matches!(o.kind, OperandKind::Imm(_)) && o.size_hint.is_none())
         && matches[0].opsize != default_size
         && matches[0].opsize != 0
         && resolved
@@ -796,6 +807,39 @@ fn assemble_inner(
             .collect();
         v.sort_by_key(|d| d.ops[0].width());
         v.dedup_by_key(|d| d.ops[0].width());
+        // `short`, `near` and a size keyword pin the displacement instead,
+        // leaving the layout pass nothing to choose; a width the instruction
+        // has no form for is an error rather than the next size up, since the
+        // source asked for that one. The wide row writes the operand size
+        // rather than its own four bytes, so in 16-bit code it is the
+        // two-byte form `near` and `word` both name.
+        if let Some(w) = ops[0].size_hint {
+            let written = |d: &Def| {
+                let w = d.ops[0].width();
+                if w == 4 && bits == 16 && d.opsize == 0 {
+                    2
+                } else {
+                    w
+                }
+            };
+            if v.len() == 1 && written(v[0]) == 1 {
+                cx.error(
+                    req.span,
+                    format!(
+                        "`{mnemonic}` has one branch form only, so it takes neither `short` nor `near`"
+                    ),
+                );
+                return None;
+            }
+            if !v.iter().any(|d| written(d) == w) {
+                cx.error(
+                    req.span,
+                    format!("no form of `{mnemonic}` has a {w}-byte branch displacement"),
+                );
+                return None;
+            }
+            v.retain(|d| written(d) == w);
+        }
         v
     } else {
         vec![matches[0]]
@@ -1164,7 +1208,43 @@ fn select<'d>(
             }
         }
     }
-    out
+    prefer_imm_size(out, ops)
+}
+
+/// Narrows a match list to the operation size a size keyword on an immediate
+/// asked for.
+///
+/// NASM reads `dword` before an immediate as the size of the operation rather
+/// than the width of the field, so `push dword 0x20` in 16-bit code is the
+/// one-byte-immediate form under an operand-size prefix, `66 6a 20`. That
+/// reading only holds where the field follows the operation: `ret` counts its
+/// bytes in sixteen bits whatever the mode, so `ret word 4` names that field
+/// and leaves the operand size alone. A keyword whose size no remaining row
+/// has is left alone too, as `mov rax, dword 1` is.
+fn prefer_imm_size<'d>(matches: Vec<&'d Def>, ops: &[Operand]) -> Vec<&'d Def> {
+    let Some(hint) = ops.iter().find_map(|o| match o.kind {
+        OperandKind::Imm(_) => o.size_hint,
+        _ => None,
+    }) else {
+        return matches;
+    };
+    let imm_width = |d: &Def| {
+        d.ops
+            .iter()
+            .find(|o| matches!(o, Op::Imm(_) | Op::Imm8s))
+            .map(|o| o.width())
+    };
+    let want = u16::from(hint) * 8;
+    if matches
+        .iter()
+        .all(|d| imm_width(d) == imm_width(matches[0]))
+        || !matches.iter().any(|d| u16::from(d.opsize) == want)
+    {
+        return matches;
+    }
+    let mut matches = matches;
+    matches.retain(|d| u16::from(d.opsize) == want);
+    matches
 }
 
 /// True when every operand is a register and all of them are the accumulator.

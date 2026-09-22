@@ -964,7 +964,8 @@ impl Assembler {
     }
 
     /// Gives each section a base address. Relocatable output leaves them all
-    /// at zero; absolute output lays them out end to end.
+    /// at zero; absolute output lays them out end to end, with the ones that
+    /// occupy no file space last in NASM source.
     fn assign_addresses(&mut self) {
         if self.options.relocatable {
             for s in &mut self.sections {
@@ -972,11 +973,33 @@ impl Assembler {
             }
             return;
         }
+        // NASM's flat output lays the sections that occupy file space out
+        // first, in the order the source named them, and puts the ones that
+        // allocate without writing after them, so that no `.bss` leaves a
+        // hole in the image.
+        let nasm = self.options.dialect == crate::lexer::Dialect::Nasm;
+        let order: Vec<usize> = if nasm {
+            let nobits = |i: &usize| self.sections[*i].kind == SectionKind::Nobits;
+            (0..self.sections.len())
+                .filter(|i| !nobits(i))
+                .chain((0..self.sections.len()).filter(nobits))
+                .collect()
+        } else {
+            (0..self.sections.len()).collect()
+        };
         let mut addr = self.options.base_addr;
-        for s in &mut self.sections {
+        for i in order {
+            let s = &mut self.sections[i];
             // An empty section is not aligned: a linker drops it from the
-            // image, alignment and all, rather than pad for nothing.
-            let align = if s.size == 0 { 1 } else { s.align.max(1) };
+            // image, alignment and all, rather than pad for nothing. NASM
+            // aligns it all the same, and what follows starts after the hole,
+            // so a `section .data align=8` with nothing in it still moves the
+            // next section along.
+            let align = if s.size == 0 && !nasm {
+                1
+            } else {
+                s.align.max(1)
+            };
             addr = match s.origin {
                 Some(origin) => origin,
                 None => addr.next_multiple_of(align),

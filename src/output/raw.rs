@@ -39,11 +39,17 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     }
 
     let lo = chosen.iter().map(|s| s.addr).min().expect("non-empty");
-    let hi = chosen
+    // A section that allocates no file space ends nothing: `objcopy -O
+    // binary` and NASM's own flat output both stop at the last byte something
+    // wrote, rather than padding the image out over a `.bss` that follows.
+    let Some(hi) = chosen
         .iter()
+        .filter(|s| s.kind != SectionKind::Nobits)
         .map(|s| s.addr + s.size)
         .max()
-        .expect("non-empty");
+    else {
+        return Ok(Vec::new());
+    };
     let mut out = vec![0u8; (hi - lo) as usize];
     for s in &chosen {
         if s.kind == SectionKind::Nobits {
