@@ -243,6 +243,11 @@ impl Architecture for Msp430 {
         &["__crt0_init_bss"]
     }
 
+    /// GNU as for MSP430 aligns nothing in `.bss` by its size.
+    fn local_common(&self) -> crate::arch::LocalCommon {
+        crate::arch::LocalCommon::PACKED
+    }
+
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(self.isa, size, pcrel)
     }

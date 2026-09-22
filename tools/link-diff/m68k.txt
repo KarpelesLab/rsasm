@@ -119,3 +119,29 @@ reader:
         move.l  #bigger, %d0
         move.l  shared, %d1
         rts
+
+=== common blocks aligned by their size, and objects reserved in .bss
+--- a.s
+        .comm   odd3, 3
+        .comm   grows, 5
+        .lcomm  lone1, 1
+        .lcomm  lone6, 6
+        .lcomm  lone9, 9
+        .data
+        .long   odd3, grows, lone1, lone6, lone9
+        .text
+        .globl  _start
+_start:
+        rts
+--- b.s
+        .comm   odd3, 3
+        .comm   grows, 24
+        .local  loc2
+        .comm   loc2, 2, 8
+        .lcomm  ltwo, 2
+        .data
+        .long   grows, loc2, ltwo
+        .text
+        .globl  reader
+reader:
+        rts

@@ -388,34 +388,6 @@ impl Assembler {
         }
     }
 
-    /// `.lcomm name, size[, align]`: an uninitialized object in `.bss`,
-    /// which is where COFF keeps one, since it has no local common blocks.
-    pub(crate) fn coff_lcomm(
-        &mut self,
-        name: crate::intern::Name,
-        nspan: Span,
-        size: u64,
-        align: u64,
-        span: Span,
-    ) {
-        let bss = self.standard_section(".bss");
-        let saved = self.cur;
-        self.set_section(bss);
-        self.align_to(align, span);
-        self.define_label(&crate::parser::LabelDef::Named(name, nspan));
-        let size = self.exprs.int(size, span);
-        let fill = self.exprs.int(0, span);
-        self.cur_section().push(crate::section::Fragment::new(
-            crate::section::FragKind::Space {
-                size,
-                fill,
-                resolved: 0,
-            },
-            span,
-        ));
-        self.set_section(saved);
-    }
-
     /// Translates one relocation from the backend's ELF numbering into
     /// COFF's, and moves its addend into the field it relocates, which is
     /// where COFF keeps one. Returns false after reporting that COFF has no

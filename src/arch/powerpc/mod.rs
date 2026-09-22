@@ -116,6 +116,17 @@ impl Architecture for PowerPc {
         true
     }
 
+    /// `ppc_elf_lcomm`: an alignment of 8 unless the third operand gives
+    /// another, and no symbol type. llvm-mc reads the operand too, but packs
+    /// `.bss` without one and types the symbol `STT_OBJECT`.
+    fn local_common(&self) -> crate::arch::LocalCommon {
+        crate::arch::LocalCommon {
+            align: |_| 8,
+            takes_align: true,
+            ty: crate::symbol::SymType::NoType,
+        }
+    }
+
     /// llvm-mc, the reference, aligns `.text` to 4 bytes; GNU as leaves it
     /// at 1.
     fn section_align(

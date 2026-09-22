@@ -325,12 +325,11 @@ form by form and in random whole programs as well.
 Anything that produces incorrect output rather than an error is listed here,
 separately:
 
-- `.lcomm`, and `.comm` of a symbol declared `.local`, write a local common
-  symbol rather than allocating the space in `.bss` as both references do.
+- Nothing is known to be, at the moment.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
-backend. Four such choices are worth knowing about:
+backend. Five such choices are worth knowing about:
 
 - **Which references are left to the linker.** A PC-relative reference to a
   global or weak symbol is relocated even when the symbol is in the same
@@ -368,6 +367,24 @@ backend. Four such choices are worth knowing about:
   counts. RISC-V's `.riscv.attributes` is the same in both.
   `tools/mc-diff` leaves `.ARM.attributes` out of its comparison for that
   reason, and `tools/xas-diff` compares it.
+- **Common blocks, and symbols only a directive names.** On every ELF
+  target GNU as is followed, since it is the assembler a GNU toolchain runs
+  and aligning less than it does can misalign what the linker places. A
+  `.comm` or `.tls_common` that names no alignment (or 0) is aligned to its
+  size rounded up to a power of two, at most 16, where llvm-mc aligns it to
+  1. `.lcomm`, and a `.comm` of a symbol `.local` named first, reserve the
+  object in `.bss`, as both references do; `.lcomm` aligns it to 8, 4 or 2 by
+  its size (to 8 whatever the size on PowerPC, and not at all on AVR and
+  MSP430), where llvm-mc packs `.bss`. A name only `.type`, `.size`,
+  `.globl`, `.local` or a visibility mentions is written as a global
+  undefined symbol, and one only `.weak` mentions is left out, even after a
+  `.globl`, which leaves it weak; llvm-mc keeps the weak one, leaves out the
+  one only `.size` names, makes the `.local` one local, and refuses `.globl`
+  after `.weak`. The NASM dialect keeps an `extern` nothing refers to out of
+  the object, as NASM does. Mach-O and COFF objects follow llvm-mc here,
+  as they do elsewhere: a common block's alignment is Darwin's power of two
+  in the one and makes the block larger in the other, and `.lcomm` packs
+  `.bss` in both, where the mingw GNU as aligns by size as on ELF.
 - **m68k floating-point immediates.** Both references write a single or
   double precision `#1.5` the same way. An extended-precision one GNU as 2.47
   writes without the 16 zero bits of the 68881 format — its own `.extend`

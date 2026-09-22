@@ -276,3 +276,68 @@ towned: .long 4
     .data
 local:
     .long 0
+
+# GNU as aligns a common block that names no alignment, or 0, to its size
+# rounded up to a power of two, at most 16, on every ELF target; llvm-mc
+# aligns it to 1.
+=== common blocks that name no alignment, by size
+        .comm   c0, 0
+        .comm   c1, 1
+        .comm   c2, 2
+        .comm   c3, 3
+        .comm   c5, 5
+        .comm   c8, 8
+        .comm   c9, 9
+        .comm   c16, 16
+        .comm   c17, 17
+        .comm   c100, 100
+        .comm   czero, 12, 0
+        .comm   codd, 8, 3
+        .tls_common tc3, 3
+        .tls_common tc40, 40
+
+# Both references reserve these in `.bss`. GNU as aligns what `.lcomm`
+# reserves by its size, and a `.comm` of a `.local` symbol only as asked;
+# llvm-mc packs both. A `.local` after the `.comm` changes nothing.
+=== objects .lcomm and a .local .comm reserve in .bss
+        .lcomm  l1, 1
+        .lcomm  l4, 4
+        .lcomm  l3, 3
+        .lcomm  l17, 17
+        .lcomm  l2, 2
+        .lcomm  l0, 0
+        .lcomm  l5, 5
+        .local  b1, b9, b2
+        .comm   b1, 1
+        .comm   b9, 9
+        .comm   b2, 2, 32
+        .comm   late, 4
+        .local  late
+        .data
+        .long   l1, l4, l3, l17, l2, l0, l5, b1, b9, b2, late
+
+# GNU as writes a name only `.type`, `.size`, `.globl`, `.local` or a
+# visibility mentions as a global undefined symbol, and leaves out one
+# `.weak` names, which stays weak after `.globl`. llvm-mc keeps the weak
+# one, leaves the sized one out, makes the `.local` one local, and
+# refuses `.globl` after `.weak`.
+=== symbols only a directive names
+        .type   tfunc, %function
+        .type   tobj, %object
+        .size   sized, 4
+        .hidden hid
+        .protected prot
+        .internal intl
+        .globl  gonly
+        .weak   wonly
+        .local  lonly
+        .weak   wglob
+        .globl  wglob
+        .weak   wtyped
+        .type   wtyped, %function
+        .weak   wref, wdef
+        .globl  wref, wdef
+        .type   .Ltyped, %function
+        .hidden .Lhid
+        .data
+wdef:   .long   wref

@@ -157,6 +157,11 @@ impl Architecture for Avr {
         reloc::data(size, pcrel)
     }
 
+    /// GNU as for AVR aligns nothing in `.bss` by its size.
+    fn local_common(&self) -> crate::arch::LocalCommon {
+        crate::arch::LocalCommon::PACKED
+    }
+
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
         reloc::modifier(name, size, pcrel)
     }

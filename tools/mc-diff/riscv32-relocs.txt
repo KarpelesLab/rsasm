@@ -227,3 +227,25 @@ f:      nop
 === .attribute names the ISA string
         .attribute arch, "rv32i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0_zcd1p0_zcf1p0"
 f:      nop
+
+# rsasm follows GNU as for common blocks, and so parts from llvm-mc on
+# what these leave out: a `.comm` that names no alignment, which GNU as
+# aligns by its size and llvm-mc to 1; what `.lcomm` reserves, which
+# llvm-mc packs; and a symbol only `.size`, `.local` or `.weak` names (see
+# the x86 corpora in tools/gas-diff, and tests/output.rs).
+=== a .local .comm with its alignment, reserved in .bss
+        .local  b8, b4
+        .comm   b8, 8, 8
+        .comm   b4, 3, 4
+        .data
+        .word   b8, b4
+
+=== symbols only a directive names, where the references agree
+        .type   tfunc, %function
+        .type   tobj, %object
+        .hidden hid
+        .protected prot
+        .internal intl
+        .globl  gonly
+        .type   .Ltyped, %function
+        .hidden .Lhid

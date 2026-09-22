@@ -77,6 +77,13 @@ pub struct Symbol {
     /// Bits the backend recorded on the label as it was defined; see
     /// [`crate::arch::Architecture::label_flags`].
     pub target_flags: u8,
+    /// Named by a directive that describes the symbol's entry — `.globl`,
+    /// `.local`, `.type`, `.size` or a visibility — which is enough for GNU
+    /// as to write an undefined one; see `collect_symbols` in the ELF writer.
+    pub(crate) declared: bool,
+    /// Named by `.local` before anything defined it, which makes a later
+    /// `.comm` reserve the block in `.bss` rather than leave it common.
+    pub(crate) declared_local: bool,
 }
 
 impl Symbol {
@@ -162,6 +169,8 @@ impl SymbolTable {
             used: false,
             def_order: 0,
             target_flags: 0,
+            declared: false,
+            declared_local: false,
         });
         self.by_name.insert(name, id);
         id
@@ -188,6 +197,8 @@ impl SymbolTable {
             used: true,
             def_order: 0,
             target_flags: 0,
+            declared: false,
+            declared_local: false,
         })
     }
 
@@ -262,6 +273,8 @@ impl SymbolTable {
             used: false,
             def_order: 0,
             target_flags: 0,
+            declared: false,
+            declared_local: false,
         });
         let slots = self.locals.entry(n).or_default();
         debug_assert_eq!(
