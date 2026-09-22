@@ -68,7 +68,8 @@ class Target:
                  mc_flags=(), rsasm_flags=(), head=(), tail=(),
                  progbits="@progbits", section=True, objdump=None,
                  objdump_flags=(), addr_bits=None, word_maker=None,
-                 word_size=4, little=False):
+                 word_size=4, little=False, slot=0, objcopy=None,
+                 rewrite=None):
         self.key = key
         self.arch = arch
         self.objdump = objdump
@@ -77,6 +78,17 @@ class Target:
         self.word_maker = word_maker
         self.word_size = word_size
         self.little = little
+        # A 16-bit target has no ELF class, so rsasm writes it as a flat
+        # image (`-f bin`). `slot` is how many bytes each case is given in
+        # that image, which is what takes the place of a section per case;
+        # `objcopy` turns the reference's object into the same thing.
+        self.slot = slot
+        self.objcopy = oracle(objcopy) if objcopy else None
+        # Some targets' disassembly does not read back as itself: V850's
+        # objdump prints a branch target as an address where its assembler
+        # reads a displacement. `rewrite(text, offset)` puts such a line back
+        # into the form the assembler takes, and is the target's own business.
+        self.rewrite = rewrite
         self.gas = oracle(gas) if gas else None
         self.gas_flags = list(gas_flags)
         self.mc = mc
@@ -236,16 +248,26 @@ def build_source(target, cases, skip):
     """The source for a batch, and which case each line belongs to."""
     lines = list(target.head)
     owner = {}
+    n = 0
     for i, (_m, text) in cases:
         if i in skip:
             continue
-        if target.section:
+        if target.slot:
+            # One fixed-width slot per case in a flat image, which is what a
+            # 16-bit target has instead of a section each. Only the cases
+            # that are still in take a slot, so the slices line up with what
+            # `assemble` hands back.
+            lines.append(f"\t.org {n * target.slot}")
+            n += 1
+        elif target.section:
             lines.append(f'\t.section .t{i},"ax",{target.progbits}')
         for statement in text.split("\n"):
             owner[len(lines) + 1] = i
             lines.append("\t" + re.sub(r"\bL\b", f"L{i}", statement))
         lines.append(f"L{i}:")
         lines += target.tail
+    if target.slot:
+        lines.append(f"\t.org {n * target.slot}")
     return "\n".join(lines) + "\n", owner
 
 
@@ -255,6 +277,9 @@ def argv(tool, target, src, obj):
     if tool == "mc":
         return [LLVM_MC, f"-triple={target.mc}", *target.mc_flags,
                 "-filetype=obj", "-o", obj, src]
+    if target.slot:
+        return [RSASM, "-a", target.arch, "-f", "bin", *target.rsasm_flags,
+                "-o", obj, src]
     return [RSASM, "-a", target.arch, *target.rsasm_flags, "-o", obj, src]
 
 
@@ -290,6 +315,14 @@ def assemble(tool, target, cases, workdir):
             out.update(assemble(tool, target, live[mid:], workdir))
             return out
         if ok:
+            if target.slot:
+                image = flat_image(tool, target, obj, workdir)
+                live = [i for i, _ in cases if i not in rejected]
+                out = {i: ("err", rejected[i]) for i in rejected}
+                for n, i in enumerate(live):
+                    out[i] = ("ok", (image[2 * n * target.slot:
+                                           2 * (n + 1) * target.slot], ()))
+                return out
             secs = read_elf(obj)
             return {i: ("err", rejected[i]) if i in rejected
                     else ("ok", secs.get(f".t{i}", ("", ())))
@@ -598,8 +631,13 @@ def disassembled_cases(rng, target, count, chunk=4096):
                 if len(cases) >= count:
                     break
                 mnem = text.split()[0]
-                head = f".skip {off}\n" if off else ""
-                cases.append((mnem, head + signed_addresses(text, target.addr_bits)))
+                text = signed_addresses(text, target.addr_bits)
+                if target.rewrite:
+                    text = target.rewrite(text, off)
+                    if text is None:
+                        continue
+                head = "" if target.slot else (f".skip {off}\n" if off else "")
+                cases.append((mnem, head + text))
     return cases
 
 
@@ -640,3 +678,140 @@ def random_blob(rng, target, size):
     n = target.word_size
     return b"".join(target.word_maker(rng).to_bytes(n, order)
                     for _ in range(size // n))
+
+
+def flat_image(tool, target, obj, workdir):
+    """The flat image a slot-per-case batch produced, as hex.
+
+    rsasm wrote one directly (`-f bin`); the reference wrote an object, so
+    its code section is extracted with the matching objcopy. Padding between
+    slots is zero in both, which is what makes the slices comparable.
+    """
+    if tool == "rsasm":
+        return open(obj, "rb").read().hex()
+    out = os.path.join(workdir, "ref.bin")
+    subprocess.run([target.objcopy, "-O", "binary", obj, out],
+                   capture_output=True, text=True, timeout=120)
+    try:
+        return open(out, "rb").read().hex()
+    except OSError:
+        return ""
+
+
+def disasm_main(name, targets, rules, skip=None, default=None, count=12000,
+                limit=40, over=3):
+    """The command line the disassembly-sourced fuzzers share.
+
+    `skip` says which cases to leave out -- what the backend does not claim,
+    which each fuzzer lists for itself -- and `over` how many cases to
+    disassemble for each one kept, since skipping eats into the count.
+    """
+    import argparse
+    import random
+
+    ap = argparse.ArgumentParser(description=f"differential fuzzer for {name}")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    default = default or next(iter(targets))
+    c = sub.add_parser("check", help="compare instructions given one per line")
+    c.add_argument("--target", default=default, choices=list(targets))
+    c.add_argument("file")
+    c.add_argument("--limit", type=int, default=100)
+    z = sub.add_parser("fuzz", help="disassemble random words and compare")
+    add_fuzz_args(z, count, limit)
+    z.add_argument("--target", default="all", choices=list(targets) + ["all"])
+    args = ap.parse_args()
+
+    chosen = [targets[args.target]] if getattr(args, "target", "all") != "all" \
+        else list(targets.values())
+    for t in chosen:
+        bad = t.missing()
+        if bad:
+            raise SystemExit(bad)
+
+    if args.cmd == "check":
+        cases = [(line.split()[0], line.strip()) for line in open(args.file)
+                 if line.strip() and not line.startswith("#")]
+        return report(name, compare(targets[args.target], cases, rules), args.limit)
+
+    rng = random.Random(args.seed)
+    jobs = []
+    per = max(1, args.count // len(chosen))
+    for t in chosen:
+        cases = [c for c in disassembled_cases(rng, t, per * over)
+                 if (skip is None or not skip(c))
+                 and (not args.only or re.search(args.only, c[0]))]
+        jobs.append((t, cases[:per]))
+    if args.print_cases:
+        for t, cases in jobs:
+            for _m, text in cases:
+                print(f"[{t.key}] " + text.replace("\n", " ; "))
+        return 0
+    return drive(name, jobs, rules, args.limit, args.batch, args.no_splits)
+
+
+def resolves_a_numeric_target(text, res, target):
+    """A branch or call whose target is written as a number.
+
+    GNU as leaves it to the linker on several targets -- a relocation
+    against the absolute section, with the whole value as the addend and the
+    field left as written -- where rsasm works the displacement out itself.
+    The instruction is the same either way: the linker computes `S + A` with
+    `S` zero, which is the value rsasm already put in, so a linked image is
+    identical. Only the object differs, and only in carrying a relocation
+    that resolves to what is already there.
+
+    Recognised as: the same bytes, every relocation GNU as wrote against
+    `*ABS*`, and none from rsasm.
+    """
+    g, r = res.get("gas"), res.get("rsasm")
+    if not g or g[0] != "ok" or r[0] != "ok" or g[1][0] != r[1][0]:
+        return False
+    return bool(g[1][1]) and not r[1][1] and all(w == "*ABS*" for _o, _t, w, _a in g[1][1])
+
+
+def fills_in_a_relocated_field(text, res, target):
+    """The same relocations, and a field one of them is about to overwrite.
+
+    GNU as computes an absolute target and writes it into the instruction
+    *as well as* emitting the relocation for it; rsasm leaves the field
+    zero. With RELA the addend is what the linker uses and the field's old
+    contents are thrown away, so the two objects link to the same image --
+    checked by linking a differing case with the target's own `ld` and
+    comparing the result byte for byte.
+
+    Recognised as: both accepted, the same relocations with addends, the
+    same length, and every bit rsasm set also set by GNU as -- that is,
+    rsasm's bytes are GNU as's with the relocated bits cleared, and nothing
+    else differs.
+    """
+    g, r = res.get("gas"), res.get("rsasm")
+    if not g or g[0] != "ok" or r[0] != "ok":
+        return False
+    if (not g[1][1] or g[1][1] != r[1][1] or len(g[1][0]) != len(r[1][0])
+            or any(a is None for _o, _t, _w, a in g[1][1])):
+        return False
+    gb, rb = bytes.fromhex(g[1][0]), bytes.fromhex(r[1][0])
+    return all(rv & ~gv == 0 for gv, rv in zip(gb, rb))
+
+
+def relocates_an_absolute_target(text, res, target):
+    """A branch whose target is written as an absolute address.
+
+    GNU as works the displacement out as if the section were loaded at zero
+    and emits nothing for the linker. rsasm keeps the relocation, because
+    where the section ends up is the linker's business -- and on a target
+    with branch relaxation that means it must also take the long form, since
+    it cannot yet know the displacement is short.
+
+    Both branch to the same address once linked at zero, which was checked
+    by linking a differing case with the target's own `ld` and reading the
+    image; rsasm's is the one that still works if the section moves.
+
+    Recognised as: both accepted, GNU as wrote no relocation, and every
+    relocation rsasm wrote is against the absolute section.
+    """
+    g, r = res.get("gas"), res.get("rsasm")
+    if not g or g[0] != "ok" or r[0] != "ok":
+        return False
+    return (not g[1][1] and bool(r[1][1])
+            and all(w == "*ABS*" for _o, _t, w, _a in r[1][1]))
