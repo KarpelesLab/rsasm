@@ -454,3 +454,223 @@ fn an_i386_got_load_takes_got32x_only_where_it_is_relaxable() {
     let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
     assert_eq!(kinds, vec![43, 43, 3]);
 }
+
+/// Symbols as (name, st_info, st_shndx, st_value, st_size), from an ELF64
+/// object's `.symtab`.
+fn symbols_of(b: &[u8]) -> Vec<(String, u8, u16, u64, u64)> {
+    let shoff = u64at(b, 0x28) as usize;
+    let shnum = u16at(b, 0x3c) as usize;
+    let header = |i: usize| shoff + i * 64;
+    let symtab = (0..shnum)
+        .map(header)
+        .find(|&sh| u32at(b, sh + 4) == 2)
+        .expect("no .symtab");
+    let (off, size) = (
+        u64at(b, symtab + 0x18) as usize,
+        u64at(b, symtab + 0x20) as usize,
+    );
+    let strtab = header(u32at(b, symtab + 0x28) as usize);
+    let str_off = u64at(b, strtab + 0x18) as usize;
+    (0..size / 24)
+        .map(|i| {
+            let s = off + i * 24;
+            let name = str_off + u32at(b, s) as usize;
+            let end = b[name..].iter().position(|&c| c == 0).unwrap() + name;
+            (
+                String::from_utf8_lossy(&b[name..end]).into_owned(),
+                b[s + 4],
+                u16at(b, s + 6),
+                u64at(b, s + 8),
+                u64at(b, s + 16),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_symbol_in_a_thread_local_section_is_thread_local() {
+    // Every expectation is `x86_64-elf-as --64`'s for the same source. GNU as
+    // gives a label in a section with `SHF_TLS` the type `STT_TLS` whatever
+    // `.type` says, before or after the label; its value stays the offset in
+    // its own section, `.tbss` or `.tdata` alike. `.tdata` and `.tbss` are
+    // thread-local by name, or with a suffix after a dot, but `.tdatax` is
+    // not.
+    let b = elf(concat!(
+        ".section .tdata,\"awT\",%progbits\n",
+        ".globl tv\ntv: .word 1\nlocv: .word 2\n",
+        ".type locv, %function\n",
+        ".section .tbss,\"awT\",%nobits\n",
+        ".globl bv\nbv: .space 8\ntb2: .space 4\n",
+        ".section .tdata.foo\nc: .word 1\n",
+        ".section .tdatax\nx: .word 1\n",
+        ".section .mytls,\"awT\",%progbits\n",
+        ".globl a3\n.type a3, %object\na3: .word 1\n.size a3, 2\n",
+        ".set alias, tv\n.globl alias\n",
+        ".text\n.type mysym, %tls_object\nmysym:\n",
+        ".globl f\n.type f, %tls_object\n",
+        ".tls_common tc, 8, 8\n",
+    ));
+    let secs = sections_of(&b);
+    let sec = |n: &str| secs.iter().position(|s| s.0 == n).unwrap() as u16;
+    let kind_and_flags = |n: &str| (secs[sec(n) as usize].1, secs[sec(n) as usize].2);
+    // SHT_PROGBITS = 1, SHT_NOBITS = 8; SHF_WRITE | SHF_ALLOC | SHF_TLS.
+    assert_eq!(kind_and_flags(".tdata"), (1, 0x403));
+    assert_eq!(kind_and_flags(".tbss"), (8, 0x403));
+    assert_eq!(kind_and_flags(".tdata.foo"), (1, 0x403));
+    assert_eq!(kind_and_flags(".tdatax"), (1, 0));
+    assert_eq!(kind_and_flags(".mytls"), (1, 0x403));
+
+    let syms = symbols_of(&b);
+    let sym = |n: &str| {
+        let s = syms
+            .iter()
+            .find(|s| s.0 == n)
+            .unwrap_or_else(|| panic!("no symbol {n}"));
+        (s.1, s.2, s.3, s.4)
+    };
+    const LOCAL_TLS: u8 = 6;
+    const GLOBAL_TLS: u8 = (1 << 4) | 6;
+    assert_eq!(sym("tv"), (GLOBAL_TLS, sec(".tdata"), 0, 0));
+    assert_eq!(sym("locv"), (LOCAL_TLS, sec(".tdata"), 2, 0));
+    assert_eq!(sym("bv"), (GLOBAL_TLS, sec(".tbss"), 0, 0));
+    assert_eq!(sym("tb2"), (LOCAL_TLS, sec(".tbss"), 8, 0));
+    assert_eq!(sym("c"), (LOCAL_TLS, sec(".tdata.foo"), 0, 0));
+    assert_eq!(
+        sym("x"),
+        (0, sec(".tdatax"), 0, 0),
+        "STB_LOCAL | STT_NOTYPE"
+    );
+    assert_eq!(sym("a3"), (GLOBAL_TLS, sec(".mytls"), 0, 2));
+    assert_eq!(sym("alias"), (GLOBAL_TLS, sec(".tdata"), 0, 0));
+    assert_eq!(sym("mysym"), (LOCAL_TLS, sec(".text"), 0, 0));
+    assert_eq!(sym("f"), (GLOBAL_TLS, 0, 0, 0));
+    // SHN_COMMON, with the alignment as the value.
+    assert_eq!(sym("tc"), (GLOBAL_TLS, 0xfff2, 8, 8));
+}
+
+#[test]
+fn x86_64_tls_models_take_their_relocations() {
+    // `x86_64-elf-as --64`: bytes, offsets, types and addends. The
+    // descriptor call's relocation is at the start of the instruction and
+    // covers nothing, so `call *x@TLSCALL(%rax)` is `call *(%rax)`.
+    let src = "leaq x@TLSGD(%rip), %rdi\n\
+               leaq x@TLSLD(%rip), %rdi\n\
+               movq x@GOTTPOFF(%rip), %rax\n\
+               leaq x@DTPOFF(%rax), %rdx\n\
+               movq $x@DTPOFF, %rax\n\
+               movq %fs:0, %rax\n\
+               leaq x@TPOFF(%rax), %rdx\n\
+               movq $x@TPOFF, %rcx\n\
+               leaq x@TLSDESC(%rip), %rax\n\
+               call *x@TLSCALL(%rax)\n";
+    let asm = assemble_for("x86-64", src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&section(&asm, ".text")),
+        hex(&[
+            0x48, 0x8d, 0x3d, 0, 0, 0, 0, 0x48, 0x8d, 0x3d, 0, 0, 0, 0, 0x48, 0x8b, 0x05, 0, 0, 0,
+            0, 0x48, 0x8d, 0x90, 0, 0, 0, 0, 0x48, 0xc7, 0xc0, 0, 0, 0, 0, 0x64, 0x48, 0x8b, 0x04,
+            0x25, 0, 0, 0, 0, 0x48, 0x8d, 0x90, 0, 0, 0, 0, 0x48, 0xc7, 0xc1, 0, 0, 0, 0, 0x48,
+            0x8d, 0x05, 0, 0, 0, 0, 0xff, 0x10,
+        ])
+    );
+    let got: Vec<(u64, u32, i64)> = asm
+        .relocs
+        .iter()
+        .map(|r| (r.offset, r.kind, r.addend))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (0x03, 19, -4), // R_X86_64_TLSGD
+            (0x0a, 20, -4), // R_X86_64_TLSLD
+            (0x11, 22, -4), // R_X86_64_GOTTPOFF
+            (0x18, 21, 0),  // R_X86_64_DTPOFF32
+            (0x1f, 21, 0),
+            (0x2f, 23, 0), // R_X86_64_TPOFF32
+            (0x36, 23, 0),
+            (0x3d, 34, -4), // R_X86_64_GOTPC32_TLSDESC
+            (0x41, 35, 0),  // R_X86_64_TLSDESC_CALL
+        ]
+    );
+
+    // In data, only `@DTPOFF` and `@TPOFF` have an eight-byte form.
+    let asm = assemble_for(
+        "x86-64",
+        ".quad x@DTPOFF\n.long x@DTPOFF\n.quad x@TPOFF\n.long x@TPOFF\n",
+    );
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, vec![17, 21, 18, 23]);
+    assert!(errors_for("x86-64", ".quad x@TLSGD\n").contains("tlsgd"));
+}
+
+#[test]
+fn i386_tls_models_take_their_relocations() {
+    // `x86_64-elf-as --32`, in data, which takes every model the i386 psABI
+    // has, and the descriptor call.
+    let src = ".long x@TLSDESC, x@TLSGD, x@TLSLDM, x@DTPOFF, x@TPOFF\n\
+               .long x@NTPOFF, x@GOTTPOFF, x@GOTNTPOFF, x@INDNTPOFF\n\
+               call *x@TLSCALL(%eax)\n";
+    let asm = assemble_for("i386", src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let got: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (0x00, 39), // R_386_TLS_GOTDESC
+            (0x04, 18), // R_386_TLS_GD
+            (0x08, 19), // R_386_TLS_LDM
+            (0x0c, 32), // R_386_TLS_LDO_32
+            (0x10, 34), // R_386_TLS_LE_32
+            (0x14, 17), // R_386_TLS_LE
+            (0x18, 33), // R_386_TLS_IE_32
+            (0x1c, 16), // R_386_TLS_GOTIE
+            (0x20, 15), // R_386_TLS_IE
+            (0x24, 40), // R_386_TLS_DESC_CALL
+        ]
+    );
+}
+
+#[test]
+fn tls_models_outside_their_instruction_forms_are_refused() {
+    // Each of these is refused by `x86_64-elf-as`: a linker rewrites a TLS
+    // access model by its instructions, so only the forms it knows may be
+    // written, and the offsets are signed 32-bit relocations that fill
+    // neither an unsigned field nor a PC-relative one.
+    for (arch, src) in [
+        ("x86-64", "movq x@TLSGD(%rip), %rax\n"),
+        ("x86-64", "leaq x@TLSGD(%rip), %rax\n"),
+        ("x86-64", "leaq x@TLSLD(%rax), %rdi\n"),
+        ("x86-64", "leal x@TLSDESC(%rip), %edi\n"),
+        ("x86-64", "subq x@GOTTPOFF(%rip), %rax\n"),
+        ("x86-64", "movl x@GOTTPOFF(%rip), %eax\n"),
+        ("x86-64", "call *x@TLSCALL(%rbx)\n"),
+        ("x86-64", "jmp *x@TLSCALL(%rax)\n"),
+        ("x86-64", "movl $x@TPOFF, %eax\n"),
+        ("x86-64", "movl x@TPOFF(%eax), %edx\n"),
+        ("x86-64", "addq x@TPOFF(%rip), %rax\n"),
+        ("x86-64", "movw $x@TPOFF, %ax\n"),
+        ("x86-64", "leaq x@NTPOFF(%rax), %rdx\n"),
+        ("x86-64", ".long x@INDNTPOFF\n"),
+        ("i386", "leal x@TLSGD(%eax), %eax\n"),
+        ("i386", "leal x@TLSGD(,%ebx,2), %eax\n"),
+        ("i386", "leal x@TLSLDM(,%ebx,1), %eax\n"),
+        ("i386", "leal x@TLSDESC(%eax), %ecx\n"),
+        ("i386", "movl x@GOTTPOFF, %eax\n"),
+        ("i386", "movl %eax, x@GOTTPOFF(%ebx)\n"),
+        ("i386", "subl x@INDNTPOFF, %eax\n"),
+        ("i386", "leal x@TLSLD(%ebx), %eax\n"),
+        ("i386", ".long x@TLSCALL\n"),
+    ] {
+        let e = errors_for(arch, src);
+        assert!(e.to_ascii_lowercase().contains("`@"), "{arch}: {src}{e}");
+    }
+}

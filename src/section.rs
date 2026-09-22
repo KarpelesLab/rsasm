@@ -154,7 +154,9 @@ pub enum LinkValue {
 #[derive(Copy, Clone, Debug)]
 #[non_exhaustive]
 pub struct FixupKind {
-    /// Field width in bytes: 1, 2, 4 or 8.
+    /// Field width in bytes: 1, 2, 4 or 8, or 0 for a relocation that marks
+    /// an instruction rather than filling a field in it, as x86's
+    /// `@TLSCALL` does. A zero-width fixup is always left to the linker.
     pub size: u8,
     /// The value is relative to the address of the fixup itself (plus
     /// `adjust`), rather than absolute.
@@ -438,6 +440,13 @@ impl FixupKind {
         let bits = self.bits();
         if bits >= 128 {
             return (i128::MIN, i128::MAX);
+        }
+        // A field of no width holds nothing. Such a fixup exists only to
+        // place a relocation on an instruction — x86's `@TLSCALL` — and is
+        // always left to the linker, so this is reached only if one were
+        // ever asked to carry a value.
+        if bits == 0 {
+            return (0, 0);
         }
         if self.signed {
             (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)

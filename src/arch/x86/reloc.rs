@@ -40,6 +40,15 @@ mod x86_64 {
     pub const GOTPCREL64: u32 = 28;
     pub const GOTPCRELX: u32 = 41;
     pub const REX_GOTPCRELX: u32 = 42;
+    pub const DTPOFF64: u32 = 17;
+    pub const TPOFF64: u32 = 18;
+    pub const TLSGD: u32 = 19;
+    pub const TLSLD: u32 = 20;
+    pub const DTPOFF32: u32 = 21;
+    pub const GOTTPOFF: u32 = 22;
+    pub const TPOFF32: u32 = 23;
+    pub const GOTPC32_TLSDESC: u32 = 34;
+    pub const TLSDESC_CALL: u32 = 35;
 }
 
 mod i386 {
@@ -62,6 +71,8 @@ mod i386 {
     pub const TLS_IE_32: u32 = 33;
     pub const TLS_LE_32: u32 = 34;
     pub const SIZE32: u32 = 38;
+    pub const TLS_GOTDESC: u32 = 39;
+    pub const TLS_DESC_CALL: u32 = 40;
     pub const GOT32X: u32 = 43;
 }
 
@@ -153,9 +164,42 @@ impl Abi {
             "gotntpoff" => i386::TLS_GOTIE,
             "indntpoff" => i386::TLS_IE,
             "gottpoff" => i386::TLS_IE_32,
+            "tlsdesc" => i386::TLS_GOTDESC,
             "size" => i386::SIZE32,
             _ => return None,
         })
+    }
+
+    /// The relocation an x86-64 TLS `@` modifier names. Only `@DTPOFF` and
+    /// `@TPOFF` have a 64-bit form, which GNU as substitutes for the 32-bit
+    /// one in an eight-byte field; the rest are 32-bit only, so `.quad
+    /// foo@TLSGD` is an error there rather than something to widen. The four
+    /// modifiers with no x86-64 relocation at all — `@TLSLDM`, `@NTPOFF`,
+    /// `@GOTNTPOFF` and `@INDNTPOFF` — are i386's alone.
+    pub fn x86_64_tls_modifier(name: &str, size: u8) -> Option<u32> {
+        Some(match (name, size) {
+            ("tlsgd", 4) => x86_64::TLSGD,
+            ("tlsld", 4) => x86_64::TLSLD,
+            ("gottpoff", 4) => x86_64::GOTTPOFF,
+            ("tlsdesc", 4) => x86_64::GOTPC32_TLSDESC,
+            ("dtpoff", 4) => x86_64::DTPOFF32,
+            ("dtpoff", 8) => x86_64::DTPOFF64,
+            ("tpoff", 4) => x86_64::TPOFF32,
+            ("tpoff", 8) => x86_64::TPOFF64,
+            _ => return None,
+        })
+    }
+
+    /// `@TLSCALL`, whose relocation covers no bytes at all: it marks the
+    /// `call` through the TLS descriptor so that a linker resolving the
+    /// variable locally can rewrite the whole sequence. GNU as puts it on the
+    /// first byte of the instruction, which is why the fixup carrying it is
+    /// zero bytes wide.
+    pub fn tlsdesc_call(self) -> u32 {
+        match self {
+            Abi::X86_64 => x86_64::TLSDESC_CALL,
+            Abi::I386 => i386::TLS_DESC_CALL,
+        }
     }
 
     /// `R_386_GOT32X`: a `@GOT` load the linker may turn into a direct one

@@ -210,3 +210,56 @@ third:  ret
         .data
         .globl  shared
 shared: .quad   0x1122334455667788
+
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        # The general-dynamic sequence, with the prefix bytes the linker
+        # matches on: its transition to local-exec reads the instructions,
+        # not just the relocations, and refuses anything else.
+        .byte   0x66
+        leaq    tv@TLSGD(%rip), %rdi
+        .byte   0x66, 0x66, 0x48
+        call    __tls_get_addr@PLT
+        # Local dynamic: one call for the module, then an offset per variable.
+        leaq    tloc@TLSLD(%rip), %rdi
+        call    __tls_get_addr@PLT
+        leaq    tloc@DTPOFF(%rax), %rdx
+        leaq    tv2@DTPOFF(%rax), %rcx
+        # Initial exec, then local exec.
+        movq    %fs:0, %rax
+        addq    tv2@GOTTPOFF(%rip), %rax
+        movq    %fs:0, %rdx
+        leaq    tv3@TPOFF(%rdx), %rcx
+        leaq    tloc@TPOFF(%rdx), %rsi
+        leaq    tb@TPOFF(%rdx), %rdi
+        movq    $tv@TPOFF, %r8
+        # A TLS descriptor, whose `@TLSCALL` relocation covers no bytes.
+        leaq    tv3@TLSDESC(%rip), %rax
+        call    *tv3@TLSCALL(%rax)
+        movq    %fs:0, %rdx
+        addq    %rax, %rdx
+        ret
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .quad   0x1122334455667788
+tloc:   .quad   99
+--- b.s
+        .section .tdata,"awT",%progbits
+        .globl  tv2, tv3
+tv2:    .quad   2
+tv3:    .quad   3
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  helper
+helper: movq    %fs:0, %rax
+        leaq    tb@TPOFF(%rax), %rdx
+        leaq    tv@TPOFF(%rax), %rcx
+        ret
+        .data
+        .long   tv@DTPOFF
+        .quad   tv@TPOFF

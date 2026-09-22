@@ -45,6 +45,16 @@
 #   PowerPC one refuses `bl foo@plt` and the `@higher` and `@highest` halves
 #   rather than guessing at them; those sources are not in the corpora
 #   because rsasm does not assemble them at all.
+# * The thread-local storage models are in the x86-64 and i386 rows, where
+#   the linker turns each of them into local exec: `@TLSGD`, `@TLSLD` and
+#   `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the
+#   descriptor pair `@TLSDESC`/`@TLSCALL`. The other backends' families are
+#   absent for the same reason as their GOT and PLT modifiers: the operands
+#   do not parse there. The ARM backend has no `sym(TLSGD)` and its
+#   relatives, the AArch64 one no `:tprel_g0:` and its, and the PowerPC one
+#   refuses `@tprel`, `@dtprel` and `@got@tls*`. What no longer stands in
+#   their way is the symbol type: a symbol defined in a section with
+#   `SHF_TLS` is `STT_TLS` on every target.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot

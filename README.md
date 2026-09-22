@@ -104,6 +104,14 @@ form by form and in random whole programs as well.
   of the instruction forms a linker may rewrite into a direct reference takes
   the relaxable relocation GNU as gives it — `R_386_GOT32X`, or
   `R_X86_64_GOTPCRELX` and its REX form
+- thread-local storage: a symbol defined in a section carrying `SHF_TLS` is
+  `STT_TLS` whatever a `.type` said, on every target; `.tdata` and `.tbss`
+  are such sections whether the flag string or the built-in name says so, and
+  `.tls_common` declares a thread-local common block. x86-64 and i386
+  assemble the access models GNU as accepts for each — `@TLSGD`, `@TLSLD`,
+  `@TLSLDM`, `@DTPOFF`, `@TPOFF`, `@NTPOFF`, `@GOTTPOFF`, `@GOTNTPOFF`,
+  `@INDNTPOFF`, `@TLSDESC` and `@TLSCALL` — in code and in data, each only in
+  the instruction forms a linker knows how to rewrite
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -254,6 +262,12 @@ form by form and in random whole programs as well.
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
+- thread-local storage on the targets other than x86: the symbols and
+  sections are right everywhere, but only x86-64, i386 and SuperH read the
+  access-model operands. ARM's `sym(TLSGD)` and its relatives, AArch64's
+  `:tprel_g0:` and its, and PowerPC's `@tprel`, `@dtprel` and `@got@tls*` are
+  refused with the reason; Mach-O's `@TLVP` and PE's thread-local sections
+  are their formats' own idea of the same thing, and are not there either
 - MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
   writes and llvm-mc, the reference here, does not; and the `.module` options
   that would change which instructions are accepted (the ISA names, the
@@ -936,6 +950,7 @@ is what hid them from rsasm for as long as it did.
   of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `hi()`/`lo()`), literal
   pools and constant pools loading another object's symbols, ARM/Thumb
   interworking, `@GOTPCREL`, `@GOT` and `@PLT` where the backend has them,
+  the x86 thread-local access models, which the linker turns into local exec,
   weak definitions a second object overrides, `.comm` symbols merged between
   objects with different sizes, `.bss`, and references into another object's
   sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,

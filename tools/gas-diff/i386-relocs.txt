@@ -198,7 +198,47 @@ hid:    .long   0
     movl ext@INDNTPOFF, %eax
     movl ext@GOTNTPOFF(%ebx), %eax
     movl ext@GOTTPOFF(%ebx), %eax
-    .long ext@DTPOFF
+    leal ext@TLSDESC(%ebx), %eax
+    call *ext@TLSCALL(%eax)
+    addl ext@INDNTPOFF, %eax
+    subl ext@GOTTPOFF(%ebx), %eax
+    leal ext@NTPOFF(%eax), %edx
+    movl $ext@DTPOFF, %eax
+    movl $ext@NTPOFF, %eax
+    .long ext@DTPOFF, ext@TPOFF, ext@NTPOFF
+    .long ext@TLSGD, ext@TLSLDM, ext@TLSDESC
+    .long ext@GOTTPOFF, ext@GOTNTPOFF, ext@INDNTPOFF
+    .long ext@DTPOFF+4, ext@TPOFF-4
+
+=== thread-local sections and symbols
+    .section .tdata,"awT",%progbits
+    .globl tglob
+tglob:  .long 1
+tloc:   .long 2
+    .section .tbss,"awT",%nobits
+    .globl tbglob
+tbglob: .space 8
+tbloc:  .space 4
+    .section .tdata.named
+tnamed: .long 3
+    .section .tbss.named
+tnbss:  .space 8
+    .section .own,"awT",%progbits
+towned: .long 4
+    .tls_common tcommon, 16, 8
+    .globl tundef
+    .type tundef, %tls_object
+    .set talias, tloc
+    .globl talias
+    .type tglob, %object
+    .text
+    leal tglob@TLSGD(,%ebx,1), %eax
+    leal tloc@DTPOFF(%eax), %edx
+    movl $tbloc@NTPOFF, %ecx
+    leal towned@TPOFF(%eax), %edx
+    .data
+    .long tloc, tglob, tbloc, tcommon, tundef
+    .long tloc@DTPOFF, tglob@TPOFF
 
 === 16-bit code: word relocations
     .code16

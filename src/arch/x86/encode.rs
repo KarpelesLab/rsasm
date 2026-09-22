@@ -334,6 +334,12 @@ pub fn encode(
     check_decorators(cx, def, &roles, rounding, mem.is_some(), span)?;
     check_vsib(cx, def, mem.as_ref(), span)?;
 
+    // A TLS modifier names an access model rather than just a field, and the
+    // check may take the displacement away: `@TLSCALL` marks the instruction
+    // and leaves no bytes for a displacement at all.
+    let mut mem = mem;
+    let tlsdesc_call = check_tls(cx, target, def, &roles, &mut mem)?;
+
     // Only EVEX has the fifth register-number bit, so `xmm16` and above are
     // unreachable from any other encoding even though they parse fine.
     if def.enc != Enc::Evex {
@@ -832,14 +838,9 @@ pub fn encode(
                 .with_class(class)
         } else if width != 4 {
             FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
-        } else if bits == 64
-            && mem.as_ref().is_none_or(|m| m.addr_size == 8)
-            && !(def.opcode == [0x8d] && def.opsize != 64)
-        {
+        } else if disp_is_signed(bits, def, mem.as_ref()) {
             // A 64-bit-mode displacement is sign-extended to the address
-            // width, so the linker has to range-check it as signed. With
-            // 32-bit addressing it is an unsigned address instead, and so is
-            // the result of a `lea` into a 32-bit register.
+            // width, so the linker has to range-check it as signed.
             FixupKind::data(4)
                 .with_reloc(abi.abs32_signed())
                 .with_class(RelocClass::SignExtended)
@@ -903,7 +904,264 @@ pub fn encode(
         });
     }
 
+    // `@TLSCALL` is a mark on the instruction, not a field in it: the
+    // relocation covers no bytes and sits at the first byte of the
+    // instruction, prefixes included, which is where GNU as puts it.
+    if let Some(e) = tlsdesc_call {
+        fixups.push(Fixup {
+            offset: 0,
+            expr: e,
+            kind: FixupKind::data(0)
+                .with_reloc(abi.tlsdesc_call())
+                .linker_only(),
+            span: cx.exprs.span(e),
+        });
+    }
+
     Some(Variant { bytes, fixups })
+}
+
+/// True for the `@` modifiers that name a thread-local access model.
+fn is_tls_modifier(name: &str) -> bool {
+    matches!(
+        name,
+        "tlsgd"
+            | "tlsld"
+            | "tlsldm"
+            | "gottpoff"
+            | "tpoff"
+            | "ntpoff"
+            | "dtpoff"
+            | "gotntpoff"
+            | "indntpoff"
+            | "tlsdesc"
+            | "tlscall"
+    )
+}
+
+/// Where in an instruction a TLS modifier was written.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum TlsPlace {
+    /// A memory operand's displacement.
+    Disp,
+    /// An immediate, with its width in bytes.
+    Imm(u8),
+    /// A branch target, whose field is PC-relative.
+    Branch,
+}
+
+/// Checks a TLS `@` modifier against the instruction it was written on, and
+/// answers with the `@TLSCALL` expression where there was one.
+///
+/// A TLS modifier names a whole access model, not just a field: `foo@TLSGD`
+/// stands for the call to `__tls_get_addr` that resolves `foo`, and a linker
+/// that finds `foo` in the executable itself rewrites those instructions in
+/// place. Each model therefore has the one or two forms a linker knows how to
+/// rewrite, and GNU as refuses anything else rather than write an object
+/// whose rewrite would corrupt the code. The forms below are the ones
+/// `x86_check_tls_relocation` in `tc-i386.c` accepts.
+///
+/// `@TLSCALL` also takes the displacement away from the memory operand: its
+/// relocation covers no bytes, so `call *foo@TLSCALL(%rax)` assembles to the
+/// two bytes of `call *(%rax)` and nothing else.
+fn check_tls(
+    cx: &mut AsmCtx<'_>,
+    target: Target,
+    def: &Def,
+    roles: &Roles<'_>,
+    mem: &mut Option<Mem>,
+) -> Option<Option<ExprRef>> {
+    let Target { bits, abi } = target;
+    let tls = |cx: &AsmCtx<'_>, e: ExprRef| modifier(cx, e).filter(|n| is_tls_modifier(n));
+    let on_disp = mem
+        .as_ref()
+        .and_then(|m| m.disp)
+        .filter(|&e| tls(cx, e).is_some());
+    let found = match on_disp {
+        Some(e) => Some((e, TlsPlace::Disp)),
+        None => roles
+            .imm
+            .map(|(e, w)| (e, TlsPlace::Imm(w)))
+            .or(roles.rel.map(|(e, _)| (e, TlsPlace::Branch))),
+    };
+    let Some((expr, place)) = found else {
+        return Some(None);
+    };
+    let Some(name) = tls(cx, expr) else {
+        return Some(None);
+    };
+    let span = cx.exprs.span(expr);
+    let shown = name.to_ascii_uppercase();
+
+    // Four models exist only in the i386 psABI and one only in x86-64's;
+    // neither can express the other's, so a modifier written for the wrong
+    // object is refused rather than approximated by a relative.
+    let foreign = match (abi, name.as_str()) {
+        (reloc::Abi::X86_64, "tlsldm" | "ntpoff" | "gotntpoff" | "indntpoff") => Some("x86-64"),
+        (reloc::Abi::I386, "tlsld") => Some("i386"),
+        _ => None,
+    };
+    if let Some(object) = foreign {
+        cx.error(
+            span,
+            format!("`@{shown}` has no relocation in an {object} object"),
+        );
+        return None;
+    }
+
+    let m = mem.as_ref();
+    let base = m.and_then(|m| m.base);
+    let index = m.and_then(|m| m.index);
+    let rip = m.is_some_and(|m| m.rip_relative);
+    let scale = m.map_or(1, |m| m.scale);
+    let disp = place == TlsPlace::Disp;
+    let legacy = def.enc == Enc::Legacy;
+    let lea = legacy && def.opcode == [0x8d];
+    // Memory loaded into a register by `mov`, `add` or `sub`, which are the
+    // only shapes the initial-exec models are written in.
+    let load = |ops: &[u8]| legacy && matches!(def.opcode.as_slice(), [op] if ops.contains(op));
+    let call = legacy && def.opcode == [0xff] && def.modrm == ModRm::Ext(2);
+    let gpr = |r: Option<Reg>, size: u8| r.is_some_and(|r| r.is_gpr() && r.size == size);
+    let num = |r: Option<Reg>, n: u8| r.is_some_and(|r| r.is_gpr() && r.num == n);
+    let dest = roles.reg;
+
+    // The form the model has to be written in, and whether this instruction
+    // is it. The two offset models have no form of their own: they fill an
+    // ordinary field, and only the checks after this decide them.
+    let required = match (abi, name.as_str()) {
+        (reloc::Abi::X86_64, "tlsgd" | "tlsld") => Some((
+            disp && lea && rip && num(dest, 7) && gpr(dest, 8),
+            format!("lea sym@{shown}(%rip), %rdi"),
+        )),
+        (reloc::Abi::X86_64, "tlsdesc") => Some((
+            disp && lea && rip && gpr(dest, 8),
+            "lea sym@TLSDESC(%rip), %reg64".to_string(),
+        )),
+        (reloc::Abi::X86_64, "gottpoff") => Some((
+            disp && load(&[0x8b, 0x03]) && rip && gpr(dest, 8),
+            "mov or add from sym@GOTTPOFF(%rip) into a 64-bit register".to_string(),
+        )),
+        (reloc::Abi::I386, "tlsgd") => Some((
+            disp && lea
+                && num(dest, 0)
+                && gpr(dest, 4)
+                && if index.is_some() {
+                    base.is_none() && num(index, 3) && scale == 1
+                } else {
+                    base.is_some() && !num(base, 0)
+                },
+            "leal sym@TLSGD(,%ebx,1), %eax or leal sym@TLSGD(%reg32), %eax".to_string(),
+        )),
+        (reloc::Abi::I386, "tlsldm") => Some((
+            disp && lea
+                && index.is_none()
+                && base.is_some()
+                && !num(base, 0)
+                && num(dest, 0)
+                && gpr(dest, 4),
+            "leal sym@TLSLDM(%reg32), %eax".to_string(),
+        )),
+        (reloc::Abi::I386, "tlsdesc") => Some((
+            disp && lea && index.is_none() && num(base, 3) && gpr(dest, 4),
+            "leal sym@TLSDESC(%ebx), %reg32".to_string(),
+        )),
+        (reloc::Abi::I386, "gottpoff" | "gotntpoff") => Some((
+            disp && load(&[0x8b, 0x03, 0x2b]) && index.is_none() && gpr(base, 4) && gpr(dest, 4),
+            format!("mov, add or sub from sym@{shown}(%reg32) into a 32-bit register"),
+        )),
+        (reloc::Abi::I386, "indntpoff") => Some((
+            disp
+                && base.is_none()
+                && index.is_none()
+                // `movl sym, %eax` is encoded as the `moffs` form, whose
+                // destination is `%eax` and needs no register operand.
+                && ((load(&[0x8b, 0x03]) && gpr(dest, 4))
+                    || (legacy && def.opcode == [0xa1] && def.opsize == 32)),
+            "mov or add from sym@INDNTPOFF into a 32-bit register".to_string(),
+        )),
+        // The accumulator holds the descriptor the call goes through, and
+        // what the linker rewrites leaves no room for a SIB byte.
+        (_, "tlscall") => Some((
+            disp && call && index.is_none() && num(base, 0),
+            "call *sym@TLSCALL(%rax)".to_string(),
+        )),
+        _ => None,
+    };
+    if let Some((ok, form)) = required {
+        if !ok {
+            cx.error(span, format!("`@{shown}` is only encodable as `{form}`"));
+            return None;
+        }
+        if name == "tlscall" {
+            return Some(mem.as_mut().and_then(|m| m.disp.take()));
+        }
+        return Some(None);
+    }
+
+    // `@TPOFF` and `@DTPOFF` fill a four-byte field, or an eight-byte one in
+    // an x86-64 object, whose psABI has 64-bit relocations for them; an i386
+    // object has nothing but the 32-bit pair.
+    let width = match place {
+        TlsPlace::Imm(w) => w,
+        // A `moffs` form carries a whole address; every other displacement is
+        // four bytes wide unless the address size is 16-bit.
+        TlsPlace::Disp if roles.moffs.is_some() => m.map_or(4, |m| m.addr_size),
+        TlsPlace::Disp => m.map_or(4, |m| if m.addr_size == 2 { 2 } else { 4 }),
+        TlsPlace::Branch => 4,
+    };
+    let fits = match abi {
+        reloc::Abi::X86_64 => reloc::Abi::x86_64_tls_modifier(&name, width).is_some(),
+        reloc::Abi::I386 => width == 4,
+    };
+    if !fits {
+        cx.error(span, format!("`@{shown}` cannot fill a {width}-byte field"));
+        return None;
+    }
+    // The two offsets are measured from the thread pointer, which the linker
+    // works out without reference to the field's own address, so a
+    // PC-relative field cannot hold one.
+    if rip || place == TlsPlace::Branch {
+        cx.error(
+            span,
+            format!(
+                "`@{shown}` is not computed from the field's address, so it cannot fill a \
+                 PC-relative field"
+            ),
+        );
+        return None;
+    }
+    // Their 32-bit relocations are range-checked as signed, and GNU as
+    // refuses them in a field it reads as an unsigned 32-bit number: `movq
+    // $sym@TPOFF, %rax` sign-extends its immediate and is accepted, `movl
+    // $sym@TPOFF, %eax` does not and is not. Outside 64-bit mode nothing is
+    // sign-extended and the check does not apply.
+    let signed = match place {
+        TlsPlace::Imm(4) => def.opsize == 64 && legacy,
+        TlsPlace::Imm(_) => true,
+        TlsPlace::Disp => disp_is_signed(bits, def, m),
+        TlsPlace::Branch => true,
+    };
+    if bits == 64 && !signed {
+        cx.error(
+            span,
+            format!("`@{shown}` is range-checked as signed, and this field is unsigned"),
+        );
+        return None;
+    }
+    Some(None)
+}
+
+/// Whether a four-byte displacement is sign-extended to the address width.
+///
+/// It decides both the relocation the field takes — `R_X86_64_32S` rather
+/// than `R_X86_64_32` — and which TLS relocations may sit in it, since BFD
+/// range-checks `@TPOFF` and `@DTPOFF` as signed. With 32-bit addressing the
+/// displacement is an unsigned address instead, and so is the result of a
+/// `lea` into a 32-bit register.
+fn disp_is_signed(bits: u8, def: &Def, mem: Option<&Mem>) -> bool {
+    bits == 64
+        && mem.is_none_or(|m| m.addr_size == 8)
+        && !(def.opcode == [0x8d] && def.opsize != 64)
 }
 
 /// The name of the `@` modifier in an expression, lowercased, if it has one.

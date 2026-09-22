@@ -929,3 +929,18 @@ emms
 sfence
 ldmxcsr -8(%ebp)
 stmxcsr -8(%ebp)
+leal foo@TLSGD(,%ebx,1), %eax
+leal foo@TLSLDM(%ebx), %eax
+leal foo@TLSDESC(%ebx), %eax
+call *foo@TLSCALL(%eax)
+leal foo@DTPOFF(%eax), %edx
+leal foo@TPOFF(%eax), %edx
+leal foo@NTPOFF(%eax), %edx
+movl foo@GOTTPOFF(%ebx), %eax
+movl foo@GOTNTPOFF(%ebx), %eax
+movl foo@INDNTPOFF, %eax
+subl foo@GOTTPOFF(%ebx), %eax
+movl %gs:foo@NTPOFF, %eax
+movl $foo@TPOFF, %eax
+movl $foo@NTPOFF, %eax
+movl $foo@DTPOFF, %eax

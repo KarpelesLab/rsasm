@@ -180,8 +180,13 @@ impl Assembler {
             ".set" | ".equ" | ".equiv" => self.dir_set(&mut cur, span, text == ".equiv"),
             ".size" => self.dir_size(&mut cur, span),
             ".type" => self.dir_type(&mut cur, span),
-            ".comm" => self.dir_comm(&mut cur, span, false),
-            ".lcomm" => self.dir_comm(&mut cur, span, true),
+            ".comm" => self.dir_comm(&mut cur, span, false, SymType::Object),
+            ".lcomm" => self.dir_comm(&mut cur, span, true, SymType::Object),
+            // A thread-local common block is an ELF idea; neither the PE nor
+            // the Mach-O reference knows the directive, so neither does this.
+            ".tls_common" if self.options.format == crate::output::Format::Elf => {
+                self.dir_comm(&mut cur, span, false, SymType::Tls)
+            }
 
             // ---- conditionals ---------------------------------------------
             ".if" | ".ifeq" | ".ifne" | ".ifdef" | ".ifndef" | ".ifb" | ".ifnb" => {
@@ -917,12 +922,15 @@ impl Assembler {
         for sym in self.target().section_symbols(&text) {
             self.refer_to_symbol(sym, tok.span);
         }
-        let mut kind = if text.starts_with(".bss") {
+        let mut kind = if text.starts_with(".bss") || builtin_section(&text, ".tbss") {
             SectionKind::Nobits
         } else {
             SectionKind::Progbits
         };
         let mut flags = default_flags_for(&text);
+        // `SHF_TLS` is ELF's alone, so a COFF or Mach-O section that happens
+        // to be called `.tdata` is an ordinary one there.
+        flags.tls &= self.options.format == crate::output::Format::Elf;
         let mut entsize = 0u64;
 
         // A COFF section's attributes are its own: flag letters that mean
@@ -1132,7 +1140,11 @@ impl Assembler {
         true
     }
 
-    fn dir_comm(&mut self, cur: &mut Cursor<'_>, span: Span, local: bool) -> bool {
+    /// `.comm`, `.lcomm` and `.tls_common`, which differ only in the binding
+    /// and the type the block gets: a thread-local common block is
+    /// `STT_TLS`, and the linker gathers it into the thread-local image
+    /// rather than into `.bss`.
+    fn dir_comm(&mut self, cur: &mut Cursor<'_>, span: Span, local: bool, ty: SymType) -> bool {
         let Some((name, nspan)) = self.expect_name(cur) else {
             return true;
         };
@@ -1187,7 +1199,7 @@ impl Assembler {
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Common { size, align };
         sym.def_span = nspan;
-        sym.ty = SymType::Object;
+        sym.ty = ty;
         if !local {
             sym.binding = Binding::Global;
         }
@@ -1477,11 +1489,26 @@ impl Assembler {
     }
 }
 
+/// Whether `name` is one of GNU as's built-in section names, or a subsection
+/// of it: `.tdata` and `.tdata.foo` are the thread-local data section, while
+/// `.tdatax` is a section the source invented and gets no flags of its own.
+fn builtin_section(name: &str, base: &str) -> bool {
+    name == base || name.strip_prefix(base).is_some_and(|r| r.starts_with('.'))
+}
+
 fn default_flags_for(name: &str) -> SectionFlags {
     if name.starts_with(".text") || name == ".init" || name == ".fini" {
         SectionFlags::text()
     } else if name.starts_with(".rodata") {
         SectionFlags::rodata()
+    // A thread-local section is written data that the linker copies into
+    // each thread's block rather than mapping, so it carries `SHF_TLS` on
+    // top of what `.data` and `.bss` carry.
+    } else if builtin_section(name, ".tdata") || builtin_section(name, ".tbss") {
+        SectionFlags {
+            tls: true,
+            ..SectionFlags::data()
+        }
     } else if name.starts_with(".data") || name.starts_with(".bss") {
         SectionFlags::data()
     } else {

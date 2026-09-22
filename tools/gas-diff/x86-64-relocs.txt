@@ -141,3 +141,56 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+=== thread-local storage models
+        leaq    ext@TLSGD(%rip), %rdi
+        leaq    ext@TLSLD(%rip), %rdi
+        leaq    ext@TLSDESC(%rip), %rax
+        call    *ext@TLSCALL(%rax)
+        call    *ext@TLSCALL(%eax)
+        movq    ext@GOTTPOFF(%rip), %rax
+        addq    ext@GOTTPOFF(%rip), %r15
+        leaq    ext@DTPOFF(%rax), %rdx
+        leaq    ext@TPOFF(%rax), %rdx
+        movq    %fs:ext@TPOFF, %rax
+        movq    ext@DTPOFF+8(%rax,%rbx,4), %rdx
+        movq    $ext@DTPOFF, %rax
+        movq    $ext@TPOFF, %rcx
+        movabsq $ext@TPOFF, %rcx
+        addq    $ext@TPOFF, %rax
+        pushq   $ext@TPOFF
+        .data
+        .long   ext@DTPOFF, ext@TPOFF
+        .quad   ext@DTPOFF, ext@TPOFF
+        .long   ext@TLSGD, ext@TLSLD
+        .long   ext@GOTTPOFF, ext@TLSDESC
+        .long   ext@DTPOFF+4, ext@TPOFF-4
+
+=== thread-local sections and symbols
+        .section .tdata,"awT",%progbits
+        .globl  tglob
+tglob:  .quad   1
+tloc:   .quad   2
+        .section .tbss,"awT",%nobits
+        .globl  tbglob
+tbglob: .space  8
+tbloc:  .space  4
+        .section .tdata.named
+tnamed: .quad   3
+        .section .tbss.named
+tnbss:  .space  8
+        .section .own,"awT",%progbits
+towned: .quad   4
+        .tls_common tcommon, 16, 8
+        .globl  tundef
+        .type   tundef, %tls_object
+        .set    talias, tloc
+        .globl  talias
+        .type   tglob, %object
+        .text
+        leaq    tglob@TLSGD(%rip), %rdi
+        leaq    tloc@DTPOFF(%rax), %rdx
+        movq    $tbloc@TPOFF, %rcx
+        leaq    towned@TPOFF(%rax), %rdx
+        .data
+        .quad   tloc, tglob, tbloc, tcommon, tundef
+        .long   tloc@DTPOFF, tglob@TPOFF

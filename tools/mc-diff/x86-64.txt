@@ -845,3 +845,21 @@ kshiftrq $3, %k1, %k2
 kunpckbw %k1, %k2, %k3
 kunpckwd %k1, %k2, %k3
 kunpckdq %k1, %k2, %k3
+leaq foo@TLSGD(%rip), %rdi
+leaq foo@TLSLD(%rip), %rdi
+leaq foo@TLSDESC(%rip), %rax
+# `tools/macho-diff` assembles this corpus for Darwin as well, and llvm-mc 22
+# crashes on `@TLSCALL` there rather than refusing it, so the two rows are
+# left out. GNU as covers them in tools/gas-diff/x86-64-relocs.txt and a
+# linked program uses them in tools/link-diff/x86-64.txt.
+#call *foo@TLSCALL(%rax)
+#call *foo@TLSCALL(%eax)
+movq foo@GOTTPOFF(%rip), %rax
+addq foo@GOTTPOFF(%rip), %r15
+leaq foo@DTPOFF(%rax), %rdx
+leaq foo@TPOFF(%rax), %rdx
+movq %fs:foo@TPOFF, %rax
+movq foo@DTPOFF+8(%rax,%rbx,4), %rdx
+movq $foo@DTPOFF, %rax
+movq $foo@TPOFF, %rcx
+movabsq $foo@TPOFF, %rcx

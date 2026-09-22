@@ -151,3 +151,50 @@ entry1: ret
         .section .rodata
         .globl  msg
 msg:    .asciz  "linked"
+
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        # General dynamic, then local dynamic: the linker matches on the
+        # instructions as well as the relocations when it turns these into
+        # local-exec, so only these forms can be written.
+        leal    tv@TLSGD(,%ebx,1), %eax
+        call    ___tls_get_addr@PLT
+        leal    tloc@TLSLDM(%ebx), %eax
+        call    ___tls_get_addr@PLT
+        leal    tloc@DTPOFF(%eax), %edx
+        leal    tv2@DTPOFF(%eax), %ecx
+        # Initial exec, then local exec in both its spellings.
+        movl    %gs:0, %eax
+        subl    tv2@GOTTPOFF(%ebx), %eax
+        movl    %gs:0, %edx
+        leal    tv3@TPOFF(%edx), %ecx
+        leal    tloc@NTPOFF(%edx), %esi
+        movl    $tb@NTPOFF, %edi
+        # A TLS descriptor, whose `@TLSCALL` relocation covers no bytes.
+        leal    tv3@TLSDESC(%ebx), %eax
+        call    *tv3@TLSCALL(%eax)
+        ret
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .long   0x11223344
+tloc:   .long   99
+--- b.s
+        .section .tdata,"awT",%progbits
+        .globl  tv2, tv3
+tv2:    .long   2
+tv3:    .long   3
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .space  8
+        .text
+        .globl  helper
+helper: movl    %gs:0, %eax
+        leal    tb@NTPOFF(%eax), %edx
+        leal    tv@TPOFF(%eax), %ecx
+        ret
+        .data
+        .long   tv@DTPOFF
+        .long   tv@NTPOFF
