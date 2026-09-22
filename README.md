@@ -896,7 +896,7 @@ independent assembler, and compare the bytes:
   exist for. Two more rows link [PE/COFF](#pecoff) objects into an image with
   GNU ld for mingw, where what a link has to get right is `@IMGREL`,
   `.secrel32` and `.secidx` and the addend a COFF relocation keeps in its
-  field. 228 of 228 match across twenty-nine variants.
+  field. 229 of 229 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 403 of 403

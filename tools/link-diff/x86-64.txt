@@ -174,3 +174,39 @@ hidden: ret
         .data
         .globl  shared
 shared: .quad   42
+
+=== three objects, with local labels in another section
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    second
+        call    third
+        leaq    .Lmsg(%rip), %rax
+        movq    shared(%rip), %rcx
+        movq    first_table(%rip), %rdx
+        ret
+        .section .rodata
+.Lmsg:  .asciz  "one"
+        .globl  first_table
+first_table:
+        .quad   .Lmsg
+        .quad   second
+        .long   .Lmsg - first_table
+        .long   0
+--- b.s
+        .text
+        .globl  second
+second: call    third
+        leaq    .Lb(%rip), %rdx
+        movq    $.Lb, %rsi
+        ret
+        .section .rodata
+.Lb:    .asciz  "two"
+--- c.s
+        .text
+        .globl  third
+third:  ret
+        .data
+        .globl  shared
+shared: .quad   0x1122334455667788
