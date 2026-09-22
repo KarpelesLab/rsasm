@@ -930,7 +930,9 @@ and goes to llvm-mc and `riscv64-elf-as`; MIPS, SPARC, SuperH, RX, RL78,
 V850/RH850 and the Z80 take their cases from the *other* side of binutils —
 GNU objdump's disassembly of random bytes, which reaches every operand value
 a form allows and shares nothing with either assembler's parser — and go to
-whichever references that target has. `tools/fuzz/run.sh` runs the set with
+whichever references that target has. The 6502 and the 8080 are fuzzed with
+whole programs against ca65 and the Macro Assembler AS, as the 8051 already
+was, and `nasm` source against NASM itself. `tools/fuzz/run.sh` runs the set with
 one seed and bounded counts, which is what CI runs on every pull request;
 the nightly run uses the date as its seed and ten times the cases. A fuzzer
 that compared nothing fails the job as loudly as one that found a

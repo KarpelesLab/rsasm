@@ -53,6 +53,9 @@ times the ground with a seed taken from the date.
 | `avr.py` | AVR, 21 cores | GNU as, GNU ld | whole random programs |
 | `z80.py` | Zilog Z80 | GNU as | GNU objdump's disassembly |
 | `mcs51.py` | Intel 8051 | AS, sdas8051 | whole random programs |
+| `mos6502.py` | MOS 6502 | ca65 + ld65, vasm | whole random programs |
+| `i8080.py` | Intel 8080 | AS + p2bin | whole random programs |
+| `nasm.py` | the `nasm` dialect | NASM | whole random programs |
 
 `gasfuzz.py` is the machinery the fuzzers added after the first few share:
 the batch of cases in one object with a section each, the re-run without
