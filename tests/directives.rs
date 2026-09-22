@@ -261,6 +261,37 @@ fn symbol_attributes() {
 }
 
 #[test]
+#[cfg(feature = "sparc")]
+fn a_symbol_type_may_carry_any_of_the_three_sigils() {
+    use rsasm::symbol::SymType;
+    // Which one a target's source uses is whichever is not already taken:
+    // `@` starts a comment on ARM and `%` names a register on SPARC, where
+    // GNU as and llvm-mc both write `.type sym, #function`.
+    // `#` is a comment on x86, so that spelling is checked where it is used.
+    for (arch, src) in [
+        ("x86-64", ".type f, @function\n"),
+        ("x86-64", ".type f, %function\n"),
+        ("x86-64", ".type f, STT_FUNC\n"),
+        ("sparc", ".type f, #function\n"),
+        ("sparc", ".type f, STT_FUNC\n"),
+    ] {
+        let asm = assemble_for(arch, src);
+        assert!(
+            !asm.diags.has_errors(),
+            "{src}: {}",
+            asm.diags.render(&asm.sm, false)
+        );
+        let s = asm
+            .symbols
+            .iter()
+            .find(|(_, s)| asm.interner.get(s.name) == "f")
+            .expect("no symbol `f`")
+            .1;
+        assert_eq!(s.ty, SymType::Func, "{src}");
+    }
+}
+
+#[test]
 fn error_and_warning_directives() {
     assert!(errors(r#".error "boom""#).contains("boom"));
     let asm = assemble(r#".warning "careful""#);

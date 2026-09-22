@@ -1,0 +1,121 @@
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        jsr     helper
+        bsr.w   helper
+        bra.w   helper
+        beq.w   helper
+        bne.w   weakfn
+        jmp     helper
+        jsr     weakfn
+        rts
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        jsr     _start
+        bra.w   _start
+        rts
+weakfn:
+        rts
+
+=== absolute and pc-relative addressing of another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        move.l  #target, %d0
+        move.l  target, %d1
+        lea     target, %a0
+        lea     (target, %pc), %a1
+        move.l  bssvar, %d2
+        move.l  #rodata, %d3
+        rts
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .long   0x11223344
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .long   target
+        .long   target + 16
+        .long   target - .
+        .long   wsym
+        .long   com1
+        .long   bssvar
+        .long   after - dptr
+        .size   dptr, . - dptr
+after:  .long   0
+        .text
+        .globl  _start
+_start: rts
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        jsr     both
+        jsr     weakonly
+        move.l  #both, %d0
+        rts
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   illegal
+        illegal
+        .weak   weakonly
+weakonly:
+        rts
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .globl  _start
+_start:
+        move.l  shared, %d0
+        move.l  #bigger, %a0
+        rts
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        move.l  #bigger, %d0
+        move.l  shared, %d1
+        rts

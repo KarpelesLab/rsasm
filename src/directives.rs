@@ -1095,9 +1095,12 @@ impl Assembler {
             self.diags.error(span, "expected `,` after the symbol name");
             return true;
         }
-        // The type is written `@function`, `%function` or `STT_FUNC`.
-        if cur.eat_punct(Punct::At).is_none() {
-            cur.eat_punct(Punct::Percent);
+        // The type is written `@function`, `%function`, `#function` or
+        // `STT_FUNC`. Which sigil a target's source uses is whichever one is
+        // not already taken: `@` starts a comment on ARM, `%` names a
+        // register on SPARC and PowerPC, so SPARC sources write `#function`.
+        if cur.eat_punct(Punct::At).is_none() && cur.eat_punct(Punct::Percent).is_none() {
+            cur.eat_punct(Punct::Hash);
         }
         let Some((tname, tspan)) = self.expect_name(cur) else {
             return true;
