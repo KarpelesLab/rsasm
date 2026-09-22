@@ -30,7 +30,9 @@ finding down; `run.sh` prints the exact one to repeat under any fuzzer that
 differed.
 
 `--scale` multiplies every count, which is how the nightly CI run covers ten
-times the ground with a seed taken from the date.
+times the ground with a seed taken from the date. `FUZZ_TIMEOUT` (1800
+seconds) is how long one fuzzer may take before it is killed and read as
+"did not finish".
 
 ## What each one fuzzes
 
