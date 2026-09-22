@@ -71,6 +71,13 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 #
 # There is no MIPS64 row: the MIPS GNU ld among the oracles emulates only
 # o32. There is no Z80 row: rsasm writes no ELF for the 8-bit targets.
+#
+# The last two rows are PE/COFF (`-f coff`), linked into an image by GNU ld
+# for mingw. Their reference is llvm-mc rather than the mingw GNU as, which
+# is what `tools/coff-diff` compares whole objects against: GNU as gives a
+# COFF section a 16-byte alignment where llvm-mc and rsasm give it four, so
+# a GNU as reference would place the second object's `.text` differently for
+# that reason alone.
 TARGETS="
 x86-64|x86-64|x86-64|x86_64-elf-as|--64|x86_64-elf-ld|-m elf_x86_64|0x401000|
 i386|i386|i386|x86_64-elf-as|--32|x86_64-elf-ld|-m elf_i386|0x8048000|
@@ -99,6 +106,8 @@ avr5|avr5|avr5|avr-elf-as|-mmcu=avr5|avr-elf-ld|-m avr5|0x0|-m avr5 --relax
 avr51|avr5|avr51|avr-elf-as|-mmcu=avr51|avr-elf-ld|-m avr51|0x0|-m avr51 --relax
 avr6|avr5|avr6|avr-elf-as|-mmcu=avr6|avr-elf-ld|-m avr6 --no-stubs|0x0|-m avr6 --no-stubs --relax
 avrtiny|avrtiny|avrtiny|avr-elf-as|-mmcu=avrtiny|avr-elf-ld|-m avrtiny|0x0|-m avrtiny --relax
+win64|win64|x86-64|mc:x86_64-windows-msvc||pe:x86_64-w64-mingw32-ld||0|
+win32|win32|i386|mc:i686-windows-msvc||pe:i686-w64-mingw32-ld||0|
 "
 
 command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found; skipping" >&2; exit 0; }
@@ -185,6 +194,20 @@ link() { # out linkflags sections objects...
     case "$s" in OUTPUT_*) cmds="$cmds $s" ;; *) ldflags+=("$s") ;; esac
   done
   shift 3
+  # A PE image lays itself out: there is no script, the entry is a symbol
+  # rather than an address, and the timestamp the linker would otherwise
+  # stamp into the header has to be turned off for two runs to agree. Its
+  # sections and their contents come out of `llvm-objdump`, which reads the
+  # loaded image without the header fields that are a function of when and
+  # where it was linked.
+  if [ -n "$pe" ]; then
+    "$link_ld" "${ldflags[@]}" -e _start --no-insert-timestamp -o "$out.elf" "$@" \
+      > "$d/log" 2>&1 ||
+      { echo "LINK-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"; return 1; }
+    llvm-objdump -h -s "$out.elf" 2> "$d/log" | tail -n +3 > "$out.bin" ||
+      { echo "LINK-ERROR: objdump: $(head -1 "$d/log")"; return 1; }
+    return 0
+  fi
   "$link_ld" "${ldflags[@]}" -e "$base" -T "$d/link.ld" -o "$out.elf" "$@" > "$d/log" 2>&1 ||
     { echo "LINK-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"; return 1; }
   for s in $sections; do only+=(--only-section="$s"); done
@@ -198,6 +221,10 @@ link() { # out linkflags sections objects...
 # links; a symbol that reached the object with the wrong binding, size or
 # section does not survive this.
 symbols() { # elf
+  if [ -n "$pe" ]; then
+    llvm-nm "$1" | LC_ALL=C sort
+    return
+  fi
   llvm-readelf --symbols --wide "$1" | awk '
     NR > 1 && $4 != "SECTION" && $4 != "FILE" && $8 != "" && $8 !~ /^\$/ {
       printf "%s %s %s %s %s %s\n", $8, $2, $3, $4, $5, $7
@@ -214,8 +241,10 @@ compare() { # key arch as asflags ldflags variants name stems...
   case "$m" in
     REF-MISSING:*) skip=$((skip + 1)); return ;;
   esac
+  local fmt=()
+  [ -n "$pe" ] && fmt=(-f coff)
   for stem in "$@"; do
-    "$rsasm" -a "$arch" -o "$d/$stem.rs.o" "$d/$stem.s" > "$d/rslog" 2>&1 ||
+    "$rsasm" -a "$arch" "${fmt[@]}" -o "$d/$stem.rs.o" "$d/$stem.s" > "$d/rslog" 2>&1 ||
       { r="RSASM-ERROR: $stem: $(tr '\n' ' ' < "$d/rslog")"; break; }
   done
   # A program named `refused: ...` is one the reference will not assemble or
@@ -273,9 +302,10 @@ compare() { # key arch as asflags ldflags variants name stems...
   done
 }
 
-# Hex of a file, 16 bytes to a line, with the image address of each line.
+# Hex of a file, 16 bytes to a line, with the image address of each line. A
+# PE image's is already `llvm-objdump`'s own listing.
 dump() { # file
-  xxd -g1 -o "$((base))" "$1" | cut -c1-58
+  if [ -n "$pe" ]; then cat "$1"; else xxd -g1 -o "$((base))" "$1" | cut -c1-58; fi
 }
 
 run_target() { # corpora key arch as asflags linkers ldflags base variants
@@ -283,6 +313,11 @@ run_target() { # corpora key arch as asflags linkers ldflags base variants
   local before=$((pass + fail)) name="" stems=() stem="" progs l
   base=$8
   link_ld=""
+  # `pe:` on the linker marks a PE/COFF target: rsasm writes `-f coff`, the
+  # linker lays the image out itself, and the two are compared as the loaded
+  # image rather than as ELF sections.
+  pe=""
+  case "$linkers" in pe:*) pe=1; linkers=${linkers#pe:} ;; esac
   for l in ${linkers//,/ }; do
     link_ld=$(tool "$l") && break
   done
