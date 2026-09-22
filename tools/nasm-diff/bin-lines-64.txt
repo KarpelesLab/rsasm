@@ -94,3 +94,14 @@ test rax, rax
 cmp rax, 10
 setz al
 cmove rax, rbx
+jmp short $
+jmp near $
+jz short $
+jz near $
+call near $
+push word 0x1234
+push qword 0x20
+xchg rax, rax
+mov eax, [ds:rbx]
+mov eax, [ss:rbp]
+mov eax, [gs:rax+8]

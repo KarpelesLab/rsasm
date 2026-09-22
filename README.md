@@ -189,8 +189,7 @@ form by form and in random whole programs as well.
   the sign-extending form rather than NASM's shorter 32-bit load (a constant or
   a symbol is optimized); x87, `enter`, far direct `jmp`/`call seg:off`, `[rip]`
   addressing (NASM uses `[rel]`), the `..gotpc`/`..gotoff`/`..tlsie` `wrt`
-  targets and 16-bit object formats; `-f bin` follows NASM except that a
-  trailing `.bss` is written as zeros rather than trimmed
+  targets and 16-bit object formats
 - in CC-RL and CC-RH source: bit symbols, `$label`/`%label` gp- and
   ep-relative references, `STARTOF`/`SIZEOF`, and CC-RL's `HIGH`/`LOWW` of a
   relocatable label (all refused with the reason)
@@ -618,9 +617,10 @@ x86 hand-written code targets. The whole language people reach for is there:
   `static` with `:function`/`:data` and sizes, `default rel`/`abs`, `$`/`$$`
   and `.local`/`..@` labels
 - NASM's operand syntax: the `byte`/`word`/`dword`/`qword` size keywords with
-  no `ptr`, `[rel x]` and `[abs x]`, segment overrides `[es:di]`, the moffs
-  accumulator forms, and 8086 16-bit addressing; and the `wrt ..plt`,
-  `wrt ..got`, `wrt ..sym` and `wrt ..gotoff` ELF relocations
+  no `ptr`, `short` and `near` on a branch, `[rel x]` and `[abs x]`, segment
+  overrides `[es:di]`, the moffs accumulator forms, and 8086 16-bit
+  addressing; and the `wrt ..plt`, `wrt ..got`, `wrt ..sym` and
+  `wrt ..gotoff` ELF relocations
 
 Much of what looks like NASM directive syntax — `section`, `global`, `struc`,
 `align` — is macros in NASM's standard macro set wrapping a bracketed
@@ -645,7 +645,7 @@ section, relocations and global symbols included. Local symbols are not
 compared in ELF objects: NASM writes every label into the symbol table, where
 rsasm, like GNU as, keeps them to itself, and a linker never sees the
 difference. `-f win64` and `-f win32` objects are compared whole, as
-`tools/coff-diff/canon.sh` prints them; see [PE/COFF](#pecoff). 403 of 403
+`tools/coff-diff/canon.sh` prints them; see [PE/COFF](#pecoff). 444 of 444
 match.
 
 ## Multi-architecture files
@@ -947,7 +947,7 @@ is what hid them from rsasm for as long as it did.
   field. 229 of 229 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
-  symbols included, and as `win64` and `win32` COFF objects. 403 of 403
+  symbols included, and as `win64` and `win32` COFF objects. 444 of 444
   match. `tools/oracles/build.sh` builds NASM from a checksum-pinned source.
 - `tools/multiarch-diff/run.sh` for files that switch targets with `.arch`,
   against the same references, one part at a time.

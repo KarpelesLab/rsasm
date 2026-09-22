@@ -791,8 +791,21 @@ impl Assembler {
                     if n > 0 && (n as u64).is_power_of_two() {
                         let id = self.cur;
                         if self.nasm.absolute.is_none() {
+                            // In a flat binary a section has no alignment of
+                            // its own until something asks for one: NASM
+                            // starts each at a multiple of four and then
+                            // takes the first request as the alignment, even
+                            // where it is smaller than four. An object's
+                            // section is aligned by its kind from the start,
+                            // and a request only ever raises that.
+                            let first = !self.options.relocatable
+                                && !self.nasm.explicit_align.contains(&id);
                             let s = self.section_mut(id);
-                            s.align = s.align.max(n as u64);
+                            s.align = if first {
+                                n as u64
+                            } else {
+                                s.align.max(n as u64)
+                            };
                             self.nasm.explicit_align.insert(id);
                         }
                     } else {
@@ -894,7 +907,9 @@ impl Assembler {
                     exec: name == ".text",
                     ..Default::default()
                 },
-                1,
+                // NASM's flat output starts every section it is told about at
+                // a multiple of four, unless `align=` says otherwise.
+                4,
             )
         };
         let mut explicit_align = false;
@@ -965,15 +980,19 @@ impl Assembler {
         let n = self.interner.intern(&name);
         let existed = self.sections.iter().any(|s| s.name == n);
         let id = self.get_or_create_section(n, kind, flags, align);
+        // The first `align=` on a flat binary's section replaces the writer's
+        // own four rather than being measured against it; see `sectalign`.
+        let first = !relocatable && !self.nasm.explicit_align.contains(&id);
         if !existed {
             self.section_mut(id).align = align;
         } else if explicit_align {
             let s = self.section_mut(id);
-            s.align = s.align.max(align);
+            s.align = if first { align } else { s.align.max(align) };
         }
         if explicit_align {
             self.nasm.explicit_align.insert(id);
         }
+        self.nasm.opened.insert(id);
         self.set_section(id);
         self.nasm.absolute = None;
     }
@@ -1061,12 +1080,21 @@ impl Assembler {
                 self.get_or_create_section(n, kind, core, 1)
             }
         };
+        // Whether the source has already asked for an alignment outright,
+        // with `align=` or an `align` directive. Until it has, the section's
+        // alignment is whatever its characteristics carry; from then on it is
+        // the largest that was asked for, and the characteristics no longer
+        // have a say. That is what keeps `section .s rdata align=2` at two
+        // rather than at the eight `rdata` implies, and keeps a section an
+        // `align 16` raised at sixteen when it is opened again with
+        // `align=4`.
+        let explicit = self.nasm.explicit_align.contains(&id);
         if let Some(f) = flags {
-            // The alignment lives in the characteristics word too; `align=`
-            // replaces it, and `align=0` goes back to the default.
             let bits = (f & c::SCN_ALIGN_MASK) >> 20;
             let default = if bits == 0 { 1 } else { 1u64 << (bits - 1) };
-            self.section_mut(id).align = default;
+            if !explicit {
+                self.section_mut(id).align = default;
+            }
             let info = self.coff_section_info(id);
             info.characteristics = f & !c::SCN_ALIGN_MASK;
         } else {
@@ -1075,8 +1103,10 @@ impl Assembler {
             // empty one in the object.
             self.coff_section_info(id);
         }
+        // `align=0` asks for nothing and leaves both alone.
         if let Some(Some(a)) = align {
-            self.section_mut(id).align = a;
+            let s = self.section_mut(id);
+            s.align = if explicit { s.align.max(a) } else { a };
             self.nasm.explicit_align.insert(id);
         }
         let _ = span;

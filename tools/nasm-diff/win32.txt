@@ -42,3 +42,20 @@ _data:  dd      _f, _ext, _data
         mov     [_foo+4], ecx
         push    _foo
         dd      _foo, _foo+3
+=== branch widths, segment overrides and an empty section
+        global _f
+        section .text
+_f:
+_target:
+        mov     eax, [ds:ebx]
+        mov     eax, [ss:ebp+1]
+        jmp     short _target
+        jz      near _target
+        push    word 0x20
+        ret
+        section .empty
+        section .data align=2
+        align   8
+        db      1
+        section .data align=2
+        db      2

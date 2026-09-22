@@ -643,7 +643,10 @@ through `tools/coff-diff/canon.sh`.
 Each records the places its two assemblers part company as named rules with
 a citation. `nasm.py` also carries, at the head of the script, the
 differences it found that are *not* generated -- each with a whole program
-that shows it -- because they are not settled: NASM assembles some of them
-with a warning where rsasm stops, and rsasm follows GNU as on others. That
-list is what is left to do for the NASM dialect, and it shrinks as each one
-is decided.
+that shows it and the reason rsasm does not follow NASM there: NASM
+assembles some of them with a warning where rsasm stops, writes a
+relocation over the field next to the one it belongs to in another, and
+binds a reference to a symbol a linker may still preempt in a third. The
+entries are numbered, and a number stays with its entry once it is settled,
+so what the script cites never moves; an entry settled by fixing rsasm is
+struck from the list and generated again.

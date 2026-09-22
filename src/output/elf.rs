@@ -276,10 +276,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     let mut sec_index: HashMap<SectionId, u16> = HashMap::new();
     let mut emitted: Vec<SectionId> = Vec::new();
 
-    // NASM always emits the default `.text`, even with nothing in it, since
-    // its standard macros make it the initial section; a data-only NASM
-    // program still has an (empty) `.text` in its object.
-    let nasm_text = asm.options.dialect == crate::lexer::Dialect::Nasm;
+    // NASM writes every section a `section` directive named, empty or not,
+    // and the initial `.text` its standard macros select only when something
+    // went into it: a data-only NASM program has no `.text` in its object.
+    let nasm_named =
+        |id| asm.options.dialect == crate::lexer::Dialect::Nasm && asm.nasm.opened.contains(&id);
     // The sections the target writes of its own accord keep the type and
     // flags their psABI gives them, which the section model has no room for:
     // see `Architecture::elf_attributes`.
@@ -300,8 +301,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         })
         .collect();
     for s in &asm.sections {
-        let keep_empty = (nasm_text && s.id == SectionId(0) && asm.interner.get(s.name) == ".text")
-            || labelled.contains(&s.id);
+        let keep_empty = nasm_named(s.id) || labelled.contains(&s.id);
         if s.size == 0 && s.frags.is_empty() && !keep_empty {
             continue;
         }
@@ -639,8 +639,13 @@ fn collect_symbols(
         // A symbol declared global and never defined is written even if
         // nothing refers to it, as both references write it: it makes the
         // linker pull in whatever defines it, which is what the
-        // `.globl __do_copy_data` avr-gcc and Clang emit is for.
-        if !sym.is_defined() && !sym.used && sym.binding != Binding::Global {
+        // `.globl __do_copy_data` avr-gcc and Clang emit is for. NASM has no
+        // spelling for that — an undefined symbol there was declared
+        // `extern` — and leaves one nothing refers to out of the object, so
+        // the NASM dialect does the same.
+        let keep_undefined =
+            sym.binding == Binding::Global && asm.options.dialect != crate::lexer::Dialect::Nasm;
+        if !sym.is_defined() && !sym.used && !keep_undefined {
             continue;
         }
         // A `.L` label is local to the assembly, by the ELF convention GNU as

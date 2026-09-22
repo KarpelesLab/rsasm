@@ -200,9 +200,10 @@ pub const IMM64: u32 = 1 << 4;
 /// this: `xchg eax, eax` must not encode as `90`, which is `nop` and does not
 /// clear the upper half of `rax`.
 pub const NOTACC: u32 = 1 << 5;
-/// A 64-bit form that needs no REX.W, because the plain opcode already means
-/// what the source asked for. `xchg rax, rax` is the one case: it is spelled
-/// `90`, the canonical `nop`.
+/// A 64-bit form that needs no REX.W, because the opcode already fixes the
+/// width: a control or debug register is as wide as the mode on its own, the
+/// 64-bit `0f 01` system rows have no other size, and `lar` and `lsl` produce
+/// at most 32 bits whatever register they are given.
 pub const NO_REX_W: u32 = 1 << 6;
 /// The instruction accepts embedded rounding control (`{rn-sae}` and its
 /// siblings). Only the 512-bit and scalar forms of the operations whose result
@@ -249,6 +250,11 @@ pub(crate) const DISTINCT_DEST: u32 = 1 << 18;
 /// RIP-relative: AMX's tile loads and stores take their stride from the
 /// index register, and have no encoding without one.
 pub(crate) const SIBMEM: u32 = 1 << 19;
+/// A 64-bit form GNU as writes without REX.W although the register asked for
+/// it. `xchg rax, rax` is the one case: GNU as spells it `90`, the canonical
+/// `nop`, and NASM writes the `48 90` the operands name. Both do nothing, so
+/// each dialect keeps the spelling its own reference produces.
+pub(crate) const NO_REX_W_GAS: u32 = 1 << 20;
 
 /// Which prefix family carries the instruction.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
