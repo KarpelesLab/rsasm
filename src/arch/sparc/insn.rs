@@ -12,6 +12,22 @@
 //! op=3  format 3   loads and stores, same shape, different `op3` space
 //! ```
 
+use super::reg::FpWidth;
+
+/// What a `%fsr` or `%fq` operand means for a load or store.
+///
+/// Both name the floating-point state rather than a register, so neither
+/// fills a field: the mnemonic and the register together pick a different
+/// opcode, and the `rd` field carries what is left of the distinction.
+#[derive(Copy, Clone, Debug)]
+pub enum StateOp {
+    /// `%fsr`, with the `rd` that says how much of it moves: `ld`/`st` carry
+    /// the low 32 bits and `ldx`/`stx` all 64.
+    Fsr(u8),
+    /// `%fq`, the exception queue, which only `std` reads.
+    Fq,
+}
+
 /// A load or store. `op3` lives in the `op=3` opcode space.
 #[derive(Copy, Clone, Debug)]
 pub struct MemForm {
@@ -21,10 +37,16 @@ pub struct MemForm {
     /// mnemonic, so `ld [%o0], %f1` is a different instruction from
     /// `ld [%o0], %g1`.
     pub fop3: Option<u8>,
+    /// How wide that float form's register is, which is what says whether
+    /// `%f32` and above can name it.
+    pub fwidth: FpWidth,
     /// True when the data register comes first: `st %g1, [%o0]`.
     pub store: bool,
     /// The data register must be a float register (`ldf`, `stdf`, ...).
     pub float_only: bool,
+    /// What `%fsr` or `%fq` means here, for the mnemonics that move the
+    /// floating-point state.
+    pub state: Option<StateOp>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -44,6 +66,9 @@ pub enum Form {
         cond: u8,
         predicted: bool,
     },
+    /// `fb<cc>`: `FBfcc`, or the V9 `FBPfcc` with a `%fccN` operand. The
+    /// condition is numbered by [`fcond_code`], not [`cond_code`].
+    BranchFloat(u8),
     /// V9 branch on the contents of a register (`BPr`).
     BranchReg(u8),
     Call,
@@ -53,12 +78,40 @@ pub enum Form {
     Window(u8),
     /// V9 `return`, spelled `rett` in V8.
     Return,
-    /// `FPop1` with two sources: `frs1, frs2, frd`.
-    FpBin(u16),
-    /// `FPop1` with one source: `frs2, frd`.
-    FpUn(u16),
-    /// `FPop2` compare: `frs1, frs2`.
-    FpCmp(u16),
+    /// `FPop1` with two sources: `frs1, frs2, frd`. The two widths differ
+    /// only for `fsmuld` and `fdmulq`, which widen their result.
+    FpBin {
+        opf: u16,
+        src: FpWidth,
+        dst: FpWidth,
+    },
+    /// `FPop1` with one source: `frs2, frd`. The conversions are this form
+    /// with two different widths.
+    FpUn {
+        opf: u16,
+        src: FpWidth,
+        dst: FpWidth,
+    },
+    /// `FPop2` compare: `frs1, frs2`, or `%fccN, frs1, frs2` on V9, where the
+    /// bank the result lands in rides in the `rd` field.
+    FpCmp {
+        opf: u16,
+        width: FpWidth,
+    },
+    /// V9 `fmov<s|d|q><cc> %icc, frs2, frd`, or `%fccN`. As with [`MovCc`],
+    /// which condition table the name comes from is what the operand picks.
+    ///
+    /// [`MovCc`]: Form::MovCc
+    FpMovCc {
+        icc: Option<u8>,
+        fcc: Option<u8>,
+        width: FpWidth,
+    },
+    /// V9 `fmovr<s|d|q><cond> rs1, frs2, frd`.
+    FpMovReg {
+        rcond: u8,
+        width: FpWidth,
+    },
     /// V9 `mov<cc> %icc, reg_or_imm, rd`, or `%fccN`, which selects the
     /// floating-point condition names instead. The two tables share names
     /// with different values -- `e` is 1 against `%icc` and 9 against a
@@ -164,28 +217,46 @@ fn mem(op3: u8, store: bool) -> Def {
     v8(Form::Mem(MemForm {
         op3,
         fop3: None,
+        fwidth: FpWidth::Single,
         store,
         float_only: false,
+        state: None,
     }))
 }
 
 /// `ld`, `st`, `ldd` and `std`, whose opcode depends on the register class.
-fn mem_either(op3: u8, fop3: u8, store: bool) -> Def {
+fn mem_either(op3: u8, fop3: u8, fwidth: FpWidth, store: bool, state: Option<StateOp>) -> Def {
     v8(Form::Mem(MemForm {
         op3,
         fop3: Some(fop3),
+        fwidth,
         store,
         float_only: false,
+        state,
+    }))
+}
+
+/// `ldx` and `stx`, which move no float register but do move `%fsr`.
+fn mem_state(op3: u8, store: bool, state: Option<StateOp>) -> Def {
+    v8(Form::Mem(MemForm {
+        op3,
+        fop3: None,
+        fwidth: FpWidth::Single,
+        store,
+        float_only: false,
+        state,
     }))
 }
 
 /// `ldf`, `stdf` and friends: GNU as spellings that pin the float form.
-fn mem_float(op3: u8, store: bool) -> Def {
+fn mem_float(op3: u8, fwidth: FpWidth, store: bool) -> Def {
     v8(Form::Mem(MemForm {
         op3,
         fop3: Some(op3),
+        fwidth,
         store,
         float_only: true,
+        state: None,
     }))
 }
 
@@ -257,22 +328,28 @@ fn alu(name: &str) -> Option<Def> {
 
 #[rustfmt::skip]
 fn memory(name: &str) -> Option<Def> {
+    use FpWidth::{Double, Single};
+    // `ld`/`st` and `ldx`/`stx` also move `%fsr`. That pair of opcodes is the
+    // same for all four mnemonics; `rd` is the only thing that says whether
+    // the low 32 bits move or all 64.
+    let fsr32 = Some(StateOp::Fsr(0));
+    let fsr64 = Some(StateOp::Fsr(1));
     Some(match name {
-        "ld"   => mem_either(0x00, 0x20, false),
-        "lduw" => mem_either(0x00, 0x20, false),
+        "ld"   => mem_either(0x00, 0x20, Single, false, fsr32),
+        "lduw" => mem_either(0x00, 0x20, Single, false, fsr32),
         "ldub" => mem(0x01, false),
         "lduh" => mem(0x02, false),
-        "ldd"  => mem_either(0x03, 0x23, false),
+        "ldd"  => mem_either(0x03, 0x23, Double, false, None),
         "ldsb" => mem(0x09, false),
         "ldsh" => mem(0x0a, false),
-        "st" | "stw" => mem_either(0x04, 0x24, true),
+        "st" | "stw" => mem_either(0x04, 0x24, Single, true, fsr32),
         "stb"  => mem(0x05, true),
         "sth"  => mem(0x06, true),
-        "std"  => mem_either(0x07, 0x27, true),
-        "ldf"  => mem_float(0x20, false),
-        "lddf" => mem_float(0x23, false),
-        "stf"  => mem_float(0x24, true),
-        "stdf" => mem_float(0x27, true),
+        "std"  => mem_either(0x07, 0x27, Double, true, Some(StateOp::Fq)),
+        "ldf"  => mem_float(0x20, Single, false),
+        "lddf" => mem_float(0x23, Double, false),
+        "stf"  => mem_float(0x24, Single, true),
+        "stdf" => mem_float(0x27, Double, true),
         // V9 widened the integer registers to 64 bits and added the opcodes
         // that move all of them.
         // Read-modify-write: both exchange with memory and hand the old
@@ -280,8 +357,8 @@ fn memory(name: &str) -> Option<Def> {
         "ldstub" => mem(0x0d, false),
         "swap" => mem(0x0f, false),
         "ldsw" => Def { v9: true, ..mem(0x08, false) },
-        "ldx"  => Def { v9: true, ..mem(0x0b, false) },
-        "stx"  => Def { v9: true, ..mem(0x0e, true) },
+        "ldx"  => Def { v9: true, ..mem_state(0x0b, false, fsr64) },
+        "stx"  => Def { v9: true, ..mem_state(0x0e, true, fsr64) },
         _ => return None,
     })
 }
@@ -303,12 +380,36 @@ fn control(name: &str) -> Option<Def> {
                 predicted: false,
             }));
         }
+        // `fb` on its own is `fba`, the same way `b` is `ba`.
+        "fb" => return Some(v8(BranchFloat(8))),
         "return" => return Some(v9(Return)),
         _ => {}
     }
     // `b<cc>` and the V9 `bp<cc>`, `br<cond>`, `mov<cc>`, `movr<cond>` and
     // `t<cc>` families are all "opcode plus condition name", so they are
     // decoded from the mnemonic rather than listed one by one.
+    //
+    // The floating-point moves come first because `fmovs` is both the plain
+    // move in `float` below and the stem of `fmovse`; a condition name is
+    // what tells them apart, and an empty one is not a condition.
+    if let Some(rest) = name.strip_prefix("fmovr")
+        && let Some((width, cond)) = width_prefix(rest)
+        && let Some(rcond) = rcond_code(cond)
+    {
+        return Some(v9(FpMovReg { rcond, width }));
+    }
+    if let Some(rest) = name.strip_prefix("fmov")
+        && let Some((width, cond)) = width_prefix(rest)
+        && let (icc, fcc) = (cond_code(cond), fcond_code(cond))
+        && (icc.is_some() || fcc.is_some())
+    {
+        return Some(v9(FpMovCc { icc, fcc, width }));
+    }
+    if let Some(rest) = name.strip_prefix("fb")
+        && let Some(cond) = fcond_code(rest)
+    {
+        return Some(v8(BranchFloat(cond)));
+    }
     if let Some(rest) = name.strip_prefix("movr")
         && let Some(rcond) = rcond_code(rest)
     {
@@ -349,33 +450,81 @@ fn control(name: &str) -> Option<Def> {
     None
 }
 
+/// `FPop1` with both operand widths the same, which is all of the arithmetic
+/// but the two widening multiplies.
+const fn fp_bin(opf: u16, w: FpWidth) -> Form {
+    Form::FpBin {
+        opf,
+        src: w,
+        dst: w,
+    }
+}
+
+const fn fp_un(opf: u16, src: FpWidth, dst: FpWidth) -> Form {
+    Form::FpUn { opf, src, dst }
+}
+
 #[rustfmt::skip]
 fn float(name: &str) -> Option<Def> {
-    use Form::*;
+    use FpWidth::{Double, Quad, Single};
+    use Form::FpCmp;
     Some(match name {
-        "fadds" => v8(FpBin(0x41)), "faddd" => v8(FpBin(0x42)), "faddq" => v8(FpBin(0x43)),
-        "fsubs" => v8(FpBin(0x45)), "fsubd" => v8(FpBin(0x46)), "fsubq" => v8(FpBin(0x47)),
-        "fmuls" => v8(FpBin(0x49)), "fmuld" => v8(FpBin(0x4a)), "fmulq" => v8(FpBin(0x4b)),
-        "fdivs" => v8(FpBin(0x4d)), "fdivd" => v8(FpBin(0x4e)), "fdivq" => v8(FpBin(0x4f)),
-        "fsmuld" => v8(FpBin(0x69)),
+        "fadds" => v8(fp_bin(0x41, Single)), "faddd" => v8(fp_bin(0x42, Double)), "faddq" => v8(fp_bin(0x43, Quad)),
+        "fsubs" => v8(fp_bin(0x45, Single)), "fsubd" => v8(fp_bin(0x46, Double)), "fsubq" => v8(fp_bin(0x47, Quad)),
+        "fmuls" => v8(fp_bin(0x49, Single)), "fmuld" => v8(fp_bin(0x4a, Double)), "fmulq" => v8(fp_bin(0x4b, Quad)),
+        "fdivs" => v8(fp_bin(0x4d, Single)), "fdivd" => v8(fp_bin(0x4e, Double)), "fdivq" => v8(fp_bin(0x4f, Quad)),
+        // The two multiplies that widen: the product needs twice the bits the
+        // factors have, so the destination is a register pair or quad.
+        "fsmuld" => v8(Form::FpBin { opf: 0x69, src: Single, dst: Double }),
+        "fdmulq" => v8(Form::FpBin { opf: 0x6e, src: Double, dst: Quad }),
 
-        "fmovs" => v8(FpUn(0x01)), "fnegs" => v8(FpUn(0x05)), "fabss" => v8(FpUn(0x09)),
+        "fmovs" => v8(fp_un(0x01, Single, Single)), "fnegs" => v8(fp_un(0x05, Single, Single)),
+        "fabss" => v8(fp_un(0x09, Single, Single)),
         // The double and quad register-to-register moves only exist on V9;
         // on V8 they are written as two or four `fmovs`.
-        "fmovd" => v9(FpUn(0x02)), "fnegd" => v9(FpUn(0x06)), "fabsd" => v9(FpUn(0x0a)),
-        "fmovq" => v9(FpUn(0x03)), "fnegq" => v9(FpUn(0x07)), "fabsq" => v9(FpUn(0x0b)),
+        "fmovd" => v9(fp_un(0x02, Double, Double)), "fnegd" => v9(fp_un(0x06, Double, Double)),
+        "fabsd" => v9(fp_un(0x0a, Double, Double)),
+        "fmovq" => v9(fp_un(0x03, Quad, Quad)), "fnegq" => v9(fp_un(0x07, Quad, Quad)),
+        "fabsq" => v9(fp_un(0x0b, Quad, Quad)),
 
-        "fsqrts" => v8(FpUn(0x29)), "fsqrtd" => v8(FpUn(0x2a)), "fsqrtq" => v8(FpUn(0x2b)),
-        "fitos" => v8(FpUn(0xc4)), "fitod" => v8(FpUn(0xc8)), "fitoq" => v8(FpUn(0xcc)),
-        "fstoi" => v8(FpUn(0xd1)), "fdtoi" => v8(FpUn(0xd2)), "fqtoi" => v8(FpUn(0xd3)),
-        "fstod" => v8(FpUn(0xc9)), "fstoq" => v8(FpUn(0xcd)),
-        "fdtos" => v8(FpUn(0xc6)), "fdtoq" => v8(FpUn(0xce)),
-        "fqtos" => v8(FpUn(0xc7)), "fqtod" => v8(FpUn(0xcb)),
+        "fsqrts" => v8(fp_un(0x29, Single, Single)), "fsqrtd" => v8(fp_un(0x2a, Double, Double)),
+        "fsqrtq" => v8(fp_un(0x2b, Quad, Quad)),
+        // The conversions are the same form with the two widths apart. A
+        // 32-bit integer sits in a single register and a 64-bit one in a
+        // double, whatever the value in it means.
+        "fitos" => v8(fp_un(0xc4, Single, Single)), "fitod" => v8(fp_un(0xc8, Single, Double)),
+        "fitoq" => v8(fp_un(0xcc, Single, Quad)),
+        "fstoi" => v8(fp_un(0xd1, Single, Single)), "fdtoi" => v8(fp_un(0xd2, Double, Single)),
+        "fqtoi" => v8(fp_un(0xd3, Quad, Single)),
+        "fstod" => v8(fp_un(0xc9, Single, Double)), "fstoq" => v8(fp_un(0xcd, Single, Quad)),
+        "fdtos" => v8(fp_un(0xc6, Double, Single)), "fdtoq" => v8(fp_un(0xce, Double, Quad)),
+        "fqtos" => v8(fp_un(0xc7, Quad, Single)), "fqtod" => v8(fp_un(0xcb, Quad, Double)),
+        // V9 added the conversions to and from a 64-bit integer, which needs
+        // a register pair to hold it whatever the other side is.
+        "fxtos" => v9(fp_un(0x84, Double, Single)), "fxtod" => v9(fp_un(0x88, Double, Double)),
+        "fxtoq" => v9(fp_un(0x8c, Double, Quad)),
+        "fstox" => v9(fp_un(0x81, Single, Double)), "fdtox" => v9(fp_un(0x82, Double, Double)),
+        "fqtox" => v9(fp_un(0x83, Quad, Double)),
 
-        "fcmps" => v8(FpCmp(0x51)), "fcmpd" => v8(FpCmp(0x52)), "fcmpq" => v8(FpCmp(0x53)),
-        "fcmpes" => v8(FpCmp(0x55)), "fcmped" => v8(FpCmp(0x56)), "fcmpeq" => v8(FpCmp(0x57)),
+        "fcmps" => v8(FpCmp { opf: 0x51, width: Single }), "fcmpd" => v8(FpCmp { opf: 0x52, width: Double }),
+        "fcmpq" => v8(FpCmp { opf: 0x53, width: Quad }),
+        "fcmpes" => v8(FpCmp { opf: 0x55, width: Single }), "fcmped" => v8(FpCmp { opf: 0x56, width: Double }),
+        "fcmpeq" => v8(FpCmp { opf: 0x57, width: Quad }),
         _ => return None,
     })
+}
+
+/// The `s`, `d` or `q` that ends a mnemonic's stem, with the rest after it:
+/// `fmovd` + `e` in `fmovde`, `fmovr` + `s` + `gz` in `fmovrsgz`.
+fn width_prefix(rest: &str) -> Option<(FpWidth, &str)> {
+    let (letter, tail) = rest.split_at_checked(1)?;
+    let w = match letter {
+        "s" => FpWidth::Single,
+        "d" => FpWidth::Double,
+        "q" => FpWidth::Quad,
+        _ => return None,
+    };
+    Some((w, tail))
 }
 
 #[cfg(test)]
@@ -420,9 +569,54 @@ mod tests {
     /// llvm-mc assemble it.
     #[test]
     fn unknown_mnemonics_are_not_invented() {
-        for bad in ["", "t", "mov", "movr", "br", "bp", "zzz", "ldq"] {
+        for bad in [
+            "", "t", "mov", "movr", "br", "bp", "zzz", "ldq", "fmov", "fmovr", "fmovrs", "fmovx",
+        ] {
             assert!(lookup(bad).is_none(), "`{bad}` should not resolve");
         }
+        // `b` is `ba` and `fb` is `fba`; both are spellings the disassembler
+        // prints.
         assert!(lookup("b").is_some());
+        assert!(lookup("fb").is_some());
+    }
+
+    /// The floating-point moves are read as a stem, a width letter and a
+    /// condition, which the plain `fmovs`, `fmovd` and `fmovq` must survive.
+    #[test]
+    fn a_width_letter_alone_is_not_a_conditional_move() {
+        assert!(matches!(
+            lookup("fmovs"),
+            Some(Def {
+                form: Form::FpUn { opf: 0x01, .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            lookup("fmovse"),
+            Some(Def {
+                form: Form::FpMovCc {
+                    icc: Some(1),
+                    fcc: Some(9),
+                    ..
+                },
+                ..
+            })
+        ));
+        assert!(matches!(
+            lookup("fmovrsgz"),
+            Some(Def {
+                form: Form::FpMovReg { rcond: 6, .. },
+                ..
+            })
+        ));
+        // `fbne` is 1 in the floating-point table where the integer `bne` is
+        // 9, so the two prefixes really do read different tables.
+        assert!(matches!(
+            lookup("fbne"),
+            Some(Def {
+                form: Form::BranchFloat(1),
+                ..
+            })
+        ));
     }
 }

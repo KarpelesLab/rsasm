@@ -97,10 +97,9 @@ pub fn assemble(cx: &mut AsmCtx<'_>, m: &str, span: Span, ops: &[Operand]) -> Op
 
         "jmp" => {
             expect(cx, m, span, ops, 1)?;
-            let Some(addr) = ops[0].as_addr() else {
-                cx.error(ops[0].span, "`jmp` takes an address such as `%o7 + 8`");
-                return None;
-            };
+            // `jmp` is `jmpl ..., %g0` and reads its target the same way,
+            // which includes a bare value: that is `%g0 + value`.
+            let addr = encode::target(cx, &ops[0])?;
             let (rs1, low, fixup) = encode::address(cx, &addr)?;
             Some(encode::one(word(
                 encode::format3(encode::OP_ALU, 0, u32::from(JMPL), rs1, low),

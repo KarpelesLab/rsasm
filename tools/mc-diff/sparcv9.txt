@@ -1,0 +1,131 @@
+# SPARC V9 corpus. The harness assembles these with the `sparcv9` triple, so
+# this is where the 64-bit instructions and the operands V9 added go; the V8
+# set they build on is in sparc.txt and is not repeated here.
+
+# ---- the 64-bit integer instructions --------------------------------------
+mulx %g1, %g2, %g3
+mulx %g1, 5, %g3
+udivx %g1, %g2, %g3
+sdivx %g1, %g2, %g3
+sllx %g1, 3, %g2
+srlx %g1, 3, %g2
+srax %g1, 63, %g2
+sllx %g1, %g2, %g3
+ldx [%g1 + %g2], %g3
+ldx [%sp + 2047], %g2
+ldsw [%g1 + %g2], %g3
+stx %g3, [%sp - 8]
+return %i7 + 8
+return %i7
+
+# ---- the conditional moves -------------------------------------------------
+move %icc, %g2, %g1
+movne %icc, 1, %g1
+movl %icc, 3, %g1
+movgu %xcc, %g2, %g1
+mova %xcc, -1024, %g1
+movrz %g1, %g2, %g3
+movrnz %g1, %g2, %g3
+movrlez %g1, 5, %g3
+
+# ---- the floating-point conditional moves ----------------------------------
+# `FMOVcc` numbers all six condition-code banks in one three-bit field, the
+# four `%fcc`s first and the integer pair above them, and reads its condition
+# name from whichever table the bank belongs to.
+fmovse %icc, %f1, %f2
+fmovse %xcc, %f1, %f2
+fmovsne %icc, %f1, %f2
+fmovsa %icc, %f1, %f2
+fmovsn %icc, %f1, %f2
+fmovsgu %icc, %f1, %f2
+fmovsle %xcc, %f1, %f2
+fmovse %fcc0, %f1, %f2
+fmovse %fcc3, %f1, %f2
+fmovslg %fcc0, %f1, %f2
+fmovsu %fcc2, %f1, %f2
+fmovsuge %fcc2, %f1, %f2
+fmovde %fcc1, %f2, %f4
+fmovqe %fcc1, %f4, %f8
+fmovde %fcc1, %f32, %f62
+fmovqa %fcc1, %f32, %f60
+# `FMOVr` tests a whole register against zero instead, and its `opf_low` is
+# four above the condition-code form's.
+fmovrse %g1, %f1, %f2
+fmovrsz %g1, %f1, %f2
+fmovrsne %g1, %f1, %f2
+fmovrslez %g1, %f1, %f2
+fmovrslz %g1, %f1, %f2
+fmovrsgz %g1, %f1, %f2
+fmovrsgez %g1, %f1, %f2
+fmovrdz %g1, %f2, %f4
+fmovrqz %g1, %f4, %f8
+fmovrde %i7, %f32, %f62
+
+# ---- the register-to-register moves V9 added -------------------------------
+fmovd %f0, %f2
+fnegd %f0, %f2
+fabsd %f0, %f2
+fmovq %f0, %f4
+fnegq %f0, %f4
+fabsq %f0, %f4
+fmovd %f32, %f34
+fmovq %f32, %f36
+
+# ---- the upper half of the floating-point file -----------------------------
+# V9 doubled the register file without widening the five-bit field, so
+# `%f32`-`%f62` take the values a double or quad register can never use: bit 5
+# of the number travels in bit 0.
+faddd %f32, %f34, %f62
+fsubd %f34, %f36, %f38
+fmuld %f40, %f42, %f44
+fdivd %f46, %f48, %f50
+fsqrtd %f52, %f54
+fnegd %f56, %f58
+fabsd %f60, %f62
+faddq %f32, %f36, %f60
+fdmulq %f32, %f34, %f36
+fitod %f1, %f32
+fdtoi %f32, %f1
+fstod %f1, %f32
+fsmuld %f1, %f2, %f32
+fcmpd %f32, %f34
+ldd [%o0], %f32
+std %f32, [%o0]
+
+# ---- the conversions to and from a 64-bit integer --------------------------
+fxtos %f2, %f1
+fxtod %f2, %f4
+fxtoq %f2, %f4
+fstox %f1, %f2
+fdtox %f2, %f4
+fqtox %f4, %f2
+
+# ---- a compare that names the bank it writes -------------------------------
+fcmps %fcc0, %f1, %f2
+fcmps %fcc3, %f1, %f2
+fcmpd %fcc2, %f2, %f4
+fcmpq %fcc1, %f4, %f8
+fcmpes %fcc1, %f1, %f2
+fcmped %fcc3, %f60, %f62
+
+# ---- the trap that names a bank --------------------------------------------
+te %icc, 5
+te %xcc, 5
+ta %icc, 0
+tn %xcc, %g0 + 3
+tvc %icc, 5
+tgu %xcc, 100
+te %icc, 127
+te %xcc, %g1 + %g2
+te %icc, %g1 + 5
+
+# ---- the floating-point state registers ------------------------------------
+# `ld`/`st` move 32 bits of `%fsr` and `ldx`/`stx` all 64, which is the whole
+# difference between the two pairs: they share an opcode and differ in `rd`.
+ld [%o0], %fsr
+ldx [%o0], %fsr
+st %fsr, [%o0]
+stx %fsr, [%o0]
+ldx [%o0 + 8], %fsr
+stx %fsr, [%sp + 2047]
+std %fq, [%o0]

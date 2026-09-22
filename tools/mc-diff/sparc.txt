@@ -104,6 +104,15 @@ ld [%o0], %f1
 st %f1, [%o0]
 ldd [%o0], %f0
 std %f0, [%o0]
+# `%fsr` and `%fq` are opcodes of their own rather than a register in a
+# field: naming one is what picks them.
+ld [%o0], %fsr
+ld [%o0 + 4], %fsr
+ld [%o0 + %o1], %fsr
+st %fsr, [%o0]
+st %fsr, [%sp + 64]
+std %fq, [%o0]
+std %fq, [%g1 + %g2]
 
 # ---- register windows ------------------------------------------------------
 save %sp, -96, %sp
@@ -147,7 +156,9 @@ fmuls %f0, %f1, %f2
 fmuld %f0, %f2, %f4
 fdivs %f0, %f1, %f2
 fdivd %f0, %f2, %f4
+# The two multiplies whose result is wider than their factors.
 fsmuld %f0, %f1, %f2
+fdmulq %f0, %f2, %f4
 fmovs %f1, %f2
 fnegs %f1, %f2
 fabss %f1, %f2
