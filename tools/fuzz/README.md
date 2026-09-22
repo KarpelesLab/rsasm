@@ -501,11 +501,19 @@ symbol in a twelve-bit field where both references insist on `%lo`, and it
 reads the twenty-bit field of `lui` and `auipc` as signed as well as
 unsigned.
 
+One case in eight is a small program rather than a single instruction: a
+forward branch to the label the harness defines after every case, over a
+gap drawn from the distances that sit on and just past the reach of each
+branch form. That is the only way the choice between a two-byte branch, a
+four-byte one and the opposite branch over a `jal` is reached at all.
+
 Running it found the aliases both references read and rsasm did not (`and
 a0, a1, 4` for `andi` and the rest of that family, `csrw frm, 3`, `move`,
 `sgt`, `zext.b`, the `sext`/`zext` shift pairs, `scall`, `sbreak`,
 `fmv.s.x`, `jr off(rs)`), an `sext.b` whose second shift came out logical
-instead of arithmetic, and a `csrrw x0, cycle, x0` compressed to `c.unimp`.
+instead of arithmetic, a `csrrw x0, cycle, x0` compressed to `c.unimp`, and
+a conditional branch past +-4 KiB that was refused where both references
+write the opposite branch over a `jal`.
 
 ## MIPS, SPARC, SuperH, RX, RL78, V850 and the Z80
 
