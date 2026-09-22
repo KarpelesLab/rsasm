@@ -349,6 +349,13 @@ pub struct Assembler {
     /// The literals each section's next pool will hold; see
     /// [`crate::literals`].
     pub(crate) literal_pools: HashMap<SectionId, Vec<crate::arch::LiteralRequest>>,
+    /// How far each section's next literal pool is aligned, where that is
+    /// more than the four bytes a pool starts out wanting. GNU as's ARM port
+    /// keeps the alignment on the pool itself, and a pool that a `.ltorg`
+    /// emptied keeps it: once a section has held an eight-byte entry, every
+    /// later pool in it is aligned to eight as well. See
+    /// [`crate::literals`].
+    pub(crate) literal_pool_align: HashMap<SectionId, u64>,
     /// The mapping symbols of the finished object; see the crate's `mapping`
     /// module. Not API.
     #[doc(hidden)]
@@ -415,6 +422,7 @@ impl Assembler {
             tail_pads: Vec::new(),
             relocs_by_fragment: Vec::new(),
             literal_pools: HashMap::new(),
+            literal_pool_align: HashMap::new(),
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
             coff: crate::coff::State::default(),

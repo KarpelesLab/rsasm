@@ -218,6 +218,24 @@ pub enum Literal {
     Expr(ExprRef),
 }
 
+/// How a backend's literal pool is laid out; see
+/// [`Architecture::literal_pool`] and the crate's `literals` module. The two
+/// references differ, so each backend says which it follows.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum LiteralPool {
+    /// A pool per entry width, written narrowest first, each run aligned to
+    /// its own width: GNU as's AArch64 (`add_to_lit_pool` there keeps a
+    /// `literal_pool` per size and `s_ltorg` walks them in order).
+    ByWidth,
+    /// One array of four-byte slots, filled in the order the literals were
+    /// asked for: GNU as's ARM. An eight-byte entry takes two slots and has
+    /// to start at an eight-aligned one, so a padding slot may go in front
+    /// of it — and a later four-byte entry fills that padding slot rather
+    /// than appending.
+    Slots,
+}
+
 /// A PC-relative reference to a symbol defined in the fixup's own section,
 /// as [`Architecture::defers_to_linker`] is asked about it.
 #[derive(Copy, Clone, Debug)]
@@ -1044,6 +1062,12 @@ pub trait Architecture {
     /// literal pool, which are aligned to each run's width.
     fn align_padding_is_code(&self) -> bool {
         false
+    }
+
+    /// How the core lays out this backend's literal pools; see
+    /// [`LiteralPool`] and the crate's `literals` module.
+    fn literal_pool(&self) -> LiteralPool {
+        LiteralPool::ByWidth
     }
 
     /// Bits to record on a label as it is defined, in the backend's own

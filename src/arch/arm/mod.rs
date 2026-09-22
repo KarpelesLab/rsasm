@@ -292,6 +292,12 @@ impl Architecture for Arm {
         true
     }
 
+    /// `add_to_lit_pool` keeps an ARM pool as an array of four-byte slots in
+    /// the order the literals were asked for, not a run per width.
+    fn literal_pool(&self) -> crate::arch::LiteralPool {
+        crate::arch::LiteralPool::Slots
+    }
+
     /// Thumb branches, literal loads and `adr` are sized as GNU as's
     /// `arm_relax_frag` sizes them.
     fn relaxation(&self) -> crate::arch::Relaxation {
