@@ -1981,6 +1981,49 @@ impl Assembler {
                 return Vec::new();
             }
         };
+        // A thread-local access names a variable whose value only the linker
+        // works out, so GNU as refuses one it can already see is not such a
+        // variable: a number, a difference, a function, or a symbol defined
+        // outside a thread-local section. An undefined symbol is taken to be
+        // one, and is made one below. A mark on an instruction
+        // (`.tlsdesccall`) makes no such claim, and names whatever it is
+        // given.
+        let tls_access = effects.is_some_and(|x| x.tls)
+            || (kind.class == crate::reloc::RelocClass::ThreadLocal && kind.size > 0);
+        if tls_access {
+            let refusal = match (v.plus, v.minus) {
+                (Some(t), None) if self.symbols.get(t).ty == crate::symbol::SymType::Func => {
+                    Some(format!(
+                        "`{}` is a function, and is accessed as a thread-local variable",
+                        self.display_name(t)
+                    ))
+                }
+                (Some(t), None) => (self.symbols.get(t).is_defined() && !self.is_thread_local(t))
+                    .then(|| {
+                        format!(
+                            "`{}` is accessed as a thread-local variable, but is defined \
+                             outside a thread-local section",
+                            self.display_name(t)
+                        )
+                    }),
+                _ => Some(
+                    "a thread-local access needs a variable, not a number or a difference".into(),
+                ),
+            };
+            if let Some(msg) = refusal {
+                self.diags.error(span, msg);
+                return Vec::new();
+            }
+        }
+        // GNU as puts a mark on the four bytes after it, and refuses one with
+        // nothing after it to mark.
+        if kind.size == 0 && at >= self.section(section).size {
+            self.diags.error(
+                span,
+                "this marks the instruction after it, and nothing follows it in the section",
+            );
+            return Vec::new();
+        }
         if !self.options.relocatable
             && let Some(msg) = self.flat_refusal(e, kind, section, fi, at)
         {
@@ -2040,9 +2083,14 @@ impl Assembler {
             kind.reloc = r;
         }
         let kind = &kind;
-        if effects.is_some_and(|x| x.tls)
+        // Whatever `.type` said, GNU as makes the target of a thread-local
+        // access thread-local; the function it refuses above.
+        if tls_access
             && let Some(t) = v.plus
-            && self.symbols.get(t).ty == crate::symbol::SymType::NoType
+            && matches!(
+                self.symbols.get(t).ty,
+                crate::symbol::SymType::NoType | crate::symbol::SymType::Object
+            )
         {
             self.symbols.get_mut(t).ty = crate::symbol::SymType::Tls;
         }

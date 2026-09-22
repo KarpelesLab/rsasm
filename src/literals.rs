@@ -201,6 +201,10 @@ impl Assembler {
                 }
                 Request::Literal(lit) => self.literal_pools.entry(self.cur).or_default().push(lit),
                 Request::FlushLiterals => self.flush_literals(span),
+                Request::Mark { expr, kind } => {
+                    let espan = self.exprs.span(expr);
+                    self.cur_section().emit_fixup(0, expr, kind, espan);
+                }
                 // The last word on a tag wins, as it does in GNU as, where
                 // each directive overwrites the attribute.
                 Request::Attribute { vendor, tag, value } => {

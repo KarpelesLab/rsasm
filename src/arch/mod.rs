@@ -194,6 +194,14 @@ pub enum Request {
     Literal(LiteralRequest),
     /// Writes out the section's literal pool here: `.ltorg`.
     FlushLiterals,
+    /// A relocation that covers no bytes, placed where the section stands,
+    /// so on whatever is emitted next: AArch64's `.tlsdesccall sym` marks the
+    /// `blr` after it for the linker that rewrites the sequence. The fixup's
+    /// kind is zero bytes wide.
+    Mark {
+        expr: ExprRef,
+        kind: crate::section::FixupKind,
+    },
     /// What an attribute directive — ARM's `.eabi_attribute`, RISC-V's
     /// `.attribute`, PowerPC's `.gnu_attribute` — said one tag of the
     /// object's build attributes is. It replaces whatever
@@ -899,6 +907,16 @@ pub trait Architecture {
     /// has them. [`Architecture::modifier_reloc`] then says which relocation
     /// each picks, as it does for the `@` spelling.
     fn data_paren_modifiers(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Relocation modifiers this target's GNU as reads as a `%name(...)` call
+    /// around the whole value of the data directive `directive`: AArch64's
+    /// `.xword %dtprel(sym)`, which it reads in `.word`, `.long`, `.xword`
+    /// and `.dword` alone. Written only in lower case, and only as the whole
+    /// value. [`Architecture::modifier_reloc`] then says which relocation
+    /// each picks, and in which widths.
+    fn percent_modifiers(&self, _directive: &str) -> &'static [&'static str] {
         &[]
     }
 

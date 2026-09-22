@@ -135,6 +135,28 @@ impl Architecture for AArch64 {
         }
     }
 
+    /// `.xword %dtprel(sym)`, GNU as's one data modifier for AArch64, which
+    /// it reads in these four directives and accepts only in the eight-byte
+    /// two.
+    fn percent_modifiers(&self, directive: &str) -> &'static [&'static str] {
+        match directive {
+            ".word" | ".long" | ".xword" | ".dword" => &["dtprel"],
+            _ => &[],
+        }
+    }
+
+    fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
+        (name == "dtprel" && size == 8 && !pcrel).then_some(reloc::TLS_DTPREL64)
+    }
+
+    /// `%dtprel(sym)` makes an undefined `sym` thread-local, as GNU as does.
+    fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
+        crate::arch::ModifierSymbols {
+            needs: None,
+            tls: name == "dtprel",
+        }
+    }
+
     /// Darwin's page modifiers, each valid only on the field its name
     /// describes: `@PAGE` on an `adrp`, `@PAGEOFF` on the offset that
     /// completes it, and the `@GOT` pair for a load through the GOT.
@@ -199,19 +221,39 @@ impl Architecture for AArch64 {
     }
 
     /// `.ltorg` and `.pool` write the section's literal pool out here.
+    ///
+    /// `.tlsdesccall sym`, `.tlsdescadd sym` and `.tlsdescldr sym` put a
+    /// relocation covering no bytes on whatever comes next, which in a TLS
+    /// descriptor sequence is the `blr`, `add` or `ldr` a linker rewrites
+    /// when it relaxes the sequence to another model. llvm-mc knows only the
+    /// first. GNU as writes nothing at all for a value that is a number, and
+    /// neither does this; llvm-mc refuses one.
     fn directive(
         &self,
         cx: &mut AsmCtx<'_>,
         name: &str,
-        _cur: &mut crate::cursor::Cursor<'_>,
+        cur: &mut crate::cursor::Cursor<'_>,
     ) -> bool {
-        match name {
+        let mark = match name {
             ".ltorg" | ".pool" => {
                 cx.requests.push(crate::arch::Request::FlushLiterals);
-                true
+                return true;
             }
-            _ => false,
+            ".tlsdesccall" => reloc::TLSDESC_CALL,
+            ".tlsdescadd" => reloc::TLSDESC_ADD,
+            ".tlsdescldr" => reloc::TLSDESC_LDR,
+            _ => return false,
+        };
+        let Some(expr) = cx.expr_parser().parse(cur) else {
+            return true;
+        };
+        if cx.constant(expr).is_none() {
+            cx.requests.push(crate::arch::Request::Mark {
+                expr,
+                kind: encode::fixup_tls_mark(mark),
+            });
         }
+        true
     }
 
     /// A64 code is `$x`, and the literal pools and data in a code section
