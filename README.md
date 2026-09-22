@@ -124,7 +124,11 @@ form by form and in random whole programs as well.
   `:tlsdesc_off_g1:`), the `.tlsdesccall`, `.tlsdescadd` and `.tlsdescldr`
   marks, and `.xword %dtprel(sym)`, each on the instructions GNU as takes it
   on; none has an ILP32 form here, since the backend writes LP64 objects
-  only. PowerPC assembles them for both word sizes: `@tprel` and `@dtprel`
+  only. ARM and Thumb assemble GNU as's — `(TLSGD)`, `(TLSLDM)`, `(TLSLDO)`,
+  `(GOTTPOFF)`, `(TPOFF)` and `(TLSDESC)` in data, with the distance from the
+  `add` a compiler writes after them, `bl sym(tlscall)`, and the
+  `.tlsdescseq` mark on the instructions of a descriptor sequence. PowerPC
+  assembles them for both word sizes: `@tprel` and `@dtprel`
   with every half the object has (`@l`, `@ha`, `@higher`…), their DS forms
   and, on POWER10, the 34-bit field; the GOT entries `@got@tprel`,
   `@got@dtprel`, `@got@tlsgd` and `@got@tlsld` and their halves, with the
@@ -175,7 +179,9 @@ form by form and in random whole programs as well.
   (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
   `.word _GLOBAL_OFFSET_TABLE_`, `bl sym(PLT)`, and
   `movw`/`movt` with `:lower16:` and `:upper16:`, absolute or measured
-  against a label), `$a`/`$t`/`$d` mapping symbols, and the
+  against a label), the thread-local ones (`.word sym(TLSGD)` and the other
+  access models, `bl sym(tlscall)` and `.tlsdescseq`), `$a`/`$t`/`$d`
+  mapping symbols, and the
   `.ARM.attributes` section the linker reads to decide what the program may
   contain — without it GNU ld assumes the oldest architecture and routes
   every interworking call through a veneer; the whole
@@ -256,9 +262,9 @@ form by form and in random whole programs as well.
   `.debug_macro`/`.debug_names`
 - ARM: `-mimplicit-it`, so a conditional Thumb instruction needs an `it` block
   of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
-  pool entries; the relocation suffixes past the GOT and PLT ones --
-  `(TARGET1)`, `(TARGET2)`, `(SBREL)` and the thread-local `(TLSGD)` and
-  its relatives, which GNU as reads and rsasm refuses as unrecognised; and
+  pool entries; the relocation suffixes past the GOT, PLT and thread-local
+  ones -- `(TARGET1)`, `(TARGET2)` and `(SBREL)`, which GNU as reads and
+  rsasm refuses as unrecognised; and
   the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - ARM vectors: the floating-point immediate of `vmov.f32 s0, #1.0` and
@@ -302,13 +308,14 @@ form by form and in random whole programs as well.
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
-- thread-local storage on ARM: the symbols and sections are right
-  everywhere, but only x86-64, i386, AArch64, PowerPC and SuperH read the
-  access-model operands. ARM's `sym(TLSGD)` and its relatives are refused
-  with the reason; Mach-O's `@TLVP` and PE's thread-local sections are their
-  formats' own idea of the same thing, and are not there either, so an
-  AArch64 thread-local operator in either format is refused as llvm-mc
-  refuses it
+- thread-local storage on the other targets: the symbols and sections are
+  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC
+  and SuperH read the access-model operands; the rest refuse theirs (RISC-V's
+  `%tprel_hi`, MIPS's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives)
+  rather than assemble them as something else. Mach-O's `@TLVP` and PE's
+  thread-local sections are their formats' own idea of the same thing, and
+  are not there either, so an AArch64 thread-local operator in either format
+  is refused as llvm-mc refuses it
 - MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
   writes and llvm-mc, the reference here, does not; and the `.module` options
   that would change which instructions are accepted (the ISA names, the
@@ -412,6 +419,13 @@ backend. Five such choices are worth knowing about:
   as they do elsewhere: a common block's alignment is Darwin's power of two
   in the one and makes the block larger in the other, and `.lcomm` packs
   `.bss` in both, where the mingw GNU as aligns by size as on ELF.
+- **ARM's thread-local fields.** GNU as is followed. Against a variable
+  defined in the object, `x(TLSLDO) + n` leaves the variable's offset in the
+  field as well as `n`, which GNU ld then counts twice, and `x(TLSLDM) + n`
+  leaves zero where `n` is that offset; a Thumb `bl x(tlscall)` has a
+  displacement of zero; and `.tlsdescseq` in Thumb code writes
+  `R_ARM_THM_TLS_DESCSEQ`. llvm-mc writes `n` alone, the usual -4, and
+  `R_ARM_TLS_DESCSEQ`.
 - **m68k floating-point immediates.** Both references write a single or
   double precision `#1.5` the same way. An extended-precision one GNU as 2.47
   writes without the 16 zero bits of the 68881 format — its own `.extend`
@@ -1016,7 +1030,8 @@ is what hid them from rsasm for as long as it did.
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
   the x86, AArch64 and PowerPC thread-local access models, which the linker
-  turns into local exec, weak definitions a second object overrides, `.comm`
+  turns into local exec, ARM's and Thumb's, whose descriptor calls it turns
+  into initial exec, weak definitions a second object overrides, `.comm`
   symbols merged between objects with different sizes, `.bss`, and
   references into another object's sections. The targets whose linker
   relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked

@@ -324,6 +324,11 @@ pub struct Assembler {
     /// The alignment fragments put ahead of data that must already be
     /// aligned, which are errors if they pad; see `Assembler::align_data`.
     pub(crate) align_tests: Vec<(SectionId, u32)>,
+    /// Where a [`Request::Mark`](crate::arch::Request::Mark) put its
+    /// relocation, and how many bytes have to follow it in its reference
+    /// fragment: section, fragment index, offset in the fragment, bytes,
+    /// and the directive to blame.
+    pub(crate) mark_tests: Vec<(SectionId, u32, u32, u8, Span)>,
     /// What the attribute directives -- ARM's `.eabi_attribute`, RISC-V's
     /// `.attribute`, PowerPC's `.gnu_attribute` -- said, as
     /// (vendor, tag, value), in the order the source wrote them. Merged into
@@ -420,6 +425,7 @@ impl Assembler {
             end_of_source: false,
             relax_shift: None,
             align_tests: Vec::new(),
+            mark_tests: Vec::new(),
             attr_overrides: Vec::new(),
             cc_bare_labels: Vec::new(),
             cc_local_counter: 0,

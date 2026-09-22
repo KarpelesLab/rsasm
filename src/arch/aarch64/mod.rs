@@ -251,6 +251,8 @@ impl Architecture for AArch64 {
             cx.requests.push(crate::arch::Request::Mark {
                 expr,
                 kind: encode::fixup_tls_mark(mark),
+                as_data: false,
+                within: 0,
             });
         }
         true

@@ -155,3 +155,26 @@ f:      movw    r0, #:lower16:sym
         bx      lr
         .word   sym(GOT), sym(GOTOFF), sym(GOT_PREL)
         .word   _GLOBAL_OFFSET_TABLE_ - (f + 4)
+=== the thread-local suffixes and tlscall
+        @ Only undefined variables are here: for one defined in the object,
+        @ GNU as, which rsasm follows, leaves the symbol's value in the field
+        @ of `x(TLSLDO) + 4`, and zero in that of an `x(TLSLDM)` whose addend
+        @ is the value, where llvm-mc writes the addend alone
+        @ (tools/xas-diff/arm-relocs.txt). Two more are in
+        @ tools/xas-diff/thumb-relocs.txt alone: llvm-mc leaves the usual
+        @ -4 in a `bl sym(tlscall)`, where GNU as leaves a displacement of
+        @ zero, as it does in a `blx`; and it marks a Thumb instruction after
+        @ `.tlsdescseq` with the ARM `R_ARM_TLS_DESCSEQ`, where GNU as writes
+        @ `R_ARM_THM_TLS_DESCSEQ`.
+        .text
+f:      ldr     r0, .Lgd
+.LPIC0: add     r0, pc
+        blx     tv(tlscall)
+        blx     r1
+        nop.w
+        bx      lr
+        .p2align 2
+.Lgd:   .word   tv(TLSGD) + (. - .LPIC0 - 4)
+        .word   tv(TLSLDM) + (. - .LPIC0 - 4)
+        .word   tv(TLSLDO), tv(GOTTPOFF), tv(TPOFF), tv(TLSDESC)
+        .word   tv(tlsgd), tv(tlsldo) + 4, tv(tpoff) - 8

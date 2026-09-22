@@ -161,3 +161,26 @@ f:      movw    r0, #:lower16:sym
         bx      lr
         .word   sym(GOT), sym(GOTOFF), sym(GOT_PREL)
         .word   _GLOBAL_OFFSET_TABLE_ - (f + 8)
+=== the thread-local suffixes, tlscall and the descriptor sequence
+        @ Only undefined variables are here: for one defined in the object,
+        @ GNU as, which rsasm follows, leaves the symbol's value in the field
+        @ of `x(TLSLDO) + 4`, and zero in that of an `x(TLSLDM)` whose addend
+        @ is the value, where llvm-mc writes the addend alone
+        @ (tools/xas-diff/arm-relocs.txt).
+        .text
+f:      ldr     r0, .Lgd
+.LPIC0: add     r0, pc, r0
+        bl      tv(tlscall)
+        blx     tv(tlscall)
+        .tlsdescseq tv
+        add     r0, pc, r0
+        .tlsdescseq tv
+        ldr     r1, [r0, #4]
+        .tlsdescseq tv
+        blx     r1
+        bx      lr
+.Lgd:   .word   tv(TLSGD) + (. - .LPIC0 - 8)
+        .word   tv(TLSLDM) + (. - .LPIC0 - 8)
+        .word   tv(TLSLDO), tv(GOTTPOFF), tv(TPOFF), tv(TLSDESC)
+        .word   tv(tlsgd), tv(tlsldo) + 4, tv(tpoff) - 8
+        .word   tv(TLSDESC) + (. - .LPIC0 - 8)

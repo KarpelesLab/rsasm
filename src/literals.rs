@@ -201,16 +201,34 @@ impl Assembler {
                 }
                 Request::Literal(lit) => self.literal_pools.entry(self.cur).or_default().push(lit),
                 Request::FlushLiterals => self.flush_literals(span),
-                Request::Mark { expr, kind } => {
-                    let espan = self.exprs.span(expr);
-                    self.cur_section().emit_fixup(0, expr, kind, espan);
-                }
                 // The last word on a tag wins, as it does in GNU as, where
                 // each directive overwrites the attribute.
                 Request::Attribute { vendor, tag, value } => {
                     self.attr_overrides
                         .retain(|&(v, t, _)| (v, t) != (vendor, tag));
                     self.attr_overrides.push((vendor, tag, value));
+                }
+                Request::Mark {
+                    expr,
+                    kind,
+                    as_data,
+                    within,
+                } => {
+                    if as_data {
+                        self.map_data();
+                    }
+                    let espan = self.exprs.span(expr);
+                    let section = self.cur;
+                    let s = self.cur_section();
+                    s.emit_fixup(0, expr, kind, espan);
+                    // The fixup went into the open data fragment, which is
+                    // always the section's last.
+                    let frag = s.frags.len() - 1;
+                    let offset = s.frags[frag].size() as u32;
+                    if within > 0 {
+                        self.mark_tests
+                            .push((section, frag as u32, offset, within, span));
+                    }
                 }
             }
         }

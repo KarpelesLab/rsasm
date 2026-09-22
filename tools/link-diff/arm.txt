@@ -235,3 +235,77 @@ _start:
         .globl  reader
 reader:
         bx      lr
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, %function
+_start:
+        @ General dynamic: the offset of the variable's GOT pair from the
+        @ `add` that makes it an address.
+        ldr     r0, .Lgd
+.LPIC0: add     r0, pc, r0
+        bl      __tls_get_addr(PLT)
+        @ Local dynamic: one call for the module, then an offset per variable.
+        ldr     r0, .Lldm
+.LPIC1: add     r0, pc, r0
+        bl      __tls_get_addr(PLT)
+        ldr     r1, .Lldo
+        add     r1, r0, r1
+        ldr     r1, .Lldo2
+        add     r1, r0, r1
+        @ Initial exec, then local exec, from the thread pointer.
+        ldr     r2, .Lie
+.LPIC2: ldr     r2, [pc, r2]
+        mrc     p15, 0, r3, c13, c0, 3
+        add     r2, r3, r2
+        ldr     r4, .Lle
+        add     r4, r3, r4
+        ldr     r4, .Lle2
+        add     r4, r3, r4
+        @ A descriptor, called through `(tlscall)`, and the sequence that
+        @ `.tlsdescseq` marks for the linker to rewrite.
+        ldr     r0, .Ldesc
+.LPIC3: bl      tv3(tlscall)
+        ldr     r0, .Ldesc2
+        .tlsdescseq tv2
+.LPIC4: add     r0, pc, r0
+        .tlsdescseq tv2
+        ldr     r1, [r0, #4]
+        .tlsdescseq tv2
+        blx     r1
+        bx      lr
+.Lgd:   .word   tv(TLSGD) + (. - .LPIC0 - 8)
+.Lldm:  .word   tloc(TLSLDM) + (. - .LPIC1 - 8)
+.Lldo:  .word   tloc(TLSLDO)
+.Lldo2: .word   tv(tlsldo)
+.Lie:   .word   tv2(GOTTPOFF) + (. - .LPIC2 - 8)
+.Lle:   .word   tv3(TPOFF)
+.Lle2:  .word   tb(tpoff) + 4
+.Ldesc: .word   tv3(TLSDESC) + (. - .LPIC3)
+.Ldesc2: .word  tv2(tlsdesc) + (. - .LPIC4 - 8)
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .word   0x11223344
+tloc:   .word   99
+--- b.s
+        .section .tdata,"awT",%progbits
+        .globl  tv2, tv3
+tv2:    .word   2
+tv3:    .word   3
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  __tls_get_addr, helper
+        .type   __tls_get_addr, %function
+        .type   helper, %function
+__tls_get_addr:
+        bx      lr
+helper: mrc     p15, 0, r0, c13, c0, 3
+        ldr     r1, 1f
+        add     r1, r0, r1
+        bx      lr
+1:      .word   tb(TPOFF)
+        .data
+        .word   tv(TLSLDO), tv(TPOFF), tv2(tpoff) + 8

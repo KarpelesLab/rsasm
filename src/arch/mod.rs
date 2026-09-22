@@ -196,11 +196,22 @@ pub enum Request {
     FlushLiterals,
     /// A relocation that covers no bytes, placed where the section stands,
     /// so on whatever is emitted next: AArch64's `.tlsdesccall sym` marks the
-    /// `blr` after it for the linker that rewrites the sequence. The fixup's
-    /// kind is zero bytes wide.
+    /// `blr` after it for the linker that rewrites the sequence, and ARM's
+    /// `.tlsdescseq sym` the next instruction of a descriptor sequence. The
+    /// fixup's kind is zero bytes wide.
+    ///
+    /// ARM's GNU as treats its directive as data for the mapping symbols,
+    /// which the instruction after it then marks again as code: `as_data`
+    /// says so. It also gives the relocation a field of `within` bytes that
+    /// has to lie inside one of its fragments, so that many bytes must follow
+    /// before anything that starts another — an alignment, a `.space`, the
+    /// end of a relaxable instruction, or the end of the section. Zero asks
+    /// for nothing more than something after the mark.
     Mark {
         expr: ExprRef,
         kind: crate::section::FixupKind,
+        as_data: bool,
+        within: u8,
     },
     /// What an attribute directive — ARM's `.eabi_attribute`, RISC-V's
     /// `.attribute`, PowerPC's `.gnu_attribute` — said one tag of the
@@ -1249,6 +1260,17 @@ pub trait Architecture {
     /// field and ignores the entry's addend; GNU as writes both accordingly.
     fn addend_in_field(&self, _reloc: u32, rela: bool) -> bool {
         !rela
+    }
+
+    /// What a relocation of type `reloc` whose addend lives in its field
+    /// (see [`Architecture::addend_in_field`]) writes there, given the addend
+    /// and the value of the symbol the relocation names: its offset in its
+    /// section where it is defined, zero where it is undefined or common.
+    ///
+    /// Normally the addend. GNU as for ARM leaves the symbol's value in the
+    /// field of some thread-local relocations as well; see `Arm::rel_field`.
+    fn rel_field(&self, _reloc: u32, addend: i64, _symbol_value: i64) -> i64 {
+        addend
     }
 
     /// Whether a `RELA` relocation of type `reloc` against a label defined in

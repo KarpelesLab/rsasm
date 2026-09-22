@@ -31,6 +31,25 @@
 //! and it is what makes `.word _GLOBAL_OFFSET_TABLE_ - (1b + 8)` next to an
 //! `add rn, pc, rn` load the GOT's address.
 //!
+//! # Thread-local operands
+//!
+//! The access models are data suffixes like the GOT ones: `(TLSGD)`,
+//! `(TLSLDM)`, `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)` and `(TLSDESC)`, each an
+//! `R_ARM_TLS_*` relocation that names the variable rather than its section
+//! and makes an undefined one `STT_TLS`. What a compiler writes adds the
+//! distance from the `add rn, pc, rn` that uses the word,
+//! `.word x(TLSGD) + (. - .LPIC0 - 8)`; that distance is a number once the
+//! layout is known, and GNU as relocates `x` with it as the addend, not
+//! PC-relative. The fields are `REL`, and GNU as fills two of them other than
+//! with the addend alone; see `Arm::rel_field`.
+//!
+//! `(tlscall)` on a branch target is the call to a TLS descriptor's resolver,
+//! `R_ARM_TLS_CALL` or `R_ARM_THM_TLS_CALL`, and leaves the branch's
+//! displacement zero. `.tlsdescseq sym` marks the instruction after it, which
+//! a linker may rewrite, with `R_ARM_TLS_DESCSEQ` or `R_ARM_THM_TLS_DESCSEQ`,
+//! a relocation that covers none of its bits. GNU as also takes both as data
+//! suffixes, `(TLSCALL)` and `(TLSDESCSEQ)`, and so does this backend.
+//!
 //! # Deliberate differences from GNU as
 //!
 //! GNU as is the reference for what this backend writes — its literal pools,
@@ -66,9 +85,13 @@
 //! reading, and is `.word sym + 4` here. `.4byte` and `.int` are plain
 //! four-byte directives in GNU as, which gives the suffix only to `.word` and
 //! `.long`, and take it here. A suffix GNU as knows but this backend has no
-//! relocation for — `(TARGET1)`, `(SBREL)`, the thread-local ones — is
-//! refused as unrecognised. And `sym(GOT) - label` is refused, there being no
-//! PC-relative counterpart of `R_ARM_GOT_BREL` for the difference to become.
+//! relocation for — `(TARGET1)`, `(TARGET2)`, `(SBREL)`, and the FDPIC ones,
+//! which GNU as itself refuses outside an FDPIC object — is refused as
+//! unrecognised. And `sym(GOT) - label` is refused, as is the difference with
+//! any other suffix and `.tlsdescseq sym - label`: none of their relocations
+//! has a PC-relative counterpart for the difference to become, and GNU as,
+//! which makes the fixup PC-relative regardless, writes the field's own
+//! address into the field.
 
 #[doc(hidden)]
 pub mod attr_data;
@@ -140,12 +163,24 @@ const THUMB_BITS: u8 = 16;
 
 /// The `sym(NAME)` suffixes a `.word` takes; see
 /// [`Arm::data_paren_modifiers`].
-const DATA_SUFFIXES: &[&str] = &["got", "got_prel", "gotoff", "plt"];
+const DATA_SUFFIXES: &[&str] = &[
+    "got",
+    "got_prel",
+    "gotoff",
+    "plt",
+    "tlsgd",
+    "tlsldm",
+    "tlsldo",
+    "gottpoff",
+    "tpoff",
+    "tlsdesc",
+    "tlscall",
+    "tlsdescseq",
+];
 
-/// The one a branch target takes. GNU as's `encode_branch` also allows
-/// `(tlscall)`, which needs the thread-local relocations this backend does
-/// not write.
-const BRANCH_SUFFIXES: &[&str] = &["plt"];
+/// The ones a branch target takes, which are the two GNU as's
+/// `encode_branch` allows.
+const BRANCH_SUFFIXES: &[&str] = &["plt", "tlscall"];
 
 /// Label flag: defined in Thumb code.
 const LABEL_THUMB: u8 = 1;
@@ -315,9 +350,9 @@ impl Architecture for Arm {
 
     /// The suffixes `s_arm_elf_cons` reads after a symbol in a `.word`, of
     /// which these are the ones this backend has a relocation for; see
-    /// [`reloc::modifier`]. GNU as knows more — `(TARGET1)`, `(SBREL)` and
-    /// the thread-local ones — and refuses anything not in its table, which
-    /// is what an unlisted name gets here.
+    /// [`reloc::modifier`]. GNU as knows more — `(TARGET1)`, `(TARGET2)`,
+    /// `(SBREL)` and the FDPIC ones — and refuses anything not in its table,
+    /// which is what an unlisted name gets here.
     fn data_paren_modifiers(&self) -> &'static [&'static str] {
         DATA_SUFFIXES
     }
@@ -331,11 +366,72 @@ impl Architecture for Arm {
     /// `R_ARM_JUMP24`, the same numbers a plain `bl sym` and `b sym` get,
     /// because a linker routes either through a PLT entry when it needs one.
     /// Returning the fixup's own relocation says so.
+    ///
+    /// `(tlscall)` is `R_ARM_TLS_CALL` on every ARM branch `encode_branch`
+    /// encodes, conditional or not, and `R_ARM_THM_TLS_CALL` on a Thumb `bl`
+    /// or `blx`. A Thumb `b` goes through `do_t_branch` instead, which reads
+    /// the operand the same way and then ignores the suffix, so it keeps its
+    /// own relocation. The zero-width fixup `.tlsdescseq` makes already
+    /// carries the relocation for its instruction set.
     fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
-        if name == "plt" && kind.pcrel {
-            return Some(kind.reloc);
+        match name {
+            "plt" if kind.pcrel => return Some(kind.reloc),
+            "tlscall" if kind.pcrel => {
+                return Some(match kind.reloc {
+                    reloc::CALL | reloc::JUMP24 => reloc::TLS_CALL,
+                    reloc::THM_CALL => reloc::THM_TLS_CALL,
+                    other => other,
+                });
+            }
+            "tlsdescseq" if kind.size == 0 => return Some(kind.reloc),
+            _ => {}
         }
         reloc::modifier(name, kind.size, kind.pcrel)
+    }
+
+    /// Every thread-local suffix makes its symbol `STT_TLS`, which GNU as's
+    /// `md_apply_fix` does for each of their relocations; none of them adds
+    /// `_GLOBAL_OFFSET_TABLE_` to the object.
+    fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
+        crate::arch::ModifierSymbols {
+            tls: reloc::is_tls_modifier(name),
+            ..Default::default()
+        }
+    }
+
+    /// `.tlsdescseq`'s relocation covers no bytes, so there is no field to
+    /// hold anything.
+    fn addend_in_field(&self, reloc: u32, rela: bool) -> bool {
+        !rela && !matches!(reloc, reloc::TLS_DESCSEQ | reloc::THM_TLS_DESCSEQ)
+    }
+
+    /// The call and descriptor-sequence marks leave no addend at all; see
+    /// [`reloc::has_no_addend`]. Writing zero, rather than leaving the field
+    /// alone, gives a Thumb `bl` the `J1` and `J2` bits a displacement of
+    /// zero has.
+    ///
+    /// GNU as also leaves two thread-local offsets in their fields other than
+    /// as the addend alone, and rsasm writes what it does, since the object is
+    /// what `tools/xas-diff` compares.
+    ///
+    /// `tc_gen_reloc` takes the symbol's value back out of the addend BFD
+    /// computed for most of them, but not for `R_ARM_TLS_LDO32`, whose howto
+    /// then puts it back into the field: `x(TLSLDO) + 4`, for an `x` four
+    /// bytes into `.tdata`, leaves 8 there, and GNU ld, which adds the symbol
+    /// again, links it as 12 bytes into the block where llvm-mc's object
+    /// links as 8. An addend of zero writes nothing, so the `x(TLSLDO)` a
+    /// compiler writes is unaffected.
+    ///
+    /// `R_ARM_TLS_LDM32` does have the value taken out, and is written
+    /// through the same howto, which writes nothing where what is left is
+    /// zero: an addend equal to the symbol's value leaves the field zero.
+    fn rel_field(&self, reloc: u32, addend: i64, symbol_value: i64) -> i64 {
+        match reloc {
+            reloc::TLS_LDO32 if addend != 0 => addend.wrapping_add(symbol_value),
+            reloc::TLS_LDM32 if addend == symbol_value => 0,
+            r if reloc::has_no_addend(r) => 0,
+            _ => addend,
+        }
     }
 
     /// `(PLT)` names the function itself where nothing built a PLT; the GOT
@@ -739,6 +835,10 @@ impl Architecture for Arm {
                 eabi_attribute(cx, cur);
                 true
             }
+            ".tlsdescseq" => {
+                tls_descseq(cx, cur);
+                true
+            }
             _ => false,
         }
     }
@@ -827,6 +927,43 @@ fn eabi_attribute(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
         vendor: "aeabi",
         tag,
         value,
+    });
+}
+
+/// `.tlsdescseq sym`: marks the instruction after it as part of a TLS
+/// descriptor sequence, with `R_ARM_TLS_DESCSEQ` in ARM code and
+/// `R_ARM_THM_TLS_DESCSEQ` in Thumb, which lets a linker that relaxes the
+/// access rewrite it. The relocation covers no bits of the instruction.
+///
+/// GNU as's `s_arm_tls_descseq` places the relocation where the section has
+/// got to, as a four-byte field that the next four bytes have to fill, and
+/// calls `md_cons_align` first, which marks data there for the mapping
+/// symbols; see [`Request::Mark`]. An addend is accepted and dropped, as it
+/// is there. A number, which GNU as crashes on, is refused.
+fn tls_descseq(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
+    let span = cur.peek().span;
+    let Some(e) = cx.expr_parser().parse(cur) else {
+        return;
+    };
+    if cx.constant(e).is_some() {
+        cx.error(span, "`.tlsdescseq` expects a symbol");
+        return;
+    }
+    let name = cx.interner.intern("tlsdescseq");
+    let espan = cx.exprs.span(e);
+    let expr = cx
+        .exprs
+        .alloc(crate::expr::ExprKind::Modifier(name, e), espan);
+    let reloc = if cx.state.bits == THUMB_BITS {
+        reloc::THM_TLS_DESCSEQ
+    } else {
+        reloc::TLS_DESCSEQ
+    };
+    cx.requests.push(Request::Mark {
+        expr,
+        kind: FixupKind::data(0).with_reloc(reloc).linker_only(),
+        as_data: true,
+        within: 4,
     });
 }
 

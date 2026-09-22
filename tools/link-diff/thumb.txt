@@ -250,3 +250,90 @@ _start:
         .globl  reader
 reader:
         bx      lr
+=== thread-local variables across objects
+--- a.s
+        .syntax unified
+        .thumb
+        .text
+        .globl  _start
+        .thumb_func
+        .type   _start, %function
+_start:
+        @ General dynamic: the offset of the variable's GOT pair from the
+        @ `add` that makes it an address, which reads the PC four bytes on.
+        ldr     r0, .Lgd
+.LPIC0: add     r0, pc
+        bl      __tls_get_addr(PLT)
+        @ Local dynamic: one call for the module, then an offset per variable.
+        ldr     r0, .Lldm
+.LPIC1: add     r0, pc
+        bl      __tls_get_addr(PLT)
+        ldr     r1, .Lldo
+        add     r1, r0
+        ldr     r1, .Lldo2
+        add     r1, r0
+        @ Initial exec, then local exec, from the thread pointer.
+        ldr     r2, .Lie
+.LPIC2: add     r2, pc
+        ldr     r2, [r2]
+        mrc     p15, 0, r3, c13, c0, 3
+        add     r2, r3
+        ldr     r4, .Lle
+        add     r4, r3
+        ldr     r4, .Lle2
+        add     r4, r3
+        @ A descriptor, called through `(tlscall)`, and the sequence that
+        @ `.tlsdescseq` marks for the linker to rewrite. The `ldr` is not
+        @ marked: GNU as relaxes it, and a mark's relocation needs four bytes
+        @ after it before a relaxed instruction ends its fragment, which a
+        @ 16-bit one alone does not have.
+        ldr     r0, .Ldesc
+.LPIC3: bl      tv3(tlscall)
+        ldr     r0, .Ldesc2
+        .tlsdescseq tv2
+.LPIC4: add     r0, pc
+        ldr     r1, [r0, #4]
+        .tlsdescseq tv2
+        blx     r1
+        mov     r5, r0
+        bx      lr
+        .p2align 2
+.Lgd:   .word   tv(TLSGD) + (. - .LPIC0 - 4)
+.Lldm:  .word   tloc(TLSLDM) + (. - .LPIC1 - 4)
+.Lldo:  .word   tloc(TLSLDO)
+.Lldo2: .word   tv(tlsldo)
+.Lie:   .word   tv2(GOTTPOFF) + (. - .LPIC2 - 4)
+.Lle:   .word   tv3(TPOFF)
+.Lle2:  .word   tb(tpoff) + 4
+.Ldesc: .word   tv3(TLSDESC) + (. - .LPIC3) + 1
+.Ldesc2: .word  tv2(tlsdesc) + (. - .LPIC4 - 4) + 1
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .word   0x11223344
+tloc:   .word   99
+--- b.s
+        .syntax unified
+        .thumb
+        .section .tdata,"awT",%progbits
+        .globl  tv2, tv3
+tv2:    .word   2
+tv3:    .word   3
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  __tls_get_addr, helper
+        .thumb_func
+        .type   __tls_get_addr, %function
+__tls_get_addr:
+        bx      lr
+        .thumb_func
+        .type   helper, %function
+helper: mrc     p15, 0, r0, c13, c0, 3
+        ldr     r1, 1f
+        add     r1, r0
+        bx      lr
+        .p2align 2
+1:      .word   tb(TPOFF)
+        .data
+        .word   tv(TLSLDO), tv(TPOFF), tv2(tpoff) + 8

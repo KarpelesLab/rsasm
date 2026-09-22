@@ -100,6 +100,7 @@ impl Assembler {
 
         self.assign_addresses();
         self.report_misaligned_data();
+        self.report_uncontained_marks();
         self.apply_fixups();
         // After the fixups, which intern the symbols they name, so that these
         // follow them in the symbol table as they do in GNU as's.
@@ -200,6 +201,51 @@ impl Assembler {
                     format!(
                         "misaligned data: the value does not start at a multiple of {align} bytes; \
                          `.{align}byte` places one without aligning it"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Refuses a mark that has fewer bytes after it than GNU as's relocation
+    /// covers; see [`Request::Mark`](crate::arch::Request::Mark).
+    ///
+    /// GNU as checks that a relocation lies inside the fragment it was made
+    /// in, and a mark's is made with a field of its own width, which the
+    /// bytes after the mark have to fill. Its fragments end where these do:
+    /// at an alignment, a `.space`, or the end of the section, with no-op
+    /// padding still inside the fragment it ends, since `arm_handle_align`
+    /// writes it there; and after an instruction relaxation sizes, whose
+    /// bytes are the variable part of the fragment before.
+    fn report_uncontained_marks(&mut self) {
+        for &(sec, fi, off, within, span) in &self.mark_tests {
+            let s = &self.sections[sec.0 as usize];
+            let mut have = s.frags[fi as usize].size() - off as u64;
+            for f in &s.frags[fi as usize + 1..] {
+                if have >= within as u64 {
+                    break;
+                }
+                match &f.kind {
+                    FragKind::Bytes { variants, .. } => {
+                        have += f.size();
+                        if f.relaxable || variants.len() > 1 {
+                            break;
+                        }
+                    }
+                    FragKind::Align { fill, .. } if fill.is_empty() => {
+                        have += f.size();
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            if have < within as u64 {
+                self.diags.error(
+                    span,
+                    format!(
+                        "the relocation this places covers the {within} bytes after it, and only \
+                         {have} follow before an alignment, a `.space`, a relaxable instruction \
+                         or the end of the section"
                     ),
                 );
             }
@@ -1098,6 +1144,18 @@ impl Assembler {
                 .is_some_and(|s| self.section(s).flags.tls)
     }
 
+    /// The value a relocation's symbol has in the object: its offset in its
+    /// section where it is defined in one, and zero where it is undefined,
+    /// common or a section symbol. See [`Architecture::rel_field`].
+    ///
+    /// [`Architecture::rel_field`]: crate::arch::Architecture::rel_field
+    fn named_value(&self, id: SymbolId) -> i64 {
+        match (self.symbol_section(id), self.symbol_addr(id)) {
+            (Some(s), Some(addr)) => addr - self.section(s).addr as i64,
+            _ => 0,
+        }
+    }
+
     /// Reduces a [`Value`] to a number, if every symbol in it has an address.
     pub(crate) fn resolve_value(&self, v: Value) -> Option<i64> {
         let mut n = v.addend;
@@ -1864,13 +1922,19 @@ impl Assembler {
                                         );
                                         continue;
                                     }
+                                    let field = if rela {
+                                        r.addend
+                                    } else {
+                                        let value = r.symbol.map_or(0, |s| self.named_value(s));
+                                        arch.rel_field(r.kind, r.addend, value)
+                                    };
                                     let endian = arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =
                                         &mut self.sections[si].frags[fi].kind
                                     {
                                         let dst = &mut variants[*chosen].bytes
                                             [off as usize..off as usize + kind.size as usize];
-                                        kind.write(endian, dst, r.addend);
+                                        kind.write(endian, dst, field);
                                     }
                                     if rela {
                                         r.addend = 0;
@@ -1974,10 +2038,13 @@ impl Assembler {
         }
         let v = match self.eval(e) {
             Ok(v) => v,
-            Err(err) => {
-                self.diags.emit(err.into_diagnostic());
-                return Vec::new();
-            }
+            Err(err) => match self.eval_with_distances(e) {
+                Some(v) => v,
+                None => {
+                    self.diags.emit(err.into_diagnostic());
+                    return Vec::new();
+                }
+            },
         };
         // A thread-local access names a variable whose value only the linker
         // works out, so GNU as refuses one it can already see is not such a
@@ -2295,6 +2362,47 @@ impl Assembler {
                 self.symbols.get_mut(target).used = true;
                 target
             }
+        }
+    }
+
+    /// Evaluates `e` for a relocation with every difference of two labels in
+    /// one section inside it taken as the distance it now is, for a value
+    /// ordinary evaluation refuses because it holds a second symbol.
+    ///
+    /// The PIC idioms add a distance to the symbol they relocate: ARM's
+    /// `.word x(TLSGD) + (. - .LPIC0 - 8)` is `x` plus the offset from the
+    /// `add rn, pc, rn` at `.LPIC0` to the word, which the linker needs to
+    /// find the GOT entry from the PC. GNU as folds that distance while it
+    /// reads the line, or once the fragments between are sized, and
+    /// relocates `x` with it as the addend. Only the parts of a sum are
+    /// folded, never the whole value: `sym - label` on its own is a
+    /// PC-relative reference, which has its own relocation.
+    fn eval_with_distances(&mut self, e: ExprRef) -> Option<Value> {
+        let node = self.exprs.get(e);
+        let span = node.span;
+        match node.kind {
+            ExprKind::Binary(op @ (expr::BinOp::Add | expr::BinOp::Sub), l, r) => {
+                let l = self.eval_with_distances(l)?;
+                let r = self.eval_with_distances(r)?;
+                let (l, r) = (self.fold_distance(l)?, self.fold_distance(r)?);
+                expr::eval_binary(op, l, r, span).ok()
+            }
+            ExprKind::Modifier(_, inner) => self.eval_with_distances(inner),
+            _ => self.eval(e).ok(),
+        }
+    }
+
+    /// `v` as a number if it is the difference of two labels in one section.
+    fn fold_distance(&self, v: Value) -> Option<Value> {
+        match (v.plus, v.minus) {
+            (Some(p), Some(m))
+                if self.symbol_section(p).is_some()
+                    && self.symbol_section(p) == self.symbol_section(m) =>
+            {
+                let d = self.symbol_addr(p)? - self.symbol_addr(m)?;
+                Some(Value::abs(v.addend.wrapping_add(d)))
+            }
+            _ => Some(v),
         }
     }
 

@@ -55,12 +55,10 @@
 #   `@tls` marker (and, in 64-bit code, their prefixed `@pcrel` forms), and
 #   `@tprel` and its halves. AArch64's `.xword %dtprel(sym)` is not linked:
 #   GNU ld refuses its relocation in an allocated section, and the image is
-#   made of those. ARM still has none -- `(TLSGD)` and its relatives -- but
-#   not for want of `STT_TLS`, which a symbol in a thread-local section has
-#   on every target. What it lacks is its own: the relocations, the operand
-#   syntax that selects them, and the marker relocations that cover no field
-#   but tell the linker which instructions to rewrite (`(tlscall)` and
-#   `.tlsdescseq`); the backend says where it refuses them.
+#   made of those. They are in the ARM and Thumb rows too: `(TLSGD)`,
+#   `(TLSLDM)` and `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's
+#   `(TLSDESC)` with the `(tlscall)` branch and the `.tlsdescseq` marks,
+#   which GNU ld rewrites into initial-exec loads.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot
