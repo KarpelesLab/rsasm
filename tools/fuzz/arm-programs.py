@@ -24,7 +24,10 @@ fuzzer compares. The rules it is looking for are `add_to_lit_pool`,
 *and subsection*, entries in the order they were asked for, a four-byte
 padding slot in front of an eight-byte entry that would land unaligned
 (reusable by a later four-byte entry), a pool aligned to eight from the
-first eight-byte entry in it onwards, and at most 1024 slots.
+first eight-byte entry in it onwards -- and from then on for every later
+pool in the section -- and at most 1024 slots. So the values a program
+loads repeat, and its doubleword values are chosen to share, pad and be
+shared: the halves of a `vldr dN, =x` are words a `ldr` may ask for too.
 
 A case is:
 
@@ -32,12 +35,14 @@ A case is:
     rsasm     they differ. These are the findings; the exit status is 1 when
               there are any. Each is shown reduced: statements are dropped
               while the difference stays the same kind.
-    known     they differ in a way rsasm means to; `KNOWN` lists each with
-              its reason.
+    known     they differ in a way this fuzzer is not about, each with its
+              reason: `KNOWN` and `KNOWN_GAS` list the ones told apart by
+              what the assembler that refused said, and `known_object` the
+              two that show in the object itself.
 
 `--mutations` (default 0.15) is the fraction of programs given something
-meant to be refused: a pool out of reach, a `=` on a store, an over-wide
-literal.
+meant to be refused: a pool out of reach, a `=` on a store or an `ldrd`, an
+over-wide literal, an eight-byte entry that is not a number.
 
 Environment: RSASM (default target/debug/rsasm under the repository root)
 and RSASM_ORACLES (default target/oracles), whose `bin` holds
@@ -62,11 +67,34 @@ CANON = os.path.join(ROOT, "tools", "mc-diff", "canon.sh")
 FLAGS = ["-march=armv7ve", "-mfpu=neon-vfpv4"]
 TARGETS = {"arm": FLAGS, "thumb": FLAGS + ["-mthumb"]}
 
-# What rsasm refuses on purpose, matched against its message. GNU as keeps
-# the low 32 bits of a literal that does not fit a word and assembles a load
-# of the truncated value; rsasm says so instead.
+# What rsasm refuses where GNU as does not, matched against rsasm's message.
+# Each is a difference this fuzzer is not about:
+#
+#   * GNU as keeps the low 32 bits of a literal that does not fit a word (or
+#     a doubleword) and assembles a load of the truncated value; rsasm says
+#     so instead.
+#   * an `adr` naming a label in another section cannot be resolved and has
+#     no relocation; GNU as writes a fixed value that is wrong wherever the
+#     linker puts the two sections, and rsasm refuses it. The generator does
+#     not write one, but reducing a finding can.
+#   * subsections (`.text 1`, `.subsection 2`) are not modelled: rsasm reads
+#     the number as trailing tokens. GNU as keeps a pool per subsection,
+#     which is why the generator writes them at all.
 KNOWN = [("does not fit in the 32-bit word", "literal wider than a word"),
-         ("does not fit in the 64-bit", "literal wider than a doubleword")]
+         ("does not fit in the 64-bit", "literal wider than a doubleword"),
+         ("no relocation exists for a 4-byte PC-relative reference",
+          "an `adr` out of its own section"),
+         ("unexpected trailing tokens", "a subsection"),
+         ("unknown directive `.subsection`", "a subsection")]
+
+# The other way round: what GNU as refuses and rsasm assembles, matched
+# against GNU as's message. An ARM `bl` or `b` must land on a word boundary,
+# and GNU as checks the offset of a target in another section although only
+# the linker knows where the section goes; rsasm leaves the whole reference
+# to the linker. A label an odd number of halfwords into Thumb code is the
+# way to write one.
+KNOWN_GAS = [("misaligned branch destination",
+              "an ARM branch to a target GNU as checks before the linker")]
 
 # Parts of the language a run can leave out, for bisecting a finding.
 FEATURES = ["vldr", "subsec", "macro", "sections", "state", "data", "adr",
@@ -150,12 +178,19 @@ def assemble(source, target, workdir):
 MOV_CONSTS = [0, 1, 12, 0xff, 0x104, 0xff000000, 0x3fc, -1, -2, 0xfc000003]
 MOVW_CONSTS = [0x1234, 0xffff, 0x8001, 0xabcd]
 BIG_CONSTS = [0x12345678, 0x11223344, 0xdeadbeef, 0x01020304, 0xfffffffe,
-              0x7fffffff, 0x80000001, 0xcafebabe, 0x55556666]
+              0x7fffffff, 0x80000001, 0xcafebabe, 0x55556666,
+              # The halves of the doubleword values below, which a four-byte
+              # entry may share a slot with -- or take the second half of,
+              # once an eight-byte entry has been written over the first.
+              0x55667788, 0x99887766, 0xaabbccdd, 0x400921fb, 0x54442d18]
 # Doubleword values for `vldr dN, =`: the ones a NEON `vmov` immediate or
 # `fconstd` can hold, and the ones only a pool can.
 D_CONSTS = [0, 1, 0xff, 0x3ff0000000000000, 0xffffffff00000000, 0x00ff00ff00ff00ff,
             0x1122334455667788, 0x99887766aabbccdd, 0xdeadbeefcafebabe,
-            0x400921fb54442d18, -1, -2]
+            0x400921fb54442d18, -1, -2,
+            # A low half of zero, which a padding slot holds too, and a value
+            # whose halves are the two BIG_CONSTS above it.
+            0x1234567800000000, 0x1122334400000000]
 S_CONSTS = [0x3f800000, 0x40000000, 0x12345678, 0, 1, 0xbf800000, 0x7f7fffff]
 
 HALF_LOADS = ["ldrh", "ldrsh", "ldrsb", "ldrb"]
@@ -192,6 +227,14 @@ class Program:
         self.labels = [f"l{i}" for i in range(rng.randrange(2, 6))]
         self.undefined = [f"ext{i}" for i in range(rng.randrange(1, 3))]
         self.where = {}
+        # Of those, the ones data of an odd length left at an address no
+        # instruction can have; see `code_label`.
+        self.misaligned = set()
+        # The `=` values this program has asked for already, so that it asks
+        # again: a pool entry shared is a pool entry not appended, and which
+        # slot a later literal lands in depends on it.
+        self.used = []
+        self.dused = []
         self.macros = []
         self.header = [".syntax unified"]
         if rng.random() < 0.5:
@@ -201,11 +244,21 @@ class Program:
         self.exec_section = True
         self.previous = ".text"
         self.stack = []
-        # Data of an unknown length since the last alignment: an instruction
-        # after it would sit at an address no instruction can have, which is
-        # a kind of program of its own (see KNOWN), not what this is for.
-        self.after_data = False
+        # Data of an unknown length since the last alignment, per section: an
+        # instruction after it would sit at an address no instruction can
+        # have, which is a kind of program of its own (see KNOWN), not what
+        # this is for. It is per section because that is where the location
+        # counter is: leaving a section and coming back finds it where it was.
+        self.dirty = {}
         self.gen(mutate)
+
+    @property
+    def after_data(self):
+        return self.dirty.get(self.section, False)
+
+    @after_data.setter
+    def after_data(self, value):
+        self.dirty[self.section] = value
 
     # -- the section the next statement goes in ----------------------------
 
@@ -213,7 +266,6 @@ class Program:
         if name != self.section:
             self.previous = self.section
         self.section, self.exec_section = name, exec_ok
-        self.after_data = False
 
     def section_stmt(self):
         rng = self.rng
@@ -230,16 +282,13 @@ class Program:
             self.section = prev
             self.exec_section = next(
                 (e for n, _d, e in SECTIONS if n == prev), True)
-            self.after_data = False
             return ".previous"
         if what == "push":
             name = f".push{rng.randrange(2)}"
             self.stack.append((self.section, self.previous, self.exec_section))
             self.section, self.exec_section = name, True
-            self.after_data = False
             return f'.pushsection {name},"ax",%progbits'
         self.section, self.previous, self.exec_section = self.stack.pop()
-        self.after_data = False
         return ".popsection"
 
     # -- pieces ------------------------------------------------------------
@@ -248,29 +297,76 @@ class Program:
         return f"r{self.rng.randrange(4) if lo else self.rng.randrange(11)}"
 
     def value(self):
-        """The `=` operand of a word-sized literal load."""
-        r = self.rng.random()
-        if r < 0.3:
-            return str(self.rng.choice(MOV_CONSTS))
-        if r < 0.45:
-            return hex(self.rng.choice(MOVW_CONSTS))
-        if r < 0.7:
-            return hex(self.rng.choice(BIG_CONSTS))
-        name = self.rng.choice(self.labels + self.undefined)
-        addend = self.rng.choice(["", "", "+4", "+0x100", "-8"])
-        return name + addend
+        """The `=` operand of a word-sized literal load.
+
+        A value this program has asked for already is asked for again often:
+        an entry shared is an entry not appended, and which slot every later
+        literal lands in follows from that."""
+        rng = self.rng
+        r = rng.random()
+        if r < 0.2 and self.used:
+            return rng.choice(self.used)
+        if r < 0.4:
+            v = str(rng.choice(MOV_CONSTS))
+        elif r < 0.5:
+            v = hex(rng.choice(MOVW_CONSTS))
+        elif r < 0.75:
+            v = hex(rng.choice(BIG_CONSTS))
+        else:
+            name = rng.choice(self.labels + self.undefined)
+            v = name + rng.choice(["", "", "+4", "+0x100", "-8"])
+        self.used.append(v)
+        return v
+
+    def dvalue(self):
+        """The `=` operand of a `vldr dN`, which is eight bytes wide and has
+        to be a number."""
+        rng = self.rng
+        if rng.random() < 0.25 and self.dused:
+            return rng.choice(self.dused)
+        v = hex(rng.choice(D_CONSTS)) if rng.random() < 0.8 else str(
+            rng.choice(D_CONSTS))
+        self.dused.append(v)
+        return v
+
+    def vldr(self):
+        """A VFP pool load. A `d` register asks for an eight-byte entry, an
+        `s` register for a four-byte one, and GNU as reads a data type on
+        either and never looks at it."""
+        rng = self.rng
+        if rng.random() < 0.55:
+            suffix = rng.choice(["", "", ".64", ".f64"])
+            return f"vldr{suffix} d{rng.randrange(32)}, ={self.dvalue()}"
+        suffix = rng.choice(["", "", ".32", ".f32"])
+        v = rng.choice([hex(rng.choice(S_CONSTS))] * 3 + self.labels)
+        self.used.append(v)
+        return f"vldr{suffix} s{rng.randrange(32)}, ={v}"
 
     def here_label(self):
         """A label already placed in the section the next statement goes in,
-        or None."""
-        here = [n for n, s in self.where.items() if s == self.section]
+        for an `adr`, or None.
+
+        Not one that data of an odd length left at an address no instruction
+        can have: GNU as's `adr` adds one to the address of a
+        `.thumb_func` label, where rsasm sets its low bit, and for an odd
+        address those are not the same number. It says nothing about
+        pools."""
+        here = [n for n, s in self.where.items()
+                if s == self.section and n not in self.misaligned]
         return self.rng.choice(here) if here else None
 
     def code_label(self):
         """A label in a section that holds code, for a branch; an undefined
-        name otherwise, which is a relocation either way."""
+        name otherwise, which is a relocation either way.
+
+        A label that data of an odd length left at an address no instruction
+        can have is not one: the two assemblers disagree about a branch to
+        one (GNU as writes an ARM `bl` to an odd address and refuses a
+        Thumb one; rsasm is the other way round), and it says nothing about
+        pools."""
         code = [n for n, s in self.where.items()
-                if s in (".text", ".foo", ".push0", ".push1")]
+                if s in (".text", ".foo", ".push0", ".push1")
+                and n not in self.misaligned]
         code += self.undefined
         return self.rng.choice(code)
 
@@ -284,12 +380,7 @@ class Program:
         if r < 0.32 and "halfword" not in self.skip:
             return f"{rng.choice(HALF_LOADS)} {self.reg()}, ={self.value()}"
         if r < 0.42 and "vldr" not in self.skip:
-            if rng.random() < 0.6:
-                suffix = rng.choice(["", "", ".64"])
-                return f"vldr{suffix} d{rng.randrange(16)}, ={hex(rng.choice(D_CONSTS))}"
-            suffix = rng.choice(["", "", ".32"])
-            name = rng.choice([hex(rng.choice(S_CONSTS))] * 3 + self.labels)
-            return f"vldr{suffix} s{rng.randrange(16)}, ={name}"
+            return self.vldr()
         if r < 0.5 and "adr" not in self.skip:
             target = self.here_label()
             if target:
@@ -350,7 +441,7 @@ class Program:
             self.stmts.append(self.statement())
         for name in todo:
             self.place(name)
-            self.stmts.append("nop" if self.exec_section and not self.after_data
+            self.stmts.append(self.code("nop") if self.exec_section
                               else ".word 0")
         if rng.random() < 0.4:
             self.stmts.append(rng.choice([".ltorg", ".pool"]))
@@ -361,25 +452,36 @@ class Program:
         if self.thumb and self.exec_section and self.rng.random() < 0.2:
             self.stmts.append(".thumb_func")
         self.where[name] = self.section
+        if self.after_data:
+            self.misaligned.add(name)
         self.stmts.append(f"{name}:")
 
+    def code(self, *stmts):
+        """One or more instructions, behind an alignment where data of an odd
+        length came before them: an instruction at an address no instruction
+        can have is a kind of program of its own, and the two assemblers
+        disagree about several of them (which PC an `adr` rounds to, and
+        whether a branch to a misaligned label is refused). It says nothing
+        about pools, which is what this is for."""
+        lines = list(stmts)
+        if self.after_data:
+            self.after_data = False
+            lines.insert(0, self.rng.choice([".align 2", ".balign 4", ".p2align 2"]))
+        return "\n\t".join(lines)
+
     def statement(self):
-        """One statement, or a small block of them. Code goes in after an
-        alignment where data of an odd length came before it."""
+        """One statement, or a small block of them."""
         rng = self.rng
         r = rng.random()
         if r < 0.45 and self.exec_section:
-            if self.after_data and rng.random() < 0.9:
-                self.after_data = False
-                return rng.choice([".align 2", ".balign 4", ".p2align 2"]) + "\n\t" + self.insn()
-            return self.insn()
+            return self.code(self.insn())
         if r < 0.55:
             return rng.choice([".ltorg", ".pool"])
         if r < 0.62 and self.macros and self.exec_section:
-            return f"lit {self.value()}"
+            return self.code(f"lit {self.value()}")
         if r < 0.68 and "macro" not in self.skip and self.exec_section:
             body = "\n".join("\t" + self.insn() for _ in range(rng.randrange(1, 3)))
-            return f".rept {rng.randrange(2, 4)}\n{body}\n.endr"
+            return self.code(f".rept {rng.randrange(2, 4)}\n{body}\n.endr")
         if r < 0.8 and "data" not in self.skip:
             stmt = self.data()
             self.after_data = not stmt.startswith((".align", ".balign", ".p2align"))
@@ -389,9 +491,8 @@ class Program:
                                ".align 2\n\t.arm", ".thumb"])
         if "sections" in self.skip:
             return self.data()
-        if r < 0.95 or "subsec" in self.skip:
+        if r < 0.99 or "subsec" in self.skip:
             return self.section_stmt()
-        self.after_data = False
         return rng.choice([".text 1", ".text 2", ".text 0", ".data 1",
                            f".subsection {rng.randrange(3)}"])
 
@@ -400,10 +501,17 @@ class Program:
         kind, stmt = rng.choice([
             ("far pool", f".space {rng.choice([4100, 5000, 1100])}"),
             ("store from a pool", f"str {self.reg()}, =4"),
+            ("vector store from a pool", "vstr d0, =1"),
             ("literal wider than a word", "ldr r0, =0x1122334455667788"),
             ("literal wider than a doubleword", "vldr d0, =0x112233445566778899"),
             ("float literal", "ldr r0, =1.5"),
             ("pool entry that is not a number", "vldr d0, =l0"),
+            ("doubleword pool load", "ldrd r0, r1, =0x1122334455667788"),
+            ("halfword pool load out of reach",
+             f"ldrh r0, =0x12345678\n\t.space {rng.choice([300, 600])}"),
+            ("a quadword register", "vldr q0, =1"),
+            ("a lane", "vldr d0[1], =1"),
+            ("a narrow literal load", "ldrh.n r0, =4"),
         ])
         self.mutation = kind
         at = rng.randrange(len(self.stmts) + 1)
@@ -435,7 +543,115 @@ def known(gas, rsasm):
         for needle, why in KNOWN:
             if needle in rsasm["text"]:
                 return why
+    if rsasm["ok"] and not gas["ok"]:
+        for needle, why in KNOWN_GAS:
+            if needle in gas["text"]:
+                return why
     return None
+
+
+def canon_parts(text):
+    """A canonical object split into the parts this compares: the bytes of
+    each section by name, the relocations by (table, offset, type), and every
+    other line in order."""
+    sections, relocs, rest = {}, {}, []
+    name = None
+    for line in text.splitlines():
+        if line.startswith("section "):
+            name = line.split()[1]
+            rest.append(line)
+        elif line.startswith("  ") and name:
+            sections[name] = line.strip()
+        elif line.startswith("."):
+            f = line.split()
+            if len(f) == 4:
+                relocs[tuple(f[:3])] = f[3]
+                continue
+            rest.append(line)
+        else:
+            rest.append(line)
+    return sections, relocs, rest
+
+
+def known_object(gas, rsasm):
+    """The differences between two objects that this fuzzer is not about,
+    or None if there is anything else. There are two, and a program may
+    have both:
+
+    *Which symbol a relocation names.* GNU as's `arm_fix_adjustable`
+    relocates a reference to a local label against the label's *section*,
+    folding the label's offset into the field; llvm-mc names the label and
+    leaves the field alone, and rsasm follows it (`relocates_with_label` in
+    src/arch/arm/mod.rs, which tools/dwarf-diff compares against llvm-mc).
+    A linker reads the two the same. A branch out of its own section is how
+    to write one: the relocation's table, offset and type agree, both
+    targets name the same section, and the four bytes of the field differ.
+
+    *How a code section's last bytes are padded to its alignment.* GNU as
+    pads there with the no-ops of the instruction set in force when the
+    *file* ends -- `subsegs_finish_section` makes the frag then, and
+    `arm_handle_align` reads the mode recorded on it -- and writes zeros
+    and a `$d` where what is left is not a whole number of them. rsasm pads
+    with the no-ops of the last instruction in the section, which is the
+    same thing until an `.arm` or `.thumb` after that instruction changes
+    the mode. A pool's own padding is zeros either way."""
+    g_sec, g_rel, g_rest = canon_parts(gas)
+    r_sec, r_rel, r_rest = canon_parts(rsasm)
+    if g_rel.keys() != r_rel.keys():
+        return None
+    reasons = []
+    # Where the two may differ, as (first, last) byte offsets per section.
+    spans = {}
+    for key, target in g_rel.items():
+        other = r_rel[key]
+        if target == other:
+            continue
+        if "+" not in target or "+" not in other:
+            return None
+        if target.rsplit("+", 1)[0] != other.rsplit("+", 1)[0]:
+            return None
+        table, offset, _ = key
+        if not table.startswith((".rel.", ".rela.")):
+            return None
+        at = int(offset, 16)
+        spans.setdefault("." + table.split(".", 2)[2], []).append((at, at + 3))
+        reasons = ["a relocation naming the label, as llvm-mc names it"]
+    # The padding shows as a `$d` GNU as alone writes, and sometimes as a
+    # mapping symbol rsasm alone writes at that same offset.
+    gas_only = [line for line in g_rest if line not in r_rest]
+    rsasm_only = [line for line in r_rest if line not in g_rest]
+    marks = []
+    for line in gas_only:
+        f = line.split()
+        if len(f) != 6 or f[0] != "symbol" or f[1] != "$d" or "+" not in f[5]:
+            return None
+        section, _, at = f[5].partition("+")
+        marks.append((section, int(at, 16)))
+        spans.setdefault(section, []).append((int(at, 16), len(g_sec.get(section, "")) // 2))
+    for line in rsasm_only:
+        f = line.split()
+        if len(f) != 6 or f[0] != "symbol" or f[1] not in ("$a", "$t", "$d"):
+            return None
+        section, _, at = f[5].partition("+")
+        if (section, int(at, 16)) not in marks:
+            return None
+    if marks:
+        reasons.append("a code section's last bytes padded in the other"
+                       " instruction set")
+    if not reasons:
+        return None
+    for name, hexed in g_sec.items():
+        other = r_sec.get(name)
+        if other == hexed:
+            continue
+        if other is None or len(other) != len(hexed):
+            return None
+        for i in range(0, len(hexed), 2):
+            if hexed[i:i + 2] == other[i:i + 2]:
+                continue
+            if not any(lo <= i // 2 <= hi for lo, hi in spans.get(name, ())):
+                return None
+    return " and ".join(reasons)
 
 
 def classify(gas, rsasm):
@@ -453,6 +669,9 @@ def classify(gas, rsasm):
             return "agree", "refused elsewhere"
         return "agree", None
     if gas["text"] != rsasm["text"]:
+        why = known_object(gas["text"], rsasm["text"])
+        if why:
+            return "known", why
         return "rsasm", "object"
     return "agree", None
 

@@ -55,7 +55,7 @@ assembler, not against rsasm's own idea of the manual. See
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21730 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 2952 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3052 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 669 |
@@ -125,7 +125,11 @@ but 18 forms where both manuals show MAME to be wrong.
   (`vcmpneq_oqps`, `vpcmpnltuq`), AT&T length spellings (`vcvtpd2psx`) and the
   `{vex}`, `{vex3}` and `{evex}` pseudo-prefixes
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
-  `.ltorg`), `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
+  `.ltorg`) down to the four-byte slots GNU as keeps them in -- the byte and
+  halfword loads take an entry as well, and `vldr d0, =x` takes two slots and
+  aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
+  `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
+  `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, and `$a`/`$t`/`$d` mapping symbols; the whole
   ARMv7-A/R/M instruction set with the security, virtualization and divide
   extensions, and with it the floating-point unit up to VFPv4 and NEON --
@@ -858,7 +862,7 @@ independent assembler, and compare the bytes:
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 24,003 of 24,003 match across fifty-six
+  from checksum-pinned sources. 24,103 of 24,103 match across fifty-six
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the

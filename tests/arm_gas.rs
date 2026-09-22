@@ -140,7 +140,14 @@ fn a_pool_out_of_reach_is_refused() {
     assert!(e.contains("put an `.ltorg` nearer"), "{e}");
     let e = errors_for("thumb", "ldr.n r0, =0x12345678\n.space 1026\n.ltorg\n");
     assert!(e.contains("0 to 1020"), "{e}");
-    assert!(errors_for("arm", "ldrb r0, =1").contains("only `ldr` can"));
+    // The halfword loads address in mode 3, whose offset is eight bits.
+    let e = errors_for("arm", "ldrh r0, =0x12345678\n.space 300\n.pool\n");
+    assert!(e.contains("-255 to 255"), "{e}");
+    assert!(e.contains("put an `.ltorg` nearer"), "{e}");
+    assert!(
+        errors_for("arm", "strb r0, =1")
+            .contains("a store has nothing to load from a literal pool")
+    );
     assert!(errors_for("arm", "ldr r0, =0x100000000").contains("32-bit word"));
 }
 

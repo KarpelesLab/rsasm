@@ -205,6 +205,12 @@ pub struct LiteralRequest {
     pub value: Literal,
     /// Entry width in bytes.
     pub size: u8,
+    /// Whether the number was written without a negation, which is GNU as's
+    /// `X_unsigned` and part of what makes two of its ARM pool entries the
+    /// same: `-1` and `0xffffffffffffffff` are one `i64` and two entries,
+    /// and so are `4` and `8-4`. An entry that is not a number, and a pool
+    /// whose backend groups its entries by width, has no use for it.
+    pub unsigned: bool,
     pub span: Span,
 }
 
@@ -216,6 +222,24 @@ pub enum Literal {
     Const(i64),
     /// Anything else, which the entry relocates if it has to.
     Expr(ExprRef),
+}
+
+/// How a backend's literal pool is laid out; see
+/// [`Architecture::literal_pool`] and the crate's `literals` module. The two
+/// references differ, so each backend says which it follows.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum LiteralPool {
+    /// A pool per entry width, written narrowest first, each run aligned to
+    /// its own width: GNU as's AArch64 (`add_to_lit_pool` there keeps a
+    /// `literal_pool` per size and `s_ltorg` walks them in order).
+    ByWidth,
+    /// One array of four-byte slots, filled in the order the literals were
+    /// asked for: GNU as's ARM. An eight-byte entry takes two slots and has
+    /// to start at an eight-aligned one, so a padding slot may go in front
+    /// of it — and a later four-byte entry fills that padding slot rather
+    /// than appending.
+    Slots,
 }
 
 /// A PC-relative reference to a symbol defined in the fixup's own section,
@@ -401,6 +425,18 @@ impl AsmCtx<'_> {
     /// same number, or the same symbol plus the same addend. Until then the
     /// entry's address is a label with a name no source can spell.
     pub fn literal(&mut self, value: Literal, size: u8, span: Span) -> ExprRef {
+        self.literal_from(value, size, span, true)
+    }
+
+    /// The same, saying as well whether the number was written without a
+    /// negation; see [`LiteralRequest::unsigned`].
+    pub(crate) fn literal_from(
+        &mut self,
+        value: Literal,
+        size: u8,
+        span: Span,
+        unsigned: bool,
+    ) -> ExprRef {
         // The arena only grows, and grows below, so its length names each
         // entry once.
         let n = self.exprs.len();
@@ -409,6 +445,7 @@ impl AsmCtx<'_> {
             label,
             value,
             size,
+            unsigned,
             span,
         }));
         self.exprs.alloc(crate::expr::ExprKind::Sym(label), span)
@@ -1044,6 +1081,12 @@ pub trait Architecture {
     /// literal pool, which are aligned to each run's width.
     fn align_padding_is_code(&self) -> bool {
         false
+    }
+
+    /// How the core lays out this backend's literal pools; see
+    /// [`LiteralPool`] and the crate's `literals` module.
+    fn literal_pool(&self) -> LiteralPool {
+        LiteralPool::ByWidth
     }
 
     /// Bits to record on a label as it is defined, in the backend's own

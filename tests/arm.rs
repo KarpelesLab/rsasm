@@ -1114,3 +1114,192 @@ fn thumb_vector_instructions() {
     // `mvns rd, #x` where only the complement is expandable is `movs`.
     tenc("mvns r8, -2", "5f f0 01 08");
 }
+
+// ---- literal pools wider and narrower than a word --------------------------
+
+/// `vldr dN, =x` asks the pool for eight bytes, which it holds as two
+/// four-byte slots that have to start at an eight-aligned one: a padding slot
+/// goes in front of a pair that would not, and the pool itself is aligned to
+/// eight from then on. A later four-byte literal takes the padding slot over.
+#[test]
+fn a_doubleword_pool_entry_takes_two_slots() {
+    enc(
+        "vldr d0, =0x1122334455667788\nldr r0, =0xaabbccdd\nbx lr\n.pool\n",
+        "02 0b 9f ed 0c 00 9f e5 1e ff 2f e1 00 00 00 00 \
+         88 77 66 55 44 33 22 11 dd cc bb aa",
+    );
+    enc(
+        "ldr r0, =0xaabbccdd\nvldr d0, =0x1122334455667788\nbx lr\n.pool\n",
+        "08 00 9f e5 03 0b 9f ed 1e ff 2f e1 00 00 00 00 \
+         dd cc bb aa 00 00 00 00 88 77 66 55 44 33 22 11",
+    );
+    enc(
+        "ldr r0, =0xaabbccdd\nvldr d0, =0x1122334455667788\nldr r1, =0x99887766\n\
+         bx lr\n.pool\n",
+        "08 00 9f e5 03 0b 9f ed 04 10 9f e5 1e ff 2f e1 \
+         dd cc bb aa 66 77 88 99 88 77 66 55 44 33 22 11",
+    );
+    // An eight-byte literal takes a pair of slots that already holds its two
+    // words, whoever put them there.
+    enc(
+        "ldr r0, =0x55667788\nldr r1, =0x11223344\nvldr d0, =0x1122334455667788\n\
+         bx lr\n.pool\n",
+        "08 00 9f e5 08 10 9f e5 00 0b 9f ed 1e ff 2f e1 \
+         88 77 66 55 44 33 22 11",
+    );
+    // `pool->alignment` outlives the pool a `.ltorg` emptied, so the second
+    // pool here is aligned to eight although it holds one word.
+    enc(
+        "vldr d0, =0x1122334455667788\n.pool\nldr r0, =0x12345678\n.pool\nbx lr\n",
+        "00 0b 9f ed 00 00 00 00 88 77 66 55 44 33 22 11 \
+         00 00 1f e5 00 00 00 00 78 56 34 12 1e ff 2f e1",
+    );
+    // GNU as writes a slot that emits eight bytes where an eight-byte literal
+    // matches the pair right after a padding slot: `add_to_lit_pool` breaks
+    // out of its search with `padding_slot_p` still set from the slot before,
+    // writes the whole expression back over the one it matched, and leaves
+    // the old second half in the pool as a slot of its own. The third
+    // literal's own entry then lands four bytes past where its load points.
+    enc(
+        "ldr r0, =0xaabbccdd\nvldr d0, =0x1122334455667788\n\
+         vldr d1, =0x1122334455667788\nvldr d2, =0xdeadbeefcafebabe\nbx lr\n.pool\n",
+        "10 00 9f e5 05 0b 9f ed 04 1b 9f ed 05 2b 9f ed 1e ff 2f e1 \
+         00 00 00 00 dd cc bb aa 00 00 00 00 88 77 66 55 44 33 22 11 \
+         44 33 22 11 be ba fe ca ef be ad de",
+    );
+    // A `vldr` reaches 1020 bytes either way in steps of four, and keeps the
+    // U bit set for an offset of zero where `ldr` clears it.
+    enc(
+        "vldr s0, =0x3f800001\nvldr s1, =0x3f800001\nvldr.32 s2, =0x12345678\n\
+         bx lr\n.pool\n",
+        "02 0a 9f ed 01 0a df ed 01 1a 9f ed 1e ff 2f e1 01 00 80 3f 78 56 34 12",
+    );
+    enc(
+        "vldr s0, =0x3f800001\nnop\n.pool\n",
+        "00 0a 9f ed 00 f0 20 e3 01 00 80 3f",
+    );
+    let e = errors_for("arm", "vldr s0, =0x3f800001\n.space 1024\nbx lr\n");
+    assert!(e.contains("-1020 to 1020"), "{e}");
+    assert!(e.contains("put an `.ltorg` nearer"), "{e}");
+    // An eight-byte entry has to be a number, and only a load takes one.
+    assert!(errors_for("arm", "vldr d0, =f\nf: bx lr\n").contains("invalid type for literal pool"));
+    assert!(errors_for("arm", "vstr d0, =1").contains("expected a memory operand"));
+    assert!(errors_for("arm", "vldr q0, =1").contains("not a `q` one"));
+}
+
+/// The same in Thumb, where the pool is reached from the PC rounded down to a
+/// word and a `vldr` may stand in an `it` block.
+#[test]
+fn a_doubleword_pool_entry_in_thumb() {
+    tenc(
+        "vldr d0, =0x1122334455667788\nldr r0, =0xaabbccdd\nbx lr\n.pool\n",
+        "9f ed 01 0b 02 48 70 47 88 77 66 55 44 33 22 11 dd cc bb aa",
+    );
+    tenc(
+        "ldr r0, =0xaabbccdd\nvldr d0, =0x1122334455667788\nbx lr\n.pool\n",
+        "01 48 9f ed 03 0b 70 47 dd cc bb aa 00 00 00 00 \
+         88 77 66 55 44 33 22 11",
+    );
+    tenc(
+        "nop\nvldr d0, =0x1122334455667788\nldr r0, =0xaabbccdd\nldr r1, =0x99887766\n\
+         bx lr\n.pool\n",
+        "00 bf 9f ed 03 0b 04 48 04 49 70 47 00 00 00 00 \
+         88 77 66 55 44 33 22 11 dd cc bb aa 66 77 88 99",
+    );
+    tenc(
+        "it eq\nvldreq d0, =0x1122334455667788\nbx lr\n.pool\n",
+        "08 bf 9f ed 01 0b 70 47 88 77 66 55 44 33 22 11",
+    );
+}
+
+/// A number GNU as can move is moved rather than loaded, and a `vldr` has
+/// three instructions to move one with: the NEON `vmov.i64`, which is
+/// unconditional whatever the load said, and the VFP `vmov.f32` and
+/// `vmov.f64` of an eight-bit immediate.
+#[test]
+fn a_vldr_of_a_number_a_move_can_hold() {
+    enc(
+        "vldr d0, =-1\nvldr d1, =0x3ff0000000000000\nvldr d2, =0x00ff00ff00ff00ff\n\
+         vldr d3, =0xffffffff00000000\nvldr d4, =0\nvldreq d5, =0x3ff0000000000000\n",
+        "3f 0e 87 f3 00 1b b7 ee 35 2e 85 f2 30 3e 87 f3 30 4e 80 f2 00 5b b7 0e",
+    );
+    enc(
+        "vldr s0, =0x3f800000\nvldr s1, =0xbf800000\nvldreq s2, =0x40000000\n",
+        "00 0a b7 ee 00 0a ff ee 00 1a b0 0e",
+    );
+    tenc(
+        "vldr d0, =-1\nvldr d1, =0x3ff0000000000000\nvldr s0, =0x3f800000\n",
+        "87 ff 3f 0e b7 ee 00 1b b7 ee 00 0a",
+    );
+    // A data type GNU as reads and never looks at, since the register says
+    // the width; one it cannot read is still not an instruction.
+    enc("vldr.64 d0, =-1\n", "3f 0e 87 f3");
+    enc("vldr.f32 s0, =0x3f800000\n", "00 0a b7 ee");
+    assert!(errors_for("arm", "vldr.foo d0, [r1]").contains("unknown instruction"));
+}
+
+/// The byte and halfword loads take a pool entry too. `ldrh`, `ldrsh` and
+/// `ldrsb` address in "mode 3", whose offset is eight bits in two nibbles, so
+/// they reach 255 bytes where `ldr` and `ldrb` reach 4095; in Thumb they are
+/// always the 32-bit form, only `ldr` having a 16-bit PC-relative encoding.
+/// Every width shares the one four-byte entry.
+#[test]
+fn the_byte_and_halfword_literal_loads() {
+    enc(
+        "ldrh r0, =0x12345678\nldrsh r1, =0x12345678\nldrsb r2, =0x12345678\n\
+         ldrb r3, =0x12345678\nldr r4, =0x12345678\nbx lr\n.pool\n",
+        "b0 01 df e1 fc 10 df e1 d8 20 df e1 04 30 df e5 00 40 1f e5 1e ff 2f e1 \
+         78 56 34 12",
+    );
+    enc(
+        "ldrh r0, =0x104\nldrsb r1, =-2\n",
+        "41 0f a0 e3 01 10 e0 e3",
+    );
+    tenc(
+        "ldrh r0, =0x12345678\nldrsh r1, =0x12345678\nldrsb r2, =0x12345678\n\
+         ldrb r3, =0x12345678\nldr r4, =0x12345678\nldr r9, =0x12345678\n\
+         bx lr\n.pool\n",
+        "bf f8 14 00 bf f9 10 10 9f f9 0c 20 9f f8 08 30 01 4c df f8 04 90 70 47 \
+         78 56 34 12",
+    );
+    tenc(
+        "ldrh r0, =0x104\nldrsb r1, =-2\nldrb r2, =0x1234\n",
+        "4f f4 82 70 6f f0 01 01 41 f2 34 22",
+    );
+    // The moves are all 32 bits wide, so a `.n` leaves nothing that fits; and
+    // only `ldr` may name the stack pointer or the PC.
+    assert!(errors_for("thumb", "ldrh.n r0, =4").contains("16-bit instruction"));
+    assert!(errors_for("thumb", "ldrh sp, =4").contains("`sp` is not allowed here"));
+    assert!(errors_for("arm", "ldrh pc, =4").contains("`pc` is not allowed here"));
+    assert!(
+        errors_for("arm", "ldrt r0, =4")
+            .contains("an unprivileged transfer takes no literal pool value")
+    );
+    // A word load into the stack pointer is not moved either, so it loads.
+    tenc(
+        "ldr sp, =0x104\nldr r0, =0x104\nbx lr\n.pool\n",
+        "df f8 08 d0 4f f4 82 70 70 47 00 00 04 01 00 00",
+    );
+}
+
+/// What makes two literals one entry is what the source wrote, not what its
+/// value is as an `i64`: GNU as compares `X_unsigned` as well, which every
+/// integer has unless it was negated, a subtraction among the ways to negate
+/// one. So `0x12345678` and `0x1234567a-2` are two entries.
+#[test]
+fn a_pool_entry_is_shared_by_how_the_number_was_written() {
+    enc(
+        "ldr r0, =0x12345678\nldr r1, =0x1234567a-2\nldr r2, =0x12345678\n\
+         bx lr\n.pool\n",
+        "08 00 9f e5 08 10 9f e5 00 20 1f e5 1e ff 2f e1 78 56 34 12 78 56 34 12",
+    );
+    // A doubleword written with a minus keeps its words apart from the same
+    // words written positive, and shares with another negation of them.
+    enc(
+        "vldr d0, =-0x1122334455667788\nldr r0, =0xaa998878\n\
+         vldr d1, =0xeeddccbbaa998878\nbx lr\n.pool\n",
+        "02 0b 9f ed 0c 00 9f e5 04 1b 9f ed 1e ff 2f e1 \
+         78 88 99 aa bb cc dd ee 78 88 99 aa 00 00 00 00 \
+         78 88 99 aa bb cc dd ee",
+    );
+}

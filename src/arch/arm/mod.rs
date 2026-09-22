@@ -20,6 +20,7 @@ pub mod reloc;
 #[doc(hidden)]
 pub mod table;
 pub mod thumb;
+pub(crate) mod vfp;
 
 use crate::arch::{
     ArchState, Architecture, AsmCtx, Endian, InsnRequest, Interwork, InterworkTarget, Request,
@@ -290,6 +291,12 @@ impl Architecture for Arm {
 
     fn pads_as_last_instruction(&self) -> bool {
         true
+    }
+
+    /// `add_to_lit_pool` keeps an ARM pool as an array of four-byte slots in
+    /// the order the literals were asked for, not a run per width.
+    fn literal_pool(&self) -> crate::arch::LiteralPool {
+        crate::arch::LiteralPool::Slots
     }
 
     /// Thumb branches, literal loads and `adr` are sized as GNU as's

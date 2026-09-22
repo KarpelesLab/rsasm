@@ -33,7 +33,13 @@ pub fn forms(name: &str) -> Option<&'static [Form]> {
 
 /// Assembles `ins` from its table forms, or reports why none of them fit.
 pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, at: u16) -> Option<Vec<Variant>> {
-    let all = forms(table::FORMS[at as usize].name)?;
+    let name = table::FORMS[at as usize].name;
+    // `vldr sN, =expr` loads from the literal pool, which no form in the
+    // table describes; see [`super::vfp`].
+    if name == "vldr" && super::vfp::is_literal_load(ins) {
+        return super::vfp::literal_load(cx, ins);
+    }
+    let all = forms(name)?;
     let thumb = cx.state.bits == THUMB_BITS;
     let mut best: Option<(&Form, usize)> = None;
     for form in all {
@@ -1205,7 +1211,7 @@ fn squash_bits(imm: u32) -> u32 {
 }
 
 /// The low `size` bits of `hi:lo`, inverted.
-fn invert_size(lo: &mut u32, hi: &mut u32, size: u32) {
+pub(super) fn invert_size(lo: &mut u32, hi: &mut u32, size: u32) {
     match size {
         8 => *lo = !*lo & 0xFF,
         16 => *lo = !*lo & 0xFFFF,
@@ -1221,7 +1227,7 @@ fn invert_size(lo: &mut u32, hi: &mut u32, size: u32) {
 /// `neon_cmode_for_move_imm`: the value is a byte somewhere in the element,
 /// a byte with ones below it, or a byte pattern repeated over the element.
 /// `op` starts as 1 for `vmvn` and the encoding may flip it.
-fn cmode_for_move(mut lo: u32, hi: u32, op: &mut u32, size: u32) -> Option<(u32, u32)> {
+pub(super) fn cmode_for_move(mut lo: u32, hi: u32, op: &mut u32, size: u32) -> Option<(u32, u32)> {
     if size == 64 {
         if bits_same_in_bytes(hi) && bits_same_in_bytes(lo) {
             if *op == 1 {

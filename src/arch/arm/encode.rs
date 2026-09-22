@@ -6,7 +6,7 @@
 //! function knows where the bits go.
 
 use super::imm;
-use super::insn::{AL, Mnem};
+use super::insn::{AL, Mnem, Transfer};
 use super::operand::{Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
 use super::reg::{self, Reg};
 use super::{Insn, reloc};
@@ -458,18 +458,52 @@ pub fn literal_constant(cx: &mut AsmCtx<'_>, op: &Operand, e: ExprRef) -> Option
     Some(Some(v as u32))
 }
 
-/// The error for an `=expr` operand on anything but `ldr`.
-pub fn literal_only_for_ldr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, op: &Operand) -> Option<()> {
-    if ins.mnem == Mnem::Ldr {
-        return Some(());
+/// Whether a number was written without a negation, which GNU as keeps on
+/// the expression as `X_unsigned` and an ARM pool entry is shared by; see
+/// [`crate::arch::LiteralRequest::unsigned`].
+///
+/// `gas/expr.c` starts every integer off unsigned ("all integers are
+/// regarded as unsigned unless they are negated"), clears it for a unary
+/// minus, a `~` and a subtraction, keeps the left operand's across a shift,
+/// and otherwise keeps it only where both operands have it.
+pub fn literal_unsigned(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    use crate::expr::{BinOp, ExprKind, UnOp};
+    match cx.exprs.get(e).kind {
+        ExprKind::Unary(UnOp::Neg | UnOp::Not, _) => false,
+        ExprKind::Unary(_, inner) => literal_unsigned(cx, inner),
+        ExprKind::Binary(BinOp::Sub, ..) => false,
+        ExprKind::Binary(BinOp::Shl | BinOp::Shr | BinOp::Sar | BinOp::Shr32, left, _) => {
+            literal_unsigned(cx, left)
+        }
+        ExprKind::Binary(_, left, right) => {
+            literal_unsigned(cx, left) && literal_unsigned(cx, right)
+        }
+        ExprKind::Modifier(_, inner) => literal_unsigned(cx, inner),
+        _ => true,
     }
-    cx.error(
-        op.span,
-        format!(
-            "`{}` cannot load from a literal pool; only `ldr` can",
-            ins.text
-        ),
-    );
+}
+
+/// Whether a transfer takes an `=expr` at all, as GNU as's table has it: the
+/// word, byte and halfword loads reach `move_or_literal_pool`, which refuses
+/// a store ("invalid pseudo operation"); the unprivileged and doubleword
+/// forms never call it, and their addressing mode refuses the operand
+/// instead ("Instruction does not support =N addresses").
+pub fn literal_transfer(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    t: Transfer,
+    op: &Operand,
+) -> Option<()> {
+    let why = if !t.load {
+        "a store has nothing to load from a literal pool"
+    } else if t.translate {
+        "an unprivileged transfer takes no literal pool value"
+    } else if t.size == 8 {
+        "a doubleword load takes no literal pool value"
+    } else {
+        return Some(());
+    };
+    cx.error(op.span, format!("`{}`: {why}", ins.text));
     None
 }
 
@@ -484,15 +518,38 @@ fn scatter_literal(w: u64, v: i64) -> u64 {
     (w & !0x0080_0fff) | up | (v.unsigned_abs() & 0xfff)
 }
 
-/// `ldr rt, =expr` in A32.
+/// The same field where the offset is eight bits in two nibbles, which is
+/// how the halfword and signed-byte loads hold it.
+fn scatter_literal8(w: u64, v: i64) -> u64 {
+    if v == 0 {
+        return w & !0xf0f;
+    }
+    let up = if v > 0 { 0x0080_0000 } else { 0 };
+    let mag = v.unsigned_abs() & 0xff;
+    (w & !0x0080_0f0f) | up | ((mag >> 4) << 8) | (mag & 0xf)
+}
+
+/// `ldr rt, =expr` in A32, and the byte and halfword loads that take an
+/// `=expr` as well.
+///
+/// The halfword and signed-byte loads address in "mode 3", whose offset is
+/// eight bits in two fields, so they reach only 255 bytes either way; the
+/// word and unsigned-byte loads reach 4095. A number `mov` or `mvn` can hold
+/// is moved instead of loaded, whichever load was written.
 fn literal_load(
     cx: &mut AsmCtx<'_>,
     ins: &Insn<'_>,
+    t: Transfer,
     rt: u32,
     op: &Operand,
     e: ExprRef,
 ) -> Option<Vec<Variant>> {
-    literal_only_for_ldr(cx, ins, op)?;
+    literal_transfer(cx, ins, t, op)?;
+    // `do_ldst` lets `ldr pc, =x` through, which is a branch; `do_ldstv4`
+    // and the byte loads reject the PC.
+    if t.size != 4 {
+        no_pc(cx, ins.ops[0].span, rt as Reg)?;
+    }
     let constant = literal_constant(cx, op, e)?;
     if let Some(v) = constant {
         if let Some(field) = imm::modified(v) {
@@ -506,17 +563,36 @@ fn literal_load(
         Some(v) if constant.is_some() => Literal::Const(v),
         _ => Literal::Expr(e),
     };
-    let entry = cx.literal(value, 4, op.span);
-    // The PC reads two instructions ahead, and the load reaches 4095 bytes
-    // either way from there.
-    let kind = FixupKind::pcrel(4, 8)
-        .with_limits(-4095, 4095)
-        .with_range_hint("the literal pool is too far away; put an `.ltorg` nearer")
-        .scatter(scatter_literal);
+    let entry = cx.literal_from(value, 4, op.span, literal_unsigned(cx, e));
+    let hint = "the literal pool is too far away; put an `.ltorg` nearer";
+    // The PC reads two instructions ahead, and the load reaches from there.
+    let mode3 = t.size == 2 || t.signed;
+    let (kind, base) = if mode3 {
+        // P, the immediate form of mode 3, L, the PC as the base, and the
+        // two bits that say which width and sign.
+        let op = if t.signed {
+            0xd0 | (u32::from(t.size == 2) << 5)
+        } else {
+            0xb0
+        };
+        (
+            FixupKind::pcrel(4, 8)
+                .with_limits(-255, 255)
+                .with_range_hint(hint)
+                .scatter(scatter_literal8),
+            0x015f_0000 | op,
+        )
+    } else {
+        (
+            FixupKind::pcrel(4, 8)
+                .with_limits(-4095, 4095)
+                .with_range_hint(hint)
+                .scatter(scatter_literal),
+            0x051f_0000 | (u32::from(t.size == 1) << 22),
+        )
+    };
     Some(vec![Variant {
-        bytes: word(ins.cond, 0x051f_0000 | (rt << 12))
-            .to_le_bytes()
-            .to_vec(),
+        bytes: word(ins.cond, base | (rt << 12)).to_le_bytes().to_vec(),
         fixups: vec![Fixup {
             offset: 0,
             expr: entry,
@@ -548,7 +624,7 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     arity(cx, ins, &[2])?;
     let rt = reg_of(cx, &ins.ops[0])? as u32;
     if let OperandKind::Literal(e) = ins.ops[1].kind {
-        return literal_load(cx, ins, rt, &ins.ops[1], e);
+        return literal_load(cx, ins, t, rt, &ins.ops[1], e);
     }
     let mem = *memory_operand(cx, &ins.ops[1])?;
     // Only a word transfer reaches the PC, and of the unprivileged ones
@@ -649,6 +725,9 @@ fn load_store_extra(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>>
         }
     }
     no_pc(cx, ins.ops[0].span, rt as Reg)?;
+    if let OperandKind::Literal(e) = ins.ops[mem_at].kind {
+        return literal_load(cx, ins, t, rt, &ins.ops[mem_at], e);
+    }
     let mem = *memory_operand(cx, &ins.ops[mem_at])?;
     let (p, w) = if t.translate {
         translate_bits(cx, &mem)?
