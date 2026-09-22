@@ -439,9 +439,14 @@ jobs:
           sudo apt-get install -y -qq llvm-22
           echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
+      # `llvm-readobj` is here because the NASM fuzzer reads its COFF objects
+      # through tools/coff-diff/canon.sh, which uses it; a fuzzer whose
+      # reference is missing stops rather than skipping, so it has to be on
+      # the PATH before the run and not discovered halfway through it.
       - name: Confirm the pinned oracle is the one in use
         run: |
           set -euo pipefail
+          command -v llvm-mc llvm-readobj
           llvm-mc --version | tee /dev/stderr | grep -q "LLVM version 22\." \
             || { echo "::error::llvm-mc is not LLVM 22"; exit 1; }
 
