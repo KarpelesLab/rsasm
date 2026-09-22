@@ -9,6 +9,31 @@
 //!
 //! The state's `bits` field carries the choice — 32 for ARM, 16 for Thumb —
 //! because that is what `.code 16` and `.code 32` already mean in ARM sources.
+//!
+//! # Deliberate differences from GNU as
+//!
+//! GNU as is the reference for what this backend writes — its literal pools,
+//! its mapping symbols and its interworking — but not for what it accepts.
+//! Two things it refuses are assembled here, and llvm-mc, which writes the
+//! same object rsasm does for both, is the reference for them instead.
+//!
+//! * A branch to a *local* label in another section that is an odd number of
+//!   halfwords into Thumb code. GNU as's `arm_fix_adjustable` relocates such
+//!   a reference against the label's section, folding the label's offset into
+//!   the addend, and `md_apply_fix` then reads the low two bits of that
+//!   addend as the branch destination's and stops with "misaligned branch
+//!   destination" — although the offset it checked is not the branch's until
+//!   a linker has placed both sections. rsasm names the label, as llvm-mc
+//!   does (see `relocates_with_label` below), and leaves the whole reference
+//!   to the linker, which has both addresses and the `blx` to reach Thumb
+//!   with. The case is in `tools/mc-diff/arm-relocs.txt`.
+//! * A literal pool entry holding a difference of labels, `ldr r0, =l1-l0`,
+//!   where the difference is not already a number. GNU as's
+//!   `parse_big_immediate` takes a constant, a bignum, or a symbol plus an
+//!   addend, and a difference of two labels that the parser cannot fold is
+//!   none of the three, so the line is a syntax error there; once the layout
+//!   is known it is an ordinary number, and rsasm puts it in the pool. The
+//!   case is in `tools/mc-diff/arm-programs.txt`.
 
 pub mod encode;
 pub(crate) mod generic;
@@ -113,8 +138,12 @@ pub const IW_THUMB_JUMP: u8 = 6;
 pub const IW_THUMB_JUMP16: u8 = 7;
 /// The 16-bit form of a Thumb `adr` layout may widen.
 pub const IW_THUMB_ADR16: u8 = 8;
-/// The 32-bit form of a Thumb `adr` layout chose between the two.
+/// The 32-bit form of a Thumb `adr` layout chose between the two, whose
+/// addend is even, so setting the Thumb bit in it adds one.
 pub const IW_THUMB_ADR: u8 = 9;
+/// [`IW_THUMB_ADR`] where the addend is already odd, so setting the Thumb bit
+/// in it changes nothing.
+pub const IW_THUMB_ADR_ODD: u8 = 10;
 
 impl Architecture for Arm {
     fn name(&self) -> &'static str {
@@ -387,18 +416,28 @@ impl Architecture for Arm {
         };
         // GNU as sets the low bit of a Thumb function's address in an `adr`
         // it relaxed once every symbol is known, which also makes it 32 bits.
+        // `md_convert_frag` ORs the bit into the *addend*, not into the
+        // finished `S + A - P`, so it adds one only where the addend is even;
+        // which of the two classes the instruction carries says that, since
+        // the addend is known when the `adr` is read.
         match class {
             IW_THUMB_ADR16 if thumb => return Interwork::Relocate,
             IW_THUMB_ADR if thumb => {
                 return Interwork::Becomes {
                     patch: |w| w,
                     kind: FixupKind {
-                        link: LinkValue::Split(|v| v | 1),
+                        link: LinkValue::Split(|v| v + 1),
                         ..thumb::adr32_kind()
                     },
                 };
             }
-            IW_THUMB_ADR16 | IW_THUMB_ADR => return Interwork::AsWritten,
+            IW_THUMB_ADR_ODD if thumb => {
+                return Interwork::Becomes {
+                    patch: |w| w,
+                    kind: thumb::adr32_kind(),
+                };
+            }
+            IW_THUMB_ADR16 | IW_THUMB_ADR | IW_THUMB_ADR_ODD => return Interwork::AsWritten,
             _ => {}
         }
         // A 16-bit branch has no relocation, so where the target is not

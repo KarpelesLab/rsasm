@@ -724,6 +724,11 @@ fn mov(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return encode_shift(cx, ins, rd, rm, shift, amount, src.span);
     }
 
+    // `do_t_mov_cmp` relaxes the immediate form wherever a 16-bit one could
+    // exist, whatever the constant turns out to be; see `relaxes_load_store`.
+    if !mvn && sets_flags16(ins) && low(rd) && ins.width == Width::Any {
+        cx.relaxable = true;
+    }
     let v = encode::imm32(cx, src)?;
     if !mvn && sets_flags16(ins) && low(rd) && v <= 0xff && want_narrow(ins) {
         return Some(narrow(0x2000 | ((rd as u16) << 8) | v as u16));
@@ -868,6 +873,15 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return wide_dp(cx, ins, ins.mnem, rd, rn, src, ins.set_flags);
     }
 
+    // `do_t_add_sub` reaches for one of four 16-bit forms, and relaxes the
+    // instruction wherever the registers allow one; see `relaxes_load_store`.
+    if ins.width == Width::Any
+        && ((rd == reg::SP && rn == reg::SP && !ins.set_flags)
+            || (low(rd) && !sub && !ins.set_flags && (rn == reg::SP || rn == reg::PC))
+            || (low(rd) && low(rn) && sets_flags16(ins)))
+    {
+        cx.relaxable = true;
+    }
     let written = encode::imm_of(cx, src)?;
     // A negative constant that the twelve-bit encoding holds as written is
     // written that way: `adds r6, #-1` is `adds.w r6, r6, #0xffffffff`,
@@ -896,7 +910,10 @@ fn add_sub(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     };
 
     if want_narrow(ins) {
-        if rn == reg::SP && rd == reg::SP && v.is_multiple_of(4) && v / 4 <= 0x7f {
+        // The 16-bit `add sp, #imm` leaves the flags alone, so `adds` takes
+        // the 32-bit form, as `do_t_add_sub`'s `!flags` says.
+        if rn == reg::SP && rd == reg::SP && !ins.set_flags && v.is_multiple_of(4) && v / 4 <= 0x7f
+        {
             let base = if sub { 0xb080 } else { 0xb000 };
             return Some(narrow(base | (v / 4) as u16));
         }
@@ -1066,6 +1083,10 @@ fn compare(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         ));
     }
     if let OperandKind::Imm(_) = src.kind {
+        // `do_t_mov_cmp` again: a low base relaxes whatever the constant is.
+        if low(rn) && ins.width == Width::Any {
+            cx.relaxable = true;
+        }
         let v = encode::imm32(cx, src)?;
         if low(rn) && v <= 0xff && want_narrow(ins) {
             return Some(narrow(0x2800 | ((rn as u16) << 8) | v as u16));
@@ -1338,6 +1359,12 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             "a PC-relative address is a plain load, with no writeback",
         );
         return None;
+    }
+    // `do_t_ldst` reaches for a 16-bit form here, and where one could exist
+    // gives the instruction a fragment its relaxation revisits -- even when
+    // the offset does not fit it and the 32-bit form is what is written.
+    if ins.width == Width::Any && !t.translate && low(rt) && relaxes_load_store(t, &mem) {
+        cx.relaxable = true;
     }
     if !t.translate
         && want_narrow(ins)
@@ -1664,7 +1691,14 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let span = ins.ops[1].span;
     let e = encode::thumb_function_address(cx, e);
     // Only the form GNU as relaxes learns about a Thumb function defined
-    // after the `adr`; see `Arm::interwork`.
+    // after the `adr`; see `Arm::interwork`. It sets the bit in the addend,
+    // which the rest of the expression is not part of, so the class carries
+    // the addend's parity to the point where the target is known.
+    let wide_class = if encode::odd_addend(cx, e) {
+        super::IW_THUMB_ADR_ODD
+    } else {
+        super::IW_THUMB_ADR
+    };
     let relaxed = low(rd) && ins.width == Width::Any;
     let mut out = Vec::new();
     if low(rd) && want_narrow(ins) {
@@ -1686,7 +1720,7 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if want_wide(ins) {
         let mut kind = adr32_kind();
         if relaxed {
-            kind = kind.link(LinkValue::Interwork(super::IW_THUMB_ADR));
+            kind = kind.link(LinkValue::Interwork(wide_class));
         }
         out.push(fixed(wide_bytes(0xf20f, (rd as u16) << 8), e, kind, span));
     }
@@ -1807,6 +1841,20 @@ fn literal_load(
 }
 
 /// The 16-bit form of a load or store, if the operands fit one.
+/// Whether `do_t_ldst` would try a 16-bit form for this address, which is
+/// what decides whether GNU as gives the instruction a relaxable fragment,
+/// whatever form it ends up writing: a plain `[rn, #imm]` on a low base, or
+/// a word load from the PC or the stack pointer, or a word store to it.
+fn relaxes_load_store(t: Transfer, mem: &Mem) -> bool {
+    if mem.index != Index::Offset || !matches!(mem.offset, MemOffset::None | MemOffset::Imm(_)) {
+        return false;
+    }
+    let word = t.size == 4 && !t.signed;
+    (low(mem.base) && !t.signed)
+        || (word && t.load && (mem.base == reg::PC || mem.base == reg::SP))
+        || (word && !t.load && mem.base == reg::SP)
+}
+
 fn narrow_load_store(t: Transfer, rt: Reg, mem: &Mem) -> Option<u16> {
     if mem.index != Index::Offset {
         return None;

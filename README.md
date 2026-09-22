@@ -1048,8 +1048,13 @@ the element size is refused on a NEON instruction, as is a quadword register
 where only a double one goes. The exception is the `al` condition, which
 llvm-mc takes everywhere and GNU as refuses on anything unconditional --
 except where some other form of the mnemonic is conditional, which is how it
-comes to take `vnegal.f32 d0, d1`; rsasm takes it everywhere. See
-`tools/xas-diff/README.md`.
+comes to take `vnegal.f32 d0, d1`; rsasm takes it everywhere. Two things GNU
+as refuses are assembled here, since llvm-mc writes for both the object rsasm
+writes: an ARM branch to a local label an odd number of halfwords into Thumb
+code in another section, whose offset GNU as checks before the linker has
+placed the section, and a literal pool entry holding a difference of labels
+its parser cannot fold (`ldr r0, =l1-l0`). See `tools/xas-diff/README.md` and
+the ARM backend's module documentation.
 
 ## Design
 
