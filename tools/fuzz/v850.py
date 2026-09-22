@@ -42,6 +42,11 @@ from gasfuzz import Target
 # into the field without complaint, which is why leaving it alone would also
 # compare rsasm's refusal against a wrong encoding.)
 BRANCH = re.compile(r"^(b[a-z]*|jr|jarl|loop)$")
+# A jump to a label, and the distances worth putting between the two. Only
+# `jr` and `jarl` take one: GNU as reads a conditional branch's operand as a
+# displacement, and refuses a symbol there ("condition code not expected").
+BRANCHES = ["jr L", "jarl L, r10"]
+REACHES = [0, 2, 250, 254, 256, 258, 65530, 65534, 65536, 0x1ffffe, 0x200000]
 ADDRESS = re.compile(r"(?<![\w.$])(-?(?:0x[0-9a-f]+|\d+))(?![\w.])")
 
 
@@ -58,11 +63,13 @@ def to_displacement(text, off):
 TARGETS = {
     "v850": Target("v850", "v850", gas="v850-elf-as",
                    objdump="v850-elf-objdump", objdump_flags=["-m", "v850"],
-                   addr_bits=32, rewrite=to_displacement),
+                   addr_bits=32, rewrite=to_displacement,
+                   branches=BRANCHES, reaches=REACHES),
     "rh850": Target("rh850", "rh850", gas="v850-elf-as",
                     gas_flags=["-mv850e3v5"], objdump="v850-elf-objdump",
                     objdump_flags=["-m", "v850e3v5"], addr_bits=32,
-                    rewrite=to_displacement),
+                    rewrite=to_displacement, branches=BRANCHES,
+                    reaches=REACHES),
 }
 
 # The coprocessor and cache instructions, which README.md does not claim.

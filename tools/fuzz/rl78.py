@@ -43,10 +43,19 @@ import sys
 import gasfuzz
 from gasfuzz import Target
 
+# A branch to a label, and the distances worth putting between the two: the
+# ends of the eight-bit conditional field, of `br $!`'s sixteen-bit relative
+# one, and past it, where the branch has to be given up on.
+BRANCH = re.compile(r"^b[a-z]*$")
+BRANCHES = ["br $L", "br !L", "bz $L", "bnz $L", "bc $L", "bnc $L",
+            "bh $L", "bnh $L", "bt a.3, $L", "bf a.0, $L"]
+REACHES = [0, 2, 120, 126, 128, 130, 250, 254, 256, 258, 32000, 32764,
+           32766, 32768, 32770]
+
 TARGETS = {
     "rl78": Target("rl78", "rl78", gas="rl78-elf-as", progbits="%progbits",
                    objdump="rl78-elf-objdump", objdump_flags=["-m", "rl78"],
-                   addr_bits=32),
+                   addr_bits=32, branches=BRANCHES, reaches=REACHES),
 }
 
 # The RL78-S3 multiply-divide-accumulate unit, which README.md does not
@@ -58,13 +67,45 @@ def skip(case):
     return bool(NOT_IMPLEMENTED.match(case[0]))
 
 
+def truncates_a_long_branch(text, res, target):
+    """A conditional branch whose expansion cannot reach either.
+
+    GNU as turns `bz $L` past the eight-bit field into `bnz $+3` over a
+    `br $!`, whose relative field is sixteen bits. Past *that* it wraps the
+    field and says nothing: disassembling its own output for a gap of 32768
+    shows the branch going to `0xffff8005` rather than to the label. rsasm
+    refuses instead.
+    """
+    g, r = res.get("gas"), res.get("rsasm")
+    return bool(g and g[0] == "ok" and r[0] == "err"
+                and "out of range" in str(r[1]))
+
+
+def expands_a_branch_that_reaches(text, res, target):
+    """A conditional branch at a displacement its own field still holds.
+
+    GNU as gives up on the three-byte conditional branches -- `bh`, `bnh`,
+    `bt`, `bf` and their bit-addressed forms -- a little before the end of
+    their eight-bit field and writes the opposite branch over a `br $!`
+    instead. rsasm writes the one instruction, and GNU objdump reads it as
+    going to the same label: `bt a.3, $0x81` for a gap of 126, where GNU as
+    wrote six bytes for the same jump.
+    """
+    g, r = res.get("gas"), res.get("rsasm")
+    if not g or g[0] != "ok" or r[0] != "ok":
+        return False
+    return len(r[1][0]) < len(g[1][0]) and BRANCH.match(text.split()[0]) is not None
+
+
 RULES = gasfuzz.Rules(deviations=[
     ("resolves-a-numeric-target", gasfuzz.resolves_a_numeric_target),
     ("fills-in-a-relocated-field", gasfuzz.fills_in_a_relocated_field),
     ("relocates-an-absolute-target", gasfuzz.relocates_an_absolute_target),
+    ("expands-a-branch-that-reaches", expands_a_branch_that_reaches),
+    ("truncates-a-long-branch", truncates_a_long_branch),
 ])
 
 
 if __name__ == "__main__":
     sys.exit(gasfuzz.disasm_main("rl78", TARGETS, RULES, skip, "rl78",
-                                 count=10000))
+                                 count=10000, programs=0.15))

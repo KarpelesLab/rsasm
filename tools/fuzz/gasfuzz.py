@@ -69,7 +69,7 @@ class Target:
                  progbits="@progbits", section=True, objdump=None,
                  objdump_flags=(), addr_bits=None, word_maker=None,
                  word_size=4, little=False, slot=0, objcopy=None,
-                 rewrite=None):
+                 rewrite=None, branches=(), reaches=()):
         self.key = key
         self.arch = arch
         self.objdump = objdump
@@ -89,6 +89,10 @@ class Target:
         # reads a displacement. `rewrite(text, offset)` puts such a line back
         # into the form the assembler takes, and is the target's own business.
         self.rewrite = rewrite
+        # How this target writes a branch to a label, and the distances worth
+        # putting between the two (see `branch_programs`).
+        self.branches = list(branches)
+        self.reaches = list(reaches)
         self.gas = oracle(gas) if gas else None
         self.gas_flags = list(gas_flags)
         self.mc = mc
@@ -705,13 +709,38 @@ def flat_image(tool, target, obj, workdir):
         return ""
 
 
+def branch_programs(rng, branches, reaches, count):
+    """Cases that are a branch to `L` over a gap, rather than one instruction.
+
+    An instruction on its own never reaches the part of an assembler that
+    chooses a branch's width: that only happens once there is something in
+    between and a label at the end. `L` is the label `build_source` defines
+    after every case, so the branch is always forward and its distance is
+    whatever the gap adds up to. `branches` are the target's own spellings
+    and `reaches` the distances that sit on and just past each form's range.
+    """
+    out = []
+    for _ in range(count):
+        branch = rng.choice(branches)
+        gap = rng.choice(reaches)
+        lines = [branch]
+        if rng.random() < 0.3:
+            lines.append(f".p2align {rng.randrange(1, 4)}")
+        if gap:
+            lines.append(f".skip {gap}")
+        out.append((branch.split()[0], "\n".join(lines)))
+    return out
+
+
 def disasm_main(name, targets, rules, skip=None, default=None, count=12000,
-                limit=40, over=3):
+                limit=40, over=3, programs=0.0):
     """The command line the disassembly-sourced fuzzers share.
 
     `skip` says which cases to leave out -- what the backend does not claim,
     which each fuzzer lists for itself -- and `over` how many cases to
     disassemble for each one kept, since skipping eats into the count.
+    `programs` is the share of cases that are a branch over a gap instead,
+    for the targets whose `branches` and `reaches` say how to write one.
     """
     import argparse
     import random
@@ -744,10 +773,16 @@ def disasm_main(name, targets, rules, skip=None, default=None, count=12000,
     jobs = []
     per = max(1, args.count // len(chosen))
     for t in chosen:
-        cases = [c for c in disassembled_cases(rng, t, per * over)
+        want = per
+        extra = []
+        if programs and t.branches and not args.only:
+            n = int(per * programs)
+            extra = branch_programs(rng, t.branches, t.reaches, n)
+            want -= n
+        cases = [c for c in disassembled_cases(rng, t, want * over)
                  if (skip is None or not skip(c))
                  and (not args.only or re.search(args.only, c[0]))]
-        jobs.append((t, cases[:per]))
+        jobs.append((t, cases[:want] + extra))
     if args.print_cases:
         for t, cases in jobs:
             for _m, text in cases:

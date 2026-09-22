@@ -37,9 +37,18 @@ import sys
 import gasfuzz
 from gasfuzz import Target
 
+# A branch to a label, and the distances worth putting between the two: RX
+# branches come in three widths, and where the choice between them changes is
+# where it is worth looking.
+BRANCHES = ["bra L", "beq L", "bne L", "bsr L", "bgt L", "ble L", "bc L",
+            "bn L", "bo L"]
+REACHES = [0, 2, 6, 8, 10, 120, 126, 128, 130, 32000, 32764, 32766, 32768,
+           32770, 100000]
+
 TARGETS = {
     "rx": Target("rx", "rx", gas="rx-elf-as", objdump="rx-elf-objdump",
-                 objdump_flags=["-m", "rx"], addr_bits=32),
+                 objdump_flags=["-m", "rx"], addr_bits=32,
+                 branches=BRANCHES, reaches=REACHES),
 }
 
 # README.md claims RXv1. Everything RXv2 and RXv3 added is skipped by name,
@@ -66,4 +75,5 @@ RULES = gasfuzz.Rules(deviations=[
 
 
 if __name__ == "__main__":
-    sys.exit(gasfuzz.disasm_main("rx", TARGETS, RULES, skip, "rx", count=10000))
+    sys.exit(gasfuzz.disasm_main("rx", TARGETS, RULES, skip, "rx", count=10000,
+                                 programs=0.15))

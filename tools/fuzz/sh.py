@@ -40,13 +40,18 @@ import sys
 import gasfuzz
 from gasfuzz import Target
 
+# A branch to a label, and the distances worth putting between the two: the
+# ends of `bt`/`bf`'s eight-bit field and of `bra`'s twelve-bit one.
+BRANCHES = ["bra L", "bsr L", "bt L", "bf L", "bt/s L", "bf/s L"]
+REACHES = [0, 2, 250, 254, 256, 258, 4090, 4094, 4096, 4098]
+
 TARGETS = {
     "sh": Target("sh", "sh", gas="sh-elf-as", gas_flags=["-big"],
                  objdump="sh-elf-objdump", objdump_flags=["-m", "sh4", "-EB"],
-                 addr_bits=32),
+                 addr_bits=32, branches=BRANCHES, reaches=REACHES),
     "shl": Target("shl", "shl", gas="sh-elf-as", gas_flags=["-little"],
                   objdump="sh-elf-objdump", objdump_flags=["-m", "sh4", "-EL"],
-                  addr_bits=32),
+                  addr_bits=32, branches=BRANCHES, reaches=REACHES),
 }
 
 # What README.md's "SuperH SH-1 to SH-4A" does not claim: the SH-2A
@@ -80,4 +85,5 @@ RULES = gasfuzz.Rules(deviations=[
 
 
 if __name__ == "__main__":
-    sys.exit(gasfuzz.disasm_main("sh", TARGETS, RULES, skip, "sh"))
+    sys.exit(gasfuzz.disasm_main("sh", TARGETS, RULES, skip, "sh",
+                                 programs=0.15))

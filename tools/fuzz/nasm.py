@@ -36,7 +36,7 @@ over padding chosen to sit either side of the point where a short branch stops
 reaching, so both assemblers have to relax the same way.
 
     tools/fuzz/nasm.py fuzz --seed 1 --count 600
-    tools/fuzz/nasm.py fuzz --format elf64 --count 5000 --mutations 0.5
+    tools/fuzz/nasm.py fuzz --format elf64 --count 5000 --mutations 0.5 --jobs 8
     tools/fuzz/nasm.py check prog.asm --format bin
 
 A case is classified:
@@ -45,8 +45,13 @@ A case is classified:
     rsasm       they differ. These are the findings; the exit status is 1 when
                 there are any, and each is printed in full, so that pasting it
                 into a file and running the two commands above reproduces it.
-    deviation   they differ in a way rsasm means to (`DEVIATIONS`), each named
-                with where it is written down.
+                `--limit` (default 20) is how many are shown.
+    deviation   they differ in a way `DEVIATIONS` above accounts for --
+                `prefix-order`, `macro-local-name` and `branch-width` -- each
+                named and counted rather than listed.
+
+`check` says which of the three one program is, and exits 1 only for a
+finding, so it can be used on a case pared down by hand.
 
 `--mutations` (default 0.25) is the fraction of programs given a statement
 meant to be refused: a register of the wrong width or from another mode, an
@@ -55,7 +60,9 @@ a negative `times`, a label defined twice, a macro called with the wrong
 number of arguments, an unterminated `%if`.
 
 Nothing that is compared is written in this script: every byte comes out of a
-NASM run.
+NASM run. What the two already differ over, and what is therefore left out of
+the programs, is the `NOT GENERATED` list below, each entry with a case that
+shows it and a note where it would have been written.
 
 Environment: RSASM (default target/debug/rsasm under the repository root) and
 RSASM_ORACLES (default target/oracles), whose `bin` holds the NASM 2.16.03
@@ -66,6 +73,7 @@ objects.
 import argparse
 import collections
 import concurrent.futures
+import difflib
 import os
 import random
 import re
@@ -117,8 +125,56 @@ FORMATS = {
 #     relocation; rsasm shortens it. Both branch to the same instruction --
 #     shortening moves everything after it four bytes down, which is why the
 #     displacement is 127 either way -- and every other address in the object
-#     moves with it. It is NASM that is being careful here, so this one is
-#     left in the report rather than worked around.
+#     moves with it. It is NASM that is being careful here.
+#
+# NOT GENERATED
+#
+# The rest of what these runs turned up is left out of the programs rather
+# than waved through, since a fuzzer that reports the same handful of
+# differences on every run reports nothing. Each is written where it would
+# have been generated; this is the list, with the whole of a case that shows
+# it. Where "NASM warns" is written, NASM assembles the line and prints a
+# warning, and rsasm stops.
+#
+#   1  `[esi*1]` and `[esi*2]`, with no base, are `[esi]` and `[esi+esi]` to
+#      NASM; rsasm writes an index-only SIB and a zero displacement, four
+#      bytes longer. `[esi*3]`, `*5` and `*9`, which have no encoding of
+#      their own, both fold.
+#   2  `jmp short l`, `jmp near l`, `jz short l`: rsasm reads the keyword as
+#      an unexpected token.
+#   3  `push dword 0x20` in 16-bit code (and `push word` in 32-bit) is
+#      `66 6a 20` to NASM; rsasm ignores the keyword and pushes a word.
+#   4  an `extern` nothing refers to is left out of NASM's symbol table and
+#      written as undefined by rsasm.
+#   5  `-f bin` with more than one section: NASM starts each at a multiple of
+#      four and leaves `.bss` out of the file; rsasm lays them end to end and
+#      writes `.bss` out as zeroes.
+#   6  a segment override that names the default segment (`[ds:ebx]`,
+#      `[ss:ebp+1]`, and `[ss:esi*5]`, whose index becomes the base): NASM
+#      writes the prefix, rsasm drops it as GNU as does.
+#   7  `[sym wrt ..got]` in a 32-bit object, in anything but the `mov eax`
+#      moffs form: rsasm writes R_386_GOT32X where NASM writes R_386_GOT32.
+#   8  a branch or a `[rel x]` naming a symbol declared `global` in the
+#      section it is in: NASM resolves it, rsasm relocates it, as GNU as does.
+#   9  re-opening a COFF section with `align=n` after an `align` inside it
+#      raised the alignment: NASM keeps the larger, rsasm takes the `align=`.
+#  10  a value that does not fit the field it is written into, unless it is a
+#      literal (which both truncate, with a warning): `db b - a` where the
+#      distance is 300, `and rdi, 0x80000000`, `push 0xffffffff` in 64-bit
+#      code, `mov qword [rbx], 0xffffffff`. NASM warns; rsasm refuses.
+#  11  `dw label` or `db label` in a COFF object: NASM writes a *four*-byte
+#      relocation into the field; rsasm says COFF has no relocation that
+#      size. `dq label` in a 32-bit object is the same story.
+#  12  a label defined twice at the same address: NASM takes it.
+#  13  `[ss:abs sym]` and `[ss:rel sym]`: rsasm reads the `abs`/`rel` after a
+#      segment override as an unexpected token.
+#  14  `xchg rax, rax` is `48 90` to NASM and `90` to rsasm, as to GNU as.
+#  15  an object with nothing in `.text`: rsasm writes the empty section out
+#      anyway, NASM leaves it out.
+#  16  what NASM lets through with a warning and rsasm refuses: `db` with no
+#      operand, an instruction in `.bss`, an unknown section attribute
+#      (`section .s data` in ELF), `jmp 0` to an address rather than a label
+#      (where rsasm writes a relocation against no symbol at all).
 
 
 def hex_field(line):
@@ -507,7 +563,7 @@ class Gen:
         # it is in the section the branch is in, and relocated by rsasm, as
         # GNU as relocates one (the linker may preempt the symbol). So an
         # exported code label is not used as a branch target here; the
-        # difference is reported rather than generated.
+        # difference is NOT GENERATED 8, not a finding.
         self.exported = set()
         if self.obj:
             # The first code label stays unexported, so there is always
@@ -590,8 +646,8 @@ class Gen:
         """The immediate an arithmetic instruction takes. A 64-bit operand
         takes a *signed* 32 bits, except `mov` into a register, which has an
         imm64 form; NASM warns and truncates one that does not fit, and rsasm
-        refuses it (see the report), so one that does not fit is not written
-        here."""
+        refuses it (NOT GENERATED 10), so one that does not fit is not
+        written here."""
         if size == 64 and not (mnemonic == "mov" and to_reg):
             return self.spell(self.rng.choice(
                 [0, 1, 0x7FFFFFFF, -1, -0x80000000, self.rng.randint(0, 0xFFFF)]))
@@ -638,8 +694,7 @@ class Gen:
         # `reg + reg*2/4/8`; 4 and 8 are encoded as they are written. A scale
         # of 1 or 2 with no base is left out: NASM folds those too (`[esi*1]`
         # is `[esi]` and `[esi*2]` is `[esi+esi]`) and rsasm writes the
-        # index-only SIB with a displacement of zero, which is the one real
-        # difference these runs turned up in the operand syntax.
+        # index-only SIB with a displacement of zero: NOT GENERATED 1.
         alone = rng.choice([3, 4, 5, 8, 9])
         noseg = override("")
         indexseg = override("", index)
@@ -651,13 +706,13 @@ class Gen:
         if not forbid_rel and sym != "0":
             if wide:
                 # `rel` and `abs` go without a segment override: rsasm reads
-                # `[ss:abs sym]`, which NASM takes, as a bad operand (see the
-                # report), so the two are not combined here.
+                # `[ss:abs sym]`, which NASM takes, as a bad operand
+                # (NOT GENERATED 13), so the two are not combined here.
                 forms += ["[rel %s]" % sym, "[abs %s]" % sym]
                 # A `wrt ..got` reference in an instruction is written in
                 # 64-bit code only: in 32-bit code rsasm writes
                 # R_386_GOT32X for every ModRM form where NASM writes
-                # R_386_GOT32 (see the report). `dd sym wrt ..got` in data,
+                # R_386_GOT32 (NOT GENERATED 7). `dd sym wrt ..got` in data,
                 # which both write as R_386_GOT32, is still generated.
                 if self.elf and self.externs and rng.random() < 0.5:
                     forms.append("[rel %s wrt ..got]" % self.extern())
@@ -686,13 +741,13 @@ class Gen:
             form = rng.random()
             # `xchg` has no immediate form at all, so draw it another way
             # rather than spend the case on a refusal both agree on.
-            if m == "xchg" and 0.25 <= form < 0.5:
+            if m == "xchg" and (0.25 <= form < 0.5 or form >= 0.9):
                 form = 0.8
             if form < 0.25:
                 dst, src = self.reg(size), self.reg(size)
                 # `xchg rax, rax` is `48 90` to NASM and `90` -- a plain
                 # `nop`, as GNU as writes it -- to rsasm, so the two
-                # registers are kept apart (see the report).
+                # registers are kept apart (NOT GENERATED 14).
                 while m == "xchg" and dst == src:
                     src = self.reg(size)
                 return "%s %s, %s" % (m, dst, src)
@@ -765,7 +820,7 @@ class Gen:
             target = self.label("c", with_local=True)
             m = rng.choice(["jmp", "call"] + ["j" + c for c in CONDITIONS])
             if self.elf and self.externs and m == "call" and rng.random() < 0.3:
-                return "call %s wrt ..plt" % rng.choice(self.externs)
+                return "call %s wrt ..plt" % self.extern()
             return "%s %s" % (m, target)
         if pick < 0.88:
             kind = rng.choice(["reg", "mem"])
@@ -827,8 +882,7 @@ class Gen:
         # A symbol goes in a field the format has a relocation for: 32 bits
         # everywhere, 64 only where the target is. (NASM takes `dq sym` in a
         # 32-bit object, warns, and writes a 32-bit relocation zero-extended
-        # into the field; rsasm refuses it. That difference is reported, not
-        # generated.)
+        # into the field; rsasm refuses it: NOT GENERATED 11.)
         if r < 0.4 and (size == 32 or (size == 64 and self.bits == 64)):
             sym = self.label("cdb")
             if sym != "0":
@@ -839,7 +893,7 @@ class Gen:
                     return "%s wrt ..imagebase" % sym
                 return sym
         # A distance is only written where it fits: NASM warns and truncates
-        # one that does not, and rsasm refuses it (see the report).
+        # one that does not, and rsasm refuses it (NOT GENERATED 10).
         if r < 0.5 and size >= 32 and len(self.code) >= 2:
             return "%s - %s" % (self.code[0], self.code[1])
         if r < 0.55 and size >= 32:
@@ -937,13 +991,13 @@ class Gen:
             args = ", ".join(self.spell(rng.randint(0, 0xFF)) for _ in range(self.macro_args))
             return ["%s %s" % (self.macro, args)]
         if r < 0.9:
-            return ["%%define twice(x) ((x) * 2)", "db twice(%d)" % rng.randint(0, 40)]
+            return ["%define twice(x) ((x) * 2)", "db twice(%d)" % rng.randint(0, 40)]
         return ["%%strlen slen %s" % self.string(), "db slen"]
 
     def section_line(self, spec):
         """`section <name> <attributes>`, with the attributes only the first
         time the section is opened. Re-declaring one with `align=` resets the
-        alignment an `align` inside it had raised, in COFF (see the report),
+        alignment an `align` inside it had raised, in COFF (NOT GENERATED 9),
         and real source names a section's attributes once."""
         name = spec.split()[0]
         if name in self.declared:
@@ -995,6 +1049,9 @@ class Gen:
                     self.owner = name
                     out.append("%s:" % name)
                     if rng.random() < 0.2 and self.equs:
+                        # An `equ` does not take the local labels after it:
+                        # they still belong to the label before, in both
+                        # assemblers.
                         out.append("%s_len equ $ - %s" % (name, name))
                     continue
             if r < 0.3 and self.strucs:
@@ -1025,6 +1082,8 @@ class Gen:
                 name = rng.choice([n for n in self.bss if n not in self.defined] or self.bss)
                 if name not in self.defined:
                     self.defined.add(name)
+                    # Every label a local one may hang off, wherever it is.
+                    self.owner = name
                     out.append("%s:" % name)
                     continue
             if rng.random() < 0.2:
@@ -1042,7 +1101,7 @@ class Gen:
         wrong.append("mov %s, %s" % (self.reg(32), self.reg(8)))
         # A plain base register, not a symbol: a mutation may land in a data
         # section, and a rip-relative reference from one to a label in it is
-        # resolved by NASM and relocated by rsasm (see the report).
+        # resolved by NASM and relocated by rsasm (NOT GENERATED 8).
         plain = {16: "[bx]", 32: "[ebx]", 64: "[rbx]"}[bits]
         wrong.append("mov byte %s, 0x1234" % plain)
         wrong.append("mov %s, 1" % plain)                # no size to go on
@@ -1058,7 +1117,7 @@ class Gen:
         if self.defined:
             # A byte first, so that the second definition is at an address of
             # its own: NASM takes a label defined twice at the *same* address
-            # (see the report), and only a real move is refused by both.
+            # (NOT GENERATED 12), and only a real move is refused by both.
             wrong.append("db 0\n%s: db 0" % sorted(self.defined)[0])
         if getattr(self, "macro", None):
             wrong.append("%s 1, 2, 3, 4, 5" % self.macro)
@@ -1097,7 +1156,7 @@ class Gen:
             # more, NASM's `bin` writer lays each one out at a multiple of 4
             # and leaves `.bss` out of the file altogether, while rsasm puts
             # them end to end and writes `.bss` out as zeroes -- a difference
-            # this fuzzer is not about, and one reported separately.
+            # this fuzzer is not about: NOT GENERATED 5.
             text_sections = data_sections = [".text"]
         blocks = []
         for _ in range(rng.randint(2, 6)):
@@ -1127,7 +1186,7 @@ class Gen:
         # NASM writes an `extern` into the object only where something refers
         # to it, and rsasm writes every one; a program that declares a symbol
         # it never uses would differ for that reason alone, so each one gets
-        # a reference. The difference itself is reported separately.
+        # a reference. The difference itself is NOT GENERATED 4.
         text = "\n".join(l for l in lines
                          if not l.startswith(("extern ", "common ", "global ")))
         for name in self.externs + self.commons:
@@ -1156,7 +1215,8 @@ def one(job):
         ref, ours = assemble(source, fmt, d)
     cls, detail = classify(ref, ours)
     return dict(seed=seed, fmt=fmt, cls=cls, detail=detail, source=source,
-                mutation="; ".join(gen.mutations), ref=ref, ours=ours)
+                mutation="; ".join(gen.mutations), ref=ref, ours=ours,
+                refused=ref[0] == "ERROR")
 
 
 def show(result, limit=30):
@@ -1170,7 +1230,6 @@ def show(result, limit=30):
     if r["ours"][0] == "ERROR":
         print("  rsasm: ERROR %s" % r["ours"][1])
     if r["ref"][0] == "OK" and r["ours"][0] == "OK":
-        import difflib
         diff = list(difflib.unified_diff(r["ref"][1], r["ours"][1], "nasm", "rsasm",
                                          n=0, lineterm=""))
         print("\n".join("  " + l for l in diff[2:limit]))
@@ -1185,16 +1244,19 @@ def fuzz(args):
     by_format = collections.Counter()
     deviations = collections.Counter()
     findings = []
+    refused = 0
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs) as ex:
         for r in ex.map(one, jobs, chunksize=4):
             counts[r["cls"]] += 1
             by_format[r["fmt"]] += 1
+            refused += r["cls"] == "agree" and r["refused"]
             if r["cls"] == "deviation":
                 deviations[r["detail"]] += 1
             elif r["cls"] == "rsasm":
                 findings.append(r)
     print("formats: " + "  ".join("%s %d" % kv for kv in sorted(by_format.items())))
-    print("classes: " + "  ".join("%s %d" % kv for kv in sorted(counts.items())))
+    print("classes: " + "  ".join("%s %d" % kv for kv in sorted(counts.items()))
+          + "  (%d of the agreements are both refusing the program)" % refused)
     if deviations:
         print("deviations: " + "  ".join("%s %d" % kv for kv in deviations.most_common()))
     findings.sort(key=lambda r: (r["detail"], len(r["source"])))
@@ -1236,8 +1298,19 @@ def main():
     ck.add_argument("file")
     ck.add_argument("--format", choices=sorted(FORMATS), default="bin")
     args = ap.parse_args()
+    # A missing reference is a failure, not a reason to pass quietly: the
+    # whole point of the run is that the two were compared.
     if not os.path.exists(NASM):
         sys.exit("no NASM at %s; run tools/oracles/build.sh nasm" % NASM)
+    code, version = run([NASM, "-v"], ".")
+    if code != 0 or "version 2.16.03" not in version:
+        sys.exit("REF-MISSING: %s is not NASM 2.16.03 (%s)" % (NASM, version.strip()))
+    if not os.path.exists(RSASM):
+        sys.exit("no rsasm at %s; cargo build --all-features --bin rsasm" % RSASM)
+    # tools/coff-diff/canon.sh reads a COFF object with llvm-readobj.
+    if args.format is None or args.format.startswith("win"):
+        if run(["llvm-readobj", "--version"], ".")[0] != 0:
+            sys.exit("llvm-readobj is not on the PATH; the COFF objects need it")
     return fuzz(args) if args.cmd == "fuzz" else check(args)
 
 
