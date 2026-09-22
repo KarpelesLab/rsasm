@@ -328,11 +328,11 @@ backend. Four such choices are worth knowing about:
   is the one that reference's, and where they differ so does rsasm: ARM's
   `.ARM.attributes` is GNU as's, which llvm-mc does not write at all unless
   the source asks for one, and MIPS's `.reginfo` and `.MIPS.abiflags` are
-  llvm-mc's, which GNU as writes with `SHF_ALLOC` off and beside a `.pdr` and
-  a `.gnu.attributes` that rsasm writes neither of. RISC-V's
-  `.riscv.attributes` is the same in both. `tools/mc-diff` leaves
-  `.ARM.attributes` out of its comparison for that reason, and
-  `tools/xas-diff` compares it.
+  llvm-mc's: GNU as writes the same `.MIPS.abiflags`, a `.reginfo` without
+  `SHF_ALLOC`, and beside them a `.pdr` and a `.gnu.attributes` that rsasm
+  writes neither of. RISC-V's `.riscv.attributes` is the same in both.
+  `tools/mc-diff` leaves `.ARM.attributes` out of its comparison for that
+  reason, and `tools/xas-diff` compares it.
 - **m68k floating-point immediates.** Both references write a single or
   double precision `#1.5` the same way. An extended-precision one GNU as 2.47
   writes without the 16 zero bits of the 68881 format — its own `.extend`
