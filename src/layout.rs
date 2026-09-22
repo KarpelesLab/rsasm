@@ -213,7 +213,13 @@ impl Assembler {
     ///
     /// [`Architecture::elf_attributes`]: crate::arch::Architecture::elf_attributes
     fn add_attributes_section(&mut self) {
-        if !self.options.relocatable {
+        // These sections are ELF's: a COFF or Mach-O object says what it
+        // needs in its own header, and nothing reads a `.ARM.attributes`
+        // there.
+        if !self.options.relocatable || self.options.format.is_coff() {
+            return;
+        }
+        if self.options.format == crate::output::Format::MachO {
             return;
         }
         // The lengths in a build-attributes section are written in the

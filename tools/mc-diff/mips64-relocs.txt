@@ -131,3 +131,9 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+
+=== .module softfloat leaves no unit
+        .module softfloat
+        .set    noreorder
+        .globl  f
+f:      nop

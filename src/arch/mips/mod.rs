@@ -33,6 +33,14 @@ pub const NAMES: &[&str] = &["mips", "mipsel", "mips64", "mips64el"];
 /// `ArchState::features` bit: the source has said `.set noreorder`, which
 /// the header records as `EF_MIPS_NOREORDER`.
 const FEATURE_NOREORDER: u64 = 1;
+/// `ArchState::features` bit: `.module fp=64`, a 64-bit floating-point file
+/// on a 32-bit target.
+pub(crate) const FEATURE_FP64: u64 = 2;
+/// `ArchState::features` bit: `.module softfloat`, no floating-point unit.
+pub(crate) const FEATURE_SOFTFLOAT: u64 = 4;
+/// `ArchState::features` bit: `.module nooddspreg`, which gives up the odd
+/// single-precision registers.
+pub(crate) const FEATURE_NO_ODD_SPREG: u64 = 8;
 
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     let (canonical, endian, bits) = match name {
@@ -210,6 +218,10 @@ impl Architecture for Mips {
     /// delay slot and runs on both paths. Accepting `reorder` while behaving
     /// as `noreorder` would assemble a different program without a word.
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        if name == ".module" {
+            self.module(cx, cur);
+            return true;
+        }
         if name != ".set" {
             return false;
         }
@@ -243,7 +255,7 @@ impl Architecture for Mips {
             "noat" | "at" | "nomacro" | "macro" | "push" | "pop" | "nomips16" | "nomicromips"
             | "mips1" | "mips2" | "mips3" | "mips4" | "mips5" | "mips32" | "mips32r2"
             | "mips32r6" | "mips64" | "mips64r2" | "mips64r6" | "hardfloat" | "softfloat"
-            | "nodsp" => {
+            | "nodsp" | "oddspreg" | "nooddspreg" => {
                 cur.advance();
                 true
             }
@@ -285,5 +297,67 @@ impl Architecture for Mips {
         // Every MIPS instruction is one word wide, so there is never more than
         // one candidate for the layout pass to choose between.
         encode::encode(cx, &def, &args, self.endian, self.bits == 64).map(|v| vec![v])
+    }
+}
+
+impl Mips {
+    /// `.module <option>`, which says what the *file* needs of a processor
+    /// rather than what one instruction does, and so lands in
+    /// `.MIPS.abiflags`; see [`abi`].
+    ///
+    /// The options both references take to the same effect are here:
+    /// `fp=32` and `fp=64` for the width of the floating-point file,
+    /// `softfloat` and `hardfloat`, and `oddspreg` and `nooddspreg` for the
+    /// odd single-precision registers. The rest — the ISA names, the
+    /// application-specific extensions — would change which instructions are
+    /// accepted, which this backend does not vary, and are refused rather
+    /// than ignored.
+    fn module(&self, cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
+        let tok = cur.peek();
+        let Some(n) = tok.ident() else {
+            cx.error(tok.span, "`.module` needs an option");
+            cur.set_pos(cur.all().len());
+            return;
+        };
+        let mut word = cx.name(n).to_ascii_lowercase();
+        cur.advance();
+        // `fp=32` lexes as `fp`, `=`, `32`.
+        if word == "fp" && cur.peek().is_punct(crate::lexer::Punct::Eq) {
+            cur.advance();
+            if let crate::lexer::TokKind::Int(v) = cur.peek().kind {
+                cur.advance();
+                word = format!("fp={v}");
+            }
+        }
+        let wide = self.bits == 64;
+        match word.as_str() {
+            // A 64-bit target's floating-point file is 64 bits already, and
+            // neither reference lets it be anything else.
+            "fp=64" if wide => {}
+            "fp=32" if wide => cx.error(
+                tok.span,
+                "`.module fp=32` is not allowed on a 64-bit MIPS target",
+            ),
+            "fp=32" => cx.state.features &= !FEATURE_FP64,
+            "fp=64" => cx.state.features |= FEATURE_FP64,
+            "softfloat" => cx.state.features |= FEATURE_SOFTFLOAT,
+            "hardfloat" => cx.state.features &= !FEATURE_SOFTFLOAT,
+            "oddspreg" if wide => {}
+            "nooddspreg" if wide => cx.error(
+                tok.span,
+                "`.module nooddspreg` is not allowed on a 64-bit MIPS target",
+            ),
+            "oddspreg" => cx.state.features &= !FEATURE_NO_ODD_SPREG,
+            "nooddspreg" => cx.state.features |= FEATURE_NO_ODD_SPREG,
+            _ => cx.error(
+                tok.span,
+                format!(
+                    "`.module {word}` is not an option rsasm understands: it takes \
+                     `fp=32`, `fp=64`, `softfloat`, `hardfloat`, `oddspreg` and \
+                     `nooddspreg`, which are what `.MIPS.abiflags` records"
+                ),
+            ),
+        }
+        cur.set_pos(cur.all().len());
     }
 }

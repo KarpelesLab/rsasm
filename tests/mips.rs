@@ -688,6 +688,44 @@ fn objects_carry_the_register_masks_and_abi_flags() {
     }
 }
 
+/// `.module` is how a source says what the file needs of a floating-point
+/// unit, which `.MIPS.abiflags` records. Every expected string is
+/// `llvm-objcopy --dump-section .MIPS.abiflags` of llvm-mc's object.
+#[test]
+fn module_changes_the_abi_flags() {
+    for (arch, src, want) in [
+        (
+            "mips",
+            "\t.module fp=64\n\tnop\n",
+            "00 00 20 01 01 02 00 06 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\t.module fp=64\n\t.module nooddspreg\n\tnop\n",
+            "00 00 20 01 01 02 00 07 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\t.module softfloat\n\tnop\n",
+            "00 00 20 01 01 00 00 03 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\t.module softfloat\n\t.module hardfloat\n\tnop\n",
+            "00 00 20 01 01 01 00 01 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+        (
+            "mips64",
+            "\t.module softfloat\n\tnop\n",
+            "00 00 40 01 02 00 00 03 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+    ] {
+        let asm = assemble_for(arch, src);
+        assert!(!asm.diags().has_errors(), "{arch}: {src}");
+        assert_eq!(hex(&section(&asm, ".MIPS.abiflags")), want, "{arch}: {src}");
+    }
+}
+
 /// `.set noreorder` is the only thing in a source that changes the header:
 /// both references record it as `EF_MIPS_NOREORDER`.
 #[test]

@@ -149,19 +149,37 @@ pub(crate) fn sections(bits: u8, endian: Endian, state: &ArchState) -> Vec<AttrS
     };
 
     // `Elf_Internal_ABIFlags_v0`: what a loader needs of the processor. Both
-    // references write the same one for the default CPU, and nothing in a
-    // source this backend accepts changes it.
+    // references write the same one for the default CPU, and `.module` is
+    // what a source changes it with.
     let wide = bits == 64;
+    let soft = state.features & super::FEATURE_SOFTFLOAT != 0;
+    let fp64 = wide || state.features & super::FEATURE_FP64 != 0;
+    let odd_spreg = state.features & super::FEATURE_NO_ODD_SPREG == 0;
+    // `cpr1_size` is the floating-point file: none, 32 bits or 64.
+    let cpr1 = match (soft, fp64) {
+        (true, _) => 0,
+        (false, false) => 1,
+        (false, true) => 2,
+    };
+    // `fp_abi` is what the file's calling convention needs of it:
+    // `SOFT` (3), `64` (6) or `64A` (7) where it gave up the odd
+    // single-precision registers, and `DOUBLE` (1) otherwise.
+    let fp_abi = match (soft, fp64 && !wide, odd_spreg) {
+        (true, _, _) => 3,
+        (false, true, true) => 6,
+        (false, true, false) => 7,
+        _ => 1,
+    };
     b.u16(0); // version
     b.u8(if wide { 64 } else { 32 }); // isa_level
     b.u8(1); // isa_rev: MIPS32r1 / MIPS64r1
     b.u8(if wide { 2 } else { 1 }); // gpr_size: AFL_REG_32 / _64
-    b.u8(if wide { 2 } else { 1 }); // cpr1_size, the floating-point file
+    b.u8(cpr1);
     b.u8(0); // cpr2_size: no second coprocessor
-    b.u8(1); // fp_abi: Val_GNU_MIPS_ABI_FP_DOUBLE
+    b.u8(fp_abi);
     b.u32(0); // isa_ext
     b.u32(0); // ases
-    b.u32(1); // flags1: ODDSPREG, the odd single-precision registers
+    b.u32(u32::from(odd_spreg)); // flags1: ODDSPREG
     b.u32(0); // flags2
     let abiflags = AttrSection {
         name: ".MIPS.abiflags",
