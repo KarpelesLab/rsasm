@@ -17,13 +17,13 @@
 # Corpora: tools/link-diff/<corpus>.txt. `=== <name>` starts a program and
 # `--- <file>.s` starts an object inside it, so each program is at least two
 # objects that reference each other. The corpora cover, per target, calls and
-# branches between objects, absolute data references, differences of symbols
-# in different objects, weak symbols defined in one object and referenced in
-# another, `.comm` and `.bss`, section-relative references, and whatever the
-# target's own relocations are for (SuperH's in-field addends, RL78 and RX
-# difference relocations, AVR's `.avr.prop`). A program named `refused: ...`
-# is one the reference will not assemble or link, and it matches when rsasm
-# refuses it too.
+# branches between objects, absolute and PC-relative data references with
+# addends, differences of symbols, weak symbols defined in one object and
+# referenced in another, `.comm` and `.bss`, section-relative references, and
+# whatever the target's own relocations are for (SuperH's in-field addends,
+# AVR's `.avr.prop`, PE's `@IMGREL` and `.secrel32`). A program named
+# `refused: ...` is one the reference will not assemble or link, and it
+# matches when rsasm refuses it too.
 #
 # The linker is GNU ld 2.47 from the oracles directory, as in flat-diff. A
 # target whose assembler or linker is missing is skipped. Where the target's
@@ -44,6 +44,11 @@
 #   operands, and the PowerPC one refuses `bl foo@plt` and the `@higher` and
 #   `@highest` halves rather than guessing at them; those sources are not in
 #   the corpora because rsasm does not assemble them at all.
+# * A difference of two symbols in different sections is only in the corpora
+#   of the targets that have a single relocation for it. RX and RL78 spell it
+#   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot
+#   express; each backend's `reloc.rs` says it is refused rather than
+#   approximated, and GNU as writes the stack.
 # * Nothing here runs the linked program. There is no qemu user-mode
 #   emulator on the machines this is developed on, and only x86-64 could run
 #   natively; `cli_smoke` in the CI workflow does that for one program.

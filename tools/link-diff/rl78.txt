@@ -1,8 +1,9 @@
 # RL78 programs for tools/link-diff.
 #
-# Like RX, the RL78 relocations are a stack machine -- `R_RL78_OPsub`,
-# `R_RL78_OPadd` and a store -- so a difference of two symbols is only
-# evaluated by a linker. Each program is linked with and without `--relax`.
+# Each program is linked with and without `--relax`. As on RX, a difference
+# of two symbols in different sections is not here: GNU as writes it as a
+# stack of `R_RL78_SYM`, `R_RL78_OPsub` and a store, which one fixup cannot
+# express, so rsasm refuses it -- `src/arch/rl78/reloc.rs` says so.
 #
 # The symbol types are written `%function` rather than `@function`: `@`
 # separates statements in RL78 source, as it does in GNU as, and rsasm's

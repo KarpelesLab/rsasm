@@ -1,9 +1,15 @@
 # RX programs for tools/link-diff.
 #
-# The RX relocations are a little stack machine: a difference of two symbols
-# is a run of `R_RX_OPsub`, `R_RX_OPadd` and a store, and only a linker
-# evaluates it. Each program is linked with and without `--relax`, since the
-# RX linker shortens branches and the difference records are what let it.
+# Each program is linked with and without `--relax`: the RX linker shortens
+# branches and deletes the bytes, which moves everything after them, so a
+# relocation against the wrong symbol shows up as a different address rather
+# than only as different bytes.
+#
+# What is not here is a difference of two symbols in different sections.
+# GNU as writes that as a run of `R_RX_SYM`, `R_RX_OPsub` and a store -- the
+# RX relocations are a little stack machine -- which one fixup cannot
+# express, so rsasm refuses it rather than approximating it; `src/arch/rx/
+# reloc.rs` says so.
 #
 # The conditional branches across objects are written `.w`. Left to choose,
 # rsasm gives a condition whose target it cannot see the synthetic
