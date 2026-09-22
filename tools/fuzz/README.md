@@ -309,8 +309,10 @@ out-of-range immediates llvm-mc truncates (`ext v0.8b, v1.8b, v2.8b, #8`),
 as GNU as does. `--source gnu` takes the cases from GNU objdump's
 disassembly instead, which is how the spellings GNU as source is written in
 get tried. Lines for what the backend leaves out are dropped rather than
-counted: SME's ZA array and lookup tables, predicates as counters, and the
-multi-vector operands of SME2 (two register lists in one instruction).
+counted: SME's ZA array and lookup tables, predicates as counters, the
+multi-vector operands of SME2 (two register lists in one instruction), and
+`pmov p0.b, z0[0]`, whose index can only be zero and which the derived
+table spells without one.
 
 | Variable | Default |
 |---|---|
