@@ -116,8 +116,14 @@ assemble_ref() { # stem as asflags
 # The allocated sections of every object, in the order they first appear:
 # those with contents first, so that the image is contiguous, then the
 # NOBITS ones. The linker would otherwise place what it makes itself -- the
-# `.plt` the RL78 GNU ld writes whether or not anything needs it, MIPS's
-# `.reginfo` -- in the middle of the image.
+# `.plt` the RL78 GNU ld writes whether or not anything needs it -- in the
+# middle of the image.
+#
+# What a reference writes of its own accord is left out and lands in `.rest`
+# after everything else, where it moves nothing: the ABI sections llvm-mc
+# adds for MIPS (`.reginfo`, `.MIPS.abiflags`) are allocated, and counting
+# them would shift every symbol in the reference's image and nothing in
+# rsasm's. `tools/mc-diff/canon.sh` skips the same list.
 section_list() { # kind objects...
   local kind=$1 want obj
   shift
@@ -127,7 +133,8 @@ section_list() { # kind objects...
   esac
   for obj in "$@"; do
     llvm-readelf -S --wide "$obj" | sed -n 's/^ *\[ *[0-9]*\] //p' | awk "$want { print \$1 }"
-  done | awk '!seen[$0]++'
+  done | grep -vE '^\.(reginfo|pdr|comment|gnu\.attributes|riscv\.attributes|note|MIPS\.|ARM\.)' |
+    awk '!seen[$0]++'
 }
 
 # Writes $d/link.ld for the given section lists.
@@ -143,6 +150,11 @@ script() { # base script-commands bits nobits
       else echo "  $s : { *($s) }"; fi
     done
     case " $4 " in *" .bss "*) ;; *) echo "  .bss : { *(.bss) *(COMMON) }" ;; esac
+    # The sections a reference adds of its own accord go nowhere: `.reginfo`
+    # has to be merged rather than concatenated, and the MIPS linker refuses
+    # an output one of the wrong size, which is what `*(*)` would make of two
+    # objects' worth.
+    echo "  /DISCARD/ : { *(.reginfo) *(.MIPS.*) *(.ARM.*) *(.comment) *(.pdr) }"
     echo "  .rest : { *(*) }"
     echo "}"
   } > "$d/link.ld"
@@ -157,7 +169,7 @@ link() { # out linkflags sections objects...
   done
   shift 3
   "$link_ld" "${ldflags[@]}" -e "$base" -T "$d/link.ld" -o "$out.elf" "$@" > "$d/log" 2>&1 ||
-    { echo "LINK-ERROR: $(grep -m3 -iE 'error|undefined|relocation|cannot' "$d/log" | tr '\n' ' ')"; return 1; }
+    { echo "LINK-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"; return 1; }
   for s in $sections; do only+=(--only-section="$s"); done
   llvm-objcopy -O binary "${only[@]}" "$out.elf" "$out.bin" 2> "$d/log" ||
     { echo "LINK-ERROR: objcopy: $(head -1 "$d/log")"; return 1; }
