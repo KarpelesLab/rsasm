@@ -1,0 +1,61 @@
+=== the integer branches that name a condition-code bank
+# `BPcc` spends three of `Bicc`'s 22 displacement bits on the bank and the
+# static prediction hint, so these reach half a megabyte where the V8 branch
+# reaches eight.
+back:
+        nop
+        be      %icc, back
+        bne     %icc, back
+        be      %xcc, back
+        be,pn   %icc, back
+        be,a    %icc, back
+        be,a,pn %icc, back
+        bge     %xcc, back
+        bgu,pt  %xcc, back
+        nop
+
+=== every floating-point branch that names a bank
+back:
+        nop
+        fba     %fcc0, back
+        fbn     %fcc0, back
+        fbu     %fcc1, back
+        fbg     %fcc1, back
+        fbug    %fcc2, back
+        fbl     %fcc2, back
+        fbul    %fcc3, back
+        fblg    %fcc3, back
+        fbne    %fcc0, back
+        fbe     %fcc1, back
+        fbue    %fcc2, back
+        fbge    %fcc3, back
+        fbuge   %fcc0, back
+        fble    %fcc1, back
+        fbule   %fcc2, back
+        fbo     %fcc3, back
+        nop
+
+=== the floating-point branch suffixes
+        fbe,a   %fcc0, fwd
+        fbe,pn  %fcc0, fwd
+        fbe,pt  %fcc0, fwd
+        fbe,a,pn %fcc3, fwd
+        fb      %fcc0, fwd
+        fb,a    %fcc0, fwd
+        nop
+fwd:
+        retl
+        nop
+
+=== branch on the contents of a register
+back:
+        nop
+        brz     %g1, back
+        brnz    %g1, back
+        brlz    %g1, back
+        brgz    %g1, back
+        brlez   %g1, back
+        brgez   %g1, back
+        brz,a   %g1, back
+        brz,pn  %g1, back
+        nop

@@ -45,6 +45,10 @@ pub enum RelocClass {
     GotPage,
     /// The low twelve bits of the symbol's GOT slot.
     GotPageOff,
+    /// One 16-bit group of the target, which an instruction holding sixteen
+    /// bits of an address takes: AArch64's `movz`/`movk`/`movn` groups.
+    /// Mach-O has no relocation for one.
+    AddressGroup,
     /// The target itself, in a 32-bit field the CPU sign-extends to 64 bits:
     /// an x86-64 displacement, or a 64-bit operation's immediate. ELF calls it
     /// `R_X86_64_32S`; Mach-O has no relocation for it.

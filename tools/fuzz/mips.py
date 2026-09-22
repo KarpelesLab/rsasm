@@ -15,18 +15,21 @@ the bytes, the relocations and the accept/reject decision are compared.
     tools/fuzz/mips.py fuzz --target mipsel --only '^c\\.' --seed 7
     tools/fuzz/mips.py check --target mips64 lines.txt
 
-A branch prints its target as an absolute address, so a case is only the
-same instruction when it is assembled where it was disassembled; each case
-carries the `.skip` that puts it back at its own offset. The target itself
-is then written as an offset from the branch, because a bare number there
-means three different things to the three assemblers; see
-`assemblable_target`.
+A case is only the same instruction when it is assembled where it was
+disassembled, so each one carries the `.skip` that puts it back at its own
+offset. A branch's target needs more than that: the disassembler prints an
+address, and the three assemblers do not read a bare number there the same
+way, so `assemblable_target` below writes it as an offset from the branch,
+which every one of them reads alike and which keeps the displacement the
+case was disassembled with.
 
 MIPS objdump also prints a general-purpose register by its ABI name and
 without the `$` sigil -- `swl v1,-27583(t7)` -- which none of the three
-assemblers reads back, so the disassembly is asked for numbers instead. Put
-together those two things are the difference between 5% of the generated
-cases being comparable and 99.7% of them.
+assemblers reads back, so the disassembly is asked for numbers instead.
+Between them those two put nearly everything in reach: with neither, 95% of
+the generated cases were refused by all three assemblers over their spelling
+and compared nothing, with only the targets put right 91% were, and with
+both 99.7% of them are compared.
 
 GNU as runs with `.set noreorder`, `.set nomacro` and `.set noat` at the top
 of the file: by default it moves instructions into branch delay slots and
@@ -36,9 +39,9 @@ keeps it from reordering anything else.
 The instructions the backend does not implement are skipped by name, in
 `NOT_IMPLEMENTED` below, which is the MIPS32r2-and-later set the README's
 "MIPS 32/64" does not claim: the bit-field and count-leading instructions,
-the conditional moves on floating point, the rotates, the prefetches and the
-rest of the privileged set, together with coprocessors 2 and 3 and the DSP,
-MDMX, MIPS-3D and paired-single extensions.
+the rotates, the prefetches and the rest of the privileged set, together
+with coprocessors 2 and 3 and the DSP, MDMX, MIPS-3D and paired-single
+extensions.
 
 The exit status is 1 when rsasm differs from both references on any case.
 
@@ -76,7 +79,7 @@ def word(rng):
 # MIPS objdump prints a general-purpose register by its ABI name and without
 # the `$` sigil -- `swl v1,-27583(t7)` -- which no MIPS assembler reads back,
 # so the disassembly has to be asked for numbers instead. Floating-point
-# registers are already printed as `$f0`.
+# registers are already printed as `$f0` and the flags as `$fcc0`.
 NUMERIC = "-Mgpr-names=numeric"
 
 # Every mnemonic the MIPS disassembler prints with a PC-relative target
@@ -86,23 +89,33 @@ NUMERIC = "-Mgpr-names=numeric"
 # is printed as.
 BRANCH = re.compile(r"b(?!reak$)\w*")
 NUMBER = re.compile(r"-?(0x[0-9a-f]+|[0-9]+)")
+# `jalx` prints its target with the ISA-mode bit set -- `jalx 0x1235` for the
+# word whose 26-bit field holds 0x1234 -- because the call lands in MIPS16 or
+# microMIPS code. Every assembler refuses a target that is not a multiple of
+# four, so the bit comes off, which gives back the same word again.
+JALX = re.compile(r"jalx\s+(-?(?:0x)?[0-9a-f]+)")
 
 
 def assemblable_target(text, off):
-    """Writes a branch's target as an offset from the branch itself.
+    """Writes the two targets the disassembler prints in a form no assembler
+    reads back.
 
-    A disassembler prints the target as the address it computed, and the
-    three assemblers do not agree on what a bare number there means: rsasm
+    A branch's target is printed as the address it lands on, and the three
+    assemblers do not agree on what a bare number written there means: rsasm
     and GNU as read an address, llvm-mc reads the displacement itself, and
     GNU as cannot resolve an absolute address against a section it is still
-    assembling, so it leaves a `R_MIPS_PC16` against `*ABS*` that overflows.
-    That is a disagreement about a spelling and not about an encoding, and
-    `src/arch/mips/encode.rs` records which side rsasm takes.
-
+    assembling, so it leaves a `R_MIPS_PC16` against `*ABS*` that overflows
+    once the address is far from the branch (see src/arch/mips/encode.rs).
     `. + d` means the same thing to all three, and with `d` measured from
     where the instruction was disassembled it is the same instruction again,
     down to the bits in the displacement field.
+
+    `jalx` is the other: its target keeps the ISA-mode bit, and taking the
+    bit off gives back the word it was printed from.
     """
+    m = JALX.fullmatch(text)
+    if m:
+        return f"jalx {int(m.group(1), 0) & ~1:#x}"
     mnemonic, _, operands = text.partition(" ")
     if not BRANCH.fullmatch(mnemonic) or not operands:
         return text
@@ -141,10 +154,10 @@ TARGETS = {
 }
 
 # What README.md's "MIPS 32/64" does not claim: everything MIPS32r2 and later
-# added, the coprocessor-2 and privileged sets, and the DSP, MDMX, MIPS-3D
-# and paired-single extensions. Skipping them by name keeps a whole extension
-# from reading as thousands of identical findings; adding one to the backend
-# is what takes it off this list.
+# added, the second and third coprocessors, the privileged set, and the DSP,
+# MDMX, MIPS-3D and paired-single extensions. Skipping them by name keeps a
+# whole extension from reading as thousands of identical findings; adding one
+# to the backend is what takes it off this list.
 #
 # The coprocessor-2 loads and stores belong with the rest of coprocessor 2:
 # their register operand is a coprocessor-2 register, which
@@ -152,31 +165,22 @@ TARGETS = {
 # nor `cfc2` nor `bc2t` either.
 NOT_IMPLEMENTED = re.compile(r"""^(
     c[lt]o | dc[lt]o | dc[lt]z | clz | ins | dins[mu]? | ext | dext[mu]? | wsbh | dsbh | dshd
-  | seb | seh | d?ro[lr](32|v)? | d?rot[lr](32|v)? | movf | movt | movf\.[sdq] | movt\.[sdq]
+  | seb | seh | d?ro[lr](32|v)? | d?rot[lr](32|v)?
   | movn\.[sdq] | movz\.[sdq] | pref | prefx | cache | synci | rdhwr | rdpgpr | wrpgpr
   | deret | wait | tlb.* | m[ft]c[23] | dm[ft]c[023] | cfc[0-9] | ctc[0-9]
-  | [ls][wd]c[023] | bc[023].* | bc1any.* | c[0-9] | cop[0-9]
+  | [ls][wd]c[023] | bc[023]\w* | bc1any\w* | c[0-9] | cop[0-9]
   | lwxc1 | ldxc1 | swxc1 | sdxc1 | luxc1 | suxc1
   | madd\.[sdq] | msub\.[sdq] | nmadd\.[sdq] | nmsub\.[sdq] | recip\.[sdq] | rsqrt\.[sdq]
-  | alnv\.ps | cvt\.ps\.s | cvt\.s\.p[lu] | p[lu][lu]\.ps | mulr\.ps
+  | alnv\.ps | cvt\.ps\.s | cvt\.s\.p[lu] | p[lu][lu]\.ps | mulr\.ps | cabs\..*
   | ei | di | jalr\.hb | jr\.hb | sdbbp | ll[dwe] | sc[dwe] | lld | scd
   | dla | seq | sne | s(le|gt|ge)u? | ulw | ulh | usw | ush | uld | usd
-  | rem | remu | ddiv[u]? | dmul.*
-  | .*\.ps | v?mul[ou]? | msa.* | add(v|s)_.* | \w+\.qb | \w+\.ph | \w+\.w\.phl?
-  | jalx
+  | rem | remu | ddiv[u]? | mul(o|ou|u) | dmul(o|ou|u)? | vmul[ou]?
+  | .*\.ps | msa.* | add(v|s)_.* | \w+\.qb | \w+\.ph | \w+\.w\.phl?
 )$""", re.X)
-
-# The floating-point condition codes. MIPS IV gave `c.cond.fmt`, `bc1f` and
-# `bc1t` an eight-way flag written `$fcc0`-`$fcc7`; the backend has only the
-# implied `$fcc0` form, so a case naming one of the others is left out rather
-# than counted. src/arch/mips/reg.rs has two register classes and this would
-# be a third.
-UNIMPLEMENTED_OPERAND = re.compile(r"\$fcc\d")
 
 
 def skip(case):
-    mnemonic, text = case
-    return bool(NOT_IMPLEMENTED.match(mnemonic) or UNIMPLEMENTED_OPERAND.search(text))
+    return bool(NOT_IMPLEMENTED.match(case[0]))
 
 
 # ---- what the references disagree about -------------------------------------

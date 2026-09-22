@@ -92,6 +92,19 @@ oloc:   nop
 oglob:  nop
 oweak:  nop
 
+# `jalx` gets the same R_MIPS_26 as `jal`: what the linker has to do differs
+# only in the opcode, which already says the call changes ISA mode. Both
+# targets here are undefined, because rsasm assembles neither MIPS16 nor
+# microMIPS and GNU ld refuses a JALX that resolves to plain MIPS code
+# ("unsupported JALX to the same ISA mode").
+=== a call that changes ISA mode
+        .set    noreorder
+        .text
+        .weak   uweak
+        jalx    ext
+        jalx    uweak
+        nop
+
 === data referring to symbols, by binding
         .set    noreorder
         .data
@@ -138,6 +151,7 @@ hid:    .long   0
 f:      add.d   $f4, $f6, $f8
         mov.d   $f16, $f18
         c.eq.d  $f28, $f30
+        movf.d  $f20, $f22, $fcc6
         ldc1    $f4, 8($sp)
         sdc1    $f6, 16($a0)
         cvt.d.s $f10, $f12

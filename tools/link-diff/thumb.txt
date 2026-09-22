@@ -181,3 +181,41 @@ reader:
         ldr     r0, =bigger
         bx      lr
         .ltorg
+
+=== the GOT and the position-independent idiom
+--- a.s
+        .syntax unified
+        .thumb
+        .text
+        .globl  _start
+        .thumb_func
+        .type   _start, %function
+_start:
+        movw    r4, #:lower16:(_GLOBAL_OFFSET_TABLE_ - (.LPIC1 + 4))
+        movt    r4, #:upper16:(_GLOBAL_OFFSET_TABLE_ - (.LPIC1 + 4))
+.LPIC1: add     r4, pc
+        movw    r5, #:lower16:shared
+        movt    r5, #:upper16:shared
+        movw    r6, #:lower16:(shared - .LPIC2)
+        movt    r6, #:upper16:(shared - .LPIC2)
+.LPIC2: add     r6, pc
+        bl      helper(PLT)
+        b.w     helper(PLT)
+        bx      lr
+        .p2align 2
+        .word   _GLOBAL_OFFSET_TABLE_ - (.LPIC1 + 4)
+        .word   shared(GOT)
+        .word   shared(GOTOFF)
+        .word   shared(GOT_PREL)
+        .word   helper(PLT)
+--- b.s
+        .syntax unified
+        .thumb
+        .text
+        .globl  helper
+        .thumb_func
+        .type   helper, %function
+helper: bx      lr
+        .data
+        .globl  shared
+shared: .word   42

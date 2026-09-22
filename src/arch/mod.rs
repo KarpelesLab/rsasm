@@ -604,6 +604,7 @@ impl AsmCtx<'_> {
             dialect: self.dialect,
             bit_dot: self.bit_dot,
             strings: Some(self.pool),
+            paren_modifiers: &[],
         }
     }
 
@@ -890,6 +891,40 @@ pub trait Architecture {
     /// computes.
     fn expr_modifiers(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// Relocation modifiers this target's GNU as reads as a suffix in
+    /// parentheses after a symbol in a data directive, `.word sym(GOT)`,
+    /// rather than as the `sym@GOT` the GNU syntax otherwise uses. Only ARM
+    /// has them. [`Architecture::modifier_reloc`] then says which relocation
+    /// each picks, as it does for the `@` spelling.
+    fn data_paren_modifiers(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The PC-relative form of `reloc` in a `size`-byte field, for
+    /// `sym - label` written where the field is otherwise absolute: that is
+    /// `sym` measured from the field, which is what a PC-relative relocation
+    /// holds. `None` refuses the difference.
+    ///
+    /// The default covers the plain data relocations, which is what
+    /// `.long target - .` needs. A backend adds to it where an instruction
+    /// field has a pair of its own: ARM's `:lower16:` is `R_ARM_MOVW_ABS_NC`
+    /// against a symbol and `R_ARM_MOVW_PREL_NC` against a difference.
+    fn pcrel_reloc(&self, reloc: u32, size: u8) -> Option<u32> {
+        if reloc != 0 && Some(reloc) == self.data_reloc(size, false) {
+            self.data_reloc(size, true)
+        } else {
+            None
+        }
+    }
+
+    /// The relocation a reference gets from the symbol it names rather than
+    /// from its own field: GNU as relocates a four-byte ARM data reference to
+    /// `_GLOBAL_OFFSET_TABLE_` as `R_ARM_BASE_PREL`, the distance from the
+    /// field to the GOT, which is how position-independent ARM code finds it.
+    fn reloc_for_symbol(&self, reloc: u32, _name: &str) -> u32 {
+        reloc
     }
 
     /// Comment characters in GNU-style source. Ignored for the NASM dialect,

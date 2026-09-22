@@ -13,7 +13,7 @@
 //! `Punct::Dollar` followed by `Ident("t0")`, and `$8` as `Punct::Dollar`
 //! followed by `Int(8)`.
 
-use super::reg::{self, Reg};
+use super::reg::{self, Reg, RegClass};
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
 use crate::expr::ExprRef;
@@ -72,7 +72,14 @@ impl Operand {
 
     pub fn fpr(&self) -> Option<Reg> {
         match self.kind {
-            OperandKind::Reg(r) if !r.is_gpr() => Some(r),
+            OperandKind::Reg(r) if r.class == RegClass::Fpr => Some(r),
+            _ => None,
+        }
+    }
+
+    pub fn fcc(&self) -> Option<Reg> {
+        match self.kind {
+            OperandKind::Reg(r) if r.class == RegClass::Fcc => Some(r),
             _ => None,
         }
     }

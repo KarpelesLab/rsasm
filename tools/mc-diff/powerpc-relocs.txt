@@ -126,3 +126,24 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+
+=== calls through and around the PLT, and GOT entries
+        .text
+        .globl  glob
+        .weak   weak1
+start:
+        bl      ext@plt
+        b       ext@plt
+        bl      glob@plt
+        bl      weak1@plt
+        bl      loc@plt
+        bl      ext@local
+        b       glob@local
+        bl      loc@local
+        lis     3, ext@got@ha
+        lwz     3, ext@got@l(3)
+        addi    4, 4, ext@got
+        addi    5, 5, glob@got@h
+loc:    nop
+glob:   nop
+weak1:  nop

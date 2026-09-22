@@ -48,23 +48,26 @@ lay out, relax, relocate, write — with sixteen backends behind it.
 ### Architectures
 
 Every encoding claimed below is checked byte for byte against an independent
-assembler, not against rsasm's own idea of the manual. See
-[Verification](#verification).
+assembler, not against rsasm's own idea of the manual. The count is the
+target's cases in the three instruction-level harnesses — `tools/gas-diff`,
+`tools/mc-diff` and `tools/xas-diff` — which is how a row can be recomputed
+after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
+[Verification](#verification) add far more.
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21730 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3052 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
-| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 738 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21771 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3106 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 537 |
+| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9499 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 796 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 306 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
-| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |
+| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 642 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
-| TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 3699 |
+| TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 5553 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | AS | 1276 |
 | Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1935 |
@@ -135,7 +138,11 @@ form by form and in random whole programs as well.
   aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
   `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
   `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
-  the two instruction sets, `$a`/`$t`/`$d` mapping symbols, and the
+  the two instruction sets, the position-independent operands
+  (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
+  `.word _GLOBAL_OFFSET_TABLE_`, `bl sym(PLT)`, and
+  `movw`/`movt` with `:lower16:` and `:upper16:`, absolute or measured
+  against a label), `$a`/`$t`/`$d` mapping symbols, and the
   `.ARM.attributes` section the linker reads to decide what the program may
   contain — without it GNU ld assumes the oldest architecture and routes
   every interworking call through a veneer; the whole
@@ -216,7 +223,10 @@ form by form and in random whole programs as well.
   `.debug_macro`/`.debug_names`
 - ARM: `-mimplicit-it`, so a conditional Thumb instruction needs an `it` block
   of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
-  pool entries; and the divided Thumb syntax GNU as reads without
+  pool entries; the relocation suffixes past the GOT and PLT ones --
+  `(TARGET1)`, `(TARGET2)`, `(SBREL)` and the thread-local `(TLSGD)` and
+  its relatives, which GNU as reads and rsasm refuses as unrecognised; and
+  the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - ARM vectors: the floating-point immediate of `vmov.f32 s0, #1.0` and
   `vmov.f64 d0, #0.5`, which needs a literal this assembler's GAS-dialect
@@ -241,8 +251,12 @@ form by form and in random whole programs as well.
   point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
   branches, and the privileged, hypervisor, cache-hint and synchronisation
   instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
-  like); relocation modifiers other than `@l`, `@h`, `@ha`, `@pcrel` and
-  `@got@pcrel` (`@toc@ha`, `@got`, `@higher`)
+  like); the thread-local relocation modifiers (`@tprel`, `@dtprel`,
+  `@got@tlsgd` and the rest), because a symbol defined in `.tdata` or `.tbss`
+  does not come out `STT_TLS`, which the linker needs; the spellings only
+  GNU as reads, so that nothing could check them (`@plt@ha`, `@sectoff`,
+  `@sdarel`); and `@notoc`, which is a different relocation to each of the
+  two references
 - MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
   warnings and insertion, the silicon errata options, assembly-time
   relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
@@ -870,12 +884,12 @@ relocation for something ELF can express — `adr` or a conditional branch to
 another atom, a 32-bit absolute address on x86-64, a page reference without
 `@PAGE` — the reference is refused, as llvm-mc refuses it.
 
-`tools/macho-diff/run.sh` compares 1,573 cases against llvm-mc 22: single
+`tools/macho-diff/run.sh` compares 1,633 cases against llvm-mc 22: single
 statements and whole programs in Clang's style of its own, and the
 `tools/mc-diff` corpora for both machines, every instruction of which has to
 come out the same in a Mach-O object. Every header and load command, section,
-symbol and relocation matches, and each of the 1,548 objects both assemblers
-write is identical byte for byte; the other 25 cases are refused by both.
+symbol and relocation matches, and each of the 1,588 objects both assemblers
+write is identical byte for byte; the other 45 cases are refused by both.
 Three differences remain, and the corpora leave them out:
 
 - x86-64 instructions are encoded as GNU as encodes them, in either format, so
@@ -906,7 +920,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,649 of 38,649 match across twenty-one target variants. For RISC-V
+  supports. 38,861 of 38,861 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -922,7 +936,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,382 of 25,382 match across fifty-seven
+  from checksum-pinned sources. 25,435 of 25,435 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -939,9 +953,10 @@ is what hid them from rsasm for as long as it did.
   object, so nothing else here depends on a symbol being resolved across a
   file boundary. Per target the programs cover calls and branches between
   objects, absolute and PC-relative data references with addends, the halves
-  of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `hi()`/`lo()`), literal
-  pools and constant pools loading another object's symbols, ARM/Thumb
-  interworking, `@GOTPCREL`, `@GOT` and `@PLT` where the backend has them,
+  of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `:abs_g1_nc:`,
+  `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
+  another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
+  where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
   weak definitions a second object overrides, `.comm` symbols merged between
   objects with different sizes, `.bss`, and references into another object's
   sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,
@@ -950,7 +965,7 @@ is what hid them from rsasm for as long as it did.
   exist for. Two more rows link [PE/COFF](#pecoff) objects into an image with
   GNU ld for mingw, where what a link has to get right is `@IMGREL`,
   `.secrel32` and `.secidx` and the addend a COFF relocation keeps in its
-  field. 229 of 229 match across twenty-nine variants.
+  field. 236 of 236 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 444 of 444
@@ -1015,7 +1030,7 @@ whichever references that target has. The 6502, the 8080 and the 78K0 are
 fuzzed with whole programs against ca65 and the Macro Assembler AS, as the
 8051 already was, and `nasm` source against NASM itself.
 `tools/fuzz/run.sh` runs all twenty-one with one seed and bounded counts —
-748,000 cases in a little over two
+768,000 cases in a little over two
 minutes on a four-core runner — which is what CI runs on every pull
 request; the nightly run uses the date as its seed and ten times the cases.
 A fuzzer that compared nothing fails the job as loudly as one that found a

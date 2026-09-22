@@ -36,11 +36,12 @@
 //! even register and the odd one above it, so `add.d $f4, $f6, $f8` names
 //! six registers and not three. Both references mark the whole pair for an
 //! operand that holds 64 bits: the `.d` operands of the arithmetic, the
-//! comparisons and `mov.d`, and the register of `ldc1` and `sdc1`. A
-//! single-precision or integer operand marks only itself, which is why
-//! `lwc1`, `mtc1` and the `.s` forms are unchanged, and why a 64-bit target
-//! or `.module fp=64` — where one register holds the whole value — marks one
-//! register everywhere.
+//! comparisons, `mov.d` and the conditional moves, and the register of
+//! `ldc1` and `sdc1`. A single-precision or integer operand marks only
+//! itself, which is why `lwc1`, `mtc1` and the `.s` forms are unchanged, and
+//! why a 64-bit target or `.module fp=64` — where one register holds the
+//! whole value — marks one register everywhere. A condition flag belongs to
+//! no file and is counted nowhere, as `mark` says below.
 //!
 //! The two references part company on the operands of a *mixed*-format
 //! instruction. llvm-mc reads each operand's own format, so `cvt.d.s
@@ -82,6 +83,10 @@ pub(crate) fn mark(state: &mut ArchState, r: Reg) {
     let bit = match r.class {
         RegClass::Gpr => u64::from(r.num),
         RegClass::Fpr => u64::from(r.num) + 32,
+        // The condition flags are neither file: llvm-mc counts a register
+        // towards a mask only when it belongs to one of the classes a mask
+        // is about, and `$fcc0`-`$fcc7` belong to none of them.
+        RegClass::Fcc => return,
     };
     state.used |= 1 << bit;
 }

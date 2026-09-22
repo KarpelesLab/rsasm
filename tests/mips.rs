@@ -227,6 +227,31 @@ fn floating_point() {
 }
 
 #[test]
+fn a_comparison_says_which_flag_it_writes() {
+    // MIPS IV made the FPU's condition flag eight flags, `$fcc0`-`$fcc7`.
+    // Naming `$fcc0` is the same word as leaving it out.
+    enc("c.eq.s $fcc0, $f0, $f2", "46 02 00 32");
+    enc("c.eq.s $fcc1, $f0, $f2", "46 02 01 32");
+    enc("c.lt.d $fcc3, $f4, $f6", "46 26 23 3c");
+    enc("c.ngt.s $fcc7, $f30, $f28", "46 1c f7 3f");
+}
+
+#[test]
+fn a_conditional_move_says_which_flag_it_reads() {
+    // `movf` / `movt` have no implied form: the flag is always written.
+    enc("movf $4, $5, $fcc0", "00 a0 20 01");
+    enc("movt $4, $5, $fcc5", "00 b5 20 01");
+    enc("movf $sp, $ra, $fcc7", "03 fc e8 01");
+    enc("movf.s $f0, $f2, $fcc1", "46 04 10 11");
+    enc("movt.s $f30, $f28, $fcc7", "46 1d e7 91");
+    enc("movf.d $f4, $f6, $fcc2", "46 28 31 11");
+    enc("movt.d $f4, $f6, $fcc6", "46 39 31 11");
+    // Only the two floating-point formats have a conditional move.
+    assert!(errors_for("mips", "movf.w $f0, $f2, $fcc0").contains("unknown instruction"));
+    assert!(errors_for("mips", "movf.l $f0, $f2, $fcc0").contains("unknown instruction"));
+}
+
+#[test]
 fn branches_are_measured_from_the_delay_slot() {
     // A branch to its own address is -4 bytes from the delay slot: -1 word.
     enc("foo: beq $1, $2, foo", "10 22 ff ff");
@@ -239,8 +264,9 @@ fn branches_are_measured_from_the_delay_slot() {
     enc("foo: bgezal $a0, foo", "04 91 ff ff");
     enc("foo: bc1f foo", "45 00 ff ff");
     enc("foo: bc1t foo", "45 01 ff ff");
-    // The MIPS II "likely" twins, which annul the delay slot when the branch
-    // is not taken.
+    // The MIPS II "likely" twins, whose delay slot is annulled when the
+    // branch is not taken, and the flag each COP1 branch tests when it is
+    // written out.
     enc("foo: beql $1, $2, foo", "50 22 ff ff");
     enc("foo: bnel $a0, $a1, foo", "54 85 ff ff");
     enc("foo: blezl $a0, foo", "58 80 ff ff");
@@ -251,6 +277,10 @@ fn branches_are_measured_from_the_delay_slot() {
     enc("foo: bgezall $a0, foo", "04 93 ff ff");
     enc("foo: bc1fl foo", "45 02 ff ff");
     enc("foo: bc1tl foo", "45 03 ff ff");
+    enc("foo: bc1f $fcc3, foo", "45 0c ff ff");
+    enc("foo: bc1t $fcc7, foo", "45 1d ff ff");
+    enc("foo: bc1fl $fcc4, foo", "45 12 ff ff");
+    enc("foo: bc1tl $fcc1, foo", "45 07 ff ff");
     enc(
         "foo: addiu $4, $4, 1\naddiu $5, $5, -1\nbeq $4, $5, foo",
         "24 84 00 01 24 a5 ff ff 10 85 ff fd",
@@ -317,6 +347,22 @@ fn a_misaligned_jump_target_is_an_error() {
     // Misalignment is its own problem, not a range problem, and the message
     // says which.
     assert!(e.contains("not a multiple of 4"), "{e}");
+    assert!(errors_for("mips", "jalx 0x400001").contains("not a multiple of 4"));
+}
+
+#[test]
+fn jalx_calls_the_way_jal_does_and_changes_isa_mode() {
+    // The same 26-bit field as `jal`, under opcode 0x1d; what differs is the
+    // mode the call arrives in, which is the linker's and the CPU's business.
+    enc("jalx 0x400000", "74 10 00 00");
+    enc("jalx 0x80001000", "74 00 04 00");
+    enc("jalx 0x0ffffffc", "77 ff ff ff");
+    // A symbol gets R_MIPS_26, exactly as `jal` does: the ISA switch is in
+    // the opcode, and there is no relocation of its own for it.
+    let asm = assemble_for("mips", "jal ext\njalx ext");
+    assert!(!asm.diags.has_errors());
+    let kinds: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
+    assert_eq!(kinds, vec![(0, 4), (4, 4)]);
 }
 
 #[test]
@@ -770,6 +816,14 @@ fn a_double_on_a_32_bit_floating_point_file_names_a_register_pair() {
             "\tldc1 $f4, 0($sp)\n\tlwc1 $f6, 0($sp)\n",
             ".reginfo",
             "20 00 00 00 00 00 00 00 00 00 00 70 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        // A conditional move goes by its format like anything else, and the
+        // flag it reads belongs to no file and is counted nowhere.
+        (
+            "mips",
+            "\tmovf.d $f4, $f6, $fcc1\n\tmovt.s $f8, $f9, $fcc2\n",
+            ".reginfo",
+            "00 00 00 00 00 00 00 00 00 00 03 f0 00 00 00 00 00 00 00 00 00 00 00 00",
         ),
         (
             "mips",

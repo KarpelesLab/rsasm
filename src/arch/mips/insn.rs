@@ -54,8 +54,10 @@ pub enum Form {
     RsRtOff,
     /// `op rs, target` — the `rt` field is part of the opcode.
     RsOff,
-    /// `op target` — `b` / `bal` / `bc1f` / `bc1t`: every register field fixed.
-    Off,
+    /// `op target` / `op $fccN, target` — the COP1 branches, which test one
+    /// of the eight floating-point flags and read `$fcc0` when none is
+    /// written.
+    CcOff,
     /// `op target` — `j` / `jal`, a 26-bit index into the current 256 MB
     /// region.
     Off26,
@@ -71,10 +73,17 @@ pub enum Form {
     FdFsFt,
     /// `op fd, fs` — FPU unary operations and conversions.
     FdFs,
-    /// `op fs, ft` — `c.cond.fmt`, whose result goes to a condition flag.
-    FsFt,
+    /// `op fs, ft` / `op $fccN, fs, ft` — `c.cond.fmt`, whose result goes to
+    /// a condition flag, `$fcc0` when none is written.
+    CcFsFt,
     /// `op rt, fs` — `mfc1` / `mtc1` and their doubleword forms.
     RtFs,
+    /// `op rd, rs, $fccN` — `movf` / `movt`, which copy a register only when
+    /// a floating-point flag has the value the mnemonic names. The flag has
+    /// to be written: there is no implied form.
+    RdRsCc,
+    /// `op fd, fs, $fccN` — the same, between floating-point registers.
+    FdFsCc,
     /// `op rt, rd` / `op rt, rd, sel` — coprocessor-0 moves.
     RtRdSel,
 }
@@ -90,8 +99,10 @@ pub struct Def {
     /// Bit *n* is set where floating-point operand *n* holds a 64-bit value.
     /// On a 32-bit floating-point file such an operand is a register pair,
     /// which the object's register masks have to count as one; see
-    /// [`super::abi`]. Operands are numbered as the encoder reads them, so
-    /// the bit for `dmtc1 $4, $f4` is 1 and not 0.
+    /// [`super::abi`]. Operands are numbered by their place in the form's
+    /// shortest spelling, so the bit for `dmtc1 $4, $f4` is 1 and not 0, and
+    /// an explicit `$fccN` in front of `c.eq.d` does not move either of its
+    /// two.
     pub wide_fprs: u8,
 }
 
@@ -101,6 +112,11 @@ impl Def {
     const fn wide(mut self, mask: u8) -> Def {
         self.wide_fprs = mask;
         self
+    }
+
+    /// Whether floating-point operand `n` holds a 64-bit value.
+    pub fn wide_fpr(&self, n: usize) -> bool {
+        self.wide_fprs & (1 << n) != 0
     }
 
     /// True for a REGIMM branch that links. Bit 4 of the `rt` selector is
@@ -151,6 +167,10 @@ const FMT_L: u32 = 21;
 const fn cop1(fmt: u32, funct: u32) -> u32 {
     COP1 | (fmt << 21) | funct
 }
+
+/// The function code of `movf.fmt` / `movt.fmt`, whose mnemonic also fixes a
+/// bit in the `rt` field.
+const MOVCF: u32 = 0x11;
 
 #[rustfmt::skip]
 static TABLE: &[Def] = &[
@@ -304,6 +324,13 @@ static TABLE: &[Def] = &[
     d("bgezall", Form::RsOff,  REGIMM | (0x13 << 16)),
     d("j",      Form::Off26,   op(0x02)),
     d("jal",    Form::Off26,   op(0x03)),
+    // `jalx` links as `jal` does and flips the ISA mode on the way, so its
+    // target is a MIPS16 or microMIPS routine. rsasm assembles neither, and
+    // GNU as refuses a target it can see is in the same mode as the caller;
+    // here the target is left to the linker, which makes the same complaint
+    // ("unsupported JALX to the same ISA mode") about a call that resolves
+    // to plain MIPS code.
+    d("jalx",   Form::Off26,   op(0x1d)),
 
     // ---- coprocessor 0 ----------------------------------------------------
     // The COP0 `rs` field selects the direction: 0 moves from, 4 moves to.
@@ -316,12 +343,20 @@ static TABLE: &[Def] = &[
     d("mtc1",   Form::RtFs, COP1 | (4 << 21)),
     d64("dmfc1", Form::RtFs, COP1 | (1 << 21)).wide(2),
     d64("dmtc1", Form::RtFs, COP1 | (5 << 21)).wide(2),
-    // The `nd`/`tf` bits live in the rt field: `nd` selects the likely form
-    // and `tf` which way the flag is tested.
-    d("bc1f",   Form::Off, COP1 | (8 << 21)),
-    d("bc1t",   Form::Off, COP1 | (8 << 21) | (1 << 16)),
-    d("bc1fl",  Form::Off, COP1 | (8 << 21) | (2 << 16)),
-    d("bc1tl",  Form::Off, COP1 | (8 << 21) | (3 << 16)),
+    // The `nd`/`tf` bits live in the rt field: `tf` (bit 16) picks which way
+    // the test goes, and `nd` (bit 17) makes the branch a likely one, whose
+    // delay slot is annulled when it is not taken. The flag number is the
+    // three bits above them.
+    d("bc1f",   Form::CcOff, COP1 | (8 << 21)),
+    d("bc1t",   Form::CcOff, COP1 | (8 << 21) | (1 << 16)),
+    d("bc1fl",  Form::CcOff, COP1 | (8 << 21) | (2 << 16)),
+    d("bc1tl",  Form::CcOff, COP1 | (8 << 21) | (3 << 16)),
+
+    // ---- conditional moves on a floating-point flag -----------------------
+    // Same `tf` bit as the branches, in the same place, with the flag number
+    // above it; `movf.fmt` and `movt.fmt` are resolved in `fpu` below.
+    d("movf",   Form::RdRsCc, 0x01),
+    d("movt",   Form::RdRsCc, (1 << 16) | 0x01),
 ];
 
 /// COP1 operations that exist for both `.s` and `.d`, with their function
@@ -392,7 +427,7 @@ fn fpu(name: &str) -> Option<Def> {
         }
         return Some(Def {
             name: "c.cond.fmt",
-            form: Form::FsFt,
+            form: Form::CcFsFt,
             word: cop1(fmt, 0x30 + idx as u32),
             is64: false,
             wide_fprs: if fmt == FMT_D { 0b011 } else { 0 },
@@ -411,6 +446,22 @@ fn fpu(name: &str) -> Option<Def> {
             is64: fmt == FMT_L || to_fmt == FMT_L,
             word: cop1(fmt, *funct),
             wide_fprs: u8::from(fmt_is_wide(to_fmt)) | u8::from(fmt_is_wide(fmt)) << 1,
+        });
+    }
+
+    // The conditional moves, whose `tf` bit sits below the flag number just
+    // as it does in the branches. Only the two floating-point formats have
+    // one, so `movf.w` is not an instruction.
+    if base == "movf" || base == "movt" {
+        if fmt != FMT_S && fmt != FMT_D {
+            return None;
+        }
+        return Some(Def {
+            name: "movc.fmt",
+            form: Form::FdFsCc,
+            word: cop1(fmt, MOVCF) | (u32::from(base == "movt") << 16),
+            is64: false,
+            wide_fprs: if fmt == FMT_D { 0b011 } else { 0 },
         });
     }
 
@@ -468,12 +519,15 @@ mod tests {
             Form::RtRsImm | Form::RtMem | Form::FtMem | Form::RsRtOff | Form::Off26 => 0x03ff_ffff,
             Form::RtImm => 0x001f_ffff,
             Form::RsImm | Form::RsOff => 0x03e0_ffff,
-            Form::Off => 0x0000_ffff,
+            Form::CcOff => 0x001c_ffff,
             Form::Nullary => 0,
             Form::Break | Form::Code20 => 0x03ff_ffc0,
             Form::Sync => 0x0000_07c0,
             Form::FdFs => 0x0000_ffc0,
-            Form::FsFt | Form::RtFs => 0x001f_f800,
+            Form::RtFs => 0x001f_f800,
+            Form::CcFsFt => 0x001f_ff00,
+            Form::RdRsCc => 0x03fc_f800,
+            Form::FdFsCc => 0x001c_ffc0,
             Form::RtRdSel => 0x001f_f807,
         }
     }
@@ -505,6 +559,9 @@ mod tests {
         assert_eq!(lookup("add.d").expect("add.d").word, 0x4620_0000);
         assert_eq!(lookup("cvt.s.w").expect("cvt.s.w").word, 0x4680_0020);
         assert_eq!(lookup("c.eq.s").expect("c.eq.s").word, 0x4600_0032);
+        assert_eq!(lookup("movf.s").expect("movf.s").word, 0x4600_0011);
+        assert_eq!(lookup("movt.d").expect("movt.d").word, 0x4621_0011);
+        assert!(lookup("movf.l").is_none());
         assert!(lookup("add.q").is_none());
         assert!(lookup("c.bogus.s").is_none());
     }

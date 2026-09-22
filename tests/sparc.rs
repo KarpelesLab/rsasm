@@ -1,11 +1,9 @@
 //! SPARC encoding tests.
 //!
-//! Every expected byte string here came out of a `tools/mc-diff/run.sh sparc`
-//! run, which compares rsasm against `llvm-mc -triple=sparc`. The V9 cases at
-//! the bottom cannot go through that harness — its shared `ARCHES` table maps
-//! the `sparc` key to the 32-bit triple, and llvm-mc rejects every V9
-//! mnemonic there — so those were checked by hand against
-//! `llvm-mc -triple=sparcv9` instead.
+//! Every expected byte string here came out of a `tools/mc-diff/run.sh sparc
+//! sparcv9` run, which compares rsasm against `llvm-mc -triple=sparc` and
+//! `-triple=sparcv9`, and was then checked against the pinned GNU as
+//! (`sparc64-elf-as -32 -Av8` and `-64 -Av9`) as well.
 
 #![cfg(feature = "sparc")]
 
@@ -268,6 +266,30 @@ fn the_annul_bit_is_bit_29() {
     );
 }
 
+/// `FBfcc` numbers its conditions its own way: `fbne` is 1 where the integer
+/// `bne` is 9, and half of these names have no integer counterpart at all.
+#[test]
+fn every_floating_point_condition_branch() {
+    let src = "back:\n\
+               fba back\n fbn back\n fbu back\n fbg back\n\
+               fbug back\n fbl back\n fbul back\n fblg back\n\
+               fbne back\n fbe back\n fbue back\n fbge back\n\
+               fbuge back\n fble back\n fbule back\n fbo back";
+    enc(
+        src,
+        "11 80 00 00 01 bf ff ff 0f bf ff fe 0d bf ff fd \
+         0b bf ff fc 09 bf ff fb 07 bf ff fa 05 bf ff f9 \
+         03 bf ff f8 13 bf ff f7 15 bf ff f6 17 bf ff f5 \
+         19 bf ff f4 1b bf ff f3 1d bf ff f2 1f bf ff f1",
+    );
+    // `fb` alone is `fba`, the way `b` is `ba`, and `fbz` / `fbnz` are the
+    // other spellings of `fbe` and `fbne`.
+    enc(
+        "back:\n fba,a back\n fbe,a back\n fb back\n fbz back\n fbnz back",
+        "31 80 00 00 33 bf ff ff 11 bf ff fe 13 bf ff fd 03 bf ff fc",
+    );
+}
+
 #[test]
 fn a_forward_branch_counts_in_instructions() {
     enc(
@@ -282,6 +304,9 @@ fn jumps_and_returns() {
     enc("jmpl %g1 + %g2, %g3", "87 c0 40 02");
     enc("jmpl %o7, %g0", "81 c3 c0 00");
     enc("jmp %o7 + 8", "81 c3 e0 08");
+    // A bare value is `%g0 + value`, as it is for `jmpl` and `flush`.
+    enc("jmp 0x4c", "81 c0 20 4c");
+    enc("jmp -1204", "81 c0 3b 4c");
     // `ret` comes back through `%i7` (the window was rotated by `save`),
     // `retl` through `%o7` (a leaf never rotated it).
     enc("ret", "81 c7 e0 08");
@@ -352,6 +377,30 @@ fn floating_point_arithmetic() {
     enc("fdtos %f0, %f2", "85 a0 18 c0");
     enc("fcmps %f0, %f1", "81 a8 0a 21");
     enc("fcmpd %f0, %f2", "81 a8 0a 42");
+    // The two multiplies whose result is wider than their factors, which is
+    // why the destination starts a pair or a quad.
+    enc("fsmuld %f0, %f1, %f2", "85 a0 0d 21");
+    enc("fdmulq %f0, %f2, %f4", "89 a0 0d c2");
+}
+
+/// `%fsr` and `%fq` fill no register field: naming one picks a different
+/// opcode, and `rd` says how much of `%fsr` moves.
+#[test]
+fn the_floating_point_state_registers_are_opcodes_of_their_own() {
+    enc("ld [%o0], %fsr", "c1 0a 00 00");
+    enc("ld [%o0 + 4], %fsr", "c1 0a 20 04");
+    enc("ld [%o0 + %o1], %fsr", "c1 0a 00 09");
+    enc("st %fsr, [%o0]", "c1 2a 00 00");
+    // `ldx` and `stx` carry all 64 bits of it: the same opcode with `rd` = 1.
+    enc9("ldx [%o0], %fsr", "c3 0a 00 00");
+    enc9("stx %fsr, [%o0]", "c3 2a 00 00");
+    enc9("ldx [%o0 + 8], %fsr", "c3 0a 20 08");
+    // The exception queue is read-only, and only `std` reads it.
+    enc("std %fq, [%o0]", "c1 32 00 00");
+    for src in ["ldd [%o0], %fsr", "ld [%o0], %fq", "st %fq, [%o0]"] {
+        let e = errors_for("sparc", src);
+        assert!(e.contains("cannot transfer"), "`{src}` gave:\n{e}");
+    }
 }
 
 // ---- synthetics ------------------------------------------------------------
@@ -482,8 +531,9 @@ fn the_elf_machine_and_pointer_width_follow_the_target() {
 
 // ---- V9 --------------------------------------------------------------------
 //
-// Checked against `llvm-mc -triple=sparcv9`, one instruction at a time; the
-// mc-diff harness only has a 32-bit SPARC row.
+// Checked against `llvm-mc -triple=sparcv9` and `sparc64-elf-as -64 -Av9`.
+// V9 is a superset, so these are what a 64-bit target adds rather than a
+// repeat of the V8 set above.
 
 #[test]
 fn v9_64_bit_arithmetic_and_memory() {
@@ -538,6 +588,25 @@ fn v9_predicted_branches_take_a_condition_code_bank() {
     );
 }
 
+/// `FBPfcc` is to `FBfcc` what `BPcc` is to `Bicc`: three of the 22
+/// displacement bits go to the bank and the prediction hint.
+#[test]
+fn v9_floating_point_branches_take_a_condition_code_bank() {
+    enc9("back:\n fbe %fcc0, back", "13 48 00 00");
+    enc9("back:\n fbe %fcc1, back", "13 58 00 00");
+    enc9("back:\n fbe %fcc3, back", "13 78 00 00");
+    enc9("back:\n fbe,pn %fcc0, back", "13 40 00 00");
+    enc9("back:\n fbe,a %fcc0, back", "33 48 00 00");
+    enc9("back:\n fbe,a,pn %fcc3, back", "33 70 00 00");
+    enc9("back:\n fb %fcc0, back", "11 48 00 00");
+    enc9("back:\n fbn %fcc2, back", "01 68 00 00");
+    // Neither family takes the other's bank.
+    let e = errors_for("sparcv9", "fbe %icc, .");
+    assert!(e.contains("tests a `%fcc`"), "{e}");
+    let e = errors_for("sparcv9", "be %fcc0, .");
+    assert!(e.contains("need `fb<cc>`"), "{e}");
+}
+
 #[test]
 fn v9_conditional_moves() {
     enc9("movne %icc, 1, %g1", "83 66 60 01");
@@ -550,6 +619,81 @@ fn v9_conditional_moves() {
     enc9("movrlez %g1, 5, %g3", "87 78 68 05");
 }
 
+/// `FMOVcc` numbers all six condition-code banks in one three-bit field, the
+/// four `%fcc`s first and the integer pair above them, and reads its
+/// condition name from whichever table the bank belongs to.
+#[test]
+fn v9_floating_point_conditional_moves() {
+    enc9("fmovse %icc, %f1, %f2", "85 a8 60 21");
+    enc9("fmovse %xcc, %f1, %f2", "85 a8 70 21");
+    enc9("fmovse %fcc0, %f1, %f2", "85 aa 40 21");
+    enc9("fmovse %fcc3, %f1, %f2", "85 aa 58 21");
+    enc9("fmovsa %icc, %f1, %f2", "85 aa 20 21");
+    enc9("fmovsn %icc, %f1, %f2", "85 a8 20 21");
+    // `lg` is a floating-point condition only, `gu` an integer one only.
+    enc9("fmovslg %fcc0, %f1, %f2", "85 a8 80 21");
+    enc9("fmovsgu %icc, %f1, %f2", "85 ab 20 21");
+    enc9("fmovde %fcc1, %f2, %f4", "89 aa 48 42");
+    enc9("fmovqe %fcc1, %f4, %f8", "91 aa 48 64");
+    enc9("fmovde %fcc1, %f32, %f62", "bf aa 48 41");
+    let e = errors_for("sparcv9", "fmovslg %icc, %f1, %f2");
+    assert!(e.contains("is not a condition of `%icc`"), "{e}");
+}
+
+/// `FMOVr` tests a whole register against zero instead of a bank, and its
+/// `opf_low` is four above the condition-code form's.
+#[test]
+fn v9_floating_point_moves_on_a_register_test() {
+    enc9("fmovrse %g1, %f1, %f2", "85 a8 44 a1");
+    enc9("fmovrsne %g1, %f1, %f2", "85 a8 54 a1");
+    enc9("fmovrslez %g1, %f1, %f2", "85 a8 48 a1");
+    enc9("fmovrslz %g1, %f1, %f2", "85 a8 4c a1");
+    enc9("fmovrsgz %g1, %f1, %f2", "85 a8 58 a1");
+    enc9("fmovrsgez %g1, %f1, %f2", "85 a8 5c a1");
+    enc9("fmovrdz %g1, %f2, %f4", "89 a8 44 c2");
+    enc9("fmovrqz %g1, %f4, %f8", "91 a8 44 e4");
+    // `z` and `e` are the same condition under two names, as they are for
+    // the integer `movr`.
+    assert_eq!(
+        text_for("sparcv9", "fmovrsz %g1, %f1, %f2"),
+        text_for("sparcv9", "fmovrse %g1, %f1, %f2")
+    );
+}
+
+/// V9 gave the floating-point unit four condition-code banks, and a compare
+/// says which one it writes in the field an arithmetic instruction uses for
+/// its destination.
+#[test]
+fn v9_compares_name_the_bank_they_write() {
+    enc9("fcmps %fcc3, %f1, %f2", "87 a8 4a 22");
+    enc9("fcmpd %fcc2, %f2, %f4", "85 a8 8a 44");
+    enc9("fcmpes %fcc1, %f1, %f2", "83 a8 4a a2");
+    // `%fcc0` is zero in that field, so it is the V8 instruction unchanged.
+    assert_eq!(
+        text_for("sparcv9", "fcmps %fcc0, %f1, %f2"),
+        text_for("sparcv9", "fcmps %f1, %f2")
+    );
+}
+
+/// V9 made `Tcc` name the bank it tests, in a two-bit field carved out of
+/// the immediate.
+#[test]
+fn v9_traps_name_a_condition_code_bank() {
+    enc9("te %xcc, 5", "83 d0 30 05");
+    enc9("ta %icc, 0", "91 d0 20 00");
+    enc9("tn %xcc, %g0 + 3", "81 d0 30 03");
+    enc9("te %xcc, %g1 + %g2", "83 d0 50 02");
+    enc9("te %icc, %g1 + 5", "83 d0 60 05");
+    enc9("te %icc, 127", "83 d0 20 7f");
+    // `%icc` is zero there, so the V8 spelling is the same word.
+    assert_eq!(
+        text_for("sparcv9", "te %icc, 5"),
+        text_for("sparcv9", "te 5")
+    );
+    let e = errors_for("sparcv9", "te %fcc0, 5");
+    assert!(e.contains("`%icc` or `%xcc`"), "{e}");
+}
+
 #[test]
 fn v9_return_and_the_double_precision_moves() {
     enc9("return %i7 + 8", "81 cf e0 08");
@@ -557,6 +701,38 @@ fn v9_return_and_the_double_precision_moves() {
     enc9("fmovd %f0, %f2", "85 a0 00 40");
     enc9("fnegd %f0, %f2", "85 a0 00 c0");
     enc9("fabsd %f0, %f2", "85 a0 01 40");
+}
+
+/// V9 doubled the floating-point register file without widening the field
+/// that names a register, so `%f32`-`%f62` take the values a double or quad
+/// register can never use: bit 5 of the number travels in bit 0.
+#[test]
+fn v9_upper_float_registers_swizzle_into_the_same_five_bits() {
+    enc9("faddd %f32, %f34, %f62", "bf a0 48 43");
+    enc9("faddd %f0, %f2, %f4", "89 a0 08 42");
+    enc9("faddd %f62, %f62, %f62", "bf a7 c8 5f");
+    enc9("faddq %f32, %f36, %f60", "bb a0 48 65");
+    enc9("fmovd %f32, %f34", "87 a0 00 41");
+    enc9("fmovq %f32, %f36", "8b a0 00 61");
+    enc9("ldd [%o0], %f32", "c3 1a 00 00");
+    enc9("std %f32, [%o0]", "c3 3a 00 00");
+    // A conversion's two sides have their own widths, so only the double one
+    // may be an upper register.
+    enc9("fitod %f1, %f32", "83 a0 19 01");
+    enc9("fdtoi %f32, %f1", "83 a0 1a 41");
+    enc9("fcmpd %f32, %f34", "81 a8 4a 43");
+}
+
+/// The conversions between a 64-bit integer and a float, which V9 added. The
+/// integer needs a register pair whatever the other side is.
+#[test]
+fn v9_converts_to_and_from_a_64_bit_integer() {
+    enc9("fxtos %f2, %f1", "83 a0 10 82");
+    enc9("fxtod %f2, %f4", "89 a0 11 02");
+    enc9("fxtoq %f2, %f4", "89 a0 11 82");
+    enc9("fstox %f1, %f2", "85 a0 10 21");
+    enc9("fdtox %f2, %f4", "89 a0 10 42");
+    enc9("fqtox %f4, %f2", "85 a0 10 64");
 }
 
 #[test]
@@ -569,11 +745,41 @@ fn v9_only_instructions_are_refused_on_a_v8_target() {
         "movne %icc, 1, %g1",
         "fmovd %f0, %f2",
         "be %icc, .",
+        "fbe %fcc0, .",
+        "fmovse %icc, %f1, %f2",
+        "fmovrse %g1, %f1, %f2",
+        "fcmps %fcc0, %f1, %f2",
+        "te %icc, 5",
+        "faddd %f32, %f34, %f36",
+        "ldx [%o0], %fsr",
     ] {
         let e = errors_for("sparc", src);
         assert!(
             e.contains("V9"),
             "expected a V9 diagnostic for `{src}`, got:\n{e}"
+        );
+    }
+}
+
+/// A floating-point operand's width says which registers can name it: only a
+/// double or a quad reaches above `%f31`, and each starts on its own
+/// multiple. GNU as refuses every one of these.
+#[test]
+fn a_float_register_has_to_suit_the_operand_width() {
+    for (src, needle) in [
+        ("faddd %f1, %f2, %f4", "double-precision"),
+        ("faddd %f31, %f2, %f4", "double-precision"),
+        ("faddq %f2, %f4, %f8", "quad-precision"),
+        ("faddq %f0, %f4, %f62", "quad-precision"),
+        ("fadds %f32, %f2, %f4", "single-precision"),
+        ("ldd [%o0], %f1", "double-precision"),
+        ("fitod %f1, %f33", "unknown register"),
+        ("faddd %f64, %f2, %f4", "unknown register"),
+    ] {
+        let e = errors_for("sparcv9", src);
+        assert!(
+            e.contains(needle),
+            "`{src}` should mention `{needle}`, got:\n{e}"
         );
     }
 }
@@ -586,7 +792,8 @@ fn unresolved_references_become_the_matching_r_sparc_relocations() {
     let asm = assemble_for(
         "sparcv9",
         "call external\n nop\n sethi %hi(external), %o0\n or %o0, %lo(external), %o0\n\
-         be external\n nop\n brz %g1, external\n be %xcc, external",
+         be external\n nop\n brz %g1, external\n be %xcc, external\n\
+         fbe external\n fbe %fcc1, external",
     );
     assert!(
         !asm.diags.has_errors(),
@@ -603,6 +810,8 @@ fn unresolved_references_become_the_matching_r_sparc_relocations() {
             (16, 8),  // R_SPARC_WDISP22
             (24, 40), // R_SPARC_WDISP16
             (28, 41), // R_SPARC_WDISP19
+            (32, 8),  // R_SPARC_WDISP22, the floating-point branch
+            (36, 41), // R_SPARC_WDISP19, the same with a bank
         ]
     );
 }

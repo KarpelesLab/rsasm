@@ -1441,8 +1441,15 @@ impl Assembler {
         let m = self.find_modifier(e)?;
         let name = self.interner.get(m);
         let arch = self.frag_arch(section.0 as usize, fi).0;
+        // Spelled the way the target writes it: `sym(GOT)` on ARM, `sym@GOT`
+        // everywhere else.
+        let written = if arch.data_paren_modifiers().contains(&name) {
+            format!("`({name})`")
+        } else {
+            format!("`@{name}`")
+        };
         matches!(arch.flat_modifier(name), FlatModifier::LinkerOnly).then(|| {
-            format!("`@{name}` names something only a linker creates; a flat binary has none")
+            format!("{written} names something only a linker creates; a flat binary has none")
         })
     }
 
@@ -1804,20 +1811,37 @@ impl Assembler {
                                     } else {
                                         r.addend
                                     };
-                                    if !rela
-                                        && bits <= 16
-                                        && matches!(
-                                            kind.encoding,
-                                            crate::section::FieldEncoding::Whole
-                                        )
-                                        && !(-(1i64 << (bits - 1))..(1i64 << bits))
-                                            .contains(&addend)
-                                    {
+                                    // A scattered field says its own bounds,
+                                    // since its width is not its bytes'; see
+                                    // `FixupKind::addend_limits`.
+                                    let narrow = match kind.addend_limits {
+                                        Some((lo, hi)) => !(lo..=hi).contains(&addend),
+                                        None => {
+                                            bits <= 16
+                                                && matches!(
+                                                    kind.encoding,
+                                                    crate::section::FieldEncoding::Whole
+                                                )
+                                                && !(-(1i64 << (bits - 1))..(1i64 << bits))
+                                                    .contains(&addend)
+                                        }
+                                    };
+                                    if !rela && narrow {
+                                        let where_ = match kind.addend_limits {
+                                            Some((lo, hi)) => format!(
+                                                "the field it is relocated in, which holds \
+                                                 {lo} to {hi}"
+                                            ),
+                                            None => format!(
+                                                "the {}-byte field it is relocated in",
+                                                kind.size
+                                            ),
+                                        };
                                         self.diags.error(
                                             span,
                                             format!(
-                                                "value {:#x} does not fit in the {}-byte field it is relocated in",
-                                                r.addend, kind.size
+                                                "value {:#x} does not fit in {where_}",
+                                                r.addend
                                             ),
                                         );
                                         continue;
@@ -1976,20 +2000,21 @@ impl Assembler {
             // plain data field can carry as a PC-relative relocation. This is
             // how `.long target - .` jump tables and unwind data are written.
             let here = self.section(section).addr as i64 + at as i64;
-            let pcrel = if !kind.pcrel
-                && kind.reloc != 0
-                && Some(kind.reloc) == self.frag_arch(si, fi).0.data_reloc(kind.size, false)
-                && self.symbol_section(minus) == Some(section)
-            {
-                self.frag_arch(si, fi).0.data_reloc(kind.size, true)
+            let pcrel = if !kind.pcrel && self.symbol_section(minus) == Some(section) {
+                self.frag_arch(si, fi).0.pcrel_reloc(kind.reloc, kind.size)
             } else {
                 None
             };
             let (Some(r), Some(label)) = (pcrel, self.symbol_addr(minus)) else {
-                self.diags.error(
-                    span,
-                    "the difference of two symbols in different sections cannot be relocated",
-                );
+                // A field whose relocation has no PC-relative counterpart —
+                // ARM's `sym(GOT)` is one — cannot carry a difference even
+                // where both symbols are here.
+                let msg = if self.symbol_section(minus) == Some(section) {
+                    "this field has no relocation for a difference of symbols"
+                } else {
+                    "the difference of two symbols in different sections cannot be relocated"
+                };
+                self.diags.error(span, msg);
                 return Vec::new();
             };
             v.addend += here - label;
@@ -2077,6 +2102,16 @@ impl Assembler {
             at - self.sections[si].frags[fi].offset
         } else {
             at
+        };
+        // And what the symbol makes of it, for the few relocations a target
+        // picks by the name a reference happens to carry.
+        let reloc = match target {
+            Some(t) => {
+                let name = self.symbols.get(t).name;
+                let arch = self.frag_arch(si, fi).0;
+                arch.reloc_for_symbol(reloc, self.interner.get(name))
+            }
+            None => reloc,
         };
         let reloc = self.frag_arch(si, fi).0.reloc_at(reloc, place);
         if reloc == 0 {

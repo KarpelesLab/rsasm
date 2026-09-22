@@ -23,11 +23,12 @@ The two-bit `op` field is drawn rather than left to chance: uniformly random
 words are nearly all loads and stores, and the arithmetic set is behind one
 value of it.
 
-`NOT_IMPLEMENTED` and `UNIMPLEMENTED` list what README.md's "SPARC V8 / V9"
-does not claim --
+`NOT_IMPLEMENTED` lists what README.md's "SPARC V8 / V9" does not claim --
 the VIS extensions, the privileged and hyperprivileged set, the quad-precision
 floating point and the coprocessor instructions -- which is skipped by name so
-that a whole extension cannot read as thousands of identical findings.
+that a whole extension cannot read as thousands of identical findings. Nothing
+is skipped by the shape of its operands: a form the backend reads at all is
+compared with every register and every bank the disassembler prints.
 
 One case is set aside rather than compared: llvm-mc 22 crashes on `call`
 with an absolute address (`MCExpr::evaluateAsRelocatableImpl`, reached from
@@ -112,32 +113,8 @@ NOT_IMPLEMENTED = re.compile(r"""^(
 )$""", re.X)
 
 
-# Three families the backend leaves out altogether, skipped by the whole
-# line rather than by mnemonic:
-#
-#   fb<cc> / fbp<cc>   the floating-point branches
-#   fmov<cc> / fmovr   the floating-point conditional moves, of either
-#                      condition-code bank
-#   %fsr, %fq          the floating-point state registers, which `ld` and
-#                      `st` transfer
-#   t<cc> %icc, ...    the V9 trap and compare, which name a condition-code
-#   fcmp<s|d> %fccN,   bank as their first operand
-#   %f32 - %f62        the upper half of V9's floating-point file, which is
-#                      addressable only as double and quad registers and
-#                      numbers them in a five-bit field by a bit swizzle;
-#                      src/arch/sparc/reg.rs stops at %f31
-#
-# Each is a feature the backend does not have, not a disagreement about one
-# it does; they are listed here so a run says nothing about them either way.
-UNIMPLEMENTED = re.compile(
-    r"^(fb|fmov(r|[sdq][a-z]+)|t[a-z]+ %[ix]cc|fcmp[a-z]* %fcc)"
-    r"|%f(sr|q)\b|%f(3[2-9]|[45]\d|6[0-2])\b")
-
-
 def skip(case):
-    # The instruction is the last line; a `.skip` may sit in front of it.
-    return bool(NOT_IMPLEMENTED.match(case[0])
-                or UNIMPLEMENTED.search(case[1].split("\n")[-1]))
+    return bool(NOT_IMPLEMENTED.match(case[0]))
 
 
 def mc_refuses_a_spelling(text, res, target):

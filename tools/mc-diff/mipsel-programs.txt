@@ -144,6 +144,10 @@ foo:
 bc1t foo
 .p2align 6
 
+# The MIPS II "likely" twins of every conditional branch, whose delay slot is
+# annulled when the branch is not taken, and the flag each COP1 branch tests
+# when it is written out. llvm-mc fills the delay slot with a `nop` here as it
+# does for any other branch, and the alignment below absorbs it.
 === beql backward
 foo:
 beql $1, $2, foo
@@ -194,14 +198,34 @@ foo:
 bnezl $v0, foo
 .p2align 6
 
+=== bc1f on a named flag
+foo:
+bc1f $fcc3, foo
+.p2align 6
+
+=== bc1t on a named flag
+foo:
+bc1t $fcc7, foo
+.p2align 6
+
 === bc1fl
 foo:
 bc1fl foo
 .p2align 6
 
+=== bc1fl on a named flag
+foo:
+bc1fl $fcc4, foo
+.p2align 6
+
 === bc1tl
 foo:
 bc1tl foo
+.p2align 6
+
+=== bc1tl on a named flag
+foo:
+bc1tl $fcc1, foo
 .p2align 6
 
 === a backwards loop
@@ -272,6 +296,17 @@ j 0x400000
 
 === jal into kseg0
 jal 0x80001000
+.p2align 6
+
+# `jalx` calls as `jal` does and switches the ISA mode on the way, so what it
+# reaches is MIPS16 or microMIPS code. The 26-bit field holds the target the
+# same way, and a target that is not a multiple of four is refused.
+=== jalx to an absolute address
+jalx 0x400000
+.p2align 6
+
+=== jalx into kseg0
+jalx 0x80001000
 .p2align 6
 
 === j to the last word of a region

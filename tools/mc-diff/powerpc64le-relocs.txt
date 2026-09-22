@@ -174,3 +174,50 @@ lab3:   pld     3, 8(4), 0
 dstart: .fill   15, 4, 1
 dlab:   xxspltiw 3, 1
         .long   dlab - dstart
+
+=== the halves of a 64-bit address
+        .text
+        .globl  glob
+        .weak   weak1
+start:
+        lis     3, ext@highest
+        ori     3, 3, ext@highera
+        sldi    3, 3, 32
+        oris    3, 3, ext@high
+        ori     3, 3, ext@l
+        lis     4, ext@highesta
+        addis   4, 4, ext@higher
+        sldi    4, 4, 32
+        addis   4, 4, ext@higha
+        addi    4, 4, ext@l
+        lis     5, glob@highest
+        ori     5, 5, weak1@higher
+        addi    5, 5, loc@highesta
+        addis   5, 5, dat@highera
+        lis     6, ext+8@highest
+        addi    6, 6, ext-8@higher
+loc:    nop
+glob:   nop
+weak1:  nop
+        .data
+dat:    .long   0
+
+=== GOT and TOC entries
+        .text
+        .globl  glob
+start:
+        addis   3, 2, ext@toc@ha
+        addi    3, 3, ext@toc@l
+        ld      4, ext@toc(2)
+        ld      5, ext@toc@l(2)
+        addi    6, 2, glob@toc
+        lis     7, dat@toc@h
+        lis     8, ext@got@ha
+        ld      8, ext@got@l(8)
+        ld      9, ext@got(2)
+        addi    10, 10, glob@got
+        addi    11, 11, ext@got@h
+        addi    12, 12, ext@got@l
+glob:   nop
+        .data
+dat:    .quad   0
