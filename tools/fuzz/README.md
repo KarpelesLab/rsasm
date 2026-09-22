@@ -554,3 +554,39 @@ missing `swap`, `ldstub`, `taddcctv`, `tsubcctv`, `clrb`/`clrh`/`clrx` and
 `b`, an address whose base register is the hardwired zero (`[ 0x66 ]`,
 `jmpl -2347, %l2`), and the two-operand trap written as one address. MIPS,
 SuperH, RX, RL78, V850 and the Z80 found nothing.
+
+## The 6502, the 8080 and NASM source
+
+Three more whole-program fuzzers, each against the assembler its dialect is
+written for.
+
+```console
+$ tools/fuzz/mos6502.py fuzz --count 16000
+$ tools/fuzz/i8080.py fuzz --count 12000 --mutations 0.5
+$ tools/fuzz/nasm.py fuzz --count 1200 --seed 7
+$ tools/fuzz/nasm.py check prog.asm --format elf64
+```
+
+`mos6502.py` builds programs from a table of the 151 official NMOS opcodes
+written from the datasheet, renders each in ca65's spelling and, where the
+constructs are shared, in vasm's, and compares the image `ca65` and `ld65`
+produce -- and `vasm6502_oldstyle -Fbin`'s -- with `rsasm -f bin`. Branches
+are placed so their displacement is exactly 0, 1, 125, 126, 127 forward and
+-2, -126, -128 back.
+
+`i8080.py` does the same for all 244 8080 opcodes against the Macro
+Assembler AS and `p2bin`, with `ORG`, `EQU`/`SET`, `DB`/`DW`/`DS`, `$` and
+every radix both read.
+
+`nasm.py` gives whole NASM programs to NASM and to `rsasm -d nasm` for
+`bin`, `elf32`, `elf64`, `win32` and `win64`: flat images byte for byte, ELF
+objects section by section with relocations and global symbols, COFF objects
+through `tools/coff-diff/canon.sh`.
+
+Each records the places its two assemblers part company as named rules with
+a citation. `nasm.py` also carries, at the head of the script, the
+differences it found that are *not* generated -- each with a whole program
+that shows it -- because they are not settled: NASM assembles some of them
+with a warning where rsasm stops, and rsasm follows GNU as on others. That
+list is what is left to do for the NASM dialect, and it shrinks as each one
+is decided.
