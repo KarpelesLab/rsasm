@@ -218,3 +218,12 @@ base:   nop
         .data
 other:  .long   base - other
 
+=== the build attributes of a plain object
+        .globl f
+f:      nop
+=== .attribute sets a tag by name
+        .attribute unaligned_access, 1
+f:      nop
+=== .attribute names the ISA string
+        .attribute arch, "rv32i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0_zcd1p0_zcf1p0"
+f:      nop

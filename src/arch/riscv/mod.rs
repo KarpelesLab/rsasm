@@ -124,6 +124,28 @@ impl Architecture for Riscv {
         243 // EM_RISCV
     }
 
+    /// `.riscv.attributes`, whose `Tag_RISCV_arch` is the ISA string a
+    /// linker checks one object against another by. Both references write
+    /// the same one for this instruction set — `riscv64-elf-as
+    /// -march=rv64imafdc`, and `llvm-mc -mattr=+m,+a,+f,+d,+c
+    /// -riscv-add-build-attributes` — down to the extensions each implies
+    /// (`zicsr`, `zmmul`, the `a` and `c` halves, and `zcf` on RV32, whose
+    /// compressed set has the single-precision loads).
+    fn elf_attributes(&self, _state: &ArchState) -> Vec<crate::arch::AttrSection> {
+        let arch = if self.xlen == 32 {
+            "rv32i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0\
+             _zcd1p0_zcf1p0"
+        } else {
+            "rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zmmul1p0_zaamo1p0_zalrsc1p0_zca1p0\
+             _zcd1p0"
+        };
+        vec![crate::arch::AttrSection::attributes(
+            ".riscv.attributes",
+            "riscv",
+            vec![(TAG_ARCH, crate::arch::AttrValue::Str(arch.to_string()))],
+        )]
+    }
+
     /// `EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE`: the `rv32gc`/`rv64gc`
     /// defaults with their `ilp32d`/`lp64d` ABIs. GNU ld refuses to link
     /// objects whose float ABIs differ, and the flag records the ISA the file
@@ -256,6 +278,10 @@ impl Architecture for Riscv {
     }
 
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        if name == ".attribute" {
+            attribute(cx, cur);
+            return true;
+        }
         if name != ".option" {
             return false;
         }
@@ -288,6 +314,86 @@ impl Architecture for Riscv {
         }
         true
     }
+}
+
+/// `Tag_RISCV_arch`, the ISA string.
+const TAG_ARCH: u32 = 5;
+
+/// The names `.attribute` takes for a tag, and the tag each names, from GNU
+/// as's own table (`riscv_convert_symbolic_attribute` in `tc-riscv.c`) with
+/// the numbers `include/elf/riscv.h` gives them. Each is also spelled with a
+/// `Tag_RISCV_` prefix there, which is stripped before the lookup.
+const TAG_NAMES: &[(&str, u32)] = &[
+    ("stack_align", 4),
+    ("arch", TAG_ARCH),
+    ("unaligned_access", 6),
+    ("priv_spec", 8),
+    ("priv_spec_minor", 10),
+    ("priv_spec_revision", 12),
+];
+
+/// `.attribute <tag>, <value>`: the tag is a number or one of the names
+/// above, and the value a number or, for `arch`, a string.
+///
+/// The ISA string is written as the source gave it. GNU as reads it and
+/// writes back what it makes of it, which for a string that is already
+/// canonical — every extension with a version, and every implied extension
+/// spelled out, as both references write one — is the same thing; a string
+/// that leaves something out is not expanded here.
+fn attribute(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
+    let tok = cur.peek();
+    let tag = match tok.kind {
+        TokKind::Int(n) if n <= u64::from(u32::MAX) => {
+            cur.advance();
+            n as u32
+        }
+        TokKind::Ident(n) => {
+            cur.advance();
+            let word = cx.name(n).to_ascii_lowercase();
+            let word = word.strip_prefix("tag_riscv_").unwrap_or(&word);
+            match TAG_NAMES.iter().find(|&&(name, _)| name == word) {
+                Some(&(_, tag)) => tag,
+                None => {
+                    cx.error(tok.span, format!("`.attribute` does not know `{word}`"));
+                    cur.set_pos(cur.all().len());
+                    return;
+                }
+            }
+        }
+        _ => {
+            cx.error(tok.span, "`.attribute` expects a tag");
+            cur.set_pos(cur.all().len());
+            return;
+        }
+    };
+    if !cur.peek().is_punct(crate::lexer::Punct::Comma) {
+        let span = cur.peek().span;
+        cx.error(span, "`.attribute` expects a comma and a value");
+        cur.set_pos(cur.all().len());
+        return;
+    }
+    cur.advance();
+    let span = cur.peek().span;
+    let value = match cur.peek().kind {
+        TokKind::Int(n) => {
+            cur.advance();
+            crate::arch::AttrValue::Int(n)
+        }
+        TokKind::Str(i) => {
+            cur.advance();
+            crate::arch::AttrValue::Str(String::from_utf8_lossy(cx.pool.get(i)).into_owned())
+        }
+        _ => {
+            cx.error(span, "`.attribute` expects a number or a string");
+            cur.set_pos(cur.all().len());
+            return;
+        }
+    };
+    cx.requests.push(crate::arch::Request::Attribute {
+        vendor: "riscv",
+        tag,
+        value,
+    });
 }
 
 /// Splits the `.aq` / `.rl` ordering suffix off an atomic mnemonic.
