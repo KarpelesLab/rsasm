@@ -46,7 +46,7 @@ A case is classified:
                 there are any, and each is printed in full, so that pasting it
                 into a file and running the two commands above reproduces it.
                 `--limit` (default 20) is how many are shown.
-    deviation   they differ in a way `DEVIATIONS` above accounts for --
+    deviation   they differ in a way `DEVIATIONS` below accounts for --
                 `prefix-order`, `macro-local-name` and `branch-width` -- each
                 named and counted rather than listed.
 
@@ -64,10 +64,11 @@ NASM run. What the two already differ over, and what is therefore left out of
 the programs, is the `NOT GENERATED` list below, each entry with a case that
 shows it and a note where it would have been written.
 
-Environment: RSASM (default target/debug/rsasm under the repository root) and
+Environment: RSASM (default target/debug/rsasm under the repository root),
 RSASM_ORACLES (default target/oracles), whose `bin` holds the NASM 2.16.03
-that tools/oracles/build.sh builds; llvm-readobj on the PATH, for the COFF
-objects.
+that tools/oracles/build.sh builds, and NASM to name another one; llvm-readobj
+on the PATH, for the COFF objects. A reference that is missing or is another
+version stops the run rather than being skipped.
 """
 
 import argparse

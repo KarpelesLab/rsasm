@@ -1267,7 +1267,11 @@ def classify(g, m, r, ctx):
     kg, km, kr = key(g), key(m), key(r)
     if kg == km and kr == kg:
         return "agree", None
-    if g[0] == "ok" or m[0] == "ok":
+    # A deviation is worth consulting whenever anyone assembled the line:
+    # `stc p9` is one where *rsasm* is the only one that does, because it
+    # reads the coprocessor number as a number rather than as half-precision
+    # floating point.
+    if g[0] == "ok" or m[0] == "ok" or r[0] == "ok":
         for name, pred in DEVIATIONS:
             if pred(g, m, r, ctx):
                 return "deviation", name
