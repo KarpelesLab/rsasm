@@ -79,7 +79,7 @@ llvm-readobj --sections "$obj" | ${AWK:-awk} -v ignore="$ignore" '
     # A section a reference writes of its own accord is kept whether it is
     # allocated or not, and so is `.avr.prop`, which a linker relaxing AVR
     # code reads.
-    kept = name ~ /attributes$/ || name == ".reginfo" || name == ".MIPS.options" ||
+    kept = name ~ /\.attributes$/ || name == ".reginfo" || name == ".MIPS.options" ||
       name == ".note.renesas" || name == ".avr.prop"
     if (name == "" || (!alloc && !kept) || size == 0) return
     if (name == ".pdr" || name == ".comment" || name == ".note.gnu.property") return
