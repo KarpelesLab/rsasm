@@ -55,6 +55,10 @@ pub(crate) fn mark(state: &mut ArchState, r: Reg) {
     let bit = match r.class {
         RegClass::Gpr => u64::from(r.num),
         RegClass::Fpr => u64::from(r.num) + 32,
+        // The condition flags are neither file: llvm-mc counts a register
+        // towards a mask only when it belongs to one of the classes a mask
+        // is about, and `$fcc0`-`$fcc7` belong to none of them.
+        RegClass::Fcc => return,
     };
     state.used |= 1 << bit;
 }

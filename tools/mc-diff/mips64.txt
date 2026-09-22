@@ -248,3 +248,20 @@ c.lt.d $f0, $f2
 c.nge.s $f0, $f2
 c.le.s $f0, $f2
 c.ngt.s $f0, $f2
+
+# ---- the floating-point condition flags ----
+# MIPS IV widened the FPU's single flag into eight, so a comparison says which
+# one it writes and a conditional move says which one it reads; without a flag
+# operand the instruction means $fcc0.
+c.eq.s $fcc0, $f0, $f2
+c.eq.s $fcc1, $f0, $f2
+c.lt.d $fcc3, $f4, $f6
+c.ngt.s $fcc7, $f30, $f28
+c.un.d $fcc5, $f0, $f2
+movf $4, $5, $fcc0
+movt $4, $5, $fcc5
+movf $sp, $ra, $fcc7
+movf.s $f0, $f2, $fcc1
+movt.s $f30, $f28, $fcc7
+movf.d $f4, $f6, $fcc2
+movt.d $f4, $f6, $fcc6

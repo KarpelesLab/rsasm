@@ -30,6 +30,16 @@ pub const fn rd(r: u8) -> u32 {
 pub const fn sa(v: u32) -> u32 {
     (v & 0x1f) << 6
 }
+/// The flag number a COP1 branch tests and a conditional move reads, which
+/// sits in the `rt` field just above the `tf` bit the mnemonic fixes.
+pub const fn cc(n: u8) -> u32 {
+    (n as u32) << 18
+}
+/// The flag number `c.cond.fmt` writes, which is three bits of the `sa` field
+/// instead: the comparison itself needs both register fields above it.
+pub const fn cc_lo(n: u8) -> u32 {
+    (n as u32) << 8
+}
 pub const fn imm(v: i64) -> u32 {
     (v as u32) & 0xffff
 }
@@ -315,6 +325,38 @@ impl Args<'_> {
         }
     }
 
+    /// A condition-flag operand, which no register mask counts; see
+    /// [`super::abi::mark`].
+    pub fn fcc(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
+        let o = self.at(cx, i)?;
+        match o.fcc() {
+            Some(r) => Some(r),
+            None => {
+                cx.error(
+                    o.span,
+                    format!(
+                        "`{}`: operand {} must be a floating-point condition flag, \
+                         $fcc0 to $fcc7, found {}",
+                        self.mnemonic,
+                        i + 1,
+                        o.describe()
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// The flag a form that can leave `$fcc0` implied was given, and how many
+    /// operands naming it took.
+    fn leading_fcc(&self, cx: &mut AsmCtx<'_>, written: bool) -> Option<(Reg, usize)> {
+        if written {
+            Some((self.fcc(cx, 0)?, 1))
+        } else {
+            Some((Reg::fcc(0), 0))
+        }
+    }
+
     pub fn imm(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Imm> {
         let o = self.at(cx, i)?;
         match o.imm() {
@@ -513,10 +555,16 @@ pub fn encode(
             let target = a.imm(cx, 1)?;
             w.push_fixup(base | rs(s.num), target.expr, branch_fixup(), target.span);
         }
-        Form::Off => {
-            a.arity(cx, 1)?;
-            let target = a.imm(cx, 0)?;
-            w.push_fixup(base, target.expr, branch_fixup(), target.span);
+        Form::CcOff => {
+            a.arity_between(cx, 1, 2)?;
+            let (flag, skip) = a.leading_fcc(cx, a.ops.len() == 2)?;
+            let target = a.imm(cx, skip)?;
+            w.push_fixup(
+                base | cc(flag.num),
+                target.expr,
+                branch_fixup(),
+                target.span,
+            );
         }
         Form::Off26 => {
             a.arity(cx, 1)?;
@@ -572,16 +620,29 @@ pub fn encode(
             let (fd, fs) = (a.fpr(cx, 0)?, a.fpr(cx, 1)?);
             w.push(base | sa(fd.num as u32) | rd(fs.num));
         }
-        Form::FsFt => {
-            a.arity(cx, 2)?;
-            let (fs, ft) = (a.fpr(cx, 0)?, a.fpr(cx, 1)?);
-            w.push(base | rd(fs.num) | rt(ft.num));
+        Form::CcFsFt => {
+            a.arity_between(cx, 2, 3)?;
+            let (flag, skip) = a.leading_fcc(cx, a.ops.len() == 3)?;
+            let (fs, ft) = (a.fpr(cx, skip)?, a.fpr(cx, skip + 1)?);
+            w.push(base | cc_lo(flag.num) | rd(fs.num) | rt(ft.num));
         }
         Form::RtFs => {
             a.arity(cx, 2)?;
             let t = a.gpr(cx, 0)?;
             let fs = a.fpr(cx, 1)?;
             w.push(base | rt(t.num) | rd(fs.num));
+        }
+        Form::RdRsCc => {
+            a.arity(cx, 3)?;
+            let (d, s) = (a.gpr(cx, 0)?, a.gpr(cx, 1)?);
+            let flag = a.fcc(cx, 2)?;
+            w.push(base | rd(d.num) | rs(s.num) | cc(flag.num));
+        }
+        Form::FdFsCc => {
+            a.arity(cx, 3)?;
+            let (fd, fs) = (a.fpr(cx, 0)?, a.fpr(cx, 1)?);
+            let flag = a.fcc(cx, 2)?;
+            w.push(base | sa(fd.num as u32) | rd(fs.num) | cc(flag.num));
         }
         Form::RtRdSel => {
             a.arity_between(cx, 2, 3)?;
