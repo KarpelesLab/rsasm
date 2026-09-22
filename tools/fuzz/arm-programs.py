@@ -37,9 +37,8 @@ A case is:
               while the difference stays the same kind.
     known     they differ in a way this fuzzer is not about, each with its
               reason: `KNOWN` and `KNOWN_GAS` list the ones told apart by
-              what the assembler that refused said, and
-              `known_relocation_symbol` and `known_tail_padding` the two
-              that show in the object.
+              what the assembler that refused said, and `known_object` the
+              two that show in the object itself.
 
 `--mutations` (default 0.15) is the fraction of programs given something
 meant to be refused: a pool out of reach, a `=` on a store or an `ldrd`, an
@@ -574,24 +573,35 @@ def canon_parts(text):
     return sections, relocs, rest
 
 
-def known_relocation_symbol(gas, rsasm):
-    """Whether the two objects differ only in which symbol a relocation
-    names, which rsasm decides as llvm-mc does and GNU as decides otherwise.
+def known_object(gas, rsasm):
+    """The differences between two objects that this fuzzer is not about,
+    or None if there is anything else. There are two, and a program may
+    have both:
 
-    GNU as's `arm_fix_adjustable` relocates a reference to a local label
-    against the label's *section*, folding the label's offset into the field;
-    llvm-mc names the label and leaves the field alone, and rsasm follows it
-    (`relocates_with_label` in src/arch/arm/mod.rs, which tools/dwarf-diff
-    compares against llvm-mc). A linker reads the two the same. It shows up
-    here as a branch out of its own section, and as nothing else: every
-    relocation's table, offset and type agree, the two targets name the same
-    section, and the only bytes that differ are the four of such a field."""
+    *Which symbol a relocation names.* GNU as's `arm_fix_adjustable`
+    relocates a reference to a local label against the label's *section*,
+    folding the label's offset into the field; llvm-mc names the label and
+    leaves the field alone, and rsasm follows it (`relocates_with_label` in
+    src/arch/arm/mod.rs, which tools/dwarf-diff compares against llvm-mc).
+    A linker reads the two the same. A branch out of its own section is how
+    to write one: the relocation's table, offset and type agree, both
+    targets name the same section, and the four bytes of the field differ.
+
+    *How a code section's last bytes are padded to its alignment.* GNU as
+    pads there with the no-ops of the instruction set in force when the
+    *file* ends -- `subsegs_finish_section` makes the frag then, and
+    `arm_handle_align` reads the mode recorded on it -- and writes zeros
+    and a `$d` where what is left is not a whole number of them. rsasm pads
+    with the no-ops of the last instruction in the section, which is the
+    same thing until an `.arm` or `.thumb` after that instruction changes
+    the mode. A pool's own padding is zeros either way."""
     g_sec, g_rel, g_rest = canon_parts(gas)
     r_sec, r_rel, r_rest = canon_parts(rsasm)
-    if g_rest != r_rest or g_rel.keys() != r_rel.keys():
+    if g_rel.keys() != r_rel.keys():
         return None
-    # Where a field may differ, as byte offsets into each section.
-    fields = {}
+    reasons = []
+    # Where the two may differ, as (first, last) byte offsets per section.
+    spans = {}
     for key, target in g_rel.items():
         other = r_rel[key]
         if target == other:
@@ -603,8 +613,32 @@ def known_relocation_symbol(gas, rsasm):
         table, offset, _ = key
         if not table.startswith((".rel.", ".rela.")):
             return None
-        fields.setdefault("." + table.split(".", 2)[2], set()).add(int(offset, 16))
-    if not fields:
+        at = int(offset, 16)
+        spans.setdefault("." + table.split(".", 2)[2], []).append((at, at + 3))
+        reasons = ["a relocation naming the label, as llvm-mc names it"]
+    # The padding shows as a `$d` GNU as alone writes, and sometimes as a
+    # mapping symbol rsasm alone writes at that same offset.
+    gas_only = [line for line in g_rest if line not in r_rest]
+    rsasm_only = [line for line in r_rest if line not in g_rest]
+    marks = []
+    for line in gas_only:
+        f = line.split()
+        if len(f) != 6 or f[0] != "symbol" or f[1] != "$d" or "+" not in f[5]:
+            return None
+        section, _, at = f[5].partition("+")
+        marks.append((section, int(at, 16)))
+        spans.setdefault(section, []).append((int(at, 16), len(g_sec.get(section, "")) // 2))
+    for line in rsasm_only:
+        f = line.split()
+        if len(f) != 6 or f[0] != "symbol" or f[1] not in ("$a", "$t", "$d"):
+            return None
+        section, _, at = f[5].partition("+")
+        if (section, int(at, 16)) not in marks:
+            return None
+    if marks:
+        reasons.append("a code section's last bytes padded in the other"
+                       " instruction set")
+    if not reasons:
         return None
     for name, hexed in g_sec.items():
         other = r_sec.get(name)
@@ -615,51 +649,9 @@ def known_relocation_symbol(gas, rsasm):
         for i in range(0, len(hexed), 2):
             if hexed[i:i + 2] == other[i:i + 2]:
                 continue
-            if not any(at <= i // 2 < at + 4 for at in fields.get(name, ())):
+            if not any(lo <= i // 2 <= hi for lo, hi in spans.get(name, ())):
                 return None
-    return "a relocation naming the label, as llvm-mc names it"
-
-
-def known_tail_padding(gas, rsasm):
-    """Whether the two objects differ only in how a code section's last
-    bytes are padded to its alignment.
-
-    GNU as pads there with the no-ops of the instruction set in force when
-    the *file* ends (`subsegs_finish_section` makes the frag then, and
-    `arm_handle_align` reads the mode recorded on it), and writes zeros and
-    a `$d` where what is left is not a whole number of them. rsasm pads with
-    the no-ops of the last instruction in the section, which is the same
-    thing until an `.arm` or `.thumb` after that instruction changes the
-    mode. Nothing here is about pools, whose own padding is zeros either
-    way."""
-    g_sec, g_rel, g_rest = canon_parts(gas)
-    r_sec, r_rel, r_rest = canon_parts(rsasm)
-    if g_rel != r_rel:
-        return None
-    # The $d of the zero padding is GNU as's alone; every other line agrees.
-    extra = [line for line in g_rest if line not in r_rest]
-    if [line for line in r_rest if line not in g_rest]:
-        return None
-    marks = {}
-    for line in extra:
-        f = line.split()
-        if len(f) != 6 or f[0] != "symbol" or f[1] != "$d" or "+" not in f[5]:
-            return None
-        section, _, at = f[5].partition("+")
-        marks.setdefault(section, []).append(int(at, 16))
-    if not marks:
-        return None
-    for name, hexed in g_sec.items():
-        other = r_sec.get(name)
-        if other == hexed:
-            continue
-        if other is None or len(other) != len(hexed):
-            return None
-        first = min(i // 2 for i in range(0, len(hexed), 2)
-                    if hexed[i:i + 2] != other[i:i + 2])
-        if not any(at <= first for at in marks.get(name, ())):
-            return None
-    return "a code section's last bytes padded in the other instruction set"
+    return " and ".join(reasons)
 
 
 def classify(gas, rsasm):
@@ -677,10 +669,9 @@ def classify(gas, rsasm):
             return "agree", "refused elsewhere"
         return "agree", None
     if gas["text"] != rsasm["text"]:
-        for f in (known_relocation_symbol, known_tail_padding):
-            why = f(gas["text"], rsasm["text"])
-            if why:
-                return "known", why
+        why = known_object(gas["text"], rsasm["text"])
+        if why:
+            return "known", why
         return "rsasm", "object"
     return "agree", None
 

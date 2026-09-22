@@ -450,3 +450,168 @@ hid:    .long   0
         .byte   6
         .section custom,"a"
         .byte   7
+=== a vldr of a doubleword takes two slots and aligns the pool to eight
+        .syntax unified
+f:      vldr    d0, =0x1122334455667788
+        ldr     r0, =0xaabbccdd
+        bx      lr
+        .pool
+=== a padding slot goes in front of an eight-byte entry
+        .syntax unified
+f:      ldr     r0, =0xaabbccdd
+        vldr    d0, =0x1122334455667788
+        bx      lr
+        .pool
+=== a later four-byte entry fills the padding slot
+        .syntax unified
+f:      ldr     r0, =0xaabbccdd
+        vldr    d0, =0x1122334455667788
+        ldr     r1, =0x99887766
+        ldr     r2, =0x44556677
+        bx      lr
+        .pool
+=== two loads of one doubleword share its entry
+        .syntax unified
+f:      vldr    d0, =0x1122334455667788
+        vldr.64 d1, =0x1122334455667788
+        bx      lr
+        .pool
+=== an eight-byte entry that matches the pair after a padding slot
+        .syntax unified
+f:      ldr     r0, =0xaabbccdd
+        vldr    d0, =0x1122334455667788
+        vldr    d1, =0x1122334455667788
+        vldr    d2, =0xdeadbeefcafebabe
+        bx      lr
+        .pool
+=== an eight-byte entry shares the words two loads put in the pool
+        .syntax unified
+f:      ldr     r0, =0x55667788
+        ldr     r1, =0x11223344
+        vldr    d0, =0x1122334455667788
+        ldr     r2, =0x11223344
+        bx      lr
+        .pool
+        ldr     r3, =0x55667788
+        vldr    d1, =0x1122334455667788
+=== the words of a doubleword written the other way round
+        .syntax unified
+f:      ldr     r0, =0x11223344
+        ldr     r1, =0x55667788
+        vldr    d0, =0x1122334455667788
+        bx      lr
+        .pool
+=== a negated doubleword shares nothing with the same words positive
+        .syntax unified
+f:      vldr    d0, =-0x1122334455667788
+        ldr     r0, =0xaa998878
+        ldr     r1, =0xeeddccbb
+        vldr    d1, =0xeeddccbbaa998878
+        bx      lr
+        .pool
+=== a pool stays aligned to eight once one of them has been
+        .syntax unified
+f:      vldr    d0, =0x1122334455667788
+        .pool
+        ldr     r0, =0x12345678
+        .pool
+        ldr     r1, =0xaabbccdd
+        .byte   1
+        .pool
+        bx      lr
+=== a pool in another section is aligned on its own
+        .syntax unified
+f:      vldr    d0, =0x1122334455667788
+        .pool
+        .section .t8, "ax"
+        ldr     r0, =0x12345678
+        .pool
+        bx      lr
+=== a vldr of a single takes a four-byte entry, and may relocate it
+        .syntax unified
+f:      vldr    s0, =0x3f800001
+        vldr.32 s1, =0x3f800001
+        vldr    s2, =f
+        vldr    s3, =f + 8
+        vldr    s4, =sym
+        ldr     r0, =0x3f800001
+        bx      lr
+        .pool
+=== a doubleword a vmov immediate holds is moved, not loaded
+        .syntax unified
+f:      vldr    d0, =-1
+        vldr    d1, =0x3ff0000000000000
+        vldr    d2, =0x00ff00ff00ff00ff
+        vldr    d3, =0xffffffff00000000
+        vldr    d4, =0
+        vldr    d5, =1
+        vldreq  d6, =0x3ff0000000000000
+        vldrne  d7, =-1
+        bx      lr
+        .pool
+=== a single a vmov immediate holds is moved, not loaded
+        .syntax unified
+f:      vldr    s0, =0x3f800000
+        vldr    s1, =0x3f800001
+        vldr    s2, =0
+        vldr    s3, =0xbf800000
+        vldreq  s4, =0x40000000
+        bx      lr
+        .pool
+=== a vldr reaches a pool 1020 bytes past the PC
+        .syntax unified
+f:      vldr    s0, =0x3f800001
+        .space  1020
+        bx      lr
+=== refused: a vldr that does not reach its pool
+        .syntax unified
+f:      vldr    s0, =0x3f800001
+        .space  1024
+        bx      lr
+=== refused: an eight-byte entry that is not a number
+        .syntax unified
+f:      vldr    d0, =f
+        bx      lr
+=== refused: a vstr from a pool
+        .syntax unified
+f:      vstr    d0, =1
+        bx      lr
+=== refused: an ldrd from a pool
+        .syntax unified
+f:      ldrd    r0, r1, =0x1122334455667788
+        bx      lr
+=== the halfword and byte loads take pool entries too
+        .syntax unified
+f:      ldrh    r0, =0x12345678
+        ldrsh   r1, =0x12345678
+        ldrsb   r2, =0x12345678
+        ldrb    r3, =0x12345678
+        ldr     r4, =0x12345678
+        ldrh    r5, =sym
+        ldrsb   r6, =f
+        ldrh    r7, =0x104
+        ldrsh   r8, =-2
+        bx      lr
+        .pool
+=== a mode-three load reaches 252 bytes past the PC
+        .syntax unified
+f:      ldrh    r0, =0x12345678
+        .space  244
+        bx      lr
+=== refused: a mode-three load that does not reach its pool
+        .syntax unified
+f:      ldrh    r0, =0x12345678
+        .space  256
+        bx      lr
+=== refused: a halfword store from a pool
+        .syntax unified
+f:      strh    r0, =4
+        bx      lr
+=== refused: an unprivileged load from a pool
+        .syntax unified
+f:      ldrt    r0, =4
+        bx      lr
+=== refused: a halfword load into the pc
+        .syntax unified
+f:      ldrh    pc, =4
+        bx      lr

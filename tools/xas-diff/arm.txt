@@ -701,3 +701,31 @@ vld1.32 {d0[]}, [r0]!
 vld1.32 {d0[]}, [r0:32]
 vld1.32 {d0[], d1[]}, [r0]!
 vld1.32 {d0[], d1[]}, [r0:32]
+vldr.64 d0, [r1]
+vldr.32 s0, [r1]
+vldr.f64 d0, [r1, #8]
+vldr.p64 d3, [r1, #-8]
+vldr.d d0, [r1]
+vstr.64 d0, [r1]
+vstr.f32 s0, [r1, #4]
+vpush.64 {d0, d1}
+vpop.f64 {d0-d3}
+vldmia.64 r0, {d0-d1}
+vstmia.32 r0!, {s0, s1}
+vldmdb.64 r0!, {d4}
+vldr s0, =0x3f800000
+vldr s1, =0xbf800000
+vldr s2, =0x40000000
+vldr s3, =0x41000000
+vldr d0, =-1
+vldr d1, =0x3ff0000000000000
+vldr d2, =0x00ff00ff00ff00ff
+vldr d3, =0xff00ff00ff00ff00
+vldr d4, =0
+vldr d5, =0xffff0000ffff0000
+vldr.64 d6, =0x3fe0000000000000
+vldr d7, =0x4059000000000000
+ldrh r0, =0x104
+ldrsb r1, =-2
+ldrb r2, =0xff
+ldrsh r3, =0
