@@ -62,3 +62,22 @@ far:
         @ up to a word; llvm-mc does not. Ending on a word keeps that out of
         @ this case.
         movs    r0, r0
+=== a load that names its label
+        @ The 16-bit form reaches a word-aligned label up to 1020 bytes
+        @ ahead; everything else is 32 bits wide. llvm-mc sizes these the
+        @ way GNU as does, which is what rsasm follows.
+back:   .word   0x12345678
+        ldr     r0, back
+        ldrb    r1, back
+        ldrh    r2, back
+        ldrsh   r3, back
+        ldrd    r6, r7, back
+        ldr     r8, back
+        pld     back
+        .p2align 2, 0
+        ldr     r0, fwd
+        ldrh    r1, fwd
+        nop
+        .p2align 2, 0
+fwd:    bx      lr
+        nop

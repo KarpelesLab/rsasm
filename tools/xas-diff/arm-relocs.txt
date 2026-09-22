@@ -204,6 +204,97 @@ far:    adrl    r3, back
         adr     r0, other
         .data
 other:  .word   0
+=== a load that names its label
+        .syntax unified
+back:   .word   0x12345678
+        ldr     r0, back
+        ldrb    r1, back
+        ldrh    r2, back
+        ldrsb   r3, back
+        ldrsh   r4, back
+        ldrd    r6, r7, back
+        ldrd    r8, back
+        str     r0, back
+        strb    r1, back
+        strh    r2, back
+        strd    r6, r7, back
+        ldreq   r0, back
+        ldr     pc, back
+        ldr     r0, fwd
+        ldr     r0, back + 4
+        ldr     r0, .
+        pld     back
+        pli     back
+        pldw    back
+fwd:    bx      lr
+=== a load that names the label the biased PC is already on
+# `encode_arm_addr_mode_2` prefers a positive offset for a bare address, so
+# this writes `[pc, #0]` where a literal pool entry the same distance away
+# writes `[pc, #-0]`.
+        .syntax unified
+        ldr     r0, . + 8
+        ldrh    r1, . + 8
+        ldrd    r2, r3, . + 8
+        str     r4, . + 8
+        bx      lr
+=== a word load reaches 4095 bytes forward
+        .syntax unified
+        ldr     r0, fwd
+        .space  4099
+fwd:    bx      lr
+=== refused: a word load past 4095 bytes
+        .syntax unified
+        ldr     r0, fwd
+        .space  4100
+fwd:    bx      lr
+=== a word load reaches 4092 bytes back
+        .syntax unified
+back:   .word   0
+        .space  4080
+        ldr     r0, back
+=== refused: a word load further back than that
+        .syntax unified
+back:   .word   0
+        .space  4084
+        ldr     r0, back
+=== a halfword load reaches 255 bytes
+        .syntax unified
+        ldrh    r0, fwd
+        .space  259
+fwd:    bx      lr
+=== refused: a halfword load past 255 bytes
+        .syntax unified
+        ldrh    r0, fwd
+        .space  260
+fwd:    bx      lr
+=== refused: a load that names a label in another section
+        .syntax unified
+        ldr     r0, other
+        .data
+other:  .word   0
+=== refused: a load that names an undefined symbol
+        .syntax unified
+        ldr     r0, ext
+=== refused: a load that names a weak symbol
+        .syntax unified
+        .weak   w
+w:      .word   0
+        ldr     r0, w
+=== refused: a load that names a number rather than a label
+        .syntax unified
+        ldr     r0, 0x100
+=== refused: an unprivileged load that names a label
+        .syntax unified
+back:   .word   0
+        ldrt    r0, back
+=== refused: a byte load of the program counter
+        .syntax unified
+back:   .word   0
+        ldrb    pc, back
+=== refused: a load of the program counter from an unaligned label
+        .syntax unified
+back:   .word   0
+        ldr     pc, back + 1
 === calls between ARM and Thumb functions
         .syntax unified
         .arm
@@ -766,11 +857,9 @@ f:      nop
         .globl  _start
         .type   _start, %function
 _start:
-        adr     r3, .LGOT
-        ldr     r3, [r3]
+        ldr     r3, .LGOT
 .LPIC0: add     r3, pc, r3
-        adr     r0, .Lgot
-        ldr     r0, [r0]
+        ldr     r0, .Lgot
         ldr     r0, [r3, r0]
         bl      shared(PLT)
         b       shared(PLT)

@@ -475,6 +475,11 @@ pub struct InterworkTarget {
     /// Global or weak, or not defined here at all: another definition may
     /// take its place at link time.
     pub global: bool,
+    /// Declared weak, whatever its visibility. GNU as resolves a PC-relative
+    /// ARM load against a global symbol in the same section and refuses one
+    /// against a weak symbol, which [`InterworkTarget::preemptible`] cannot
+    /// tell apart.
+    pub weak: bool,
     /// Global with default visibility, weak, or undefined: another object's
     /// definition can take its place even within one link.
     pub preemptible: bool,
