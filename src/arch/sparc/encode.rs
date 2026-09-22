@@ -431,6 +431,12 @@ fn arity(cx: &mut AsmCtx<'_>, m: &str, span: Span, ops: &[Operand], want: &[usiz
 /// The address operand of `jmpl`, `call`, `flush` and `return`, which SPARC
 /// writes without brackets.
 fn target(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<Addr> {
+    if let Some(imm) = op.imm() {
+        return Some(Addr {
+            base: reg::G0,
+            offset: Offset::Imm(imm),
+        });
+    }
     match op.as_addr() {
         Some(a) => Some(a),
         None => {
@@ -685,6 +691,17 @@ pub fn encode(
             if !arity(cx, m, span, ops, &[1, 2]) {
                 return None;
             }
+            // GNU's disassembler prints the two-operand form as one
+            // address, `t<cc> %g1 + %g2`, which is the same instruction.
+            if ops.len() == 1
+                && ops[0].imm().is_none()
+                && let Some(addr) = ops[0].as_addr()
+                && !matches!(addr.offset, Offset::None)
+            {
+                let (rs1, low, fixup) = address(cx, &addr)?;
+                let word = format3(OP_ALU, u32::from(cond), 0x3a, rs1, low);
+                return Some(one(pack(word, fixup)));
+            }
             let (rs1, src) = if ops.len() == 2 {
                 (int_reg(cx, &ops[0], "source")?.num, &ops[1])
             } else {
@@ -779,11 +796,23 @@ pub fn encode(
             ))))
         }
 
-        Form::MovCc(cond) => {
+        Form::MovCc { icc, fcc } => {
             if !arity(cx, m, span, ops, &[3]) {
                 return None;
             }
             let (cc2, cc10) = cc_fields(cx, &ops[0])?;
+            // `cc2` is 1 for `%icc` and `%xcc` and 0 for a `%fccN`, which is
+            // also which condition table the name is read from.
+            let Some(cond) = (if cc2 == 1 { icc } else { fcc }) else {
+                cx.error(
+                    span,
+                    format!(
+                        "`{m}` is not a condition of {}",
+                        if cc2 == 1 { "`%icc`" } else { "a `%fcc`" }
+                    ),
+                );
+                return None;
+            };
             // `cc1cc0` sits at bits 12-11, inside what would be the immediate
             // field, so a conditional move only has eleven bits of constant.
             let low = if let Some(r) = ops[1].int_reg() {

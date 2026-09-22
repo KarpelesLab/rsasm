@@ -354,11 +354,11 @@ fn relocation_modifiers_select_relocation_types() {
     let asm = assemble_for("riscv64", "call sym@plt\nj sym\nbeqz a0, sym\n");
     assert!(!asm.diags.has_errors());
     let kinds: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
-    // R_RISCV_CALL_PLT, then two R_RISCV_JAL: a reference the linker resolves
-    // takes the full-width form, and a conditional branch to a symbol this
-    // object cannot see becomes the inverted branch over a `j`, which is what
-    // carries the relocation. llvm-mc writes the same three.
-    assert_eq!(kinds, vec![(0, 19), (8, 17), (16, 17)]);
+    // R_RISCV_CALL_PLT, then two R_RISCV_JAL: where the target is a symbol
+    // the linker places, nothing here knows it is within a branch's reach,
+    // so `beqz` becomes `c.bnez` over a `jal` and it is the jump that is
+    // relocated. llvm-mc writes exactly this.
+    assert_eq!(kinds, vec![(0, 19), (8, 17), (14, 17)]);
 }
 
 #[test]
@@ -641,15 +641,33 @@ fn immediates_out_of_range_name_the_limit() {
 }
 
 #[test]
-fn branches_out_of_range_are_reported() {
-    // A target past the branch's own +-4 KiB is not an error: the branch is
-    // inverted over a `j`, as llvm-mc writes it (`bne a0, a1, .+8; j far`).
-    let src = "beq a0, a1, far\n.space 5000\nfar: ret";
-    let text = text_for("riscv64", src);
-    assert_eq!(
-        &text[..8],
-        &[0x63, 0x14, 0xb5, 0x00, 0x6f, 0x10, 0xc0, 0x38]
+fn a_branch_past_its_reach_becomes_a_pair() {
+    // Past +-4 KiB a conditional branch cannot reach, and the way out is the
+    // opposite branch over a `jal`. Both GNU as and llvm-mc write this, and
+    // the bytes below are theirs. Only the pair is compared: the rest of the
+    // section is the five thousand bytes the branch jumps over.
+    let pair = |src: &str, want: &str| {
+        let got = hex(&text_for("riscv64", src));
+        assert!(
+            got.starts_with(want),
+            "\nsource: {src}\n  want: {want}...\n   got: {got}"
+        );
+    };
+    pair(
+        "beq a0, a1, far\n.space 5000\nfar: ret",
+        "63 14 b5 00 6f 10 c0 38",
     );
+    // With the C extension the opposite branch has a two-byte form, which
+    // moves the jump and so the distance the branch skips.
+    pair("beqz a0, far\n.space 5000\nfar: ret", "19 e1 6f 10 c0 38");
+}
+
+#[test]
+fn branches_out_of_range_are_reported() {
+    // Past `jal`'s +-1 MiB there is nothing left to expand into. GNU as
+    // truncates the displacement here; llvm-mc refuses it, and so does this.
+    let src = "beq a0, a1, far\n.space 3000000\nfar: ret";
+    assert!(try_text_for("riscv64", src).is_err());
     // An odd displacement cannot be encoded at all.
     assert!(try_text_for("riscv64", "beq a0, a1, 3").is_err());
     assert!(try_text_for("riscv64", "j 3").is_err());

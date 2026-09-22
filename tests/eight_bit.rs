@@ -357,6 +357,12 @@ fn malformed_8bit_input_never_panics() {
         "lda ^",
         "lda z:",
         "lda a:",
+        // A branch target has no address size: ca65 and vasm both read the
+        // prefix as a syntax error, since the operand is a place to go and
+        // not an address to read.
+        "bne z:$10",
+        "bne a:$10",
+        "beq zp:label",
         "lda z:,x",
         "lda (z:1),y",
         "lda $",

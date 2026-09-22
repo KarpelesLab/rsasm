@@ -1235,7 +1235,42 @@ def gas_takes_a_condition_on_vaddl(g, m, ctx):
                     ctx["text"]) is not None
 
 
+def rsasm_narrows_a_negated_immediate(g, m, r, ctx):
+    """`subs r7, #-2` in Thumb. The immediate is negated and the opposite
+    operation written instead; the question is only which size the result
+    gets. GNU as always writes the 32-bit form, because the negation in
+    `do_t_add_sub` (gas/config/tc-arm.c) happens on the T3 path alone.
+    llvm-mc writes the 16-bit form wherever it takes the spelling at all --
+    `adds r7, #-2` and `subs r7, r7, #-2` both come out narrow -- and rsasm
+    narrows everywhere, including the two-operand `subs` llvm-mc happens to
+    refuse. That is the same choice `thumb-negative-immediate` records for
+    every spelling the two references both read, so it is listed here rather
+    than counted as a finding."""
+    return (ctx["thumb"] and "#-" in ctx["text"]
+            and re.match(r"^(add|sub)s?\b", ctx["text"]) is not None
+            and g[0] == "ok" and r[0] == "ok" and m[0] == "err"
+            and len(g[1][0]) == 4 and len(r[1][0]) == 2)
+
+
+def rsasm_subtracts_from_the_program_counter(g, m, r, ctx):
+    """`sub r12, pc, #-1`.
+
+    -1 is 0xffffffff, which `ThumbExpandImm`'s repeated-byte form holds, so
+    the subtraction can be encoded as written and rsasm writes it -- which
+    is also what GNU as writes for `sub r0, r1, #-1`, with any base but the
+    program counter. Against `pc` both references turn it into an address
+    calculation instead, and then disagree about which: GNU as writes `addw`
+    (T4) and llvm-mc `add.w` (T3). All three compute the same value.
+    """
+    return (ctx["thumb"]
+            and re.match(r"^(add|sub)s?(\.[nw])?\s+[^,]+,\s*(r15|pc)\s*,\s*#-",
+                         ctx["text"]) is not None
+            and g[0] == "ok" and m[0] == "ok" and r[0] == "ok")
+
+
 DEVIATIONS = [
+    ("subtracts-from-the-program-counter", rsasm_subtracts_from_the_program_counter),
+    ("a-negated-thumb-immediate-narrowed", rsasm_narrows_a_negated_immediate),
     ("a-condition-on-vaddl-or-vsubl",
      lambda g, m, r, ctx: gas_takes_a_condition_on_vaddl(g, m, ctx)),
     ("p9-is-a-plain-coprocessor-transfer",
@@ -1249,7 +1284,11 @@ def classify(g, m, r, ctx):
     kg, km, kr = key(g), key(m), key(r)
     if kg == km and kr == kg:
         return "agree", None
-    if g[0] == "ok" or m[0] == "ok":
+    # A deviation is worth consulting whenever anyone assembled the line:
+    # `stc p9` is one where *rsasm* is the only one that does, because it
+    # reads the coprocessor number as a number rather than as half-precision
+    # floating point.
+    if g[0] == "ok" or m[0] == "ok" or r[0] == "ok":
         for name, pred in DEVIATIONS:
             if pred(g, m, r, ctx):
                 return "deviation", name
@@ -1363,6 +1402,8 @@ def report(results, args, nforms):
         if len(rows) > args.limit:
             p.append(f"    ... {len(rows) - args.limit} more (raise --limit)")
     print("\n".join(p))
+    # The last line is the one tools/fuzz/run.sh reads.
+    print(f"--- arm: {len(results)} case(s) compared, {totals['rsasm']} finding(s)")
     return 1 if totals["rsasm"] else 0
 
 

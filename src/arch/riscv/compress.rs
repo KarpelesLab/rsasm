@@ -343,10 +343,12 @@ pub fn compress(word: u32, xlen: u8) -> Option<u16> {
         },
 
         _ => {
+            // `unimp` is deliberately absent: `c.unimp` is a row of its own
+            // in binutils' table, chosen for the mnemonic, not a compression
+            // of `csrrw x0, cycle, x0`. Both references leave that spelling
+            // four bytes wide, whatever it is written as.
             if word == 0x0010_0073 {
                 Some(C_EBREAK)
-            } else if word == 0xc000_1073 {
-                Some(C_UNIMP)
             } else {
                 None
             }

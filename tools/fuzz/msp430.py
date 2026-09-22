@@ -459,6 +459,8 @@ def main():
         print(f"    gas:   {g}")
         print(f"    rsasm: {r}")
     print("--- " + ", ".join(f"{n} {k}" for k, n in sorted(tally.items())) + f", {len(findings)} finding(s)")
+    # The last line is the one tools/fuzz/run.sh reads.
+    print(f"--- msp430: {sum(tally.values()) + len(findings)} case(s) compared, {len(findings)} finding(s)")
     sys.exit(1 if findings else 0)
 
 

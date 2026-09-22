@@ -949,8 +949,22 @@ sections, branches near and out of reach, modifiers, data and alignment — on
 twenty-one cores, compares whole objects with `avr-elf-as`'s and, for a
 program with nothing undefined, the image `avr-elf-ld` links from it with
 `rsasm -f bin`; 120,000 programs, 37,000 of them linked, find no case where
-rsasm differs outside the deviations this README lists. See
-`tools/fuzz/README.md`.
+rsasm differs outside the deviations this README lists.
+
+Every other backend is fuzzed too, and all of them from one place. RISC-V
+draws its forms from the operand format strings in binutils' `riscv-opc.c`
+and goes to llvm-mc and `riscv64-elf-as`; MIPS, SPARC, SuperH, RX, RL78,
+V850/RH850 and the Z80 take their cases from the *other* side of binutils —
+GNU objdump's disassembly of random bytes, which reaches every operand value
+a form allows and shares nothing with either assembler's parser — and go to
+whichever references that target has. The 6502 and the 8080 are fuzzed with
+whole programs against ca65 and the Macro Assembler AS, as the 8051 already
+was, and `nasm` source against NASM itself. `tools/fuzz/run.sh` runs all
+twenty with one seed and bounded counts — 745,000 cases in under two
+minutes on a four-core runner — which is what CI runs on every pull
+request; the nightly run uses the date as its seed and ten times the cases.
+A fuzzer that compared nothing fails the job as loudly as one that found a
+difference. See `tools/fuzz/README.md`.
 
 AArch64's SIMD, floating-point and SVE table is derived from llvm-mc rather
 than written: `tools/tables/aarch64.py` disassembles random instruction words

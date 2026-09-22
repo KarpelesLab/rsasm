@@ -101,6 +101,11 @@ impl Operand {
     /// The address this operand denotes, if it can be read as one. A bare
     /// integer register is the address `[reg + %g0]`, which is how
     /// `jmpl %o7, %g0` and `flush %g1` are written.
+    ///
+    /// A bare value is deliberately *not* an address here: `call 0x1234` is
+    /// a displacement from the program counter, and it comes through this
+    /// same accessor. `jmpl`, `flush` and `return`, where a value does mean
+    /// `%g0 + value`, say so themselves.
     pub fn as_addr(&self) -> Option<Addr> {
         match self.kind {
             OperandKind::Mem(a) | OperandKind::Addr(a) => Some(a),
@@ -223,13 +228,29 @@ impl OperandParser<'_, '_> {
         })
     }
 
-    /// `base` followed by an optional `+ offset` or `- offset`.
+    /// `base` followed by an optional `+ offset` or `- offset`, or an
+    /// offset on its own.
+    ///
+    /// `[ 0x66 ]` is `[ %g0 + 0x66 ]`: the base register is hardwired to
+    /// zero, so leaving it out means the same address. That is how GNU's
+    /// disassembler prints one, and both references read it back.
     fn address(&mut self, cur: &mut Cursor<'_>) -> Option<Addr> {
         let start = cur.peek().span;
         if !self.peek_register(cur) {
-            self.cx
-                .error(start, "an address must start with a base register");
-            return None;
+            let offset = if let Some(part) = self.peek_part(cur) {
+                Offset::Imm(self.modifier(cur, part)?)
+            } else {
+                let e = self.expr(cur)?;
+                Offset::Imm(Imm {
+                    part: ImmPart::Whole,
+                    expr: e,
+                    span: consumed(cur, start),
+                })
+            };
+            return Some(Addr {
+                base: reg::G0,
+                offset,
+            });
         }
         let base = self.register(cur)?;
         if !base.is_int() {

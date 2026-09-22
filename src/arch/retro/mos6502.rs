@@ -319,9 +319,15 @@ fn parse_index(cx: &AsmCtx<'_>, toks: &[crate::lexer::Token]) -> Option<Index> {
 
 /// Strips ca65's address size prefix — `z:`, `zp:`, `zeropage:`, `a:`,
 /// `abs:` or `absolute:` — from the front of an operand, in the 8-bit dialect.
+///
+/// `forms` is the instruction's addressing modes: a branch has only the
+/// relative one, where the operand is a place to go rather than an address to
+/// read, so naming its width is meaningless and ca65 and vasm both refuse it.
 fn size_prefix<'t>(
-    cx: &AsmCtx<'_>,
+    cx: &mut AsmCtx<'_>,
+    forms: &[(Mode, u8)],
     toks: &'t [crate::lexer::Token],
+    span: Span,
 ) -> (Option<Size>, &'t [crate::lexer::Token]) {
     if cx.dialect != Dialect::EightBit {
         return (None, toks);
@@ -341,6 +347,10 @@ fn size_prefix<'t>(
         Some("a" | "abs" | "absolute") => Size::Absolute,
         _ => return (None, toks),
     };
+    if opcode_for(forms, Mode::Rel).is_some() {
+        cx.error(span, "a branch target has no address size to name");
+        return (None, rest);
+    }
     (Some(size), rest)
 }
 
@@ -406,7 +416,7 @@ fn parse_operand(cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>, forms: &[(Mode, u8
                 );
                 return None;
             }
-            let (size, part) = size_prefix(cx, part);
+            let (size, part) = size_prefix(cx, forms, part, span);
             let e = common::expr_of(cx, part, span)?;
             Some(Arg::Direct(e, None, size, span))
         }
@@ -428,7 +438,7 @@ fn parse_operand(cx: &mut AsmCtx<'_>, insn: &InsnRequest<'_>, forms: &[(Mode, u8
                 let e = common::expr_of(cx, common::inside_parens(base), span)?;
                 return Some(Arg::Indirect(e, IndY, span));
             }
-            let (size, base) = size_prefix(cx, base);
+            let (size, base) = size_prefix(cx, forms, base, span);
             let e = common::expr_of(cx, base, span)?;
             Some(Arg::Direct(e, Some(index), size, span))
         }

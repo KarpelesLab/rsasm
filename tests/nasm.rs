@@ -30,6 +30,28 @@ mod nasm {
         hex(&section(&asm, name))
     }
 
+    /// NASM turns an index with nothing else into a base, which is four
+    /// bytes shorter: an index on its own needs a displacement. GNU as does
+    /// not, so this only holds in the NASM dialect. Every value here came
+    /// from NASM 2.16.03.
+    #[test]
+    fn an_index_with_no_base_becomes_one() {
+        assert_eq!(flat("bits 32\ncmp bl,[esi*1]"), "3a 1e");
+        assert_eq!(flat("bits 32\ncmp bl,[esi*2]"), "3a 1c 36");
+        assert_eq!(flat("bits 32\ncmp bl,[esi*4]"), "3a 1c b5 00 00 00 00");
+        assert_eq!(flat("bits 32\ncmp bl,[esi*1+4]"), "3a 5e 04");
+        assert_eq!(flat("bits 32\ncmp bl,[esi*2+4]"), "3a 5c 36 04");
+        // The stack pointer can be a base but never an index, so `*1` is
+        // the only scale it has at all.
+        assert_eq!(flat("bits 32\ncmp bl,[esp*1]"), "3a 1c 24");
+        assert_eq!(flat("lea rax,[rsp*1+8]"), "48 8d 44 24 08");
+        // A base written after the index keeps the scale it was given.
+        assert_eq!(flat("bits 32\ncmp bl,[esi*2+eax]"), "3a 1c 70");
+        assert_eq!(flat("bits 32\ncmp bl,[esi*1+eax]"), "3a 1c 30");
+        assert_eq!(flat("lea rax,[rax*2+8]"), "48 8d 44 00 08");
+        assert_eq!(flat("lea rax,[r13*1]"), "49 8d 45 00");
+    }
+
     #[test]
     fn data_directives_and_numbers() {
         assert_eq!(flat("db 1,2,0xff,-1"), "01 02 ff ff");

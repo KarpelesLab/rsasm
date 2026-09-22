@@ -148,6 +148,28 @@ impl<'t> Operands<'t> {
         self.reg_in(cx, i, RegClass::X)
     }
 
+    /// True when operand `i` is a register name, of either bank, reporting
+    /// nothing when it is not.
+    ///
+    /// Several mnemonics mean one instruction or another depending on it:
+    /// `and a0, a1, a2` is `and` and `and a0, a1, 4` is `andi`, `jalr a0, a1`
+    /// links into `a0` and `jalr a0, 4` links into `ra`. GNU as picks between
+    /// them by whether the operand parses as a register, and so does this --
+    /// a register of the *wrong* bank is still a register, so `add a0, a1,
+    /// fa2` stays the three-register form and is refused as one, rather than
+    /// turning into `addi` against a symbol named `fa2`.
+    pub fn is_reg(&self, cx: &mut AsmCtx<'_>, i: usize) -> bool {
+        match self.piece(i) {
+            Some([tok]) => tok
+                .ident()
+                .map(|n| cx.name(n).to_ascii_lowercase())
+                .as_deref()
+                .and_then(reg::lookup)
+                .is_some(),
+            _ => false,
+        }
+    }
+
     pub fn freg(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
         self.reg_in(cx, i, RegClass::F)
     }

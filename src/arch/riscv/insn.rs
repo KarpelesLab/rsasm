@@ -148,6 +148,7 @@ pub static TABLE: &[Def] = &[
     d("wfi",    Nullary, 0x1050_0073),
     d("mret",   Nullary, 0x3020_0073),
     d("sret",   Nullary, 0x1020_0073),
+    d("dret",   Nullary, 0x7b20_0073),
 
     // ---- RV64I ----
     d64("lwu",   Load,   0x0000_6003),
@@ -282,7 +283,49 @@ pub static TABLE: &[Def] = &[
 ];
 
 pub fn lookup(name: &str) -> Option<&'static Def> {
-    TABLE.iter().find(|d| d.name == name)
+    TABLE.iter().find(|d| d.name == deprecated(name))
+}
+
+/// Spellings binutils still reads for source written before an instruction
+/// was renamed. They are `INSN_ALIAS` rows of the same encoding in
+/// `opcodes/riscv-opc.c`, and llvm-mc takes them too.
+fn deprecated(name: &str) -> &str {
+    match name {
+        "scall" => "ecall",
+        "sbreak" => "ebreak",
+        "fmv.s.x" => "fmv.w.x",
+        "fmv.x.s" => "fmv.x.w",
+        other => other,
+    }
+}
+
+/// The immediate form a three-operand mnemonic names when its last operand
+/// is written as a value rather than a register: `and a0, a1, 4` is `andi`,
+/// `csrrs a0, frm, 3` is `csrrsi`.
+///
+/// These are aliases in `opcodes/riscv-opc.c` — one mnemonic with a second
+/// row whose operand string ends in an immediate — rather than instructions
+/// of their own, which is why they are resolved here and not in the table.
+pub fn immediate_alias(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "add" => "addi",
+        "and" => "andi",
+        "or" => "ori",
+        "xor" => "xori",
+        "sll" => "slli",
+        "srl" => "srli",
+        "sra" => "srai",
+        "slt" => "slti",
+        "sltu" => "sltiu",
+        "addw" => "addiw",
+        "sllw" => "slliw",
+        "srlw" => "srliw",
+        "sraw" => "sraiw",
+        "csrrw" => "csrrwi",
+        "csrrs" => "csrrsi",
+        "csrrc" => "csrrci",
+        _ => return None,
+    })
 }
 
 /// Rounding-mode names, in `funct3` order. `dyn` reads the mode out of `fcsr`.

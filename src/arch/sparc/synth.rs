@@ -37,6 +37,10 @@ const XOR: u8 = 0x03;
 const XNOR: u8 = 0x07;
 const JMPL: u8 = 0x38;
 const STW: u8 = 0x04;
+// The other widths `clr` comes in, from the same op3 column as `STW`.
+const STB: u8 = 0x05;
+const STH: u8 = 0x06;
+const STX: u8 = 0x0e;
 
 pub fn is_synthetic(name: &str) -> bool {
     matches!(
@@ -46,6 +50,9 @@ pub fn is_synthetic(name: &str) -> bool {
             | "cmp"
             | "tst"
             | "clr"
+            | "clrb"
+            | "clrh"
+            | "clrx"
             | "not"
             | "neg"
             | "inc"
@@ -124,10 +131,16 @@ pub fn assemble(cx: &mut AsmCtx<'_>, m: &str, span: Span, ops: &[Operand]) -> Op
             ))))
         }
 
-        "clr" => {
+        "clr" | "clrb" | "clrh" | "clrx" => {
             expect(cx, m, span, ops, 1)?;
-            // `clr [addr]` stores a zero word; `clr %reg` zeroes a register.
+            // `clr [addr]` stores a zero word; `clrb`, `clrh` and `clrx`
+            // store a byte, a half and a doubleword; `clr %reg` zeroes a
+            // register.
             if let Some(rd) = ops[0].int_reg() {
+                if m != "clr" {
+                    cx.error(ops[0].span, format!("`{m}` takes an address"));
+                    return None;
+                }
                 return Some(encode::one(Word::plain(encode::format3(
                     encode::OP_ALU,
                     u32::from(rd.num),
@@ -137,12 +150,18 @@ pub fn assemble(cx: &mut AsmCtx<'_>, m: &str, span: Span, ops: &[Operand]) -> Op
                 ))));
             }
             let Some(addr) = ops[0].as_addr() else {
-                cx.error(ops[0].span, "`clr` takes a register or an address");
+                cx.error(ops[0].span, format!("`{m}` takes a register or an address"));
                 return None;
+            };
+            let op3 = match m {
+                "clrb" => STB,
+                "clrh" => STH,
+                "clrx" => STX,
+                _ => STW,
             };
             let (rs1, low, fixup) = encode::address(cx, &addr)?;
             Some(encode::one(word(
-                encode::format3(encode::OP_MEM, 0, u32::from(STW), rs1, low),
+                encode::format3(encode::OP_MEM, 0, u32::from(op3), rs1, low),
                 fixup,
             )))
         }

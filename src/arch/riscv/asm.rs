@@ -22,7 +22,8 @@ pub struct Asm<'c, 'a> {
     /// this one unless the displacement turns out not to fit.
     alt: Option<Buf>,
     /// A longer candidate, for a conditional branch whose target neither the
-    /// branch's own reach nor the assembler can be sure of.
+    /// branch's own reach nor the assembler can be sure of: the opposite
+    /// branch over a `jal`. Layout falls back to this one last.
     long: Option<Buf>,
 }
 
@@ -77,16 +78,29 @@ impl<'c, 'a> Asm<'c, 'a> {
     /// The candidate a branch takes when its own reach is not enough, or when
     /// the target is a symbol this object cannot see: the branch with its
     /// condition inverted, over a `jal x0` that carries the relocation.
-    fn set_long(&mut self, word: u32, target: &Imm) {
+    /// The opposite branch over a `j`, for a target the plain branch cannot
+    /// be shown to reach.
+    ///
+    /// `short_inverse` is the two-byte form of that opposite branch where
+    /// the C extension has one. Taking it moves the jump, and so the
+    /// distance the branch skips, from eight bytes to six; GNU as and
+    /// llvm-mc both do this, and a fuzz run against them is what found it.
+    fn set_long(&mut self, word: u32, short_inverse: Option<u16>, target: &Imm) {
         let mut buf = Buf::default();
-        // The B-type immediate for a displacement of 8, which jumps over the
-        // four-byte `j`: `imm[4:1]` is `0100` and every other bit is zero.
-        buf.push(Insn::full((word ^ 0x0000_1000) | 0x0000_0400));
+        match short_inverse {
+            Some(w) => buf.push(Insn::short(encode::cb_imm(u64::from(w), 6) as u16)),
+            // The B-type immediate for a displacement of 8, which jumps over
+            // the four-byte `j`: `imm[4:1]` is `0100` and every other bit is
+            // zero.
+            None => buf.push(Insn::full((word ^ 0x0000_1000) | 0x0000_0400)),
+        }
         buf.push(Insn::full(0x0000_006f).with_fix(target.expr, encode::kind_jal(), target.span));
         self.long = Some(buf);
     }
 
     pub fn finish(self) -> Vec<Variant> {
+        // Shortest first: layout takes the first candidate whose fixups all
+        // fit, and grows the choice when one does not.
         let mut out = Vec::with_capacity(3);
         if let Some(short) = self.alt {
             out.push(short.finish());
@@ -199,6 +213,7 @@ impl<'c, 'a> Asm<'c, 'a> {
         // bytes rather than +-4 KiB, so both forms go to layout, which keeps
         // the short one only if the target turns out to be close enough.
         let funct3 = (base >> 12) & 7;
+        let mut short_inverse = None;
         if self.rvc && funct3 <= 1 {
             let (test, other) = if rs2 == reg::ZERO {
                 (rs1, rs2)
@@ -212,15 +227,19 @@ impl<'c, 'a> Asm<'c, 'a> {
                     encode::kind_cb(),
                     target.span,
                 ));
+                // `c.beqz` and `c.bnez` are each other's opposite, so a
+                // branch that has a two-byte form has a two-byte opposite.
+                short_inverse = Some(compress::c_branch(funct3 != 0, test));
             }
         }
         self.emit_fixed(Insn::full(word).with_fix(target.expr, encode::kind_branch(), target.span));
         // A conditional branch reaches +-4 KiB, which is not far enough for a
-        // target in another object: both references write the branch inverted
-        // over a `j`, whose +-1 MiB the linker can also relax further. Layout
-        // takes it only when the plain branch does not reach, which for a
-        // symbol this object cannot see is always.
-        self.set_long(word, target);
+        // target in another object, nor for one further off in this one:
+        // both references write the branch inverted over a `j`, whose
+        // +-1 MiB the linker can also relax further. Layout takes it only
+        // when the plain branch does not reach, which for a symbol this
+        // object cannot see is always.
+        self.set_long(word, short_inverse, target);
         Some(())
     }
 
@@ -316,6 +335,14 @@ impl<'c, 'a> Asm<'c, 'a> {
     pub fn i_const(&mut self, base: u32, rd: Reg, rs1: Reg, imm: i64) {
         let w = encode::rs1(encode::rd(base, rd.bits()), rs1.bits());
         self.emit(encode::i_imm(w as u64, imm) as u32);
+    }
+
+    /// `op rd, rs1, shamt`. A shift is not an I-type: `funct7` sits in the
+    /// top of what would be the immediate, so the amount goes in on its own
+    /// rather than through `i_imm`, which would wipe it out.
+    pub fn shift_const(&mut self, base: u32, rd: Reg, rs1: Reg, shamt: u32) {
+        let w = encode::rs1(encode::rd(base, rd.bits()), rs1.bits());
+        self.emit(w | (shamt << 20));
     }
 
     /// `op rd, rs1, imm` where the immediate came from the source.
@@ -594,6 +621,13 @@ impl<'c, 'a> Asm<'c, 'a> {
                 };
                 self.emit(base | (pred << 24) | (succ << 20));
             }
+            // Binutils has two `unimp` rows: `c.unimp` for the C extension
+            // and the four-byte one for the base ISA, and it takes the
+            // shorter where it can. This is that choice, not a compression:
+            // `csrrw x0, cycle, x0`, the same word written out, stays wide.
+            Kind::Nullary if name == "unimp" && self.rvc => {
+                self.emit_fixed(Insn::short(compress::C_UNIMP));
+            }
             Kind::Nullary => self.emit(base),
         }
         Some(())
@@ -604,6 +638,22 @@ impl<'c, 'a> Asm<'c, 'a> {
     fn jalr(&mut self, base: u32, ops: &Operands<'_>, count: usize) -> Option<()> {
         let (rd, mem) = match count {
             1 => (reg::RA, self.address_or_reg(ops, 0)?),
+            // `jalr rs, off` links into `ra` and adds the offset to `rs`,
+            // where `jalr rd, rs` links into `rd`: which one it is depends on
+            // whether the second operand is a register, exactly as it does in
+            // GNU as.
+            2 if !ops.is_reg(self.cx, 1) && !ops.looks_like_mem(self.cx, 1) => {
+                let rs1 = ops.xreg(self.cx, 0)?;
+                let off = ops.imm(self.cx, 1)?;
+                (
+                    reg::RA,
+                    Mem {
+                        base: rs1,
+                        off: Some(off),
+                        span: ops.piece_span(1),
+                    },
+                )
+            }
             2 => (ops.xreg(self.cx, 0)?, self.address_or_reg(ops, 1)?),
             _ => {
                 let rd = ops.xreg(self.cx, 0)?;

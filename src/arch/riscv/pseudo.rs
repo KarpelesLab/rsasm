@@ -18,8 +18,10 @@ const ADDI: u32 = 0x0000_0013;
 const ADDIW: u32 = 0x0000_001b;
 const SLTI_U: u32 = 0x0000_3013;
 const XORI: u32 = 0x0000_4013;
+const ANDI: u32 = 0x0000_7013;
 const SLLI: u32 = 0x0000_1013;
 const SRLI: u32 = 0x0000_5013;
+const SRAI: u32 = 0x4000_5013;
 const SLT: u32 = 0x0000_2033;
 const SLTU: u32 = 0x0000_3033;
 const SUB: u32 = 0x4000_0033;
@@ -36,6 +38,7 @@ const LUI: u32 = 0x0000_0037;
 const LW: u32 = 0x0000_2003;
 const LD: u32 = 0x0000_3003;
 const CSRRW: u32 = 0x0000_1073;
+const SFENCE_VMA: u32 = 0x1200_0073;
 const CSRRS: u32 = 0x0000_2073;
 const CSRRC: u32 = 0x0000_3073;
 const CSRRWI: u32 = 0x0000_5073;
@@ -67,6 +70,14 @@ enum P {
     ZeroThenReg(u32),
     /// `op rd, rs, x0`
     RegThenZero(u32),
+    /// `op rd, rs2, rs1`: the two source registers are written the other way
+    /// round, which is all `sgt` is.
+    RegSwap(u32),
+    /// A shift left and back again, which is how the base ISA widens a
+    /// narrow value. The number is how many bits are kept; the flag says
+    /// whether the shift back is arithmetic (`sext.*`) or logical
+    /// (`zext.*`).
+    Extend(u32, bool),
     /// A branch with `x0` as the other operand; the flag says which side the
     /// written register goes on, since `blez a, t` is `bge x0, a, t`.
     BranchZero(u32, bool),
@@ -86,14 +97,21 @@ enum P {
     FloatSign(u32),
     /// `csrr rd, csr`
     CsrRead,
-    /// `csrw csr, rs` and friends.
-    CsrWrite(u32),
+    /// `csrw csr, rs` and friends. The second word is the `...i` form, which
+    /// is what the same mnemonic means when the operand is a value rather
+    /// than a register.
+    CsrWrite(u32, u32),
     /// `csrwi csr, imm` and friends.
     CsrWriteImm(u32),
     /// `rdcycle rd` and friends: a read of one fixed counter.
     ReadCounter(u32),
     /// RV64-only spellings, which are worth their own diagnostic.
     Rv64(&'static P),
+    /// RV32-only spellings: the reads of a 64-bit counter's upper half,
+    /// which on RV64 are one register wide and so do not exist.
+    Rv32(&'static P),
+    /// `sfence.vma`, with both registers optional.
+    SfenceVma,
 }
 
 /// Which address the `la` family loads.
@@ -112,6 +130,14 @@ fn classify(name: &str) -> Option<P> {
         "nop" => P::Nop,
         "ret" => P::Ret,
         "mv" => P::RegImm(ADDI, 0),
+        "move" => P::RegImm(ADDI, 0),
+        "zext.b" => P::RegImm(ANDI, 255),
+        "sgt" => P::RegSwap(SLT),
+        "sgtu" => P::RegSwap(SLTU),
+        "sext.b" => P::Extend(8, true),
+        "sext.h" => P::Extend(16, true),
+        "zext.h" => P::Extend(16, false),
+        "zext.w" => P::Rv64(&P::Extend(32, false)),
         "not" => P::RegImm(XORI, -1),
         "seqz" => P::RegImm(SLTI_U, 1),
         "sext.w" => P::Rv64(&P::RegImm(ADDIW, 0)),
@@ -146,15 +172,19 @@ fn classify(name: &str) -> Option<P> {
         "fneg.d" => P::FloatSign(FSGNJN_D),
         "fabs.d" => P::FloatSign(FSGNJX_D),
         "csrr" => P::CsrRead,
-        "csrw" => P::CsrWrite(CSRRW),
-        "csrs" => P::CsrWrite(CSRRS),
-        "csrc" => P::CsrWrite(CSRRC),
+        "csrw" => P::CsrWrite(CSRRW, CSRRWI),
+        "csrs" => P::CsrWrite(CSRRS, CSRRSI),
+        "csrc" => P::CsrWrite(CSRRC, CSRRCI),
         "csrwi" => P::CsrWriteImm(CSRRWI),
         "csrsi" => P::CsrWriteImm(CSRRSI),
         "csrci" => P::CsrWriteImm(CSRRCI),
         "rdcycle" => P::ReadCounter(0xc00),
         "rdtime" => P::ReadCounter(0xc01),
         "rdinstret" => P::ReadCounter(0xc02),
+        "rdcycleh" => P::Rv32(&P::ReadCounter(0xc80)),
+        "rdtimeh" => P::Rv32(&P::ReadCounter(0xc81)),
+        "rdinstreth" => P::Rv32(&P::ReadCounter(0xc82)),
+        "sfence.vma" => P::SfenceVma,
         _ => return None,
     })
 }
@@ -181,6 +211,32 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
             }
             return emit(a, *inner, name, ops);
         }
+        P::Rv32(inner) => {
+            if a.rv64() {
+                a.error(
+                    a.span,
+                    format!("`{name}` is an RV32 instruction, but the target is RV64"),
+                );
+                return None;
+            }
+            return emit(a, *inner, name, ops);
+        }
+        P::SfenceVma => {
+            // Both registers are optional, and so is the second on its own:
+            // binutils has a row for each of the three spellings.
+            ops.arity(a.cx, name, &[0, 1, 2])?;
+            let rs1 = if ops.is_empty() {
+                reg::ZERO
+            } else {
+                ops.xreg(a.cx, 0)?
+            };
+            let rs2 = if ops.len() == 2 {
+                ops.xreg(a.cx, 1)?
+            } else {
+                reg::ZERO
+            };
+            a.r_type(SFENCE_VMA, reg::ZERO, rs1, rs2);
+        }
         P::Nop => {
             ops.arity(a.cx, name, &[0])?;
             a.i_const(ADDI, reg::ZERO, reg::ZERO, 0);
@@ -203,6 +259,18 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
             ops.arity(a.cx, name, &[2])?;
             let (rd, rs) = (ops.xreg(a.cx, 0)?, ops.xreg(a.cx, 1)?);
             a.r_type(base, rd, rs, reg::ZERO);
+        }
+        P::RegSwap(base) => {
+            ops.arity(a.cx, name, &[3])?;
+            let (rd, rs2, rs1) = (ops.xreg(a.cx, 0)?, ops.xreg(a.cx, 1)?, ops.xreg(a.cx, 2)?);
+            a.r_type(base, rd, rs1, rs2);
+        }
+        P::Extend(bits, arith) => {
+            ops.arity(a.cx, name, &[2])?;
+            let (rd, rs) = (ops.xreg(a.cx, 0)?, ops.xreg(a.cx, 1)?);
+            let n = u32::from(a.xlen) - bits;
+            a.shift_const(SLLI, rd, rs, n);
+            a.shift_const(if arith { SRAI } else { SRLI }, rd, rd, n);
         }
         P::BranchZero(base, reg_first) => {
             ops.arity(a.cx, name, &[2])?;
@@ -227,9 +295,21 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
             a.jal(reg::ZERO, &target)?;
         }
         P::JumpReg => {
-            ops.arity(a.cx, name, &[1])?;
-            let rs = ops.xreg(a.cx, 0)?;
-            a.i_const(JALR, reg::ZERO, rs, 0);
+            // `jr rs`, `jr off(rs)` and `jr rs, off` are all the same
+            // instruction; binutils has a row for each spelling.
+            ops.arity(a.cx, name, &[1, 2])?;
+            let (rs, off) = if ops.len() == 2 {
+                (ops.xreg(a.cx, 0)?, Some(ops.imm(a.cx, 1)?))
+            } else if ops.looks_like_mem(a.cx, 0) {
+                let mem = ops.mem(a.cx, 0)?;
+                (mem.base, mem.off)
+            } else {
+                (ops.xreg(a.cx, 0)?, None)
+            };
+            match off {
+                Some(imm) => a.i_expr(JALR, reg::ZERO, rs, &imm)?,
+                None => a.i_const(JALR, reg::ZERO, rs, 0),
+            }
         }
         P::Call(tail) => {
             let (link, target) = if tail {
@@ -336,9 +416,17 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
             let csr = a.csr(ops, 1)?;
             a.emit(encode::rd(CSRRS, rd.bits()) | (csr << 20));
         }
-        P::CsrWrite(base) => {
+        P::CsrWrite(base, imm_base) => {
             ops.arity(a.cx, name, &[2])?;
             let csr = a.csr(ops, 0)?;
+            if !ops.is_reg(a.cx, 1) {
+                // `csrw frm, 3` is `csrwi`, as `csrrw rd, frm, 3` is
+                // `csrrwi`: binutils reads the mnemonic either way.
+                let imm = ops.imm(a.cx, 1)?;
+                let v = a.constant(&imm, 0, 31, "a CSR immediate")?;
+                a.emit(encode::rs1(imm_base, v as u32) | (csr << 20));
+                return Some(());
+            }
             let rs = ops.xreg(a.cx, 1)?;
             a.emit(encode::rs1(base, rs.bits()) | (csr << 20));
         }

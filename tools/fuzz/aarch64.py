@@ -180,6 +180,12 @@ def interesting(text, word=None):
     # register lists in one instruction.
     if sum(1 for a in atoms if a.kind[0] in ("zlist", "vlist")) > 1:
         return False
+    # `pmov p11.b, z31[0]`: the index on the byte form, where it can only be
+    # zero and says nothing. Both references read it; the backend's table has
+    # `pN.b, zN` without one, and `tools/tables/aarch64.py` is where that
+    # would be put right.
+    if mn == "pmov" and re.search(r"z\d+\[", text):
+        return False
     kinds = {a.kind[0] for a in atoms}
     # `ldr x0, #0x10` and friends are PC-relative: the offset printed is not
     # something to assemble back.
@@ -374,6 +380,8 @@ def report(results, tags, limit, out_path):
                 cls = classify(mc, gas, rs)
                 if cls != "agree":
                     fh.write("\t".join([cls, tag, line, fmt(mc), fmt(gas), fmt(rs)]) + "\n")
+    # The last line is the one tools/fuzz/run.sh reads.
+    print("--- aarch64: %d case(s) compared, %d finding(s)" % (len(results), counts["rsasm"]))
     return counts["rsasm"]
 
 

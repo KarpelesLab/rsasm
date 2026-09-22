@@ -1,9 +1,125 @@
 # Differential fuzzing
 
-Fuzzers for x86, ARM and Thumb (see [ARM](#arm)), AArch64 (see
-[AArch64](#aarch64)), the MSP430 (see [MSP430](#msp430)), PowerPC's vector
-and POWER8-10 instructions (see [PowerPC](#powerpc)), whole 8051 programs
-(see [The 8051](#the-8051)) and whole AVR programs (see [AVR](#avr)).
+A fuzzer per backend. Each generates programs or instructions, assembles
+them with rsasm and with one or two independent references, and compares
+the bytes, the relocations and whether each tool took the input at all.
+
+## Running them all
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/oracles/build.sh                     # the cross assemblers
+$ tools/fuzz/run.sh                          # every fuzzer, seed 1
+$ tools/fuzz/run.sh --seed 20260922 --scale 10
+$ tools/fuzz/run.sh --list                   # the set and its case counts
+$ tools/fuzz/run.sh riscv mips               # only these
+```
+
+`run.sh` is what CI runs, and the one thing every fuzzer has to agree on:
+
+* `fuzz --seed N --count M` generates the same cases for the same seed and
+  count, and nothing else does.
+* The exit status is 0 when nothing differed and non-zero when something
+  did.
+* The last line is `--- <name>: <n> case(s) compared, <k> finding(s)`.
+  `run.sh` reads it, and a missing line or a zero count fails the run: a
+  fuzzer that found nothing because it ran nothing must not read as a pass.
+
+Each fuzzer's own command line is unchanged and is still the way to chase a
+finding down; `run.sh` prints the exact one to repeat under any fuzzer that
+differed.
+
+`--scale` multiplies every count, which is how the nightly CI run covers ten
+times the ground with a seed taken from the date. `FUZZ_TIMEOUT` (1800
+seconds) is how long one fuzzer may take before it is killed and read as
+"did not finish".
+
+## What each one fuzzes
+
+| Fuzzer | Target | References | Cases from |
+|---|---|---|---|
+| `x86.py` | x86-64, i386, i8086 | GNU as, llvm-mc | the Intel SDM and GNU's expanded opcode table |
+| `aarch64.py` | AArch64 | llvm-mc, GNU as | llvm-mc's or GNU objdump's disassembly |
+| `arm.py` | A32, T32 | GNU as, llvm-mc | binutils' `arm-dis.c` syntax |
+| `arm-programs.py` | A32, T32 | GNU as | whole random programs |
+| `riscv.py` | RV32, RV64 | llvm-mc, GNU as | binutils' `riscv-opc.c` format strings |
+| `powerpc.py` | PowerPC 32/64 | GNU as, llvm-mc | binutils' `ppc-opc.c` operand kinds |
+| `mips.py` | MIPS 32/64, both endians | GNU as, llvm-mc | GNU objdump's disassembly |
+| `sparc.py` | SPARC V8, V9 | GNU as, llvm-mc | GNU objdump's disassembly |
+| `m68k.py` | 680x0, ColdFire | GNU as, vasm | GNU's opcode table |
+| `sh.py` | SuperH | GNU as | GNU objdump's disassembly |
+| `rx.py` | Renesas RX | GNU as | GNU objdump's disassembly |
+| `rl78.py` | Renesas RL78 | GNU as | GNU objdump's disassembly |
+| `v850.py` | V850, RH850 | GNU as | GNU objdump's disassembly |
+| `msp430.py` | MSP430, 430X, 430Xv2 | GNU as | TI's user guides |
+| `avr.py` | AVR, 21 cores | GNU as, GNU ld | whole random programs |
+| `z80.py` | Zilog Z80 | GNU as | GNU objdump's disassembly |
+| `mcs51.py` | Intel 8051 | AS, sdas8051 | whole random programs |
+| `mos6502.py` | MOS 6502 | ca65 + ld65, vasm | whole random programs |
+| `i8080.py` | Intel 8080 | AS + p2bin | whole random programs |
+| `nasm.py` | the `nasm` dialect | NASM | whole random programs |
+
+`gasfuzz.py` is the machinery the fuzzers added after the first few share:
+the batch of cases in one object with a section each, the re-run without
+whatever a tool rejected, a generic ELF reader that names a relocation the
+way a linker computes it, and the report. `simd.py` and `gnutbl.py` belong
+to `x86.py`.
+
+## Cases from a disassembler
+
+Several targets have no table of operand shapes to draw from -- RX and RL78
+are parsed by a generated grammar, and the V850 and Z80 tables are the
+assembler's own. For those, and for MIPS and SPARC where the table is large
+and irregular, cases come from the other side of binutils: random bytes go
+through the target's objdump, and every line that decodes becomes one case,
+in the spelling GNU as reads. The disassembler's tables are not the parser's
+and neither is rsasm's, so it is still an independent source, and it reaches
+every operand value a form allows rather than the ones someone thought to
+write down.
+
+Two things have to be put right for a disassembled line to mean the same
+thing again:
+
+* **Where it sits.** A branch prints the address it lands on, so a case
+  carries the `.skip` that puts it back at the offset it was read from. A
+  target in the top half of the address space is written as the negative
+  number it stands for, since an assembler asked for `0xffffd738` computes a
+  displacement far out of range.
+* **What the operand is.** GNU's V850 assembler reads a branch operand as a
+  *displacement* where its own disassembler prints an *address*, so those
+  lines do not read back as themselves; SPARC's `call` and branches become
+  `.`-relative, which also keeps llvm-mc away from a fixup it crashes on.
+  Each target says what its lines need in its own script.
+
+What a backend does not implement is skipped by name, with the reason in the
+script, so that a missing extension cannot read as thousands of identical
+findings. Those lists are the honest record of what each backend leaves out.
+
+## What is not fuzzed, and why
+
+Everything here needs a second opinion. Two things in the crate cannot have
+one, so neither is fuzzed:
+
+* **The NEC 78K0.** There is no freely available CA78K0 assembler to compare
+  against. Its table came out of NEC's instruction manual, was checked
+  against the byte counts in a second NEC manual and cross-checked against
+  MAME's disassembler; there is nothing to generate random programs for.
+* **The Renesas CC-RL, CC-RH and CC-RX dialects.** No Renesas assembler can
+  be run here either. What `tools/xas-diff` does instead is pair vendor
+  source with the GNU-syntax program it means and require rsasm's bytes for
+  the first to equal GNU as's for the second -- but the pairing is the thing
+  under test, so a fuzzer would have to generate both halves, and generating
+  the second half from the first is exactly the reading of the manual the
+  test is meant to check. A fuzzer for these would need the manuals'
+  expression grammar and number notation written out again, independently,
+  as an oracle; the instruction encodings themselves are already covered by
+  `rx.py`, `rl78.py` and `v850.py` through the GNU syntax.
+
+The Motorola and 8-bit dialects do have one, because a second assembler
+reads them: `m68k.py --syntax mot` and `--syntax vasm` fuzz Motorola syntax
+against GNU as `--mri` and vasm, `mcs51.py` writes each program in both AS's
+and sdas8051's spelling and compares all four ways, and `nasm.py` fuzzes
+NASM source against NASM itself.
 
 ## x86
 
@@ -156,7 +272,10 @@ seeds 6 and 7 find none.
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
-| `RSASM_ORACLES` | `target/oracles` under the repository root, for `msp430.py` |
+| `RSASM_ORACLES` | `target/oracles` under the repository root: the cross assemblers, and the binutils source some fuzzers read their forms from |
+
+A reference that is not installed fails the fuzzer rather than being
+skipped, so a machine that has lost one cannot read as a pass.
 
 ## AArch64
 
@@ -190,8 +309,10 @@ out-of-range immediates llvm-mc truncates (`ext v0.8b, v1.8b, v2.8b, #8`),
 as GNU as does. `--source gnu` takes the cases from GNU objdump's
 disassembly instead, which is how the spellings GNU as source is written in
 get tried. Lines for what the backend leaves out are dropped rather than
-counted: SME's ZA array and lookup tables, predicates as counters, and the
-multi-vector operands of SME2 (two register lists in one instruction).
+counted: SME's ZA array and lookup tables, predicates as counters, the
+multi-vector operands of SME2 (two register lists in one instruction), and
+`pmov p0.b, z0[0]`, whose index can only be zero and which the derived
+table spells without one.
 
 | Variable | Default |
 |---|---|
@@ -350,3 +471,142 @@ stops with "unknown relocation type".
 |---|---|
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `RSASM_ORACLES` | `target/oracles`, with `avr-elf-as`, `avr-elf-ld` and `avr-elf-objcopy` in `bin` |
+
+## RISC-V
+
+`riscv.py` generates RV32 and RV64 instructions from the opcode table in
+binutils' `opcodes/riscv-opc.c`, read at run time for each row's mnemonic,
+the XLEN it is for and its operand *format string* -- what `riscv_ip` in GNU
+as reads to parse operands -- never for its encoding. What each letter of
+that string means is written out in the script from the same source, and is
+the only RISC-V knowledge in it; a row whose format uses a letter the script
+does not generate is skipped rather than guessed at.
+
+```console
+$ tools/fuzz/riscv.py fuzz --count 20000
+$ tools/fuzz/riscv.py fuzz --target riscv32 --only '^f' --seed 7
+$ tools/fuzz/riscv.py check --target riscv64 lines.txt
+```
+
+GNU as runs with `-mno-relax`: it otherwise pairs every symbolic reference
+with an `R_RISCV_RELAX` marker, which is a hint to the linker rather than
+part of the encoding, and neither llvm-mc nor rsasm writes one.
+
+The references part ways often enough to need rules: GNU as leaves a
+reference to a label to the linker where llvm-mc resolves it, does not run
+an alias through compression, and expands `li` into a longer sequence for
+some values; llvm-mc truncates a value past the end of a field where GNU as
+refuses it. rsasm follows llvm-mc, which is what README.md records RISC-V as
+checked against. Three things rsasm does on purpose are listed as
+deviations: it resolves a local label the way llvm-mc does, it takes a bare
+symbol in a twelve-bit field where both references insist on `%lo`, and it
+reads the twenty-bit field of `lui` and `auipc` as signed as well as
+unsigned.
+
+One case in eight is a small program rather than a single instruction: a
+forward branch to the label the harness defines after every case, over a
+gap drawn from the distances that sit on and just past the reach of each
+branch form. That is the only way the choice between a two-byte branch, a
+four-byte one and the opposite branch over a `jal` is reached at all.
+
+Running it found the aliases both references read and rsasm did not (`and
+a0, a1, 4` for `andi` and the rest of that family, `csrw frm, 3`, `move`,
+`sgt`, `zext.b`, the `sext`/`zext` shift pairs, `scall`, `sbreak`,
+`fmv.s.x`, `jr off(rs)`), an `sext.b` whose second shift came out logical
+instead of arithmetic, a `csrrw x0, cycle, x0` compressed to `c.unimp`, and
+a conditional branch past +-4 KiB that was refused where both references
+write the opposite branch over a `jal`.
+
+## MIPS, SPARC, SuperH, RX, RL78, V850 and the Z80
+
+These take their cases from GNU objdump (see
+[Cases from a disassembler](#cases-from-a-disassembler)). MIPS and SPARC
+have llvm-mc as a second reference; the rest have GNU as alone, so a case is
+`agree`, a named `deviation`, or a finding.
+
+```console
+$ tools/fuzz/mips.py fuzz --count 20000 --target mips64el
+$ tools/fuzz/sparc.py fuzz --count 12000 --only '^f' --seed 7
+$ tools/fuzz/z80.py check lines.txt
+```
+
+GNU as runs with `.set noreorder`, `.set nomacro` and `.set noat` for MIPS:
+it otherwise moves instructions into branch delay slots and invents `nop`s,
+and the backend does not.
+
+ELF has no class for a 16-bit target, so the Z80's cases get a sixteen-byte
+slot each with `.org` and are compared as images -- rsasm's `-f bin` against
+the reference's object through `objcopy`. Relocations are not compared
+there; `tools/xas-diff` covers the relocated forms.
+
+Three deviations are shared, and each was checked by linking a differing
+case with the target's own `ld` and comparing the image:
+
+- **resolves-a-numeric-target** -- GNU as leaves a branch to a number to the
+  linker, with the whole value as the addend, where rsasm computes the
+  displacement. The linked images are identical.
+- **fills-in-a-relocated-field** -- GNU as computes the value *and* emits
+  the relocation for it; rsasm leaves those bits zero. With RELA the addend
+  is what the linker uses.
+- **relocates-an-absolute-target** -- the other way round: GNU as works the
+  displacement out as if the section were at zero and emits nothing, where
+  rsasm keeps the relocation and must therefore take the long form of a
+  relaxable branch.
+
+Two references failing are handled rather than counted: llvm-mc 22 crashes
+on SPARC's `call` with an absolute value, and GNU as 2.47 gives up on some
+RL78 branches with "Infinite loop encountered whilst attempting to compute
+the addresses of symbols". The harness halves a batch a tool gave up on
+until it finds the case, drops that reference for it, and counts it as
+`skipped`.
+
+A share of the cases is a branch to the label the harness defines after
+every case, over a gap drawn from the distances that sit on and just past
+the reach of each branch form. An instruction on its own never reaches the
+part of an assembler that chooses a branch's width, and that is where the
+RL78's two differences are.
+
+Running them found, in SPARC: `mov<cc> %fccN` encoded with the integer
+condition codes instead of the floating-point ones, `movre`/`movrne`, the
+missing `swap`, `ldstub`, `taddcctv`, `tsubcctv`, `clrb`/`clrh`/`clrx` and
+`b`, an address whose base register is the hardwired zero (`[ 0x66 ]`,
+`jmpl -2347, %l2`), and the two-operand trap written as one address. MIPS,
+SuperH, RX, V850 and the Z80 found nothing, and the RL78's two are GNU as's:
+it wraps the field of the `br $!` it expands a long branch into, and it
+writes six bytes where a three-byte conditional branch still reaches.
+
+## The 6502, the 8080 and NASM source
+
+Three more whole-program fuzzers, each against the assembler its dialect is
+written for.
+
+```console
+$ tools/fuzz/mos6502.py fuzz --count 16000
+$ tools/fuzz/i8080.py fuzz --count 12000 --mutations 0.5
+$ tools/fuzz/nasm.py fuzz --count 1200 --seed 7
+$ tools/fuzz/nasm.py check prog.asm --format elf64
+```
+
+`mos6502.py` builds programs from a table of the 151 official NMOS opcodes
+written from the datasheet, renders each in ca65's spelling and, where the
+constructs are shared, in vasm's, and compares the image `ca65` and `ld65`
+produce -- and `vasm6502_oldstyle -Fbin`'s -- with `rsasm -f bin`. Branches
+are placed so their displacement is exactly 0, 1, 125, 126, 127 forward and
+-2, -126, -128 back.
+
+`i8080.py` does the same for all 244 8080 opcodes against the Macro
+Assembler AS and `p2bin`, with `ORG`, `EQU`/`SET`, `DB`/`DW`/`DS`, `$` and
+every radix both read.
+
+`nasm.py` gives whole NASM programs to NASM and to `rsasm -d nasm` for
+`bin`, `elf32`, `elf64`, `win32` and `win64`: flat images byte for byte, ELF
+objects section by section with relocations and global symbols, COFF objects
+through `tools/coff-diff/canon.sh`.
+
+Each records the places its two assemblers part company as named rules with
+a citation. `nasm.py` also carries, at the head of the script, the
+differences it found that are *not* generated -- each with a whole program
+that shows it -- because they are not settled: NASM assembles some of them
+with a warning where rsasm stops, and rsasm follows GNU as on others. That
+list is what is left to do for the NASM dialect, and it shrinks as each one
+is decided.
