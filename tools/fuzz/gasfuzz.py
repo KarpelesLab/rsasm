@@ -276,9 +276,19 @@ def assemble(tool, target, cases, workdir):
         # diagnostic, so the text decides, not only the status.
         ok = p.returncode == 0 and "Error:" not in p.stderr
         if p.returncode in (-11, -6, 101, 134, 139):
-            for i, _ in cases:
-                rejected.setdefault(i, "PANIC " + p.stderr.strip()[-200:])
-            break
+            # The tool crashed. Which case did it is not in the output, so
+            # the batch is halved until one is left; that one gets the
+            # PANIC, and the rest of the batch keeps its answers.
+            live = [c for c in cases if c[0] not in rejected]
+            if len(live) <= 1:
+                for i, _ in live:
+                    rejected[i] = "PANIC " + p.stderr.strip().split("\n")[0][:120]
+                break
+            mid = len(live) // 2
+            out = {i: ("err", rejected[i]) for i, _ in cases if i in rejected}
+            out.update(assemble(tool, target, live[:mid], workdir))
+            out.update(assemble(tool, target, live[mid:], workdir))
+            return out
         if ok:
             secs = read_elf(obj)
             return {i: ("err", rejected[i]) if i in rejected
@@ -329,9 +339,10 @@ class Rules:
     """The exceptions a fuzzer knows about.
 
     `deviations` are `(name, predicate)` where the predicate takes the case
-    text and the per-tool results and says whether rsasm differs from an
-    agreeing reference on purpose. `splits` are `(name, predicate, preferred)`
-    for the two-reference targets, as arm.py's KNOWN_SPLITS are.
+    text, the per-tool results and the `Target`, and says whether rsasm
+    differs from an agreeing reference on purpose. `splits` are
+    `(name, predicate, preferred)` for the two-reference targets, as arm.py's
+    KNOWN_SPLITS are.
     """
 
     def __init__(self, deviations=(), splits=()):
@@ -339,16 +350,26 @@ class Rules:
         self.splits = list(splits)
 
 
-def classify(res, rules, text):
+def panicked(r):
+    return r[0] == "err" and str(r[1]).startswith("PANIC")
+
+
+def classify(res, rules, text, target):
     """(class, detail) for one case's results, keyed by tool name."""
-    if any(r[0] == "err" and str(r[1]).startswith("PANIC") for r in res.values()):
+    if panicked(res["rsasm"]):
         return "rsasm", "panic"
     r = key(res["rsasm"])
-    refs = {t: key(v) for t, v in res.items() if t != "rsasm"}
+    # A reference that crashed has no answer to compare against. llvm-mc 22
+    # does crash on some SPARC input; that is the reference's bug, not
+    # rsasm's, and the case is set aside rather than counted either way.
+    refs = {t: key(v) for t, v in res.items()
+            if t != "rsasm" and not panicked(v)}
+    if not refs:
+        return "skipped", "a reference crashed"
     if all(v == r for v in refs.values()):
         return "agree", None
     for name, pred in rules.deviations:
-        if pred(text, res):
+        if pred(text, res, target):
             return "deviation", name
     if len(refs) == 1:
         return "rsasm", None
@@ -357,7 +378,7 @@ def classify(res, rules, text):
         return "rsasm", None
     follows = ta if r == a else tb if r == b else "neither"
     for name, pred, preferred in rules.splits:
-        if pred(text, res):
+        if pred(text, res, target):
             if follows == "neither":
                 return "rsasm", name
             if preferred and follows != preferred:
@@ -413,7 +434,7 @@ def compare(target, cases, rules, offset=0):
     out = []
     for i, (m, text) in indexed:
         per = {t: res[t].get(i, ("err", "missing")) for t in target.tools}
-        cls, detail = classify(per, rules, text)
+        cls, detail = classify(per, rules, text, target)
         out.append((target.key, m, text, cls, detail, trim_skip(text, per)))
     return out
 

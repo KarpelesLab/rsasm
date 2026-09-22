@@ -121,7 +121,7 @@ def skip(case):
 
 # ---- what the references disagree about -------------------------------------
 
-def gas_relocates_a_local_label(text, res):
+def gas_relocates_a_local_label(text, res, target):
     """GNU as writes a relocation for a branch whose target is a number,
     where llvm-mc encodes the displacement. Same bytes, more relocations."""
     g, m = res.get("gas"), res.get("mc")
@@ -130,14 +130,14 @@ def gas_relocates_a_local_label(text, res):
     return g[1][0] == m[1][0] and len(g[1][1]) != len(m[1][1])
 
 
-def mc_refuses_a_spelling(text, res):
+def mc_refuses_a_spelling(text, res, target):
     """llvm-mc has no pattern for a form GNU as and its disassembler both
     know. rsasm follows GNU as on spellings."""
     g, m = res.get("gas"), res.get("mc")
     return bool(g and m and g[0] == "ok" and m[0] == "err")
 
 
-def gas_refuses_a_spelling(text, res):
+def gas_refuses_a_spelling(text, res, target):
     """The other way round: llvm-mc reads a form GNU as refuses."""
     g, m = res.get("gas"), res.get("mc")
     return bool(g and m and g[0] == "err" and m[0] == "ok")

@@ -261,7 +261,7 @@ def make(rng, target, mutate, forms):
 
 # ---- what the references disagree about -------------------------------------
 
-def resolves_a_local_label(text, res):
+def resolves_a_local_label(text, res, target):
     """Same bytes, fewer relocations.
 
     GNU as leaves every reference to a label to the linker, because linker
@@ -277,7 +277,7 @@ def resolves_a_local_label(text, res):
     return g[1][0] == r[1][0] and len(g[1][1]) > len(r[1][1])
 
 
-def relocates_a_bare_symbol(text, res):
+def relocates_a_bare_symbol(text, res, target):
     """`andi a0, a1, sym` and `lw a0, sym(a1)`.
 
     Both references insist the symbol carry a `%lo` or `%pcrel_lo`, and
@@ -291,7 +291,7 @@ def relocates_a_bare_symbol(text, res):
     return all(v[0] == "err" for k, v in res.items() if k != "rsasm")
 
 
-def takes_a_signed_upper_immediate(text, res):
+def takes_a_signed_upper_immediate(text, res, target):
     """`lui a0, -1` and `auipc a0, -1`.
 
     rsasm reads the 20-bit field of `lui` and `auipc` as signed as well as
@@ -305,14 +305,14 @@ def takes_a_signed_upper_immediate(text, res):
                 and all(v[0] == "err" for k, v in res.items() if k != "rsasm"))
 
 
-def mc_takes_an_out_of_range_value(text, res):
+def mc_takes_an_out_of_range_value(text, res, target):
     """llvm-mc truncates where GNU as refuses. rsasm refuses, as GNU as
     does."""
     g, m = res.get("gas"), res.get("mc")
     return bool(g and m and g[0] == "err" and m[0] == "ok")
 
 
-def gas_takes_more_spellings(text, res):
+def gas_takes_more_spellings(text, res, target):
     """GNU as reads forms llvm-mc has no pattern for -- `%pcrel_hi` on `lui`,
     an alias only binutils knows. rsasm follows GNU as where it is the looser
     of the two on a spelling."""
@@ -320,7 +320,7 @@ def gas_takes_more_spellings(text, res):
     return bool(g and m and g[0] == "ok" and m[0] == "err")
 
 
-def gas_relocates_a_local_label(text, res):
+def gas_relocates_a_local_label(text, res, target):
     """GNU as leaves a `%pcrel_hi`/`%pcrel_lo` pair against a local label to
     the linker, because relaxation may still move it; llvm-mc computes the
     displacement. The bytes differ, since one has the field zeroed."""
@@ -330,7 +330,7 @@ def gas_relocates_a_local_label(text, res):
     return len(g[1][1]) > len(m[1][1])
 
 
-def gas_does_not_shorten_an_alias(text, res):
+def gas_does_not_shorten_an_alias(text, res, target):
     """An alias GNU as resolves late -- `add a0, a1, 0`, `jalr ra, 0` -- comes
     out of it at full width, where llvm-mc runs it through compression like
     anything else."""
@@ -340,7 +340,7 @@ def gas_does_not_shorten_an_alias(text, res):
     return len(g[1][0]) > len(m[1][0])
 
 
-def li_expands_differently(text, res):
+def li_expands_differently(text, res, target):
     """`li` is a macro, and the two references synthesise different
     sequences for some values; rsasm follows llvm-mc's, which is the shorter
     (see src/arch/riscv/matint.rs)."""

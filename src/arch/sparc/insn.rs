@@ -59,8 +59,11 @@ pub enum Form {
     FpUn(u16),
     /// `FPop2` compare: `frs1, frs2`.
     FpCmp(u16),
-    /// V9 `mov<cc> %icc, reg_or_imm, rd`.
-    MovCc(u8),
+    /// V9 `mov<cc> %icc, reg_or_imm, rd`, or `%fccN`, which selects the
+    /// floating-point condition names instead. The two tables share names
+    /// with different values -- `e` is 1 against `%icc` and 9 against a
+    /// `%fcc` -- so both codes travel with the form and the operand picks.
+    MovCc { icc: Option<u8>, fcc: Option<u8> },
     /// V9 `movr<cond> rs1, reg_or_imm, rd`.
     MovReg(u8),
     /// `t<cc> software_trap_number`.
@@ -113,14 +116,41 @@ pub fn cond_code(name: &str) -> Option<u8> {
     })
 }
 
+/// The four-bit condition field as the *floating-point* condition codes
+/// number it, which `MOVcc` and `FMOVcc` use when the tested register is a
+/// `%fccN`. Several names appear in both tables with different values, and
+/// eight -- `lg`, `ul`, `ug`, `u`, `ue`, `uge`, `ule`, `o` -- only here.
+pub fn fcond_code(name: &str) -> Option<u8> {
+    Some(match name {
+        "n" => 0,
+        "ne" | "nz" => 1,
+        "lg" => 2,
+        "ul" => 3,
+        "l" => 4,
+        "ug" => 5,
+        "g" => 6,
+        "u" => 7,
+        "a" => 8,
+        "e" | "z" => 9,
+        "ue" => 10,
+        "ge" => 11,
+        "uge" => 12,
+        "le" => 13,
+        "ule" => 14,
+        "o" => 15,
+        _ => return None,
+    })
+}
+
 /// The three-bit `rcond` field of `BPr` and `MOVr`, which tests a whole
-/// register against zero rather than the condition codes.
+/// register against zero rather than the condition codes. `e` and `ne` are
+/// the spellings GNU's disassembler prints; `z` and `nz` mean the same.
 fn rcond_code(name: &str) -> Option<u8> {
     Some(match name {
-        "z" => 1,
+        "z" | "e" => 1,
         "lez" => 2,
         "lz" => 3,
-        "nz" => 5,
+        "nz" | "ne" => 5,
         "gz" => 6,
         "gez" => 7,
         _ => return None,
@@ -197,6 +227,7 @@ fn alu(name: &str) -> Option<Def> {
         "sdiv"   => v8(Alu(0x0f)), "sdivcc"   => v8(Alu(0x1f)),
         "mulscc" => v8(Alu(0x24)),
         "taddcc" => v8(Alu(0x20)), "tsubcc"   => v8(Alu(0x21)),
+        "taddcctv" => v8(Alu(0x22)), "tsubcctv" => v8(Alu(0x23)),
         "mulx"   => v9(Alu(0x09)),
         "udivx"  => v9(Alu(0x0d)), "sdivx"    => v9(Alu(0x2d)),
 
@@ -241,6 +272,10 @@ fn memory(name: &str) -> Option<Def> {
         "stdf" => mem_float(0x27, true),
         // V9 widened the integer registers to 64 bits and added the opcodes
         // that move all of them.
+        // Read-modify-write: both exchange with memory and hand the old
+        // value back, so the register is written last like a load's.
+        "ldstub" => mem(0x0d, false),
+        "swap" => mem(0x0f, false),
         "ldsw" => Def { v9: true, ..mem(0x08, false) },
         "ldx"  => Def { v9: true, ..mem(0x0b, false) },
         "stx"  => Def { v9: true, ..mem(0x0e, true) },
@@ -269,9 +304,10 @@ fn control(name: &str) -> Option<Def> {
         return Some(v9(MovReg(rcond)));
     }
     if let Some(rest) = name.strip_prefix("mov")
-        && let Some(cond) = cond_code(rest)
+        && let (icc, fcc) = (cond_code(rest), fcond_code(rest))
+        && (icc.is_some() || fcc.is_some())
     {
-        return Some(v9(MovCc(cond)));
+        return Some(v9(MovCc { icc, fcc }));
     }
     if let Some(rest) = name.strip_prefix("br")
         && let Some(rcond) = rcond_code(rest)
