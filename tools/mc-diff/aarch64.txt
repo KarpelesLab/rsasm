@@ -136,6 +136,36 @@ movk w0, 0x1234, lsl 16
 movk x0, 0xffff, lsl 48
 movn x0, 0
 movn w0, 65535, lsl 16
+# The relocation operators name a 16-bit group of an address. The group is
+# the shift, so no shift operand follows one.
+movz x0, :abs_g0:sym
+movz x0, :abs_g0_nc:sym
+movk x0, :abs_g1:sym
+movk x0, :abs_g1_nc:sym
+movz x0, :abs_g2:sym
+movk x0, :abs_g2_nc:sym
+movk x0, :abs_g3:sym
+movn x0, :abs_g0_s:sym
+movz x0, :abs_g1_s:sym
+movn x0, :abs_g2_s:sym
+movz w0, :abs_g0:sym
+movk w1, :abs_g1_nc:sym
+movz x0, :prel_g0:sym
+movk x0, :prel_g0_nc:sym
+movn x0, :prel_g1:sym
+movk x0, :prel_g1_nc:sym
+movz x0, :prel_g2:sym
+movk x0, :prel_g2_nc:sym
+movz x0, :prel_g3:sym
+movz w2, :prel_g0:sym
+# A constant needs no linker, so the group is taken here. A signed group that
+# comes out negative is written as its inverse, which turns movz into movn.
+movz x0, :abs_g0_nc:0x123456789abcdef0
+movk x0, :abs_g2_nc:0x123456789abcdef0
+movz x0, :abs_g1:0x12340000
+movn x0, :abs_g0_s:-5
+movz x0, :abs_g0_s:-5
+movz x3, :abs_g1_s:-0x12340000
 mov x0, 1
 mov w0, 7
 mov x0, 65535

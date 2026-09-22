@@ -6,6 +6,21 @@ pub const ABS16: u32 = 259;
 pub const PREL64: u32 = 260;
 pub const PREL32: u32 = 261;
 pub const PREL16: u32 = 262;
+// One 16-bit group of an address, for `movz`/`movn`/`movk`. `UABS` counts
+// the address from zero and refuses a negative one, `SABS` sign-extends it,
+// and `PREL` counts it from the instruction; `_NC` drops whatever lies above
+// the group rather than checking it, as the topmost group of each family
+// does anyway.
+pub const MOVW_UABS_G0: u32 = 263;
+pub const MOVW_UABS_G0_NC: u32 = 264;
+pub const MOVW_UABS_G1: u32 = 265;
+pub const MOVW_UABS_G1_NC: u32 = 266;
+pub const MOVW_UABS_G2: u32 = 267;
+pub const MOVW_UABS_G2_NC: u32 = 268;
+pub const MOVW_UABS_G3: u32 = 269;
+pub const MOVW_SABS_G0: u32 = 270;
+pub const MOVW_SABS_G1: u32 = 271;
+pub const MOVW_SABS_G2: u32 = 272;
 pub const LD_PREL_LO19: u32 = 273;
 pub const ADR_PREL_LO21: u32 = 274;
 pub const ADR_PREL_PG_HI21: u32 = 275;
@@ -18,6 +33,13 @@ pub const CALL26: u32 = 283;
 pub const LDST16_ABS_LO12_NC: u32 = 284;
 pub const LDST32_ABS_LO12_NC: u32 = 285;
 pub const LDST64_ABS_LO12_NC: u32 = 286;
+pub const MOVW_PREL_G0: u32 = 287;
+pub const MOVW_PREL_G0_NC: u32 = 288;
+pub const MOVW_PREL_G1: u32 = 289;
+pub const MOVW_PREL_G1_NC: u32 = 290;
+pub const MOVW_PREL_G2: u32 = 291;
+pub const MOVW_PREL_G2_NC: u32 = 292;
+pub const MOVW_PREL_G3: u32 = 293;
 pub const LDST128_ABS_LO12_NC: u32 = 299;
 pub const ADR_GOT_PAGE: u32 = 311;
 pub const LD64_GOT_LO12_NC: u32 = 312;

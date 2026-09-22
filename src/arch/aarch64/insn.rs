@@ -977,6 +977,41 @@ fn movw(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         "movz" => 2,
         _ => 3,
     };
+    let head = field(rd.sf(), 31, 1) | field(opc, 29, 2) | MOVW | field(rd.num as u32, 0, 5);
+
+    // `movz x0, :abs_g1_nc:sym`: the operator names the group, so it sets the
+    // shift as well as the relocation and there is nothing left to write.
+    let src = i.op(1)?;
+    if let OperandKind::Reloc(RelocOp::Movw(g), e) = src.kind {
+        if rd.class == RegClass::W && g.group >= 2 {
+            cx.error(
+                src.span,
+                format!("`{}` names bits a 32-bit register has not got", g.op),
+            );
+            return None;
+        }
+        if i.mnemonic == "movk" && !g.movk {
+            cx.error(
+                src.span,
+                format!(
+                    "`{}` may need the value negated, which `movk` cannot do",
+                    g.op
+                ),
+            );
+            return None;
+        }
+        if let Some(shift) = i.op(2) {
+            cx.error(shift.span, "a relocation operator sets the shift itself");
+            return None;
+        }
+        return Some(vec![word_fixup(
+            head | field(u32::from(g.group), 21, 2),
+            e,
+            encode::fixup_movw(g),
+            src.span,
+        )]);
+    }
+
     let v = i.imm(cx, 1, -0x8000, 0xffff, "a move-wide immediate")?;
     let mut hw = 0u32;
     if let Some(op) = i.op(2) {
@@ -995,12 +1030,7 @@ fn movw(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         cx.error(i.span, "a 32-bit move-wide can only shift by 0 or 16");
         return None;
     }
-    one(field(rd.sf(), 31, 1)
-        | field(opc, 29, 2)
-        | MOVW
-        | field(hw, 21, 2)
-        | field(v as u32, 5, 16)
-        | field(rd.num as u32, 0, 5))
+    one(head | field(hw, 21, 2) | field(v as u32, 5, 16))
 }
 
 /// `mov`, which is four different instructions.

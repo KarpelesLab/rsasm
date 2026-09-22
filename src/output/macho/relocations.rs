@@ -161,6 +161,11 @@ impl Assembler {
             && super::reloc_type(cpu, &r).is_none()
         {
             let msg = match (desc.class, desc.pcrel) {
+                (RelocClass::AddressGroup, _) => {
+                    "a Mach-O object has no relocation for one 16-bit group of an address; \
+                     Darwin builds an address out of `sym@PAGE` and `sym@PAGEOFF`"
+                        .to_string()
+                }
                 (RelocClass::SignExtended, _) => {
                     "a 64-bit Mach-O object has no relocation for a 32-bit absolute \
                      address; address the symbol RIP-relative"

@@ -16,6 +16,7 @@
 //! instruction knows which reading is wanted.
 
 use super::reg::{self, Reg, RegClass, VecReg};
+use super::reloc;
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
 use crate::expr::ExprRef;
@@ -168,6 +169,8 @@ pub enum RelocOp {
     Got,
     /// The low 12 bits of the symbol's GOT entry.
     GotLo12,
+    /// One 16-bit group of the address, for the move-wide instructions.
+    Movw(MovwGroup),
 }
 
 impl RelocOp {
@@ -176,8 +179,199 @@ impl RelocOp {
             RelocOp::Lo12 => ":lo12:",
             RelocOp::Got => ":got:",
             RelocOp::GotLo12 => ":got_lo12:",
+            RelocOp::Movw(g) => g.op,
         }
     }
+}
+
+/// What a move-wide operator's field has to hold for the value to survive.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum MovwCheck {
+    /// Nothing: the `_nc` operators drop the bits above the group, as the
+    /// topmost group of each family does for want of anything above it.
+    None,
+    /// Everything above the group must be zero.
+    Unsigned,
+    /// Everything above the group must repeat its top bit, because the
+    /// linker writes a negative value by inverting it and choosing `movn`.
+    Signed,
+}
+
+/// One `:abs_g1_nc:`-style operator: which 16-bit group of an address it
+/// names and what the linker is to make of it.
+///
+/// A64 builds a 64-bit constant out of instructions that hold sixteen bits
+/// each, so a symbol's address is written as up to four of them. Which group
+/// an instruction takes is in the operator rather than in a shift, and so is
+/// whether the address is measured from zero (`abs`) or from the instruction
+/// (`prel`).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct MovwGroup {
+    /// The operator as it is written, colons and all.
+    pub op: &'static str,
+    /// The group: 0 is bits 0-15 of the address and 3 is bits 48-63.
+    pub group: u8,
+    /// The `R_AARCH64_MOVW_*` relocation GNU as writes for it.
+    pub reloc: u32,
+    /// What has to be left of the value above the group; see [`MovwCheck`].
+    pub check: MovwCheck,
+    /// The address is measured from the instruction, which only the linker
+    /// can do.
+    pub prel: bool,
+    /// Whether `movk` takes this operator. GNU as refuses the ones a linker
+    /// may have to negate or sign-extend — every signed group, and
+    /// `:prel_g3:` along with them — since `movk` only deposits bits into a
+    /// register it leaves otherwise alone.
+    pub movk: bool,
+}
+
+/// Every move-wide operator GNU as accepts. The relocation numbers are the
+/// ones it wrote for each in a reference object.
+const MOVW_GROUPS: &[MovwGroup] = &[
+    MovwGroup {
+        op: ":abs_g0:",
+        group: 0,
+        reloc: reloc::MOVW_UABS_G0,
+        check: MovwCheck::Unsigned,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g0_nc:",
+        group: 0,
+        reloc: reloc::MOVW_UABS_G0_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g1:",
+        group: 1,
+        reloc: reloc::MOVW_UABS_G1,
+        check: MovwCheck::Unsigned,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g1_nc:",
+        group: 1,
+        reloc: reloc::MOVW_UABS_G1_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g2:",
+        group: 2,
+        reloc: reloc::MOVW_UABS_G2,
+        check: MovwCheck::Unsigned,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g2_nc:",
+        group: 2,
+        reloc: reloc::MOVW_UABS_G2_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g3:",
+        group: 3,
+        reloc: reloc::MOVW_UABS_G3,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":abs_g0_s:",
+        group: 0,
+        reloc: reloc::MOVW_SABS_G0,
+        check: MovwCheck::Signed,
+        prel: false,
+        movk: false,
+    },
+    MovwGroup {
+        op: ":abs_g1_s:",
+        group: 1,
+        reloc: reloc::MOVW_SABS_G1,
+        check: MovwCheck::Signed,
+        prel: false,
+        movk: false,
+    },
+    MovwGroup {
+        op: ":abs_g2_s:",
+        group: 2,
+        reloc: reloc::MOVW_SABS_G2,
+        check: MovwCheck::Signed,
+        prel: false,
+        movk: false,
+    },
+    MovwGroup {
+        op: ":prel_g0:",
+        group: 0,
+        reloc: reloc::MOVW_PREL_G0,
+        check: MovwCheck::Signed,
+        prel: true,
+        movk: false,
+    },
+    MovwGroup {
+        op: ":prel_g0_nc:",
+        group: 0,
+        reloc: reloc::MOVW_PREL_G0_NC,
+        check: MovwCheck::None,
+        prel: true,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":prel_g1:",
+        group: 1,
+        reloc: reloc::MOVW_PREL_G1,
+        check: MovwCheck::Signed,
+        prel: true,
+        movk: false,
+    },
+    MovwGroup {
+        op: ":prel_g1_nc:",
+        group: 1,
+        reloc: reloc::MOVW_PREL_G1_NC,
+        check: MovwCheck::None,
+        prel: true,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":prel_g2:",
+        group: 2,
+        reloc: reloc::MOVW_PREL_G2,
+        check: MovwCheck::Signed,
+        prel: true,
+        movk: false,
+    },
+    MovwGroup {
+        op: ":prel_g2_nc:",
+        group: 2,
+        reloc: reloc::MOVW_PREL_G2_NC,
+        check: MovwCheck::None,
+        prel: true,
+        movk: true,
+    },
+    MovwGroup {
+        op: ":prel_g3:",
+        group: 3,
+        reloc: reloc::MOVW_PREL_G3,
+        check: MovwCheck::None,
+        prel: true,
+        movk: false,
+    },
+];
+
+/// The move-wide operator `name` spells, written without its colons.
+fn movw_group(name: &str) -> Option<MovwGroup> {
+    MOVW_GROUPS
+        .iter()
+        .copied()
+        .find(|g| g.op.trim_matches(':') == name)
 }
 
 #[derive(Clone, Debug)]
@@ -434,13 +628,16 @@ fn immediate(cx: &mut AsmCtx<'_>, toks: &[Token]) -> Option<(Option<RelocOp>, Ex
             Some("lo12") => Some(RelocOp::Lo12),
             Some("got") => Some(RelocOp::Got),
             Some("got_lo12") => Some(RelocOp::GotLo12),
-            Some(other) => {
-                cx.error(
-                    colon.span.to(name.span),
-                    format!("unsupported relocation operator `:{other}:`"),
-                );
-                return None;
-            }
+            Some(other) => match movw_group(other) {
+                Some(g) => Some(RelocOp::Movw(g)),
+                None => {
+                    cx.error(
+                        colon.span.to(name.span),
+                        format!("unsupported relocation operator `:{other}:`"),
+                    );
+                    return None;
+                }
+            },
             None => {
                 cx.error(
                     colon.span.to(name.span),

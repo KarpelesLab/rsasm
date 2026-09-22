@@ -167,3 +167,42 @@ reader:
         adrp    x0, bigger
         add     x0, x0, :lo12:bigger
         ret
+
+=== move-wide groups of another object's symbols
+--- a.s
+        .text
+        .globl  _start
+_start:
+        movz    x0, :abs_g0_nc:target
+        movk    x0, :abs_g1_nc:target
+        movk    x0, :abs_g2_nc:target
+        movk    x0, :abs_g3:target
+        movz    x1, :abs_g1:target
+        movk    x1, :abs_g0_nc:target + 4
+        movz    x2, :abs_g2:bssvar
+        movz    x3, :prel_g0_nc:target
+        movk    x3, :prel_g1_nc:target
+        movk    x3, :prel_g2_nc:target
+        movz    x4, :prel_g3:target
+        movz    x5, :prel_g0:target
+        movn    x6, :prel_g1:rodata
+        movz    x7, :prel_g2:rodata
+        movz    w8, :abs_g0_nc:target
+        movk    w8, :abs_g1_nc:target
+        movz    x9, :abs_g0_s:small
+        movz    x10, :abs_g1_s:small
+        movn    x11, :abs_g0_s:small
+        ret
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .quad   0x1122334455667788
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+        .globl  small
+        .set    small, -0x1234

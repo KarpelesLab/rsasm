@@ -131,3 +131,47 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+=== move-wide groups of a symbol's address
+# An address is built sixteen bits at a time, and the operator picks which
+# sixteen. A label reaches the linker whichever section it is in, even for
+# `:prel_gN:`, whose PC-relative arithmetic the relocation is what asks for;
+# only a constant is taken here.
+#
+# `movk` with a signed group -- `:abs_gN_s:` and every `:prel_gN:` but the
+# `_nc` ones -- is not here: llvm-mc takes it, GNU as refuses it because the
+# linker may have to write such a value as its inverse, which only `movz` and
+# `movn` can carry, and rsasm follows GNU as.
+        .text
+        .globl  glob
+        .weak   weak1
+        .set    kabs, 0x123456789abcdef0
+        .set    ksmall, -0x1234
+f:
+        movz    x0, :abs_g0_nc:glob
+        movk    x0, :abs_g1_nc:glob
+        movk    x0, :abs_g2_nc:glob
+        movk    x0, :abs_g3:glob
+        movz    x1, :abs_g0:ext
+        movz    x2, :abs_g1:ext + 16
+        movz    x3, :abs_g2:weak1
+        movn    x4, :abs_g0_s:ext
+        movz    x5, :abs_g1_s:ext - 8
+        movn    x6, :abs_g2_s:ext
+        movz    x7, :prel_g0:ext
+        movk    x7, :prel_g0_nc:ext
+        movz    x8, :prel_g1:loc
+        movk    x8, :prel_g1_nc:loc
+        movz    x9, :prel_g2:dat
+        movk    x9, :prel_g2_nc:dat
+        movz    x10, :prel_g3:dat
+        movz    w11, :abs_g0_nc:glob
+        movk    w11, :abs_g1_nc:glob
+        movz    w12, :prel_g0:ext - 8
+        movz    x13, :abs_g0_nc:kabs
+        movk    x13, :abs_g3:kabs
+        movz    x14, :abs_g0_s:ksmall
+loc:    nop
+glob:   nop
+weak1:  nop
+        .data
+dat:    .quad   0

@@ -54,7 +54,7 @@ assembler, not against rsasm's own idea of the manual. See
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21730 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21761 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3052 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
@@ -885,8 +885,8 @@ independent assembler, and compare the bytes:
   object, so nothing else here depends on a symbol being resolved across a
   file boundary. Per target the programs cover calls and branches between
   objects, absolute and PC-relative data references with addends, the halves
-  of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `hi()`/`lo()`), literal
-  pools and constant pools loading another object's symbols, ARM/Thumb
+  of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `:abs_g1_nc:`, `hi()`/`lo()`),
+  literal pools and constant pools loading another object's symbols, ARM/Thumb
   interworking, `@GOTPCREL`, `@GOT` and `@PLT` where the backend has them,
   weak definitions a second object overrides, `.comm` symbols merged between
   objects with different sizes, `.bss`, and references into another object's

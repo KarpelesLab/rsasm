@@ -138,6 +138,67 @@ pub fn fixup_got_page() -> FixupKind {
         .link(LinkValue::LinkerOnly("a GOT entry"))
 }
 
+// ---- move-wide groups -------------------------------------------------------
+
+fn scatter_movw<const GROUP: u32>(w: u64, v: i64) -> u64 {
+    (w & !(0xffff << 5)) | ((((v >> (16 * GROUP)) as u64) & 0xffff) << 5)
+}
+
+/// A signed group, where GNU as settles a value it can work out by choosing
+/// the instruction: `movz` holds a value that is not negative and `movn`
+/// holds the inverse of one that is, whichever of the two was written. The
+/// operators that reach here are refused on `movk`, so the opcode is always
+/// one of those two.
+fn scatter_movw_signed<const GROUP: u32>(w: u64, v: i64) -> u64 {
+    let g = v >> (16 * GROUP);
+    let (opc, imm) = if g < 0 { (0, !g as u64) } else { (2, g as u64) };
+    (w & !(0xffff << 5) & !(3 << 29)) | (opc << 29) | ((imm & 0xffff) << 5)
+}
+
+/// `movz x0, :abs_g1_nc:sym` and its relatives: the 16-bit field holds one
+/// group of the symbol's address.
+///
+/// The fixup is absolute even for the `:prel_gN:` operators, as GNU as's is.
+/// Nothing subtracts the instruction's address at assembly time: the
+/// relocation is what makes the value PC-relative, so a label in the fixup's
+/// own section still reaches the linker while a constant is taken as
+/// written. [`LinkValue::Page`] with byte-sized pages is that subtraction,
+/// and only a flat image, which has no linker to do it, ever asks for it.
+///
+/// The range is stated as the whole value rather than the group, since
+/// "nothing above group `n`" is exactly "fits in `16 * (n + 1)` bits", and
+/// the group is taken as the field is written.
+pub fn fixup_movw(g: super::operand::MovwGroup) -> FixupKind {
+    use super::operand::MovwCheck;
+    let bits = 16 * (g.group + 1);
+    let plain: fn(u64, i64) -> u64 = match g.group {
+        0 => scatter_movw::<0>,
+        1 => scatter_movw::<1>,
+        2 => scatter_movw::<2>,
+        _ => scatter_movw::<3>,
+    };
+    let kind = FixupKind::data(4)
+        .with_reloc(g.reloc)
+        .with_class(RelocClass::AddressGroup);
+    let kind = match g.check {
+        MovwCheck::None => kind.with_field(64, 1).scatter(plain),
+        MovwCheck::Unsigned => kind
+            .with_field(bits, 1)
+            .with_limits(0, (1i64 << bits) - 1)
+            .scatter(plain),
+        MovwCheck::Signed => kind.with_field(bits, 1).signed().scatter(match g.group {
+            0 => scatter_movw_signed::<0>,
+            1 => scatter_movw_signed::<1>,
+            _ => scatter_movw_signed::<2>,
+        }),
+    };
+    if g.prel {
+        kind.link(LinkValue::Page(0))
+    } else {
+        kind
+    }
+}
+
 // ---- `:lo12:` fields --------------------------------------------------------
 //
 // The low twelve bits of an address, completing what an `adrp` started. Like
