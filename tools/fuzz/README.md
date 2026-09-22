@@ -1,9 +1,94 @@
 # Differential fuzzing
 
-Fuzzers for x86, ARM and Thumb (see [ARM](#arm)), AArch64 (see
-[AArch64](#aarch64)), the MSP430 (see [MSP430](#msp430)), PowerPC's vector
-and POWER8-10 instructions (see [PowerPC](#powerpc)), whole 8051 programs
-(see [The 8051](#the-8051)) and whole AVR programs (see [AVR](#avr)).
+A fuzzer per backend. Each generates programs or instructions, assembles
+them with rsasm and with one or two independent references, and compares
+the bytes, the relocations and whether each tool took the input at all.
+
+## Running them all
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/oracles/build.sh                     # the cross assemblers
+$ tools/fuzz/run.sh                          # every fuzzer, seed 1
+$ tools/fuzz/run.sh --seed 20260922 --scale 10
+$ tools/fuzz/run.sh --list                   # the set and its case counts
+$ tools/fuzz/run.sh riscv mips               # only these
+```
+
+`run.sh` is what CI runs, and the one thing every fuzzer has to agree on:
+
+* `fuzz --seed N --count M` generates the same cases for the same seed and
+  count, and nothing else does.
+* The exit status is 0 when nothing differed and non-zero when something
+  did.
+* The last line is `--- <name>: <n> case(s) compared, <k> finding(s)`.
+  `run.sh` reads it, and a missing line or a zero count fails the run: a
+  fuzzer that found nothing because it ran nothing must not read as a pass.
+
+Each fuzzer's own command line is unchanged and is still the way to chase a
+finding down; `run.sh` prints the exact one to repeat under any fuzzer that
+differed.
+
+`--scale` multiplies every count, which is how the nightly CI run covers ten
+times the ground with a seed taken from the date.
+
+## What each one fuzzes
+
+| Fuzzer | Target | References | Cases from |
+|---|---|---|---|
+| `x86.py` | x86-64, i386, i8086 | GNU as, llvm-mc | the Intel SDM and GNU's expanded opcode table |
+| `aarch64.py` | AArch64 | llvm-mc, GNU as | llvm-mc's or GNU objdump's disassembly |
+| `arm.py` | A32, T32 | GNU as, llvm-mc | binutils' `arm-dis.c` syntax |
+| `arm-programs.py` | A32, T32 | GNU as | whole random programs |
+| `riscv.py` | RV32, RV64 | llvm-mc, GNU as | binutils' `riscv-opc.c` format strings |
+| `powerpc.py` | PowerPC 32/64 | GNU as, llvm-mc | binutils' `ppc-opc.c` operand kinds |
+| `mips.py` | MIPS 32/64, both endians | GNU as, llvm-mc | GNU objdump's disassembly |
+| `sparc.py` | SPARC V8, V9 | GNU as, llvm-mc | GNU objdump's disassembly |
+| `m68k.py` | 680x0, ColdFire | GNU as, vasm | GNU's opcode table |
+| `sh.py` | SuperH | GNU as | GNU objdump's disassembly |
+| `rx.py` | Renesas RX | GNU as | GNU objdump's disassembly |
+| `rl78.py` | Renesas RL78 | GNU as | GNU objdump's disassembly |
+| `v850.py` | V850, RH850 | GNU as | GNU objdump's disassembly |
+| `msp430.py` | MSP430, 430X, 430Xv2 | GNU as | TI's user guides |
+| `avr.py` | AVR, 21 cores | GNU as, GNU ld | whole random programs |
+| `z80.py` | Zilog Z80 | GNU as | GNU objdump's disassembly |
+| `mcs51.py` | Intel 8051 | AS, sdas8051 | whole random programs |
+
+`gasfuzz.py` is the machinery the fuzzers added after the first few share:
+the batch of cases in one object with a section each, the re-run without
+whatever a tool rejected, a generic ELF reader that names a relocation the
+way a linker computes it, and the report. `simd.py` and `gnutbl.py` belong
+to `x86.py`.
+
+## Cases from a disassembler
+
+Several targets have no table of operand shapes to draw from -- RX and RL78
+are parsed by a generated grammar, and the V850 and Z80 tables are the
+assembler's own. For those, and for MIPS and SPARC where the table is large
+and irregular, cases come from the other side of binutils: random bytes go
+through the target's objdump, and every line that decodes becomes one case,
+in the spelling GNU as reads. The disassembler's tables are not the parser's
+and neither is rsasm's, so it is still an independent source, and it reaches
+every operand value a form allows rather than the ones someone thought to
+write down.
+
+Two things have to be put right for a disassembled line to mean the same
+thing again:
+
+* **Where it sits.** A branch prints the address it lands on, so a case
+  carries the `.skip` that puts it back at the offset it was read from. A
+  target in the top half of the address space is written as the negative
+  number it stands for, since an assembler asked for `0xffffd738` computes a
+  displacement far out of range.
+* **What the operand is.** GNU's V850 assembler reads a branch operand as a
+  *displacement* where its own disassembler prints an *address*, so those
+  lines do not read back as themselves; SPARC's `call` and branches become
+  `.`-relative, which also keeps llvm-mc away from a fixup it crashes on.
+  Each target says what its lines need in its own script.
+
+What a backend does not implement is skipped by name, with the reason in the
+script, so that a missing extension cannot read as thousands of identical
+findings. Those lists are the honest record of what each backend leaves out.
 
 ## x86
 
@@ -156,7 +241,10 @@ seeds 6 and 7 find none.
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `GAS` | `as` (must handle `--32` and `--64`) |
 | `LLVM_MC` | `llvm-mc` (verified with LLVM 22) |
-| `RSASM_ORACLES` | `target/oracles` under the repository root, for `msp430.py` |
+| `RSASM_ORACLES` | `target/oracles` under the repository root: the cross assemblers, and the binutils source some fuzzers read their forms from |
+
+A reference that is not installed fails the fuzzer rather than being
+skipped, so a machine that has lost one cannot read as a pass.
 
 ## AArch64
 
@@ -350,3 +438,90 @@ stops with "unknown relocation type".
 |---|---|
 | `RSASM` | `target/debug/rsasm` under the repository root |
 | `RSASM_ORACLES` | `target/oracles`, with `avr-elf-as`, `avr-elf-ld` and `avr-elf-objcopy` in `bin` |
+
+## RISC-V
+
+`riscv.py` generates RV32 and RV64 instructions from the opcode table in
+binutils' `opcodes/riscv-opc.c`, read at run time for each row's mnemonic,
+the XLEN it is for and its operand *format string* -- what `riscv_ip` in GNU
+as reads to parse operands -- never for its encoding. What each letter of
+that string means is written out in the script from the same source, and is
+the only RISC-V knowledge in it; a row whose format uses a letter the script
+does not generate is skipped rather than guessed at.
+
+```console
+$ tools/fuzz/riscv.py fuzz --count 20000
+$ tools/fuzz/riscv.py fuzz --target riscv32 --only '^f' --seed 7
+$ tools/fuzz/riscv.py check --target riscv64 lines.txt
+```
+
+GNU as runs with `-mno-relax`: it otherwise pairs every symbolic reference
+with an `R_RISCV_RELAX` marker, which is a hint to the linker rather than
+part of the encoding, and neither llvm-mc nor rsasm writes one.
+
+The references part ways often enough to need rules: GNU as leaves a
+reference to a label to the linker where llvm-mc resolves it, does not run
+an alias through compression, and expands `li` into a longer sequence for
+some values; llvm-mc truncates a value past the end of a field where GNU as
+refuses it. rsasm follows llvm-mc, which is what README.md records RISC-V as
+checked against. Three things rsasm does on purpose are listed as
+deviations: it resolves a local label the way llvm-mc does, it takes a bare
+symbol in a twelve-bit field where both references insist on `%lo`, and it
+reads the twenty-bit field of `lui` and `auipc` as signed as well as
+unsigned.
+
+Running it found the aliases both references read and rsasm did not (`and
+a0, a1, 4` for `andi` and the rest of that family, `csrw frm, 3`, `move`,
+`sgt`, `zext.b`, the `sext`/`zext` shift pairs, `scall`, `sbreak`,
+`fmv.s.x`, `jr off(rs)`), an `sext.b` whose second shift came out logical
+instead of arithmetic, and a `csrrw x0, cycle, x0` compressed to `c.unimp`.
+
+## MIPS, SPARC, SuperH, RX, RL78, V850 and the Z80
+
+These take their cases from GNU objdump (see
+[Cases from a disassembler](#cases-from-a-disassembler)). MIPS and SPARC
+have llvm-mc as a second reference; the rest have GNU as alone, so a case is
+`agree`, a named `deviation`, or a finding.
+
+```console
+$ tools/fuzz/mips.py fuzz --count 20000 --target mips64el
+$ tools/fuzz/sparc.py fuzz --count 12000 --only '^f' --seed 7
+$ tools/fuzz/z80.py check lines.txt
+```
+
+GNU as runs with `.set noreorder`, `.set nomacro` and `.set noat` for MIPS:
+it otherwise moves instructions into branch delay slots and invents `nop`s,
+and the backend does not.
+
+ELF has no class for a 16-bit target, so the Z80's cases get a sixteen-byte
+slot each with `.org` and are compared as images -- rsasm's `-f bin` against
+the reference's object through `objcopy`. Relocations are not compared
+there; `tools/xas-diff` covers the relocated forms.
+
+Three deviations are shared, and each was checked by linking a differing
+case with the target's own `ld` and comparing the image:
+
+- **resolves-a-numeric-target** -- GNU as leaves a branch to a number to the
+  linker, with the whole value as the addend, where rsasm computes the
+  displacement. The linked images are identical.
+- **fills-in-a-relocated-field** -- GNU as computes the value *and* emits
+  the relocation for it; rsasm leaves those bits zero. With RELA the addend
+  is what the linker uses.
+- **relocates-an-absolute-target** -- the other way round: GNU as works the
+  displacement out as if the section were at zero and emits nothing, where
+  rsasm keeps the relocation and must therefore take the long form of a
+  relaxable branch.
+
+Two references failing are handled rather than counted: llvm-mc 22 crashes
+on SPARC's `call` with an absolute value, and GNU as 2.47 gives up on some
+RL78 branches with "Infinite loop encountered whilst attempting to compute
+the addresses of symbols". The harness halves a batch a tool gave up on
+until it finds the case, drops that reference for it, and counts it as
+`skipped`.
+
+Running them found, in SPARC: `mov<cc> %fccN` encoded with the integer
+condition codes instead of the floating-point ones, `movre`/`movrne`, the
+missing `swap`, `ldstub`, `taddcctv`, `tsubcctv`, `clrb`/`clrh`/`clrx` and
+`b`, an address whose base register is the hardwired zero (`[ 0x66 ]`,
+`jmpl -2347, %l2`), and the two-operand trap written as one address. MIPS,
+SuperH, RX, RL78, V850 and the Z80 found nothing.

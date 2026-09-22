@@ -300,10 +300,17 @@ def assemble(tool, target, cases, workdir):
         # GNU as can report an error and still exit 0 for a warning-shaped
         # diagnostic, so the text decides, not only the status.
         ok = p.returncode == 0 and "Error:" not in p.stderr
-        if p.returncode in (-11, -6, 101, 134, 139):
-            # The tool crashed. Which case did it is not in the output, so
-            # the batch is halved until one is left; that one gets the
-            # PANIC, and the rest of the batch keeps its answers.
+        # A crash, or a fatal error that blames no line: GNU as 2.47 gives up
+        # on some RL78 input with "Infinite loop encountered whilst
+        # attempting to compute the addresses of symbols", which is the
+        # reference failing rather than refusing. Either way the tool has no
+        # answer for one of these cases and the output does not say which.
+        fatal = ("Fatal error" in p.stderr
+                 and not any(ln in owner for ln in diagnostics(tool, p.stderr)))
+        if p.returncode in (-11, -6, 101, 134, 139) or fatal:
+            # Which case did it is not in the output, so the batch is halved
+            # until one is left; that one gets the PANIC, and the rest of the
+            # batch keeps its answers.
             live = [c for c in cases if c[0] not in rejected]
             if len(live) <= 1:
                 for i, _ in live:
@@ -815,3 +822,39 @@ def relocates_an_absolute_target(text, res, target):
         return False
     return (not g[1][1] and bool(r[1][1])
             and all(w == "*ABS*" for _o, _t, w, _a in r[1][1]))
+
+
+ADDRESS_TOKEN = re.compile(r"(?<![\w.$%])(-?(?:0x[0-9a-f]+|\d+))(?![\w.])")
+
+
+def dot_relative(mnemonics):
+    """A `rewrite` that turns a printed branch target into `.`-relative form.
+
+    A disassembler prints where a branch lands; an assembler asked for that
+    address computes the displacement from wherever the instruction ends up,
+    which is only the same instruction if it ends up where it was read.
+    Writing the target as `.` plus the displacement says what the encoding
+    says and means the same at any address -- and, on SPARC, keeps llvm-mc
+    away from the absolute-value fixup it crashes on.
+
+    The *last* address-shaped token is the target: a predicted branch names
+    its condition-code bank first.
+    """
+    rx = re.compile(mnemonics)
+
+    def rewrite(text, off):
+        if not rx.match(text.split()[0]):
+            return text
+        hits = list(ADDRESS_TOKEN.finditer(text))
+        if not hits:
+            return text
+        hit = hits[-1]
+        # Only a whole trailing operand is a target. `call %g3 + 8` is an
+        # indirect call through an address, and the 8 in it is a
+        # displacement from a register, not from here.
+        if hit.end() != len(text) or text[:hit.start()].rstrip().endswith(("+", "-")):
+            return text
+        return (text[:hit.start()] + ".%+d" % (int(hit.group(1), 0) - off)
+                + text[hit.end():])
+
+    return rewrite

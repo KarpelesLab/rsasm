@@ -64,17 +64,25 @@ def word(rng):
     return (rng.randrange(4) << 30) | rng.getrandbits(30)
 
 
+# `call` and the branches print the address they land on. Writing that as a
+# displacement from `.` says the same thing wherever the instruction sits --
+# and keeps llvm-mc away from the absolute-value fixup it crashes on (see
+# the docstring), so `call` is compared rather than set aside.
+BRANCHES = r"^(call|b[a-z]*|fb[a-z]*)(,[ap][nt]?)*$"
+
 TARGETS = {
     "sparc": Target("sparc", "sparc", gas="sparc64-elf-as",
                     gas_flags=["-32", "-Av8"], mc="sparc",
                     objdump="sparc64-elf-objdump",
                     objdump_flags=["-m", "sparc:v9"],
-                    addr_bits=64, word_maker=word),
+                    addr_bits=64, word_maker=word,
+                    rewrite=gasfuzz.dot_relative(BRANCHES)),
     "sparcv9": Target("sparcv9", "sparcv9", gas="sparc64-elf-as",
                       gas_flags=["-64", "-Av9"], mc="sparcv9",
                       objdump="sparc64-elf-objdump",
                       objdump_flags=["-m", "sparc:v9"],
-                      addr_bits=64, word_maker=word),
+                      addr_bits=64, word_maker=word,
+                      rewrite=gasfuzz.dot_relative(BRANCHES)),
 }
 
 # What the backend does not claim (README.md: "SPARC V8 / V9"): the VIS
@@ -93,7 +101,8 @@ NOT_IMPLEMENTED = re.compile(r"""^(
   | otherw | allclean | flushw | membar | stbar | ldd?a | std?a | ldqa | stqa | casa | casxa
   | prefetch | prefetcha | ldfsr | stfsr | ldxfsr | stxfsr | cbcc.* | c[a-z]+cc
   | ld[cd] | st[cd] | ldcsr | stcsr | ldstub[a]? | swapa
-  | (ld|st)[a-z]*a
+  | (ld|st)[a-z]*a | ldtw | sttw | cas | casl | casx | casxl
+  | cb[0-9a-z,]* | impdep[12]
   | illtrap | unimp | pause | cwbe? .* | cw[a-z]+ | movdtox | movstouw | movstosw
   | movxtod | movwtos | fpmaddx.* | aes.* | camellia.* | md5 | sha.* | crc32c | xmulx.*
   | mwait | rd | wr | random

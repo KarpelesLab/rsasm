@@ -22,6 +22,13 @@ A branch prints its target as an absolute address, so each case carries the
 The RL78 reads `@` as a comment character, so sections are declared with
 `%progbits`.
 
+A handful of cases are set aside rather than compared: GNU as 2.47 stops on
+some short conditional branches with "Infinite loop encountered whilst
+attempting to compute the addresses of symbols in section", a fatal error
+that names no line (`write.c`'s relaxation loop gives up after
+`MAX_ITERATIONS`). The harness halves a batch a tool gave up on until it
+finds the case, drops that reference for it, and counts it as `skipped`.
+
 With one reference there are no splits: a case is `agree`, a named
 `deviation`, or a finding. The exit status is 1 when there are findings.
 

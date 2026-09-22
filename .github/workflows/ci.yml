@@ -4,6 +4,12 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Nightly. Everything runs again, but only the `fuzz` job behaves
+  # differently: on a schedule it uses the date as its seed and ten times as
+  # many cases, so the fuzzers keep reaching new programs instead of
+  # re-running the same ones a pull request already covered.
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -364,6 +370,105 @@ jobs:
             || { echo "::error::dwarf-diff compared nothing"; exit 1; }
           grep -q "REF-MISSING" dwarf-diff.log \
             && { echo "::error::a reference assembler is missing"; exit 1; }
+          exit $status
+
+  fuzz:
+    name: Differential fuzzers
+    runs-on: ubuntu-latest
+    env:
+      # The same directory, and the same cache, as the xas_diff job: the
+      # reference assemblers take minutes to build and neither job needs its
+      # own copy. Outside target/, so rust-cache neither saves nor wipes it.
+      RSASM_ORACLES: ${{ github.workspace }}/../oracles
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz
+
+      # Keyed exactly as in xas_diff, on the build script, so the two jobs
+      # share one entry. On a miss both build it; that only happens when the
+      # script itself changed, which is when a rebuild is the point.
+      - name: Cache the reference assemblers
+        id: oracles
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/../oracles/bin
+            ${{ github.workspace }}/../oracles/share
+          key: oracles-${{ runner.os }}-${{ hashFiles('tools/oracles/build.sh') }}
+
+      - name: Build the reference assemblers
+        if: steps.oracles.outputs.cache-hit != 'true'
+        run: tools/oracles/build.sh
+
+      # x86, ARM, AArch64, PowerPC, RISC-V, MIPS and SPARC are compared
+      # against llvm-mc as well as GNU as, and its answers change between
+      # releases, so it is pinned exactly as the mc_diff job pins it.
+      - name: Install LLVM 22
+        run: |
+          set -euo pipefail
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$codename/ llvm-toolchain-$codename-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-22.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm the pinned oracle is the one in use
+        run: |
+          set -euo pipefail
+          llvm-mc --version | tee /dev/stderr | grep -q "LLVM version 22\." \
+            || { echo "::error::llvm-mc is not LLVM 22"; exit 1; }
+
+      # The fuzzers run the debug binary, which is what their defaults point
+      # at; a release build would only move time from here to there.
+      - name: Build rsasm
+        run: cargo build --all-features --bin rsasm
+
+      # A pull request gets seed 1 and the counts in tools/fuzz/run.sh, which
+      # is a few minutes' work and the same cases every time, so a failure is
+      # a real change and not a new random program. The nightly run uses the
+      # date, so over a week it covers ten times as much ground again.
+      - name: Choose the seed
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = schedule ]; then
+            echo "FUZZ_SEED=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+            echo "FUZZ_SCALE=10" >> "$GITHUB_ENV"
+          else
+            echo "FUZZ_SEED=1" >> "$GITHUB_ENV"
+            echo "FUZZ_SCALE=1" >> "$GITHUB_ENV"
+          fi
+
+      # Same guards as the diff harnesses: the log goes to a file so a
+      # failure still prints it, and a run that compared nothing is a
+      # failure, not a pass. run.sh already fails when a fuzzer is missing,
+      # did not finish or compared no cases; the grep is the second belt.
+      #
+      # To reproduce a failure locally, take the seed and count from the
+      # `### reproduce:` line the runner prints under the failing fuzzer:
+      #
+      #   cargo build --all-features --bin rsasm
+      #   tools/oracles/build.sh
+      #   tools/fuzz/<name>.py fuzz --seed <seed> --count <count>
+      - name: tools/fuzz/run.sh
+        run: |
+          set +e -uo pipefail
+          tools/fuzz/run.sh --seed "$FUZZ_SEED" --scale "$FUZZ_SCALE" > fuzz.log 2>&1
+          status=$?
+          cat fuzz.log
+          grep -qE -- "--- [1-9][0-9]* fuzzer\(s\), [1-9][0-9]* case\(s\) compared" fuzz.log \
+            || { echo "::error::the fuzzers compared nothing"; exit 1; }
+          grep -qE -- ", 0 did not run$" fuzz.log \
+            || { echo "::error::a fuzzer did not run"; exit 1; }
           exit $status
 
   cli_smoke:

@@ -292,6 +292,9 @@ fn control(name: &str) -> Option<Def> {
         "flush" => return Some(v8(Flush)),
         "unimp" | "illtrap" => return Some(v8(Unimp)),
         "rett" => return Some(v8(Return)),
+        // `b` on its own is `ba`: the branch whose condition is "always",
+        // which is how GNU's disassembler prints it.
+        "b" => return Some(v8(Branch { cond: 8, predicted: false })),
         "return" => return Some(v9(Return)),
         _ => {}
     }
@@ -404,10 +407,14 @@ mod tests {
         ));
     }
 
+    /// A condition name is what makes a branch or a trap; the prefix on its
+    /// own is not one. `b` is the exception: it is `ba`, and both GNU as and
+    /// llvm-mc assemble it.
     #[test]
     fn unknown_mnemonics_are_not_invented() {
-        for bad in ["", "b", "t", "mov", "movr", "br", "bp", "zzz", "ldq"] {
+        for bad in ["", "t", "mov", "movr", "br", "bp", "zzz", "ldq"] {
             assert!(lookup(bad).is_none(), "`{bad}` should not resolve");
         }
+        assert!(lookup("b").is_some());
     }
 }
