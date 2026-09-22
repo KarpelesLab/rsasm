@@ -38,7 +38,7 @@ A case is:
     known     they differ in a way this fuzzer is not about, each with its
               reason: `KNOWN` and `KNOWN_GAS` list the ones told apart by
               what the assembler that refused said, and `known_object` the
-              two that show in the object itself.
+              one that shows in the object itself.
 
 `--mutations` (default 0.15) is the fraction of programs given something
 meant to be refused: a pool out of reach, a `=` on a store or an `ldrd`, an
@@ -89,10 +89,13 @@ KNOWN = [("does not fit in the 32-bit word", "literal wider than a word"),
 
 # The other way round: what GNU as refuses and rsasm assembles, matched
 # against GNU as's message. An ARM `bl` or `b` must land on a word boundary,
-# and GNU as checks the offset of a target in another section although only
-# the linker knows where the section goes; rsasm leaves the whole reference
-# to the linker. A label an odd number of halfwords into Thumb code is the
-# way to write one.
+# and GNU as checks the offset that `arm_fix_adjustable` folded into the
+# addend of a reference to a local label in another section, although where
+# that section goes is the linker's; rsasm names the label, as llvm-mc does,
+# and leaves the whole reference to the linker. A label an odd number of
+# halfwords into Thumb code is the way to write one. The ARM backend's module
+# documentation says why this one is deliberate, and
+# tools/mc-diff/arm-relocs.txt holds the case.
 KNOWN_GAS = [("misaligned branch destination",
               "an ARM branch to a target GNU as checks before the linker")]
 
@@ -346,13 +349,12 @@ class Program:
         """A label already placed in the section the next statement goes in,
         for an `adr`, or None.
 
-        Not one that data of an odd length left at an address no instruction
-        can have: GNU as's `adr` adds one to the address of a
-        `.thumb_func` label, where rsasm sets its low bit, and for an odd
-        address those are not the same number. It says nothing about
-        pools."""
-        here = [n for n, s in self.where.items()
-                if s == self.section and n not in self.misaligned]
+        A label that data of an odd length left at an address no instruction
+        can have is one of these: GNU as ORs the Thumb bit of a `.thumb_func`
+        label into the `adr`'s *addend*, which at an odd address is not the
+        same number as ORing it into the finished value, and that is a
+        difference worth generating."""
+        here = [n for n, s in self.where.items() if s == self.section]
         return self.rng.choice(here) if here else None
 
     def code_label(self):
@@ -385,7 +387,10 @@ class Program:
             target = self.here_label()
             if target:
                 kind = "adrl" if not self.thumb and rng.random() < 0.3 else "adr"
-                return f"{kind} {self.reg()}, {target}"
+                # An addend of its own, since GNU as sets the Thumb bit in the
+                # addend and so changes nothing when it is already odd.
+                addend = rng.choice(["", "", "", " + 1", " + 2", " - 1"])
+                return f"{kind} {self.reg()}, {target}{addend}"
         if r < 0.6:
             return rng.choice([
                 f"b {self.code_label()}", f"bl {self.code_label()}",
@@ -574,9 +579,8 @@ def canon_parts(text):
 
 
 def known_object(gas, rsasm):
-    """The differences between two objects that this fuzzer is not about,
-    or None if there is anything else. There are two, and a program may
-    have both:
+    """The one difference between two objects that this fuzzer is not about,
+    or None if there is anything else.
 
     *Which symbol a relocation names.* GNU as's `arm_fix_adjustable`
     relocates a reference to a local label against the label's *section*,
@@ -585,21 +589,12 @@ def known_object(gas, rsasm):
     src/arch/arm/mod.rs, which tools/dwarf-diff compares against llvm-mc).
     A linker reads the two the same. A branch out of its own section is how
     to write one: the relocation's table, offset and type agree, both
-    targets name the same section, and the four bytes of the field differ.
-
-    *How a code section's last bytes are padded to its alignment.* GNU as
-    pads there with the no-ops of the instruction set in force when the
-    *file* ends -- `subsegs_finish_section` makes the frag then, and
-    `arm_handle_align` reads the mode recorded on it -- and writes zeros
-    and a `$d` where what is left is not a whole number of them. rsasm pads
-    with the no-ops of the last instruction in the section, which is the
-    same thing until an `.arm` or `.thumb` after that instruction changes
-    the mode. A pool's own padding is zeros either way."""
+    targets name the same section, and the four bytes of the field differ."""
     g_sec, g_rel, g_rest = canon_parts(gas)
     r_sec, r_rel, r_rest = canon_parts(rsasm)
-    if g_rel.keys() != r_rel.keys():
+    if g_rel.keys() != r_rel.keys() or g_rest != r_rest:
         return None
-    reasons = []
+    reason = None
     # Where the two may differ, as (first, last) byte offsets per section.
     spans = {}
     for key, target in g_rel.items():
@@ -615,30 +610,8 @@ def known_object(gas, rsasm):
             return None
         at = int(offset, 16)
         spans.setdefault("." + table.split(".", 2)[2], []).append((at, at + 3))
-        reasons = ["a relocation naming the label, as llvm-mc names it"]
-    # The padding shows as a `$d` GNU as alone writes, and sometimes as a
-    # mapping symbol rsasm alone writes at that same offset.
-    gas_only = [line for line in g_rest if line not in r_rest]
-    rsasm_only = [line for line in r_rest if line not in g_rest]
-    marks = []
-    for line in gas_only:
-        f = line.split()
-        if len(f) != 6 or f[0] != "symbol" or f[1] != "$d" or "+" not in f[5]:
-            return None
-        section, _, at = f[5].partition("+")
-        marks.append((section, int(at, 16)))
-        spans.setdefault(section, []).append((int(at, 16), len(g_sec.get(section, "")) // 2))
-    for line in rsasm_only:
-        f = line.split()
-        if len(f) != 6 or f[0] != "symbol" or f[1] not in ("$a", "$t", "$d"):
-            return None
-        section, _, at = f[5].partition("+")
-        if (section, int(at, 16)) not in marks:
-            return None
-    if marks:
-        reasons.append("a code section's last bytes padded in the other"
-                       " instruction set")
-    if not reasons:
+        reason = "a relocation naming the label, as llvm-mc names it"
+    if reason is None:
         return None
     for name, hexed in g_sec.items():
         other = r_sec.get(name)
@@ -651,7 +624,7 @@ def known_object(gas, rsasm):
                 continue
             if not any(lo <= i // 2 <= hi for lo, hi in spans.get(name, ())):
                 return None
-    return " and ".join(reasons)
+    return reason
 
 
 def classify(gas, rsasm):

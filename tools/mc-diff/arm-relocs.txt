@@ -129,3 +129,19 @@ hid:    .long   0
         .byte   6
         .section custom,"a"
         .byte   7
+=== a call to a Thumb label an odd number of halfwords into another section
+        @ GNU as refuses this one, with "misaligned branch destination":
+        @ `arm_fix_adjustable` folds the label's offset into the addend of a
+        @ relocation against the *section*, and `md_apply_fix` then reads the
+        @ low two bits of that addend as the branch's, although where the
+        @ section goes is the linker's to decide. rsasm names the label, as
+        @ llvm-mc does (`relocates_with_label` in src/arch/arm/mod.rs), and
+        @ leaves the whole reference to the linker.
+        .text
+        .p2align 2
+        bl      tlab
+        bx      lr
+        .section .text.t,"ax"
+        .thumb
+        nop
+tlab:   bx      lr
