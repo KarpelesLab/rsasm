@@ -30,6 +30,23 @@
 # linker relaxes, the same program is linked a second time with `--relax`:
 # relaxation is what the difference records and `.avr.prop` exist for, and it
 # is only exercised by a link.
+#
+# What the corpora do not reach, and why:
+#
+# * MIPS64 has no row: the MIPS GNU ld among the oracles emulates only o32,
+#   so it cannot link an n64 object. The same is true in flat-diff.
+# * The 8-bit targets (Z80, 6502, 8080, 8051) have no row: rsasm writes flat
+#   binaries and Intel HEX for them, not ELF, so there is nothing to link.
+# * The GOT and PLT modifiers only appear where the backend has them: x86-64
+#   (`@GOTPCREL`, `@PLT`), i386 (`@GOT`, `@GOTOFF`, `@PLT`,
+#   `_GLOBAL_OFFSET_TABLE_`) and AArch64 (`:got:`, `:got_lo12:`). The ARM
+#   backend has no `sym(GOT)`, `sym(PLT)` or `:lower16:`/`:upper16:`
+#   operands, and the PowerPC one refuses `bl foo@plt` and the `@higher` and
+#   `@highest` halves rather than guessing at them; those sources are not in
+#   the corpora because rsasm does not assemble them at all.
+# * Nothing here runs the linked program. There is no qemu user-mode
+#   emulator on the machines this is developed on, and only x86-64 could run
+#   natively; `cli_smoke` in the CI workflow does that for one program.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)

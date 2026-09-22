@@ -325,6 +325,23 @@ jobs:
             || { echo "::error::flat-diff compared nothing"; exit 1; }
           exit $status
 
+      # Whole programs split over several objects, assembled twice and linked
+      # twice with the same GNU ld: a relocation that names the wrong symbol
+      # or carries the wrong addend leaves the field zero in both objects, so
+      # only a link can see it. The relaxing targets are linked again with
+      # `--relax`, which is what their difference records exist for.
+      - name: tools/link-diff/run.sh
+        run: |
+          set +e -uo pipefail
+          tools/link-diff/run.sh > link-diff.log 2>&1
+          status=$?
+          cat link-diff.log
+          grep -qE -- "--- [1-9][0-9]* matched" link-diff.log \
+            || { echo "::error::link-diff compared nothing"; exit 1; }
+          grep -q "REF-MISSING\|skipped" link-diff.log \
+            && { echo "::error::a reference assembler or linker is missing"; exit 1; }
+          exit $status
+
       # Files that switch targets with `.arch`, each part against its own
       # reference: the host's GNU as, llvm-mc or a cross GNU as.
       - name: tools/multiarch-diff/run.sh
