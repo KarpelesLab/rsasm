@@ -600,3 +600,76 @@ f:      ldr     sp, =0x104
         ldr     r0, =0x104
         bx      lr
         .pool
+=== the GOT and PLT suffixes in data
+        .syntax unified
+        .text
+        .globl  glob
+        .weak   weak1
+        .thumb_func
+loc:    bx      lr
+        .thumb_func
+glob:   bx      lr
+weak1:  bx      lr
+        .word   ext(GOT), ext(GOTOFF), ext(GOT_PREL), ext(PLT)
+        .word   loc(GOT), glob(GOT), weak1(GOT)
+        .word   loc(GOTOFF), glob(GOTOFF), weak1(GOTOFF)
+        .word   loc(PLT), glob(PLT), weak1(PLT)
+        .word   _GLOBAL_OFFSET_TABLE_
+        .word   _GLOBAL_OFFSET_TABLE_ - .
+=== the halves of an address
+        .syntax unified
+        .text
+f:      movw    r0, #:lower16:sym
+        movt    r0, #:upper16:sym
+        movw    r1, :lower16:sym
+        movt    r1, :upper16:sym
+        movw    r2, #:lower16:sym + 0x7fff
+        movt    r2, #:upper16:sym - 0x8000
+        movw    r3, #:lower16:f
+        movt    r3, #:upper16:f
+        movw    r5, #:lower16:0x12345678
+        movt    r5, #:upper16:0x12345678
+        movw    r6, #:lower16:_GLOBAL_OFFSET_TABLE_
+        bx      lr
+=== the halves of an address measured from a label
+        .syntax unified
+        .text
+f:      movw    r0, #:lower16:(sym - f)
+        movt    r0, #:upper16:(sym - f)
+.Lpic:  movw    r1, #:lower16:(sym - .Lpic)
+        movt    r1, #:upper16:(sym - .Lpic)
+        movw    r2, #:lower16:(sym - f) + 4
+        movt    r2, #:upper16:(sym + 4 - f)
+        movw    r3, #:lower16:(sym - .)
+        movw    r4, #:lower16:(_GLOBAL_OFFSET_TABLE_ - f)
+        bx      lr
+=== a plt suffix on a branch target
+        .syntax unified
+        .text
+        .globl  glob
+        .thumb_func
+f:      bl      sym(PLT)
+        b.w     sym(PLT)
+        b       sym(PLT)
+        blx     sym(PLT)
+        beq.w   sym(PLT)
+        bl      f(PLT)
+        bl      glob(PLT)
+        .thumb_func
+glob:   bx      lr
+=== refused: a relocation suffix spelled in mixed case
+        .syntax unified
+        .word   sym(GoT)
+=== refused: a got suffix on a branch target
+        .syntax unified
+        bl      sym(GOT)
+=== refused: a relocation suffix in a literal pool entry
+        .syntax unified
+        ldr     r0, =sym(GOT)
+        .ltorg
+=== refused: the wrong half for the instruction
+        .syntax unified
+        movw    r0, #:upper16:sym
+=== refused: an addend wider than a half
+        .syntax unified
+        movw    r0, #:lower16:sym + 0x8000

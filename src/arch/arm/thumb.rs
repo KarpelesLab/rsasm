@@ -784,6 +784,29 @@ fn move_wide_bits(rd: Reg, v: u32, top: bool) -> Vec<Variant> {
     )
 }
 
+/// The 16-bit immediate of a Thumb `movw`/`movt`, spread over `imm4` in the
+/// first halfword and `i:imm3:imm8` in the second. The word is read from the
+/// four bytes in the order they were written, so the first halfword is the
+/// low half of it.
+fn scatter_mov16(w: u64, v: i64) -> u64 {
+    let v = v as u64 & 0xffff;
+    let hw1 = (w & 0xffff & !0x040f) | ((v >> 12) & 0xf) | (((v >> 11) & 1) << 10);
+    let hw2 = ((w >> 16) & 0xffff & !0x70ff) | (((v >> 8) & 7) << 12) | (v & 0xff);
+    (hw2 << 16) | hw1
+}
+
+/// The Thumb `movw rd, #:lower16:sym` and `movt rd, #:upper16:sym`; see
+/// [`encode::mov16_kind`], whose rules these share.
+pub fn mov16_kind(top: bool) -> FixupKind {
+    encode::mov16_kind(top)
+        .with_reloc(if top {
+            reloc::THM_MOVT_ABS
+        } else {
+            reloc::THM_MOVW_ABS_NC
+        })
+        .scatter(scatter_mov16)
+}
+
 fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     unconditional(cx, ins)?;
     wide_only(cx, ins)?;
@@ -791,6 +814,19 @@ fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     encode::arity(cx, ins, &[2])?;
     let rd = encode::reg_of(cx, &ins.ops[0])?;
     bad_reg(cx, ins.ops[0].span, rd)?;
+    if let OperandKind::Half(half, e) = ins.ops[1].kind {
+        let top = encode::half_matches(cx, ins, half, ins.ops[1].span)?;
+        let bytes = move_wide_bits(rd, 0, top).remove(0).bytes;
+        return Some(vec![Variant {
+            bytes,
+            fixups: vec![Fixup {
+                offset: 0,
+                expr: e,
+                kind: mov16_kind(top),
+                span: ins.ops[1].span,
+            }],
+        }]);
+    }
     let v = encode::imm_bits(cx, &ins.ops[1], 16)?;
     Some(move_wide_bits(rd, v, ins.mnem == Mnem::Movt))
 }

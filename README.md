@@ -133,7 +133,11 @@ but 18 forms where both manuals show MAME to be wrong.
   aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
   `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
   `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
-  the two instruction sets, `$a`/`$t`/`$d` mapping symbols, and the
+  the two instruction sets, the position-independent operands
+  (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
+  `.word _GLOBAL_OFFSET_TABLE_`, `bl sym(PLT)`, and
+  `movw`/`movt` with `:lower16:` and `:upper16:`, absolute or measured
+  against a label), `$a`/`$t`/`$d` mapping symbols, and the
   `.ARM.attributes` section the linker reads to decide what the program may
   contain — without it GNU ld assumes the oldest architecture and routes
   every interworking call through a veneer; the whole
@@ -204,7 +208,10 @@ but 18 forms where both manuals show MAME to be wrong.
   `.debug_macro`/`.debug_names`
 - ARM: `-mimplicit-it`, so a conditional Thumb instruction needs an `it` block
   of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
-  pool entries; and the divided Thumb syntax GNU as reads without
+  pool entries; the relocation suffixes past the GOT and PLT ones --
+  `(TARGET1)`, `(TARGET2)`, `(SBREL)` and the thread-local `(TLSGD)` and
+  its relatives, which GNU as reads and rsasm refuses as unrecognised; and
+  the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - ARM vectors: the floating-point immediate of `vmov.f32 s0, #1.0` and
   `vmov.f64 d0, #0.5`, which needs a literal this assembler's GAS-dialect
@@ -887,7 +894,8 @@ independent assembler, and compare the bytes:
   objects, absolute and PC-relative data references with addends, the halves
   of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `hi()`/`lo()`), literal
   pools and constant pools loading another object's symbols, ARM/Thumb
-  interworking, `@GOTPCREL`, `@GOT` and `@PLT` where the backend has them,
+  interworking, the GOT and PLT operands where the backend has them
+  (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)` and `:lower16:`),
   weak definitions a second object overrides, `.comm` symbols merged between
   objects with different sizes, `.bss`, and references into another object's
   sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,
