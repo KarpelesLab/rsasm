@@ -85,23 +85,24 @@ def skip(case):
     return bool(NOT_IMPLEMENTED.match(case[0]))
 
 
-def truncates_a_branch_displacement(text, res, target):
-    """A branch whose displacement does not fit its field.
+def truncates_a_displacement(text, res, target):
+    """A displacement that does not fit, or does not sit where it must.
 
-    GNU as cuts it down to the field's width and says nothing -- `ble 4148`
-    becomes `ble -4044` on a nine-bit field -- so the branch lands somewhere
-    else entirely. rsasm refuses it, as it refuses every over-wide immediate
-    (the AArch64 corpora record the same choice against llvm-mc).
+    GNU as cuts it down to the field and says nothing. `ble 4148` becomes
+    `ble -4044` on a nine-bit field, so the branch lands somewhere else
+    entirely; `ld.h -1213691[gp], r18` comes back out of GNU objdump as
+    `ld.h -1213692[gp], r18`, the odd bit dropped. rsasm refuses both, as
+    it refuses every over-wide immediate (the AArch64 corpora record the
+    same choice against llvm-mc).
     """
     g, r = res.get("gas"), res.get("rsasm")
     if not g or g[0] != "ok" or r[0] != "err":
         return False
-    return (BRANCH.match(text.split("\n")[-1].split()[0]) is not None
-            and "out of range" in str(r[1]))
+    return "out of range" in str(r[1]) or "multiple of" in str(r[1])
 
 
 RULES = gasfuzz.Rules(deviations=[
-    ("truncates-a-branch-displacement", truncates_a_branch_displacement),
+    ("truncates-a-displacement", truncates_a_displacement),
     ("resolves-a-numeric-target", gasfuzz.resolves_a_numeric_target),
     ("fills-in-a-relocated-field", gasfuzz.fills_in_a_relocated_field),
     ("relocates-an-absolute-target", gasfuzz.relocates_an_absolute_target),

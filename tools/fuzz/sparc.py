@@ -69,6 +69,9 @@ def word(rng):
 # and keeps llvm-mc away from the absolute-value fixup it crashes on (see
 # the docstring), so `call` is compared rather than set aside.
 BRANCHES = r"^(call|b[a-z]*|fb[a-z]*)(,[ap][nt]?)*$"
+# Every SPARC instruction is a word, so a branch displacement is a
+# multiple of four; anything else is a line the rewrite misread.
+ALIGN = 4
 
 TARGETS = {
     "sparc": Target("sparc", "sparc", gas="sparc64-elf-as",
@@ -76,13 +79,13 @@ TARGETS = {
                     objdump="sparc64-elf-objdump",
                     objdump_flags=["-m", "sparc:v9"],
                     addr_bits=64, word_maker=word,
-                    rewrite=gasfuzz.dot_relative(BRANCHES)),
+                    rewrite=gasfuzz.dot_relative(BRANCHES, ALIGN)),
     "sparcv9": Target("sparcv9", "sparcv9", gas="sparc64-elf-as",
                       gas_flags=["-64", "-Av9"], mc="sparcv9",
                       objdump="sparc64-elf-objdump",
                       objdump_flags=["-m", "sparc:v9"],
                       addr_bits=64, word_maker=word,
-                      rewrite=gasfuzz.dot_relative(BRANCHES)),
+                      rewrite=gasfuzz.dot_relative(BRANCHES, ALIGN)),
 }
 
 # What the backend does not claim (README.md: "SPARC V8 / V9"): the VIS
@@ -113,7 +116,8 @@ NOT_IMPLEMENTED = re.compile(r"""^(
 # line rather than by mnemonic:
 #
 #   fb<cc> / fbp<cc>   the floating-point branches
-#   fmov<cc> / fmovr   the floating-point conditional moves
+#   fmov<cc> / fmovr   the floating-point conditional moves, of either
+#                      condition-code bank
 #   %fsr, %fq          the floating-point state registers, which `ld` and
 #                      `st` transfer
 #   t<cc> %icc, ...    the V9 trap and compare, which name a condition-code
@@ -122,7 +126,7 @@ NOT_IMPLEMENTED = re.compile(r"""^(
 # Each is a feature the backend does not have, not a disagreement about one
 # it does; they are listed here so a run says nothing about them either way.
 UNIMPLEMENTED = re.compile(
-    r"^(fb|fmov(r|[a-z]+ %fcc)|t[a-z]+ %[ix]cc|fcmp[a-z]* %fcc)|%f(sr|q)\b")
+    r"^(fb|fmov(r|[sdq][a-z]+)|t[a-z]+ %[ix]cc|fcmp[a-z]* %fcc)|%f(sr|q)\b")
 
 
 def skip(case):

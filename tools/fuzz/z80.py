@@ -80,7 +80,23 @@ def skip(case):
     return bool(NOT_IMPLEMENTED.match(case[0]))
 
 
-RULES = gasfuzz.Rules()
+def undocumented_instruction(text, res, target):
+    """`out (c), 0` and `in f, (c)`.
+
+    Two slots the Z80 leaves undocumented but implements: `ED 71` writes
+    zero to the port in BC and `ED 70` sets the flags from it and keeps
+    nothing. src/arch/retro/z80.rs assembles both and says why; GNU as
+    refuses them.
+    """
+    g, r = res.get("gas"), res.get("rsasm")
+    if not g or g[0] != "err" or r[0] != "ok":
+        return False
+    return re.match(r"^(out \(c\), *0$|in (f, *)?\(c\)$)", text.strip()) is not None
+
+
+RULES = gasfuzz.Rules(deviations=[
+    ("undocumented-instruction", undocumented_instruction),
+])
 
 
 if __name__ == "__main__":

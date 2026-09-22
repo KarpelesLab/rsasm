@@ -862,7 +862,7 @@ def relocates_an_absolute_target(text, res, target):
 ADDRESS_TOKEN = re.compile(r"(?<![\w.$%])(-?(?:0x[0-9a-f]+|\d+))(?![\w.])")
 
 
-def dot_relative(mnemonics):
+def dot_relative(mnemonics, align=1):
     """A `rewrite` that turns a printed branch target into `.`-relative form.
 
     A disassembler prints where a branch lands; an assembler asked for that
@@ -873,7 +873,10 @@ def dot_relative(mnemonics):
     away from the absolute-value fixup it crashes on.
 
     The *last* address-shaped token is the target: a predicted branch names
-    its condition-code bank first.
+    its condition-code bank first. `align` is what a displacement on this
+    target has to be a multiple of; a line whose last token does not give
+    one is a line this rewrite has misread, and it is dropped rather than
+    turned into an instruction the disassembler never printed.
     """
     rx = re.compile(mnemonics)
 
@@ -889,7 +892,9 @@ def dot_relative(mnemonics):
         # displacement from a register, not from here.
         if hit.end() != len(text) or text[:hit.start()].rstrip().endswith(("+", "-")):
             return text
-        return (text[:hit.start()] + ".%+d" % (int(hit.group(1), 0) - off)
-                + text[hit.end():])
+        disp = int(hit.group(1), 0) - off
+        if align > 1 and disp % align:
+            return None
+        return (text[:hit.start()] + ".%+d" % disp + text[hit.end():])
 
     return rewrite
