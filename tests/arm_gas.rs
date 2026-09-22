@@ -238,6 +238,26 @@ fn data_before_code_is_marked_from_the_start() {
     );
 }
 
+/// The no-ops padding a section's tail are the instruction set recorded on
+/// the fragment they land in. An instruction stamps its own set on the
+/// fragment it is written into, so a `.arm` after the section was left
+/// changes nothing; but a relaxable Thumb load is a fragment of its own in
+/// GNU as, and the padding after it takes the set in force when the file
+/// ends, whose no-op may not fit — two bytes of ARM padding are zeros, with
+/// a `$d` over them.
+#[test]
+fn a_section_tail_is_padded_for_its_last_fragment() {
+    let kept = ".text\nbx lr\n.code 16\nbx lr\n.data\n.arm\n";
+    assert_eq!(hex(&text_for("arm", kept)), "1e ff 2f e1 70 47 00 bf");
+    assert_eq!(mapping("arm", kept)[..2], text(&[(0, "$a"), (4, "$t")])[..]);
+    let relaxed = ".text\nbx lr\n.code 16\nstr r0, [r3, #4]\n.data\n.arm\n";
+    assert_eq!(hex(&text_for("arm", relaxed)), "1e ff 2f e1 58 60 00 00");
+    assert_eq!(
+        mapping("arm", relaxed)[..3],
+        text(&[(0, "$a"), (4, "$t"), (6, "$d")])[..]
+    );
+}
+
 // ---- interworking ----------------------------------------------------------------
 
 /// The ELF symbol table of an object, as `(name, value, st_info)`, without
@@ -396,6 +416,23 @@ fn thumb_adr_of_a_thumb_function() {
             ".thumb_func\nf: bx lr\nadr r0, f\nadr r1, g\n.p2align 2, 0\n.thumb_func\ng: bx lr\n"
         )),
         "70 47 af f2 03 00 0f f2 05 01 00 00 70 47 00 bf"
+    );
+}
+
+/// The bit goes into the `adr`'s addend, not into the finished `S + A - P`:
+/// `md_convert_frag`'s `exp.X_add_number |= 1` adds one only where the addend
+/// is even, which shows where the function is at an odd address.
+#[test]
+fn thumb_adr_of_a_thumb_function_sets_the_bit_in_the_addend() {
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            "adr r7, f\nadr r6, f + 1\nadr r5, f + 2\n.byte 1, 2, 3\n\
+             .thumb_func\nf: .p2align 2, 0\nadr r4, f\nadr r3, f + 1\n\
+             adr r2, f + 2\nbx lr\n"
+        )),
+        "0f f2 0c 07 0f f2 08 06 0f f2 06 05 01 02 03 00 \
+         af f2 04 04 af f2 06 03 af f2 0a 02 70 47 00 bf"
     );
 }
 

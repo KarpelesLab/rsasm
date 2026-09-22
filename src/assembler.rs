@@ -2058,8 +2058,10 @@ impl Assembler {
             self.dwarf_instruction(pos, &variants, span);
         }
         // A relaxable instruction ends GNU as's fragment, and with it the
-        // record of which instruction set later padding is for.
-        let settled = variants.len() == 1;
+        // record of which instruction set later padding is for — including
+        // one the backend had only one encoding for but the reference
+        // assembler still gave a fragment of its own.
+        let settled = !relaxable && variants.len() == 1;
         self.cur_section().has_instructions = true;
         let idx = self.cur_section().emit_variants(variants, span);
         self.cur_section().frags[idx as usize].relaxable = relaxable;
