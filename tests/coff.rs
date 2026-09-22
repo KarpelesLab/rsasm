@@ -252,6 +252,16 @@ fn coff_directives_need_coff_output() {
 }
 
 #[test]
+fn a_thread_local_common_block_is_an_elf_directive() {
+    // Neither `x86_64-w64-mingw32-as` nor llvm-mc for Darwin knows
+    // `.tls_common`; both call it an unknown directive.
+    for format in [Format::Coff, Format::MachO] {
+        let e = errors("x86-64", format, ".tls_common tc, 8, 8\n");
+        assert!(e.contains("unknown directive"), "{e}");
+    }
+}
+
+#[test]
 fn a_field_coff_has_no_relocation_for_is_refused() {
     // A one-byte PC-relative field, which llvm-mc refuses too.
     let e = errors("x86-64", Format::Coff, "jecxz foo\n");

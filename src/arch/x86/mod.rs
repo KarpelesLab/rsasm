@@ -124,6 +124,9 @@ impl Architecture for X86 {
                     abi.abs(size)
                 }
             }
+            // The TLS descriptor call is marked rather than filled in, so its
+            // fixup is zero bytes wide; see `Abi::tlsdesc_call`.
+            "tlscall" => (size == 0).then(|| abi.tlsdesc_call()),
             // Every other i386 modifier names a 32-bit relocation.
             _ if abi == reloc::Abi::I386 => match name {
                 "gotpc" => abi.gotpc(size),
@@ -137,7 +140,7 @@ impl Architecture for X86 {
             "got" => abi.got(size, pcrel),
             "gotoff" => abi.gotoff(size),
             "gotpc" => abi.gotpc(size),
-            _ => None,
+            _ => reloc::Abi::x86_64_tls_modifier(name, size),
         }
     }
 

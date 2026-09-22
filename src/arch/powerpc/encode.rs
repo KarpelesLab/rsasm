@@ -1261,10 +1261,12 @@ enum Linked {
 /// What the references read here and this table leaves out:
 ///
 /// * `@tprel`, `@dtprel` and the `@got@tls*` forms, which both references
-///   agree on. They relocate against a thread-local symbol, and rsasm does
-///   not give a symbol defined in `.tdata` or `.tbss` `STT_TLS`, which both
-///   references do and the linker needs; the relocation without the symbol
-///   type would make an object that cannot be linked.
+///   agree on. The symbol type they need is there — a symbol defined in
+///   `.tdata` or `.tbss` is `STT_TLS` — and what is missing is the
+///   relocations themselves, read out of reference objects for both word
+///   sizes, and for the dynamic models the `@tls` and `(sym@tlsgd)` markers
+///   on the instructions a linker rewrites, which this backend does not
+///   parse.
 /// * `@plt@l`, `@plt@h` and `@plt@ha`, the halves of a PLT entry's address,
 ///   and the `@sectoff` and `@sdarel` families. Only GNU as reads them, and
 ///   the PowerPC harnesses run against llvm-mc, so nothing rsasm wrote for

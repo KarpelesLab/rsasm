@@ -692,6 +692,15 @@ fn collect_symbols(
         let (sym_ty, value) =
             asm.target()
                 .elf_symbol(sym.target_flags, sym.ty, sym.is_defined(), value);
+        // A label in a thread-local section is thread-local whatever `.type`
+        // said, as in GNU as; the section symbol standing for the section as
+        // a whole is not, since it names the section rather than a variable
+        // the linker copies into each thread's block.
+        let sym_ty = if sym_ty != SymType::Section && asm.is_thread_local(id) {
+            SymType::Tls
+        } else {
+            sym_ty
+        };
         let ty = match sym_ty {
             SymType::NoType => STT_NOTYPE,
             SymType::Object => STT_OBJECT,
@@ -735,15 +744,22 @@ fn collect_symbols(
     }
 
     // Mapping symbols are untyped locals, one per change between code and
-    // data; see `crate::mapping`.
+    // data; see `crate::mapping`. One in a thread-local section is
+    // thread-local as well, since GNU as decides that from the section
+    // whatever the symbol stands for.
     for m in &asm.mapping_symbols {
         let Some(&shndx) = sec_index.get(&m.section) else {
             continue;
         };
+        let ty = if asm.section(m.section).flags.tls {
+            STT_TLS
+        } else {
+            STT_NOTYPE
+        };
         locals.push(OutSym {
             id: None,
             name: strtab.add(m.name),
-            info: (STB_LOCAL << 4) | STT_NOTYPE,
+            info: (STB_LOCAL << 4) | ty,
             other: 0,
             shndx,
             value: m.offset,

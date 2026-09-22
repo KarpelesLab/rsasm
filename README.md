@@ -56,7 +56,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17055 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17085 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21771 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3106 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 537 |
@@ -107,6 +107,14 @@ form by form and in random whole programs as well.
   of the instruction forms a linker may rewrite into a direct reference takes
   the relaxable relocation GNU as gives it — `R_386_GOT32X`, or
   `R_X86_64_GOTPCRELX` and its REX form
+- thread-local storage: a symbol defined in a section carrying `SHF_TLS` is
+  `STT_TLS` whatever a `.type` said, on every target; `.tdata` and `.tbss`
+  are such sections whether the flag string or the built-in name says so, and
+  `.tls_common` declares a thread-local common block. x86-64 and i386
+  assemble the access models GNU as accepts for each — `@TLSGD`, `@TLSLD`,
+  `@TLSLDM`, `@DTPOFF`, `@TPOFF`, `@NTPOFF`, `@GOTTPOFF`, `@GOTNTPOFF`,
+  `@INDNTPOFF`, `@TLSDESC` and `@TLSCALL` — in code and in data, each only in
+  the instruction forms a linker knows how to rewrite
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -252,8 +260,8 @@ form by form and in random whole programs as well.
   branches, and the privileged, hypervisor, cache-hint and synchronisation
   instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
   like); the thread-local relocation modifiers (`@tprel`, `@dtprel`,
-  `@got@tlsgd` and the rest), because a symbol defined in `.tdata` or `.tbss`
-  does not come out `STT_TLS`, which the linker needs; the spellings only
+  `@got@tlsgd` and the rest) and the `@tls` and `(sym@tlsgd)` markers on the
+  instructions a linker rewrites; the spellings only
   GNU as reads, so that nothing could check them (`@plt@ha`, `@sectoff`,
   `@sdarel`); and `@notoc`, which is a different relocation to each of the
   two references
@@ -268,6 +276,12 @@ form by form and in random whole programs as well.
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
+- thread-local storage on the targets other than x86: the symbols and
+  sections are right everywhere, but only x86-64, i386 and SuperH read the
+  access-model operands. ARM's `sym(TLSGD)`, AArch64's `:tprel_g0:` and
+  PowerPC's `@tprel`, `@dtprel` and `@got@tls*`, each with its relatives, are
+  refused with the reason; Mach-O's `@TLVP` and PE's thread-local sections
+  are their formats' own idea of the same thing, and are not there either
 - MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
   writes and llvm-mc, the reference here, does not; and the `.module` options
   that would change which instructions are accepted (the ISA names, the
@@ -918,9 +932,9 @@ and a loader may do with the object, and leaving them out of the comparison
 is what hid them from rsasm for as long as it did.
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
-  16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
+  16-bit mode, in AT&T and Intel syntax. 8,654 of 8,654 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,861 of 38,861 match across twenty-one target variants. For RISC-V
+  supports. 38,888 of 38,888 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -957,6 +971,7 @@ is what hid them from rsasm for as long as it did.
   `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
+  the x86 thread-local access models, which the linker turns into local exec,
   weak definitions a second object overrides, `.comm` symbols merged between
   objects with different sizes, `.bss`, and references into another object's
   sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,
@@ -965,7 +980,7 @@ is what hid them from rsasm for as long as it did.
   exist for. Two more rows link [PE/COFF](#pecoff) objects into an image with
   GNU ld for mingw, where what a link has to get right is `@IMGREL`,
   `.secrel32` and `.secidx` and the addend a COFF relocation keeps in its
-  field. 236 of 236 match across twenty-nine variants.
+  field. 238 of 238 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 444 of 444
@@ -987,7 +1002,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,597 of 1,597 match, and every object both write
+  those of `tools/mc-diff`. 1,645 of 1,645 match, and every object both write
   is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random

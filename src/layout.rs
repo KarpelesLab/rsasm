@@ -1081,6 +1081,23 @@ impl Assembler {
         }
     }
 
+    /// Whether the linker has to treat `id` as a thread-local variable, so
+    /// that its value is an offset into the thread-local block rather than an
+    /// address.
+    ///
+    /// Being defined in a section with `SHF_TLS` is enough on its own, and it
+    /// is what GNU as decides as it writes the object: a `.type` naming some
+    /// other type does not take it back, whichever side of the label it is
+    /// on. The declared type still counts for the symbols that are in no such
+    /// section — `.tls_common`, and a `%tls_object` the linker must find
+    /// elsewhere.
+    pub(crate) fn is_thread_local(&self, id: SymbolId) -> bool {
+        self.symbols.get(id).ty == crate::symbol::SymType::Tls
+            || self
+                .symbol_section(id)
+                .is_some_and(|s| self.section(s).flags.tls)
+    }
+
     /// Reduces a [`Value`] to a number, if every symbol in it has an address.
     pub(crate) fn resolve_value(&self, v: Value) -> Option<i64> {
         let mut n = v.addend;
@@ -2191,9 +2208,12 @@ impl Assembler {
         let binding = self.symbols.get(target).binding;
         let arch = self.frag_arch(si, fi).0;
         // A target may need the linker to see the symbol itself: an ARM
-        // function, whose instruction set a linker reads from it.
+        // function, whose instruction set a linker reads from it, and a
+        // thread-local variable, whose section symbol is not itself
+        // thread-local and so cannot stand in for it.
         let sym = self.symbols.get(target);
-        let keep = arch.keeps_reloc_symbol(sym.target_flags, sym.ty);
+        let keep =
+            arch.keeps_reloc_symbol(sym.target_flags, sym.ty) || self.is_thread_local(target);
         // NASM's rule holds for its COFF objects too. Otherwise COFF keeps
         // the local symbols the source named, and llvm-mc relocates against
         // them by name; only the assembler's own labels, which never reach
