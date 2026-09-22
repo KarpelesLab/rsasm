@@ -13,7 +13,8 @@
 //!
 //! Register names are reserved words in either spelling: the function names
 //! (`A`, `AX`, ...) or the absolute ones (`R1`, `RP0`, ...). Both are
-//! case-insensitive.
+//! case-insensitive, inside the brackets as well as outside them, so `[RP2]`
+//! is `[DE]`, `[RP3+R3]` is `[HL+B]` and `[RP3].3` is `[HL].3`.
 
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
@@ -249,17 +250,20 @@ fn indirect(cx: &mut AsmCtx<'_>, inner: &[Token], span: Span) -> Option<Operand>
     }
     if let Some(name) = sole_ident(cx, inner) {
         match name.to_ascii_uppercase().as_str() {
-            "DE" => return Some(Operand::De),
-            "HL" => return Some(Operand::Hl),
+            "DE" | "RP2" => return Some(Operand::De),
+            "HL" | "RP3" => return Some(Operand::Hl),
             _ => {}
         }
     }
     let head = ident_text(cx, &inner[0]).map(str::to_ascii_uppercase);
-    if head.as_deref() == Some("HL") && inner.len() >= 2 && inner[1].is_punct(Punct::Plus) {
+    if matches!(head.as_deref(), Some("HL" | "RP3"))
+        && inner.len() >= 2
+        && inner[1].is_punct(Punct::Plus)
+    {
         let disp = &inner[2..];
         match sole_ident(cx, disp).map(str::to_ascii_uppercase).as_deref() {
-            Some("B") => return Some(Operand::HlB),
-            Some("C") => return Some(Operand::HlC),
+            Some("B" | "R3") => return Some(Operand::HlB),
+            Some("C" | "R2") => return Some(Operand::HlC),
             _ => {}
         }
         if disp.is_empty() {
@@ -400,7 +404,9 @@ fn bit_base(cx: &mut AsmCtx<'_>, left: &[Token], span: Span) -> Option<BitBase> 
         }
     }
     if let Some(inner) = bracketed(left) {
-        if sole_ident(cx, inner).is_some_and(|n| n.eq_ignore_ascii_case("HL")) {
+        if sole_ident(cx, inner)
+            .is_some_and(|n| n.eq_ignore_ascii_case("HL") || n.eq_ignore_ascii_case("RP3"))
+        {
             return Some(BitBase::Hl);
         }
         cx.error(

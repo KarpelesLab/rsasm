@@ -2,7 +2,7 @@
 
 For targets that neither `tools/gas-diff` (the host's GNU as) nor
 `tools/mc-diff` (llvm-mc) can assemble: m68k, V850/RH850, RL78, RX, SuperH,
-AVR, MSP430, and the 8-bit Z80, 6502, 8080 and 8051.
+AVR, MSP430, and the 8-bit Z80, 6502, 8080, 8051 and 78K0.
 And for ARM and Thumb whole objects, where GNU as is the reference that matters
 and llvm-mc answers differently; see [ARM](#arm). AArch64 is here for the
 same reason, its literal pools and its system instructions; see
@@ -50,6 +50,7 @@ See `tools/oracles/build.sh` for why the versions are pinned.
 | `z80-gas` | `z80`, GNU syntax | `z80-elf-as`, on `z80.txt` |
 | `z80-vasm` | `z80`, 8-bit syntax | `vasmz80_oldstyle`, on `z80.txt` and its own programs |
 | `i8080` | `i8080`, 8-bit syntax | `asl -cpu 8080`, converted by `p2bin` |
+| `78k0` | `78k0`, CA78K0 syntax | `asl -cpu 78070`, converted by `p2bin` |
 | `powerpc64` / `powerpc64le` | `powerpc64` / `powerpc64le` | `powerpc64-linux-gnu-as -a64 -mfuture` with `-mbig` / `-mlittle`, both on `powerpc64.txt`; see [PowerPC](#powerpc) |
 | `powerpc` | `powerpc`, relocations only | `powerpc64-linux-gnu-as -a32 -mfuture` |
 | `i8051` | `8051`, 8-bit syntax | `asl -cpu 8051` after its `stddef51.inc`, converted by `p2bin` |
@@ -294,12 +295,19 @@ reference, and a second where one reads the same syntax:
   the last two bytes of a 2 KiB block, which both references check against
   the instruction's own address and the CPU, and rsasm, against the address
   after it — the pair is AS's generic `JMP`, which uses that address too.
+- **78K0: AS.** CA78K0 is a proprietary Windows tool and neither GNU binutils
+  nor LLVM knows the 78K0, but AS does, under the CPU name `78070`. It has no
+  name for `PSW` or `SP`, so every snippet is assembled after two `EQU`s
+  giving them the short direct addresses FF1EH and FF1CH that the code table
+  itself says they are. Two operands it reads differently, and those are in
+  `78k0-pairs.txt`: NEC's `CALLF !addr11` and `CALLT [addr5]` name the target
+  address, 0800H to 0FFFH and an even 40H to 7EH, where AS reads the 11- and
+  6-bit number the opcode holds, which is that address less 0800H or 40H.
+  What AS reads more loosely than the manual — a bare address outside short
+  direct and SFR space, which it turns into absolute addressing, `[HL+0]` as
+  `[HL]`, `ADDW` on a pair that is not `AX`, and an odd `saddrp` as a warning
+  rather than an error — is left out of the corpus and written down in
+  `tools/fuzz/nec78k0.py`, which fuzzes whole programs against the same pair.
 
 A reference that refuses a case never matches, so the corpora hold only
 source every reference for the key accepts.
-
-## 78K0
-
-No reference exists — CA78K0 is a proprietary Windows tool and neither GNU
-binutils nor LLVM supports the 78K0 — so it has no corpus here. Its tables are
-verified by tests that walk the whole opcode space.

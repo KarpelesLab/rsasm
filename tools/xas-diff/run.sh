@@ -138,6 +138,7 @@ z80|z80|8bit|z80-elf-as|linked:z80-elf-ld
 z80-gas|z80|gas|z80-elf-as|linked:z80-elf-ld|z80
 z80-vasm|z80|8bit|vasmz80_oldstyle -quiet -Fbin|bin|z80
 i8080|i8080|8bit|asl -cpu 8080|p2bin
+78k0|78k0|renesas|asl -cpu 78070|p2bin
 i8051|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2bin
 i8051-sdas|8051|8bit|sdas8051 -o|sdld
 i8051-hex|8051|8bit|asl -cpu 8051 -i $bin/../share/asl|p2hex
@@ -175,6 +176,10 @@ prelude() { # key
   case "$1" in
     arm | thumb) printf '\t.syntax unified\n' ;;
     i8051 | i8051-hex) printf '\tinclude "stddef51.inc"\n' ;;
+    # AS has no name for either; the 78K0 code table's own rows say `PSW` is
+    # the short direct address FF1EH and `SP` is FF1CH, and reaching them
+    # through AS's short direct form gives the same bytes.
+    78k0) printf 'PSW\tEQU\t0FF1EH\nSP\tEQU\t0FF1CH\n' ;;
     i8051-sdas) printf '\t.area CSEG (ABS)\n' ;;
   esac
 }

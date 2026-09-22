@@ -55,6 +55,7 @@ seconds) is how long one fuzzer may take before it is killed and read as
 | `avr.py` | AVR, 21 cores | GNU as, GNU ld | whole random programs |
 | `z80.py` | Zilog Z80 | GNU as | GNU objdump's disassembly |
 | `mcs51.py` | Intel 8051 | AS, sdas8051 | whole random programs |
+| `nec78k0.py` | NEC 78K0 | AS | whole random programs |
 | `mos6502.py` | MOS 6502 | ca65 + ld65, vasm | whole random programs |
 | `i8080.py` | Intel 8080 | AS + p2bin | whole random programs |
 | `nasm.py` | the `nasm` dialect | NASM | whole random programs |
@@ -97,15 +98,11 @@ findings. Those lists are the honest record of what each backend leaves out.
 
 ## What is not fuzzed, and why
 
-Everything here needs a second opinion. Two things in the crate cannot have
-one, so neither is fuzzed:
+Everything here needs a second opinion. One thing in the crate cannot have
+one, so it alone is not fuzzed:
 
-* **The NEC 78K0.** There is no freely available CA78K0 assembler to compare
-  against. Its table came out of NEC's instruction manual, was checked
-  against the byte counts in a second NEC manual and cross-checked against
-  MAME's disassembler; there is nothing to generate random programs for.
 * **The Renesas CC-RL, CC-RH and CC-RX dialects.** No Renesas assembler can
-  be run here either. What `tools/xas-diff` does instead is pair vendor
+  be run here. What `tools/xas-diff` does instead is pair vendor
   source with the GNU-syntax program it means and require rsasm's bytes for
   the first to equal GNU as's for the second -- but the pairing is the thing
   under test, so a fuzzer would have to generate both halves, and generating
@@ -115,11 +112,12 @@ one, so neither is fuzzed:
   as an oracle; the instruction encodings themselves are already covered by
   `rx.py`, `rl78.py` and `v850.py` through the GNU syntax.
 
-The Motorola and 8-bit dialects do have one, because a second assembler
+The vendor and 8-bit dialects do have one, because a second assembler
 reads them: `m68k.py --syntax mot` and `--syntax vasm` fuzz Motorola syntax
 against GNU as `--mri` and vasm, `mcs51.py` writes each program in both AS's
-and sdas8051's spelling and compares all four ways, and `nasm.py` fuzzes
-NASM source against NASM itself.
+and sdas8051's spelling and compares all four ways, `nec78k0.py` fuzzes
+CA78K0 source against the Macro Assembler AS, whose name for the 78K0 family
+is `78070`, and `nasm.py` fuzzes NASM source against NASM itself.
 
 ## x86
 
@@ -396,6 +394,45 @@ in the last two bytes of a block; see `tools/xas-diff/README.md`) and
 **first-pass** (AS stops after a first pass in which it guessed a forward
 `JMP` or `CALL` short). Two runs of 40,000 programs each, one mixed and one
 AS-only, find no case where rsasm differs.
+
+## The 78K0
+
+`nec78k0.py` generates random whole 78K0 programs from a table of forms
+written from NEC's *78K/0 Series User's Manual: Instructions* and assembles
+each with rsasm in its CA78K0 dialect and with the Macro Assembler AS, whose
+name for the family is `78070`. Programs are labels with forward and backward
+references, equates, `DB`/`DW`/`DS`, every addressing mode the backend claims
+-- short direct and SFR addresses over the whole of both windows, `!addr16`,
+`[HL+byte]`, the bit terms, `CALLF`, `CALLT` and all three widths of branch --
+with registers in both spellings and numbers in each radix the two share.
+
+```console
+$ cargo build --all-features --bin rsasm
+$ tools/fuzz/nec78k0.py fuzz --count 3000
+$ tools/fuzz/nec78k0.py check prog.s        # one program, or a corpus file
+$ tools/fuzz/nec78k0.py corpus lines > tools/xas-diff/78k0.txt
+$ tools/fuzz/nec78k0.py corpus pairs > tools/xas-diff/78k0-pairs.txt
+```
+
+Nearly every program reads the same to both assemblers, so one text goes to
+both. Two operands do not, and a case then carries a spelling each and the
+bytes are compared: NEC's `CALLF !addr11` and `CALLT [addr5]` name the target
+address, 0800H to 0FFFH and an even 40H to 7EH, where AS reads the 11- and
+6-bit number the opcode holds, which is that address less 0800H or 40H.
+`PSW` and `SP` need no second spelling, only a prelude: AS has no name for
+either, and the code table's own rows say they are the short direct addresses
+FF1EH and FF1CH, so the AS half is assembled after two `EQU`s.
+
+`--mutations` (default 0.25) is the fraction of programs made invalid: an
+operand out of range, an addressing mode a mnemonic has not got, reserved
+space that pushes a branch out of reach. Programs are classified as in the
+module comment: **rsasm** findings, and **align**, where AS only warns about
+the odd short direct or SFR address of a `MOVW` that rsasm refuses. The forms
+the two spell differently for reasons nothing settles -- a bare `BR`, `[HL+0]`,
+an address outside both windows, `ADDW` on a pair that is not `AX` -- are
+listed in the module comment and not generated. 12,000 programs at
+`--mutations 0.4`, and the 1,276 one-line cases of `tools/xas-diff/78k0.txt`,
+find no case where rsasm differs.
 
 # m68k
 

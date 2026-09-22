@@ -1,13 +1,17 @@
 //! NEC/Renesas 78K0, in the syntax of Renesas's CA78K0 assembler.
 //!
-//! # No reference assembler
+//! # How this is checked
 //!
-//! Every other backend in this crate is checked against GNU as or llvm-mc.
-//! Neither supports the 78K0, and CA78K0 itself is a proprietary Windows tool,
-//! so this one is verified the way the Z80 and 6502 backends are: against the
-//! vendor's own documentation, with the tests walking the whole table. (The
-//! RL78, which binutils does support, is a later and differently encoded
-//! architecture; its encodings are no evidence for the 78K0's.)
+//! Neither GNU as nor llvm-mc knows the 78K0, and CA78K0 itself is a
+//! proprietary Windows tool, so the table below was built from the vendor's
+//! own documentation and the tests walk all of it. (The RL78, which binutils
+//! does support, is a later and differently encoded architecture; its
+//! encodings are no evidence for the 78K0's.)
+//!
+//! There is a second opinion all the same: the Macro Assembler AS, whose name
+//! for the family is `78070`. `tools/xas-diff` assembles every form of the
+//! table with both, and `tools/fuzz/nec78k0.py` does the same for random whole
+//! programs; both say what AS reads differently and why.
 //!
 //! The documents, all published by NEC or Renesas:
 //!
