@@ -387,6 +387,10 @@ impl Assembler {
                         r.span,
                         format!("literal pool overflow: a pool holds at most {MAX_ENTRIES} slots"),
                     );
+                    // The load keeps the slot before it, so that the pool it
+                    // cannot have a slot in does not also leave its label
+                    // undefined and report that of every load after it.
+                    uses.push((entry - 1, r.label, r.span));
                     continue;
                 }
                 if r.size == 8 {
