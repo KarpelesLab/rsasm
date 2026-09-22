@@ -19,11 +19,13 @@
 # Motorola source is column-sensitive, so indent instructions in those corpora.
 #
 # Snippets in <key>-relocs.txt, in the programs format, are compared as whole
-# objects instead: every allocated section's header and bytes, the global,
-# weak and undefined symbols, and the relocations, as tools/mc-diff/canon.sh
-# prints them; for ARM and Thumb also `e_flags` and every local symbol, with
-# `canon.sh --full`, and for AVR `e_flags`, with `canon.sh --flags`. A snippet
-# there named `refused: ...` matches when both assemblers reject it.
+# objects instead: every allocated section's header and bytes, the sections
+# the reference writes of its own accord (the build attributes, V850's
+# `.note.renesas`, AVR's `.avr.prop`), the global, weak and undefined
+# symbols, the relocations and the header's `e_flags`, as
+# tools/mc-diff/canon.sh prints them; for ARM, Thumb and AArch64 also every
+# local symbol, with `canon.sh --full`. A snippet there named
+# `refused: ...` matches when both assemblers reject it.
 #
 # AArch64 is here for its literal pools, which are GNU as's feature: where
 # the pool goes, what it shares and how its runs are aligned is decided across
@@ -295,7 +297,7 @@ compare_object() { # key arch dialect cmd name source
   # from the relocations, so they are blanked before the comparison.
   case "$1" in
     arm | thumb | aarch64) full=--full ;;
-    avr*) full="--flags --zero-relocated .avr.prop=4" ;;
+    avr*) full="--zero-relocated .avr.prop=4" ;;
   esac
   d=$(mktemp -d)
   printf '%s\n' "$6" > "$d/in.s"

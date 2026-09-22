@@ -201,6 +201,13 @@ impl Assembler {
                 }
                 Request::Literal(lit) => self.literal_pools.entry(self.cur).or_default().push(lit),
                 Request::FlushLiterals => self.flush_literals(span),
+                // The last word on a tag wins, as it does in GNU as, where
+                // each directive overwrites the attribute.
+                Request::Attribute { vendor, tag, value } => {
+                    self.attr_overrides
+                        .retain(|&(v, t, _)| (v, t) != (vendor, tag));
+                    self.attr_overrides.push((vendor, tag, value));
+                }
             }
         }
     }

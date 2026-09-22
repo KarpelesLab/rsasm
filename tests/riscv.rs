@@ -857,3 +857,53 @@ fn word_is_four_bytes_on_riscv() {
         "44 33 22 11"
     );
 }
+
+/// `.riscv.attributes`, whose `Tag_RISCV_arch` is the ISA string a linker
+/// checks one object against another by.
+///
+/// Every expected string is `riscv64-elf-objcopy --dump-section
+/// .riscv.attributes` of the reference's object for `-march=rv32imafdc` or
+/// `-march=rv64imafdc`, which llvm-mc writes identically for
+/// `-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes`.
+#[test]
+fn objects_carry_the_isa_string() {
+    let rv32 = "41 6c 00 00 00 72 69 73 63 76 00 01 62 00 00 00 05 72 76 33 32 69 32 70 \
+                31 5f 6d 32 70 30 5f 61 32 70 31 5f 66 32 70 32 5f 64 32 70 32 5f 63 32 \
+                70 30 5f 7a 69 63 73 72 32 70 30 5f 7a 6d 6d 75 6c 31 70 30 5f 7a 61 61 \
+                6d 6f 31 70 30 5f 7a 61 6c 72 73 63 31 70 30 5f 7a 63 61 31 70 30 5f 7a \
+                63 64 31 70 30 5f 7a 63 66 31 70 30 00";
+    let rv64 = "41 65 00 00 00 72 69 73 63 76 00 01 5b 00 00 00 05 72 76 36 34 69 32 70 \
+                31 5f 6d 32 70 30 5f 61 32 70 31 5f 66 32 70 32 5f 64 32 70 32 5f 63 32 \
+                70 30 5f 7a 69 63 73 72 32 70 30 5f 7a 6d 6d 75 6c 31 70 30 5f 7a 61 61 \
+                6d 6f 31 70 30 5f 7a 61 6c 72 73 63 31 70 30 5f 7a 63 61 31 70 30 5f 7a \
+                63 64 31 70 30 00";
+    // `.attribute` adds a tag, in tag order, beside the one the backend gave.
+    let with_tag = format!("{rv64} 06 01")
+        .replace("41 65", "41 67")
+        .replace("5b 00", "5d 00");
+    for (arch, src, want) in [
+        ("riscv32", "\tnop\n", rv32.to_string()),
+        ("riscv64", "\tnop\n", rv64.to_string()),
+        (
+            "riscv64",
+            "\t.attribute unaligned_access, 1\n\tnop\n",
+            with_tag.clone(),
+        ),
+        ("riscv64", "\t.attribute 6, 1\n\tnop\n", with_tag),
+        // `.gnu_attribute` adds a second vendor section to the same
+        // section, which is where GNU as puts it on a target that has one.
+        (
+            "riscv64",
+            "\t.gnu_attribute 4, 1\n\tnop\n",
+            format!("{rv64} 0f 00 00 00 67 6e 75 00 01 07 00 00 00 04 01"),
+        ),
+    ] {
+        let asm = assemble_for(arch, src);
+        assert!(!asm.diags().has_errors(), "{arch}: {src}");
+        assert_eq!(
+            hex(&section(&asm, ".riscv.attributes")),
+            want.split_whitespace().collect::<Vec<_>>().join(" "),
+            "{arch}: {src}"
+        );
+    }
+}

@@ -638,3 +638,100 @@ f:      ldrt    r0, =4
         .syntax unified
 f:      ldrh    pc, =4
         bx      lr
+=== the build attributes of a plain object
+        .syntax unified
+        .text
+        .global f
+f:      bx      lr
+=== .arch selects an architecture
+        .syntax unified
+        .arch   armv6
+f:      mov     r0, r1
+=== .arch armv5te
+        .syntax unified
+        .arch   armv5te
+f:      mov     r0, r1
+=== .arch armv8-a
+        .syntax unified
+        .arch   armv8-a
+f:      mov     r0, r1
+=== .cpu selects a CPU, which is named differently
+        .syntax unified
+        .cpu    cortex-a9
+f:      mov     r0, r1
+=== .cpu arm7tdmi
+        .syntax unified
+        .cpu    arm7tdmi
+f:      mov     r0, r1
+=== .fpu replaces the unit
+        .syntax unified
+        .fpu    vfpv2
+f:      mov     r0, r1
+=== .fpu softvfp leaves no unit
+        .syntax unified
+        .fpu    softvfp
+f:      mov     r0, r1
+=== .fpu after .arch
+        .syntax unified
+        .arch   armv7-a
+        .fpu    vfpv3
+f:      mov     r0, r1
+=== .fpu before .arch
+        .syntax unified
+        .fpu    vfpv2
+        .arch   armv7-a
+f:      mov     r0, r1
+=== .arch_extension adds to the architecture
+        .syntax unified
+        .arch   armv7-a
+        .arch_extension sec
+f:      mov     r0, r1
+=== .arch_extension mp
+        .syntax unified
+        .arch   armv7-a
+        .arch_extension mp
+f:      mov     r0, r1
+=== .arch forgets the extensions before it
+        .syntax unified
+        .arch_extension mp
+        .arch   armv7-a
+f:      mov     r0, r1
+=== .object_arch says what the object may be linked as
+        .syntax unified
+        .object_arch armv4t
+f:      mov     r0, r1
+=== .object_arch drops the profile with the architecture
+        .syntax unified
+        .object_arch armv6
+f:      mov     r0, r1
+=== .object_arch wins over a later .arch
+        .syntax unified
+        .object_arch armv6
+        .arch   armv7-a
+f:      mov     r0, r1
+=== .eabi_attribute replaces a tag
+        .syntax unified
+        .eabi_attribute 6, 7
+f:      mov     r0, r1
+=== .eabi_attribute adds one the CPU does not write
+        .syntax unified
+        .eabi_attribute 24, 1
+        .eabi_attribute 25, 1
+f:      mov     r0, r1
+=== .eabi_attribute names its tag
+        .syntax unified
+        .eabi_attribute Tag_ABI_align8_needed, 1
+f:      mov     r0, r1
+=== .eabi_attribute takes a string
+        .syntax unified
+        .eabi_attribute 5, "MYCPU"
+f:      mov     r0, r1
+=== the last .eabi_attribute on a tag wins
+        .syntax unified
+        .eabi_attribute 6, 7
+        .eabi_attribute 6, 9
+f:      mov     r0, r1
+=== .gnu_attribute goes beside the processor's tags
+        .syntax unified
+        .gnu_attribute 4, 1
+f:      mov     r0, r1

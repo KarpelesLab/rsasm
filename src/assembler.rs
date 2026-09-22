@@ -324,6 +324,12 @@ pub struct Assembler {
     /// The alignment fragments put ahead of data that must already be
     /// aligned, which are errors if they pad; see `Assembler::align_data`.
     pub(crate) align_tests: Vec<(SectionId, u32)>,
+    /// What the attribute directives -- ARM's `.eabi_attribute`, RISC-V's
+    /// `.attribute`, PowerPC's `.gnu_attribute` -- said, as
+    /// (vendor, tag, value), in the order the source wrote them. Merged into
+    /// what the backend gives when the object is laid out; see
+    /// `Assembler::add_attributes_section`.
+    pub(crate) attr_overrides: Vec<(&'static str, u32, crate::arch::AttrValue)>,
     /// CC-RH data values written without `#` that were not constants when
     /// read, to be refused at the end if they are labels; see
     /// `Assembler::cc_data`.
@@ -414,6 +420,7 @@ impl Assembler {
             end_of_source: false,
             relax_shift: None,
             align_tests: Vec::new(),
+            attr_overrides: Vec::new(),
             cc_bare_labels: Vec::new(),
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),
@@ -1545,6 +1552,45 @@ impl Assembler {
             .find(|&s| self.slot_arch(s).0.elf_machine() == machine)
             .unwrap_or(0);
         self.slot_arch(slot)
+    }
+
+    /// The sections the target writes into every object of its own accord,
+    /// and the one `.gnu_attribute` brings into being; see
+    /// [`Architecture::elf_attributes`](crate::arch::Architecture::elf_attributes).
+    /// Not API.
+    #[doc(hidden)]
+    pub fn attribute_sections(&self) -> Vec<crate::arch::AttrSection> {
+        let (arch, state) = self.target_state();
+        let mut sections = arch.elf_attributes(state);
+        if !self.attr_overrides.iter().any(|&(v, _, _)| v == "gnu") {
+            return sections;
+        }
+        // `.gnu_attribute` is every ELF target's, and none of them writes the
+        // vendor-neutral tags of its own accord, so the directive is what
+        // brings them into being. GNU as puts them beside the processor's
+        // where the target has a build-attributes section — ARM's and
+        // RISC-V's hold an `aeabi` or `riscv` vendor section and then a
+        // `gnu` one — and in a `.gnu.attributes` of its own where it has
+        // none, as on MIPS and PowerPC.
+        let vendors = sections.iter_mut().find_map(|s| match &mut s.body {
+            crate::arch::AttrBody::Tags(vendors) => Some(vendors),
+            crate::arch::AttrBody::Bytes(_) => None,
+        });
+        match vendors {
+            Some(vendors) if !vendors.iter().any(|v| v.name == "gnu") => {
+                vendors.push(crate::arch::AttrVendor {
+                    name: "gnu",
+                    tags: Vec::new(),
+                });
+            }
+            Some(_) => {}
+            None => sections.push(crate::arch::AttrSection::attributes(
+                ".gnu.attributes",
+                "gnu",
+                Vec::new(),
+            )),
+        }
+        sections
     }
 
     fn process(&mut self, stmt: &Statement) {

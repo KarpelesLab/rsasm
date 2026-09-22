@@ -11,3 +11,17 @@
         stxv    3, dat(4)
         .data
 dat:    .long 0
+=== .gnu_attribute records the floating-point ABI
+        .gnu_attribute 4, 1
+        .text
+        .globl  f
+f:      pnop
+        nop
+=== .gnu_attribute tags are written in order
+        .gnu_attribute 12, 1
+        .gnu_attribute 8, 2
+        .gnu_attribute 4, 1
+        .text
+        .globl  f
+f:      pnop
+        nop

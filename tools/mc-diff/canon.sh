@@ -11,11 +11,21 @@
 #   .rela.text 0x4 R_RISCV_CALL_PLT foo+0x0
 #
 # A section is listed if it is allocated and not empty, with its bytes unless
-# it is SHT_NOBITS, and so is AVR's `.avr.prop`, which is not allocated but is
-# what the linker relaxes the code by. What a reference writes of its own accord is left out:
-# the ABI and attribute sections (`.reginfo`, `.MIPS.abiflags`,
-# `.riscv.attributes`, `.ARM.attributes`, `.note.*`, ...), and `.text`,
-# `.data` and `.bss` while they are empty, which GNU as always creates.
+# it is SHT_NOBITS. So are the sections a reference writes of its own accord
+# even where they are not allocated -- the build attributes
+# (`.ARM.attributes`, `.riscv.attributes`, `.gnu.attributes`), MIPS's
+# `.reginfo` and `.MIPS.options`, V850's `.note.renesas` -- and AVR's
+# `.avr.prop`, which is not allocated but is what the linker relaxes the code
+# by. Left out are `.text`, `.data` and `.bss` while they are empty, which GNU
+# as always creates, `.pdr` and `.comment`, which it writes and rsasm does
+# not, and `.note.gnu.property`, which a GNU as configured
+# `--enable-x86-used-note` (Gentoo's, among others) adds to every x86 object.
+#
+# `--ignore NAME` leaves one more section out, for a comparison where the
+# reference does not write what rsasm does: llvm-mc writes no
+# `.ARM.attributes` unless the source asks for one, so `tools/mc-diff` passes
+# it for ARM and Thumb and `tools/xas-diff` compares the section against GNU
+# as, which is the reference for ARM objects.
 #
 # A symbol is listed if it is global, weak or undefined: which local labels
 # reach the symbol table, and under what names, differs between assemblers
@@ -23,13 +33,14 @@
 # relocs.awk, which names a local target by its section and offset for the
 # same reason.
 #
+# The header's `e_flags` is printed last, since it is as much a part of what
+# a linker reads as the sections are: AVR's core and relaxation flag live
+# there, and so does MIPS's `EF_MIPS_NOREORDER`.
+#
 # With `--full`, for a comparison against the one reference a target follows
-# for its whole objects, `e_flags` is
-# printed first, and the symbol list takes in every named local symbol but
-# section and file symbols, sorted: ARM's mapping symbols and Thumb function
-# bits are local, and are what that comparison is for. `--flags` prints
-# `e_flags` alone, for a target whose header says something (AVR's core and
-# relaxation flag) and whose local symbols do not.
+# for its whole objects, the symbol list takes in every named local symbol
+# but section and file symbols, sorted: ARM's mapping symbols and Thumb
+# function bits are local, and are what that comparison is for.
 #
 # `--zero-relocated NAME=WIDTH` blanks the `WIDTH` bytes at each relocation in
 # section `NAME` before printing it. A field a relocation covers belongs to the
@@ -41,11 +52,14 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 full=0
-flags=0
 zero_name=
 zero_width=0
-[ "$1" = --full ] && { full=1; flags=1; shift; }
-[ "$1" = --flags ] && { flags=1; shift; }
+ignore=
+[ "$1" = --full ] && { full=1; shift; }
+if [ "$1" = --ignore ]; then
+  ignore=$2
+  shift 2
+fi
 if [ "$1" = --zero-relocated ]; then
   zero_name=${2%%=*}
   zero_width=${2#*=}
@@ -55,16 +69,21 @@ obj=$1
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-llvm-readobj --sections "$obj" | ${AWK:-awk} '
+llvm-readobj --sections "$obj" | ${AWK:-awk} -v ignore="$ignore" '
   function hex(h,    i, v) {
     sub(/^0x/, "", h); h = toupper(h); v = 0
     for (i = 1; i <= length(h); i++) v = v * 16 + index("0123456789ABCDEF", substr(h, i, 1)) - 1
     return v
   }
-  function flush() {
-    # `.avr.prop` is not loaded, but is what a linker relaxing AVR code reads.
-    if (name == "" || (!alloc && name != ".avr.prop") || size == 0) return
-    if (name ~ /^\.(reginfo|pdr|comment|gnu\.attributes|riscv\.attributes|note)/ || name ~ /^\.(MIPS|ARM)\./) return
+  function flush(   kept) {
+    # A section a reference writes of its own accord is kept whether it is
+    # allocated or not, and so is `.avr.prop`, which a linker relaxing AVR
+    # code reads.
+    kept = name ~ /\.attributes$/ || name == ".reginfo" || name == ".MIPS.options" ||
+      name == ".note.renesas" || name == ".avr.prop"
+    if (name == "" || (!alloc && !kept) || size == 0) return
+    if (name == ".pdr" || name == ".comment" || name == ".note.gnu.property") return
+    if (ignore != "" && name == ignore) return
     printf "%s %s %s flags=%s size=0x%x align=%d\n", idx, name, type, flags, size, align
   }
   $1 == "Section" && $2 == "{" { name = ""; alloc = 0 }
@@ -111,7 +130,7 @@ sort -k2,2 "$tmp/sections" | while read -r idx name type flags size align; do
   printf '  %s\n' "$hex"
 done
 
-[ "$flags" = 1 ] && llvm-readobj --file-headers "$obj" |
+llvm-readobj --file-headers "$obj" |
   ${AWK:-awk} '$1 == "Flags" { f = $3; gsub(/[()]/, "", f); print "flags " f; exit }'
 
 llvm-readobj --symbols "$obj" > "$tmp/syms"
