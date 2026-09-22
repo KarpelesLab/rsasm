@@ -1282,6 +1282,115 @@ fn the_byte_and_halfword_literal_loads() {
     );
 }
 
+/// A transfer whose address is a bare label loads from the label itself
+/// rather than from a pool entry holding its value: `parse_address_main`
+/// turns the operand into `[pc, #label - (here + 8)]`. The U bit is what
+/// tells this apart from a pool load of the same distance -- the bare
+/// address prefers a positive offset, so a label the biased PC already sits
+/// on writes `[pc, #0]` where a pool entry there writes `[pc, #-0]`.
+///
+/// ARM state takes the stores too, and either state the preloads; only the
+/// unprivileged forms, which are post-indexed however they were written,
+/// have no such address.
+#[test]
+fn a_load_that_names_its_label() {
+    enc(
+        "back: .word 0x12345678\nldr r0, back\nldrb r1, back\nldrh r2, back\n\
+         ldrsb r3, back\nldrsh r4, back\nldrd r6, r7, back\nstr r0, back\n\
+         strh r2, back\nstrd r6, r7, back\nldreq r0, back\nldr pc, back\n\
+         ldr r0, fwd\nldr r0, back + 4\nldr r0, .\npld back\nfwd: bx lr\n",
+        "78 56 34 12 0c 00 1f e5 10 10 5f e5 b4 21 5f e1 d8 31 5f e1 fc 41 5f e1 \
+         d0 62 4f e1 24 00 0f e5 b8 22 4f e1 fc 62 4f e1 30 00 1f 05 34 f0 1f e5 \
+         08 00 9f e5 38 00 1f e5 08 00 1f e5 44 f0 5f f5 1e ff 2f e1",
+    );
+    // A word load reaches 4095 bytes and a halfword one 255, as a pool load
+    // of the same width does.
+    assert!(
+        hex(&text_for("arm", "ldr r0, fwd\n.space 4099\nfwd: bx lr\n")).starts_with("ff 0f 9f e5")
+    );
+    assert!(
+        hex(&text_for("arm", "ldrh r0, fwd\n.space 259\nfwd: bx lr\n")).starts_with("bf 0f df e1")
+    );
+    assert!(errors_for("arm", "ldr r0, fwd\n.space 4100\nfwd: bx lr\n").contains("4095"));
+    assert!(errors_for("arm", "ldrh r0, fwd\n.space 260\nfwd: bx lr\n").contains("255"));
+    // Thumb has no PC-relative store at all, and `ldrd` counts its offset in
+    // words.
+    tenc(
+        "back: .word 0x12345678\nldr r0, back\nldrb r1, back\nldrh r2, back\n\
+         ldrsb r3, back\nldrsh r4, back\nldrd r6, r7, back\nldr r8, back\n\
+         ldr pc, back\nldr r0, back + 4\npld back\n",
+        "78 56 34 12 5f f8 08 00 1f f8 0c 10 3f f8 10 20 1f f9 14 30 3f f9 18 40 \
+         5f e9 07 67 5f f8 20 80 5f f8 24 f0 5f f8 24 00 1f f8 2c f0",
+    );
+    assert!(
+        errors_for("thumb", "back: .word 0\nstr r0, back")
+            .contains("a Thumb store has no PC-relative form")
+    );
+    // `do_t_ldstt` hands the address to `encode_thumb32_addr_mode`, whose
+    // PC-relative case has no unprivileged spelling, so GNU as writes the
+    // ordinary load for one instead of refusing it. ARM state, whose
+    // `do_ldstt` insists on a post-indexed address, does refuse it.
+    tenc("back: .word 0\nldrt r0, back\n", "00 00 00 00 5f f8 08 00");
+    assert!(errors_for("arm", "back: .word 0\nldrt r0, back").contains("post-indexed address"));
+    // The address has to be a label: GNU as makes the reference PC-relative
+    // whatever was written, and nothing resolves one with no symbol in it.
+    assert!(errors_for("arm", "ldr r0, 0x100").contains("names a label"));
+    assert!(errors_for("thumb", ".set x, 4\nldr r0, x").contains("names a label"));
+    // Nor one a linker would have to place: the field has no relocation.
+    assert!(errors_for("arm", "ldr r0, ext").contains("no relocation exists"));
+    assert!(errors_for("arm", ".weak w\nw: .word 0\nldr r0, w").contains("no relocation exists"));
+    // `check_ldr_r15_aligned`: loading the PC from the PC is a branch, and
+    // one to an address that is not a multiple of four is unpredictable.
+    assert!(errors_for("arm", "back: .word 0\nldr pc, back + 1").contains("4-byte aligned"));
+    assert!(errors_for("thumb", "ldr pc, [pc, 1]").contains("4-byte aligned"));
+}
+
+/// Only the Thumb word load has a 16-bit PC-relative form, and only for a
+/// low register; `do_t_ldst` gives it a fragment and `relax_adr` sizes it,
+/// the same function that sizes an `adr`. The 32-bit form is taken for a
+/// target behind the instruction, further than 1020 bytes ahead, not on a
+/// word boundary, or that a later definition could move -- a Thumb function
+/// among those, although, unlike `adr`, the load leaves the address alone.
+#[test]
+fn a_thumb_load_that_names_a_label_picks_its_width() {
+    tenc(
+        "ldr r0, fwd\n.p2align 2, 0\nfwd: .word 0\n",
+        "00 48 00 00 00 00 00 00",
+    );
+    tenc(
+        "ldr r8, fwd\n.p2align 2, 0\nfwd: .word 0\n",
+        "df f8 00 80 00 00 00 00",
+    );
+    tenc("back: .word 0\nldr r0, back\n", "00 00 00 00 5f f8 08 00");
+    tenc(
+        "ldr r0, odd\n.byte 1\nodd: .word 0\n",
+        "df f8 01 00 01 00 00 00 00 00",
+    );
+    tenc(
+        ".thumb_func\nf: bx lr\n.p2align 2, 0\nldr r0, f\nldr r1, g\nadr r2, g\n\
+         .p2align 2, 0\n.type g, %function\ng: bx lr\nnop\n",
+        "70 47 00 00 5f f8 08 00 df f8 04 10 0f f2 01 02 70 47 00 bf",
+    );
+    // A `.n` leaves only the 16-bit form, which reaches no label behind it
+    // and no high register; a `.w` leaves only the wide one.
+    assert!(
+        errors_for("thumb", "back: .word 0\nldr.n r0, back")
+            .contains("offset -8 is out of range (0 to 1020)")
+    );
+    assert!(
+        errors_for("thumb", "ldr.n r8, fwd\n.p2align 2, 0\nfwd: .word 0")
+            .contains("16-bit instruction")
+    );
+    assert!(
+        errors_for("thumb", "ldrb.n r0, fwd\n.p2align 2, 0\nfwd: .word 0")
+            .contains("16-bit instruction")
+    );
+    tenc(
+        "ldr.w r0, fwd\n.p2align 2, 0\nfwd: .word 0\n",
+        "df f8 00 00 00 00 00 00",
+    );
+}
+
 /// What makes two literals one entry is what the source wrote, not what its
 /// value is as an `i64`: GNU as compares `X_unsigned` as well, which every
 /// integer has unless it was negated, a subtraction among the ways to negate

@@ -1369,6 +1369,9 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if let OperandKind::Literal(e) = ins.ops[1].kind {
         return literal_load(cx, ins, t, rt, &ins.ops[1], e);
     }
+    if let OperandKind::Imm(e) = ins.ops[1].kind {
+        return pcrel_load(cx, ins, t, rt, rt, &ins.ops[1], e);
+    }
     let OperandKind::Mem(mem) = ins.ops[1].kind else {
         cx.error(
             ins.ops[1].span,
@@ -1495,6 +1498,7 @@ fn wide_load_store(
             );
             return None;
         }
+        encode::pc_load_aligned(cx, mem.span, (rt >> 12) as Reg, mem.base, off)?;
         let u = u16::from(off >= 0) << 7;
         return Some(wide(base8 | u | rn, rt | (off.unsigned_abs() as u16)));
     }
@@ -1560,6 +1564,9 @@ fn load_store_dual(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, t: Transfer) -> Option<V
     }
     bad_reg(cx, ins.ops[0].span, rt)?;
     bad_reg(cx, ins.ops[at.min(ins.ops.len() - 1)].span, rt2)?;
+    if let OperandKind::Imm(e) = ins.ops[at].kind {
+        return pcrel_load(cx, ins, t, rt, rt2, &ins.ops[at], e);
+    }
     let OperandKind::Mem(mem) = ins.ops[at].kind else {
         cx.error(
             ins.ops[at].span,
@@ -1616,6 +1623,24 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     wide_only(cx, ins)?;
     encode::no_flags(cx, ins)?;
     encode::arity(cx, ins, &[1])?;
+    let (base12, base8) = match ins.mnem {
+        Mnem::Pld => (0xf890u16, 0xf810u16),
+        Mnem::Pldw => (0xf8b0, 0xf830),
+        _ => (0xf990, 0xf910),
+    };
+    if let OperandKind::Imm(e) = ins.ops[0].kind {
+        encode::pcrel_label(cx, ins.ops[0].span, e)?;
+        return Some(vec![fixed(
+            wide_bytes(base8 | u16::from(reg::PC), 0xf000),
+            e,
+            FixupKind::pcrel(4, 4)
+                .with_pc_align(4)
+                .with_limits(-4095, 4095)
+                .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                .scatter(scatter_literal32),
+            ins.ops[0].span,
+        )]);
+    }
     let OperandKind::Mem(mem) = ins.ops[0].kind else {
         cx.error(
             ins.ops[0].span,
@@ -1627,11 +1652,6 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         cx.error(mem.span, "a preload does not write its base register back");
         return None;
     }
-    let (base12, base8) = match ins.mnem {
-        Mnem::Pld => (0xf890u16, 0xf810u16),
-        Mnem::Pldw => (0xf8b0, 0xf830),
-        _ => (0xf990, 0xf910),
-    };
     let rn = mem.base as u16;
     match mem.offset {
         MemOffset::Reg {
@@ -1784,6 +1804,111 @@ fn scatter_literal16(w: u64, v: i64) -> u64 {
 fn scatter_literal32(w: u64, v: i64) -> u64 {
     let up = if v >= 0 { 0x80 } else { 0 };
     (w & !0x0fff_0080) | up | ((v.unsigned_abs() & 0xfff) << 16)
+}
+
+/// 32-bit `ldrd rt, rt2, [pc, #±imm8 * 4]`: the U bit is bit 7 of the first
+/// halfword, and the offset counts words in the low eight bits of the
+/// second.
+fn scatter_literal_dual(w: u64, v: i64) -> u64 {
+    let up = if v >= 0 { 0x80 } else { 0 };
+    (w & !0x00ff_0080) | up | (((v.unsigned_abs() / 4) & 0xff) << 16)
+}
+
+/// `ldr rt, label` in T32: the bare address GNU as's `parse_address_main`
+/// turns into a load from the PC rounded down to a word.
+///
+/// Only `ldr` itself has a 16-bit form, `ldr rt, [pc, #imm8 * 4]`, and only
+/// for a low register; `do_t_ldst` gives that one a fragment and
+/// `relax_adr` sizes it, taking the 32-bit form for a target behind the
+/// instruction, further than 1020 bytes ahead, not word-aligned, or that a
+/// later definition could move — including a Thumb function, whose address
+/// this load does *not* set the low bit of, unlike `adr`. Every other load
+/// is 32 bits wide, reaching 4095 bytes either way, or, for `ldrd`, 1020 in
+/// steps of four.
+///
+/// A store has no PC-relative form at all in Thumb. An unprivileged load
+/// has none either, and GNU as writes the ordinary load for one rather than
+/// refusing it.
+fn pcrel_load(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    t: Transfer,
+    rt: Reg,
+    rt2: Reg,
+    op: &crate::arch::arm::operand::Operand,
+    e: ExprRef,
+) -> Option<Vec<Variant>> {
+    if !t.load {
+        cx.error(
+            op.span,
+            format!("`{}`: a Thumb store has no PC-relative form", ins.text),
+        );
+        return None;
+    }
+    // Only `ldr` may name the stack pointer or the PC.
+    if t.size != 4 || t.signed {
+        bad_reg(cx, ins.ops[0].span, rt)?;
+    }
+    encode::pcrel_label(cx, op.span, e)?;
+    encode::pc_load_aligned(cx, op.span, rt, reg::PC, encode::addend(cx, e).unwrap_or(0))?;
+    let mut out = Vec::new();
+    let narrow_ok = t.size == 4 && !t.signed && !t.translate && low(rt);
+    let relaxed = narrow_ok && ins.width == Width::Any;
+    if narrow_ok && want_narrow(ins) {
+        // Only the form layout may widen is told about a Thumb function: a
+        // `.n` stands as written, and GNU as resolves that one.
+        let widens = if relaxed {
+            super::IW_THUMB_LDR16
+        } else {
+            super::IW_PCREL_LOAD
+        };
+        let kind = FixupKind::pcrel(2, 4)
+            .with_pc_align(4)
+            .with_field(12, 4)
+            .with_limits(0, 1020)
+            .link(LinkValue::Interwork(widens))
+            .scatter(scatter_literal16);
+        out.push(fixed(
+            (0x4800u16 | ((rt as u16) << 8)).to_le_bytes().to_vec(),
+            e,
+            kind,
+            op.span,
+        ));
+    }
+    if want_wide(ins) {
+        let (bytes, kind) = if t.size == 8 {
+            (
+                // `1110 100P U1W1 1111`: pre-indexed, no writeback, a
+                // load -- the store having been refused above -- and the PC
+                // as the base.
+                wide_bytes(
+                    0xe950 | u16::from(reg::PC),
+                    ((rt as u16) << 12) | ((rt2 as u16) << 8),
+                ),
+                FixupKind::pcrel(4, 4)
+                    .with_pc_align(4)
+                    .with_field(0, 4)
+                    .with_limits(-1020, 1020)
+                    .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                    .scatter(scatter_literal_dual),
+            )
+        } else {
+            let (_, base8) = wide_base(t)?;
+            (
+                wide_bytes(base8 | u16::from(reg::PC), (rt as u16) << 12),
+                FixupKind::pcrel(4, 4)
+                    .with_pc_align(4)
+                    .with_limits(-4095, 4095)
+                    .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                    .scatter(scatter_literal32),
+            )
+        };
+        out.push(fixed(bytes, e, kind, op.span));
+    }
+    if out.is_empty() {
+        return no_encoding(cx, ins);
+    }
+    Some(out)
 }
 
 /// `ldr rt, =expr` in T32, and the byte and halfword loads that take an
