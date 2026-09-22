@@ -515,7 +515,32 @@ impl Parser<'_, '_> {
     fn expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
         let mut p = self.cx.expr_parser();
         p.paren_modifiers = self.suffixes;
-        p.parse(cur)
+        let e = p.parse(cur)?;
+        // `parse_reloc` reads the suffix as the end of the operand, so
+        // `bl 4 + sym(tlscall)` is a branch and `bl sym(PLT) + 4` is the
+        // "garbage following instruction" GNU as calls it.
+        if let Some(m) = self.modifier_node(e).filter(|_| !self.suffixes.is_empty()) {
+            let (whole, suffix) = (self.cx.exprs.span(e), self.cx.exprs.span(m));
+            if suffix.hi != whole.hi {
+                self.cx.error(
+                    Span::new(suffix.hi, whole.hi),
+                    "nothing may follow a relocation suffix",
+                );
+                return None;
+            }
+        }
+        Some(e)
+    }
+
+    /// The relocation suffix in `e`, if there is one.
+    fn modifier_node(&self, e: ExprRef) -> Option<ExprRef> {
+        use crate::expr::ExprKind::*;
+        match &self.cx.exprs.get(e).kind {
+            Modifier(..) => Some(e),
+            Unary(_, a) => self.modifier_node(*a),
+            Binary(_, a, b) => self.modifier_node(*a).or_else(|| self.modifier_node(*b)),
+            _ => None,
+        }
     }
 
     /// `:lower16:` or `:upper16:` in front of an operand, if one is there.

@@ -205,6 +205,20 @@ pub enum Request {
         tag: u32,
         value: AttrValue,
     },
+    /// Places a relocation that covers no bytes here, marking whatever
+    /// follows: ARM's `.tlsdescseq sym`, which labels the next instruction
+    /// of a TLS descriptor sequence for the linker. `kind` is a zero-width
+    /// fixup. GNU as treats the directive as data for the mapping symbols,
+    /// which an instruction after it then marks again as code, and gives the
+    /// relocation a field of `within` bytes that has to lie inside one of
+    /// its fragments: that many bytes must follow before anything that
+    /// starts another, which is an alignment, a `.space`, the end of a
+    /// relaxable instruction, or the end of the section.
+    Mark {
+        expr: crate::expr::ExprRef,
+        kind: crate::section::FixupKind,
+        within: u8,
+    },
 }
 
 /// One value in an ELF build-attributes section.
@@ -1178,6 +1192,17 @@ pub trait Architecture {
     /// field and ignores the entry's addend; GNU as writes both accordingly.
     fn addend_in_field(&self, _reloc: u32, rela: bool) -> bool {
         !rela
+    }
+
+    /// What a relocation of type `reloc` whose addend lives in its field
+    /// (see [`Architecture::addend_in_field`]) writes there, given the addend
+    /// and the value of the symbol the relocation names: its offset in its
+    /// section where it is defined, zero where it is undefined or common.
+    ///
+    /// Normally the addend. GNU as for ARM leaves the symbol's value in the
+    /// field of some thread-local relocations as well; see `Arm::rel_field`.
+    fn rel_field(&self, _reloc: u32, addend: i64, _symbol_value: i64) -> i64 {
+        addend
     }
 
     /// Whether a `RELA` relocation of type `reloc` against a label defined in

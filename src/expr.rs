@@ -368,7 +368,7 @@ pub fn eval(arena: &ExprArena, r: ExprRef, cx: &mut dyn EvalCtx) -> Result<Value
     }
 }
 
-fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalError> {
+pub(crate) fn eval_binary(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, EvalError> {
     use BinOp::*;
 
     // Addition and subtraction are the only operators that may keep a symbol.

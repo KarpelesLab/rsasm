@@ -25,6 +25,39 @@ pub const GOT_BREL: u32 = 26;
 /// GOT's own address.
 pub const GOT_PREL: u32 = 96;
 
+// The thread-local relocations. Each names the variable itself, never its
+// section, and GNU as marks the variable `STT_TLS` for any of them.
+
+/// `sym(TLSDESC)`: the offset of the variable's TLS descriptor from the
+/// field, which the `ldr`/`add` pair ahead of a descriptor call reads.
+/// `readelf` prints it as `R_ARM_TLS_GOTDESC`.
+pub const TLS_GOTDESC: u32 = 90;
+/// `bl sym(tlscall)` in ARM code, and `.word sym(TLSCALL)`: the call to the
+/// descriptor's resolver, which a linker may turn into a load or a `nop`.
+pub const TLS_CALL: u32 = 91;
+/// `.tlsdescseq sym` in ARM code, and `.word sym(TLSDESCSEQ)`: marks an
+/// instruction of a descriptor sequence a linker may rewrite.
+pub const TLS_DESCSEQ: u32 = 92;
+/// `bl sym(tlscall)` and `blx sym(tlscall)` in Thumb code.
+pub const THM_TLS_CALL: u32 = 93;
+/// `sym(TLSGD)`: the offset of the variable's pair of GOT entries, for a
+/// general-dynamic `__tls_get_addr` call.
+pub const TLS_GD32: u32 = 104;
+/// `sym(TLSLDM)`: the offset of the module's GOT entry, for a local-dynamic
+/// call.
+pub const TLS_LDM32: u32 = 105;
+/// `sym(TLSLDO)`: the variable's offset within its module's block.
+pub const TLS_LDO32: u32 = 106;
+/// `sym(GOTTPOFF)`: the offset of the GOT entry holding the variable's offset
+/// from the thread pointer, for initial exec.
+pub const TLS_IE32: u32 = 107;
+/// `sym(TPOFF)`: the variable's offset from the thread pointer, for local
+/// exec.
+pub const TLS_LE32: u32 = 108;
+/// `.tlsdescseq sym` in Thumb code, whichever width the instruction after it
+/// has: GNU as writes the 16-bit number for both.
+pub const THM_TLS_DESCSEQ: u32 = 129;
+
 /// `movw rd, #:lower16:sym`.
 pub const MOVW_ABS_NC: u32 = 43;
 /// `movt rd, #:upper16:sym`.
@@ -56,7 +89,9 @@ pub fn data(size: u8, pcrel: bool) -> Option<u32> {
 /// `.long` go through, so every one of these is a four-byte relocation.
 /// `(PLT)` is the exception: there the suffix names a branch target and
 /// `s_arm_elf_cons` emits the symbol itself, so `.word sym(PLT)` is
-/// `.word sym`.
+/// `.word sym`. `(TLSCALL)` and `(TLSDESCSEQ)` give their ARM relocations
+/// even in Thumb code, since `s_arm_elf_cons` reads the table without asking
+/// which instruction set it is in.
 pub fn modifier(name: &str, size: u8, pcrel: bool) -> Option<u32> {
     if size != 4 || pcrel {
         return None;
@@ -66,8 +101,36 @@ pub fn modifier(name: &str, size: u8, pcrel: bool) -> Option<u32> {
         "got_prel" => GOT_PREL,
         "gotoff" => GOTOFF32,
         "plt" => ABS32,
+        "tlsgd" => TLS_GD32,
+        "tlsldm" => TLS_LDM32,
+        "tlsldo" => TLS_LDO32,
+        "gottpoff" => TLS_IE32,
+        "tpoff" => TLS_LE32,
+        "tlsdesc" => TLS_GOTDESC,
+        "tlscall" => TLS_CALL,
+        "tlsdescseq" => TLS_DESCSEQ,
         _ => return None,
     })
+}
+
+/// Whether a suffix names a thread-local relocation; see
+/// [`Architecture::modifier_symbols`](crate::arch::Architecture::modifier_symbols).
+pub fn is_tls_modifier(name: &str) -> bool {
+    matches!(
+        name,
+        "tlsgd" | "tlsldm" | "tlsldo" | "gottpoff" | "tpoff" | "tlsdesc" | "tlscall" | "tlsdescseq"
+    )
+}
+
+/// The relocations that carry no addend. Their BFD howtos are not
+/// `partial_inplace`, so GNU as leaves a branch with a displacement of zero
+/// and a data word zero: `bl sym(tlscall)` is `eb000000`, a branch to its own
+/// address plus eight, where a plain `bl sym` holds the usual `-8`.
+pub fn has_no_addend(reloc: u32) -> bool {
+    matches!(
+        reloc,
+        TLS_CALL | THM_TLS_CALL | TLS_DESCSEQ | THM_TLS_DESCSEQ
+    )
 }
 
 /// The PC-relative counterpart of a `movw`/`movt` half, which is what

@@ -812,3 +812,118 @@ glob:   bx      lr
 === refused: an addend wider than a half
         .syntax unified
         movw    r0, #:lower16:sym + 0x8000
+=== the thread-local suffixes in data
+        .syntax unified
+        .text
+f:      nop
+.LPIC0: add     r0, pc
+        .p2align 2
+        .word   tv(TLSGD) + (. - .LPIC0 - 4)
+        .word   tv(TLSLDM) + (. - .LPIC0 - 4)
+        .word   tv(TLSLDO), tv(GOTTPOFF), tv(TPOFF), tv(TLSDESC)
+        .word   tv(TLSLDO) + 4, tv(TPOFF) - 8
+        .word   tv(TLSCALL), tv(TLSDESCSEQ) + 4
+=== the thread-local suffixes across a relaxed load
+        .syntax unified
+        .text
+.LPIC0: nop
+        ldr     r0, 1f
+        add     r0, pc
+        nop
+        nop
+        .p2align 2
+1:      .word   tv(TLSGD) + (. - .LPIC0 - 4)
+        .word   tv(TLSLDM) + (. - .LPIC0 - 4)
+=== the thread-local suffixes on variables defined here
+        .syntax unified
+        .text
+        nop
+        .p2align 2
+        .word   loc(TLSGD) + 4, loc(TLSLDM) + 4, loc(TLSLDO) + 4, loc(TPOFF) + 4
+        .section .tdata,"awT",%progbits
+        .word   0
+loc:    .word   1
+=== a tlscall suffix on a branch target
+        .syntax unified
+        .text
+f:      bl      tv(tlscall)
+        blx     tv(tlscall)
+        bl      tv(TLSCALL)
+        it      eq
+        bleq    tv(tlscall)
+        b       tv(tlscall)
+        b.w     tv(tlscall)
+        beq     tv(tlscall)
+        bl      sym(PLT)
+=== the descriptor sequence
+        .syntax unified
+        .text
+f:      nop
+        .tlsdescseq tv
+        nop.w
+        .tlsdescseq tv
+        blx     r1
+        mov     r5, r0
+        .tlsdescseq tv
+        b.w     1f
+        nop
+1:      .tlsdescseq tv
+        .word   1
+        nop
+=== a descriptor sequence mark at the start of a section
+        .syntax unified
+        .tlsdescseq tv
+        nop
+        nop
+=== refused: a descriptor sequence mark before one narrow instruction at the end
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        nop
+=== refused: a descriptor sequence mark before a relaxed load
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        ldr     r0, 1f
+        nop
+        nop
+        .p2align 2
+1:      .word   0
+=== refused: a descriptor sequence mark before a relaxed branch
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        b       1f
+        nop
+        nop
+1:      nop
+=== refused: a descriptor sequence mark before a pool load
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        ldr     r0, =0x12345678
+        nop
+        nop
+=== a descriptor sequence mark before an add from the pc and a relaxed load
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        add     r0, pc
+        ldr     r1, [r0, #4]
+        nop
+        nop
+=== refused: a descriptor sequence mark before a relaxed load from a register
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        add     r0, pc
+        .tlsdescseq tv
+        ldr     r1, [r0, #4]
+        nop
+        nop
+=== refused: a thread-local suffix other than tlscall on a branch target
+        .syntax unified
+        bl      tv(TPOFF)
+=== refused: an addend after a suffix on a branch target
+        .syntax unified
+        bl      tv(tlscall) + 4

@@ -941,3 +941,173 @@ glob:   bx      lr
         .syntax unified
         movw    r0, #:lower16:(f - sym)
 f:      bx      lr
+=== the thread-local suffixes in data
+        .syntax unified
+        .text
+f:      nop
+.LPIC0: add     r0, pc, r0
+        .word   tv(TLSGD) + (. - .LPIC0 - 8)
+        .word   tv(TLSLDM) + (. - .LPIC0 - 8)
+        .word   tv(TLSLDO), tv(GOTTPOFF), tv(TPOFF), tv(TLSDESC)
+        .word   tv(tlsgd), tv(tlsldm), tv(tlsldo), tv(gottpoff), tv(tpoff), tv(tlsdesc)
+        .word   tv(TLSLDO) + 4, tv(TPOFF) - 8, 4 + tv(GOTTPOFF)
+        .word   tv(TLSDESC) + (. - .LPIC0 - 8)
+        .long   tv(GOTTPOFF) + (. - .LPIC0 - 8)
+        .word   tv(TLSCALL), tv(TLSDESCSEQ) + 4
+=== the thread-local suffixes on variables defined here
+        .syntax unified
+        .text
+        .word   loc(TLSGD) + 4, loc(TLSLDM) + 4, loc(TLSLDM) + 8
+        .word   loc(TLSLDO), loc(TLSLDO) + 4, loc(GOTTPOFF) + 4
+        .word   loc(TPOFF) + 4, loc(TLSDESC) + 4
+        .word   glob(TLSLDO) + 4, glob(TLSLDM) + 4, weak1(TLSLDO) + 4
+        .word   weak1(TPOFF) + 4, bss(TLSLDO) + 4, bss(TPOFF) + 4
+        .section .tdata,"awT",%progbits
+        .globl  glob
+        .weak   weak1
+        .word   0
+loc:    .word   1
+glob:   .word   2
+weak1:  .word   3
+        .section .tbss,"awT",%nobits
+        .space  8
+bss:    .space  4
+=== the thread-local suffixes on a thread-local common block
+        .syntax unified
+        .text
+        .word   tc(TPOFF), tc(TLSLDO) + 4, tc(TLSGD) + 4, tc(TLSLDM) + 4
+        .tls_common tc, 4, 4
+=== the thread-local suffixes across an alignment
+        .syntax unified
+        .text
+.LPIC0: add     r0, pc, r0
+        .p2align 4
+        .word   tv(TLSGD) + (. - .LPIC0 - 8)
+        .word   tv(TLSDESC) + (.LPIC0 - .)
+=== a tlscall suffix on a branch target
+        .syntax unified
+        .text
+f:      bl      tv(tlscall)
+        blx     tv(tlscall)
+        b       tv(tlscall)
+        beq     tv(tlscall)
+        bleq    tv(tlscall)
+        bl      tv(TLSCALL)
+        bl      4 + tv(tlscall)
+        bl      loc(tlscall)
+        bl      sym(PLT)
+        .section .tdata,"awT",%progbits
+        .word   0
+loc:    .word   1
+=== the descriptor sequence
+        .syntax unified
+        .text
+f:      ldr     r0, .Ldesc
+        .tlsdescseq tv
+.LPIC0: add     r0, pc, r0
+        .tlsdescseq tv
+        ldr     r1, [r0, #4]
+        .tlsdescseq tv
+        blx     r1
+        .tlsdescseq tv + 4
+        .TLSDESCSEQ tv
+        mov     r1, r0
+        bx      lr
+.Ldesc: .word   tv(TLSDESC) + (. - .LPIC0 - 8)
+=== a descriptor sequence mark at the start of a section
+        .syntax unified
+        .tlsdescseq tv
+        nop
+=== a descriptor sequence mark before data, and before thumb code
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        .byte   1, 2, 3
+        .section .t2, "ax"
+        nop
+        .tlsdescseq tv
+        .thumb
+        nop
+=== a descriptor sequence mark across a section switch
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        .data
+        .word   1
+        .text
+        nop
+        .data
+        .tlsdescseq tv
+        .word   2
+=== refused: a descriptor sequence mark at the end of a section
+        .syntax unified
+        nop
+        .tlsdescseq tv
+=== refused: a descriptor sequence mark before an alignment
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        .p2align 2
+        nop
+=== refused: a descriptor sequence mark before space
+        .syntax unified
+        nop
+        .tlsdescseq tv
+        .space  4
+        nop
+=== refused: a descriptor sequence mark of a number
+        .syntax unified
+        .tlsdescseq 4
+        nop
+=== refused: a descriptor sequence mark with a suffix
+        .syntax unified
+        .tlsdescseq tv(TLSGD)
+        nop
+=== refused: a descriptor sequence mark of two symbols
+        .syntax unified
+        .tlsdescseq tv, tv2
+        nop
+=== refused: a thread-local suffix on an ordinary variable
+        .syntax unified
+        .word   var(TLSGD)
+        .data
+var:    .word   0
+=== refused: a thread-local suffix on a label in its own section
+        .syntax unified
+        .word   var(TPOFF)
+var:    .word   0
+=== refused: a thread-local suffix on a common block
+        .syntax unified
+        .word   var(TLSLDO)
+        .comm   var, 4, 4
+=== refused: a thread-local suffix on a function
+        .syntax unified
+        .type   fn, %function
+        .word   fn(TLSGD)
+=== refused: a tlscall suffix on a global function
+        .syntax unified
+        bl      fn(tlscall)
+        .globl  fn
+fn:     bx      lr
+=== refused: a thread-local suffix spelled in mixed case
+        .syntax unified
+        .word   tv(TlsGd)
+=== refused: a thread-local suffix in a halfword
+        .syntax unified
+        .short  tv(TPOFF)
+=== refused: a thread-local suffix other than tlscall on a branch target
+        .syntax unified
+        bl      tv(TLSGD)
+=== refused: an addend after a suffix on a branch target
+        .syntax unified
+        bl      tv(tlscall) + 4
+=== refused: another addend after a suffix on a branch target
+        .syntax unified
+        bl      sym(PLT) + 4
+=== refused: a thread-local suffix in a literal pool entry
+        .syntax unified
+        ldr     r0, =tv(TLSGD)
+        .ltorg
+=== refused: an FDPIC suffix outside an FDPIC object
+        .syntax unified
+        .word   tv(TLSGD_FDPIC)

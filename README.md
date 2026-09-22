@@ -58,7 +58,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17085 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21771 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3144 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3187 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 537 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9499 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 796 |
@@ -114,7 +114,11 @@ form by form and in random whole programs as well.
   assemble the access models GNU as accepts for each — `@TLSGD`, `@TLSLD`,
   `@TLSLDM`, `@DTPOFF`, `@TPOFF`, `@NTPOFF`, `@GOTTPOFF`, `@GOTNTPOFF`,
   `@INDNTPOFF`, `@TLSDESC` and `@TLSCALL` — in code and in data, each only in
-  the instruction forms a linker knows how to rewrite
+  the instruction forms a linker knows how to rewrite; ARM and Thumb assemble
+  GNU as's — `(TLSGD)`, `(TLSLDM)`, `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)` and
+  `(TLSDESC)` in data, with the distance from the `add` a compiler writes
+  after them, `bl sym(tlscall)`, and the `.tlsdescseq` mark on the
+  instructions of a descriptor sequence
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -155,7 +159,9 @@ form by form and in random whole programs as well.
   (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
   `.word _GLOBAL_OFFSET_TABLE_`, `bl sym(PLT)`, and
   `movw`/`movt` with `:lower16:` and `:upper16:`, absolute or measured
-  against a label), `$a`/`$t`/`$d` mapping symbols, and the
+  against a label), the thread-local ones (`.word sym(TLSGD)` and the other
+  access models, `bl sym(tlscall)` and `.tlsdescseq`), `$a`/`$t`/`$d`
+  mapping symbols, and the
   `.ARM.attributes` section the linker reads to decide what the program may
   contain — without it GNU ld assumes the oldest architecture and routes
   every interworking call through a veneer; the whole
@@ -236,9 +242,9 @@ form by form and in random whole programs as well.
   `.debug_macro`/`.debug_names`
 - ARM: `-mimplicit-it`, so a conditional Thumb instruction needs an `it` block
   of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
-  pool entries; the relocation suffixes past the GOT and PLT ones --
-  `(TARGET1)`, `(TARGET2)`, `(SBREL)` and the thread-local `(TLSGD)` and
-  its relatives, which GNU as reads and rsasm refuses as unrecognised; and
+  pool entries; the relocation suffixes past the GOT, PLT and thread-local
+  ones -- `(TARGET1)`, `(TARGET2)` and `(SBREL)`, which GNU as reads and
+  rsasm refuses as unrecognised; and
   the divided Thumb syntax GNU as reads without
   `.syntax unified` (rsasm reads Thumb as unified syntax either way)
 - ARM vectors: the floating-point immediate of `vmov.f32 s0, #1.0` and
@@ -281,9 +287,9 @@ form by form and in random whole programs as well.
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
-- thread-local storage on the targets other than x86: the symbols and
-  sections are right everywhere, but only x86-64, i386 and SuperH read the
-  access-model operands. ARM's `sym(TLSGD)`, AArch64's `:tprel_g0:` and
+- thread-local storage on the targets other than x86 and ARM: the symbols
+  and sections are right everywhere, but only x86-64, i386, ARM, Thumb and
+  SuperH read the access-model operands. AArch64's `:tprel_g0:` and
   PowerPC's `@tprel`, `@dtprel` and `@got@tls*`, each with its relatives, are
   refused with the reason; Mach-O's `@TLVP` and PE's thread-local sections
   are their formats' own idea of the same thing, and are not there either
@@ -373,6 +379,13 @@ backend. Four such choices are worth knowing about:
   counts. RISC-V's `.riscv.attributes` is the same in both.
   `tools/mc-diff` leaves `.ARM.attributes` out of its comparison for that
   reason, and `tools/xas-diff` compares it.
+- **ARM's thread-local fields.** GNU as is followed. Against a variable
+  defined in the object, `x(TLSLDO) + n` leaves the variable's offset in the
+  field as well as `n`, which GNU ld then counts twice, and `x(TLSLDM) + n`
+  leaves zero where `n` is that offset; a Thumb `bl x(tlscall)` has a
+  displacement of zero; and `.tlsdescseq` in Thumb code writes
+  `R_ARM_THM_TLS_DESCSEQ`. llvm-mc writes `n` alone, the usual -4, and
+  `R_ARM_TLS_DESCSEQ`.
 - **m68k floating-point immediates.** Both references write a single or
   double precision `#1.5` the same way. An extended-precision one GNU as 2.47
   writes without the 16 zero bits of the 68881 format — its own `.extend`
@@ -939,7 +952,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,654 of 8,654 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,890 of 38,890 match across twenty-one target variants. For RISC-V
+  supports. 38,892 of 38,892 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -955,7 +968,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,471 of 25,471 match across fifty-seven
+  from checksum-pinned sources. 25,512 of 25,512 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -977,6 +990,7 @@ is what hid them from rsasm for as long as it did.
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
   the x86 thread-local access models, which the linker turns into local exec,
+  ARM's and Thumb's, whose descriptor calls it turns into initial exec,
   weak definitions a second object overrides, `.comm` symbols merged between
   objects with different sizes, `.bss`, and references into another object's
   sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,
@@ -985,7 +999,7 @@ is what hid them from rsasm for as long as it did.
   exist for. Two more rows link [PE/COFF](#pecoff) objects into an image with
   GNU ld for mingw, where what a link has to get right is `@IMGREL`,
   `.secrel32` and `.secidx` and the addend a COFF relocation keeps in its
-  field. 238 of 238 match across twenty-nine variants.
+  field. 240 of 240 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 444 of 444

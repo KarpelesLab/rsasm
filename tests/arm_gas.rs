@@ -677,3 +677,117 @@ fn the_relocation_operands_gnu_as_refuses() {
     let e = errors_for("arm", " .word sym(GOT) - .\n");
     assert!(e.contains("no relocation for a difference"), "{e}");
 }
+
+// ---- the thread-local operands ------------------------------------------------
+
+/// The relocations of an assembled source, as `(offset, type)`: a marker
+/// relocation's addend is not written anywhere, so only where it is and what
+/// it is say anything.
+fn reloc_kinds(arch: &str, src: &str) -> Vec<(u64, u32)> {
+    relocs(arch, src)
+        .into_iter()
+        .map(|(o, k, _)| (o, k))
+        .collect()
+}
+
+const R_ARM_TLS_GOTDESC: u32 = 90;
+const R_ARM_TLS_CALL: u32 = 91;
+const R_ARM_TLS_DESCSEQ: u32 = 92;
+const R_ARM_THM_TLS_CALL: u32 = 93;
+const R_ARM_TLS_GD32: u32 = 104;
+const R_ARM_TLS_LDM32: u32 = 105;
+const R_ARM_TLS_LDO32: u32 = 106;
+const R_ARM_TLS_IE32: u32 = 107;
+const R_ARM_TLS_LE32: u32 = 108;
+const R_ARM_THM_TLS_DESCSEQ: u32 = 129;
+
+/// The access models in data, and the distance from the `add` a compiler
+/// writes after the general-dynamic one, which is an addend: it is a number
+/// once the two labels are placed, and `x` is still what is relocated.
+#[test]
+fn the_thread_local_suffixes_in_data() {
+    let src = "f:      nop
+.LPIC0: nop
+        .word x(TLSGD) + (. - .LPIC0 - 8)
+        .word x(TLSLDM), x(TLSLDO), x(GOTTPOFF), x(TPOFF), x(tlsdesc)
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![
+            (8, R_ARM_TLS_GD32, -4),
+            (12, R_ARM_TLS_LDM32, 0),
+            (16, R_ARM_TLS_LDO32, 0),
+            (20, R_ARM_TLS_IE32, 0),
+            (24, R_ARM_TLS_LE32, 0),
+            (28, R_ARM_TLS_GOTDESC, 0),
+        ]
+    );
+    assert_eq!(&hex(&text_for("arm", src))[24..35], "fc ff ff ff");
+}
+
+/// GNU as leaves `x(TLSLDO) + 4` as the variable's offset plus four when it
+/// is defined here, and `x(TLSLDM) + 4` as zero when four is where it is.
+#[test]
+fn the_thread_local_fields_gnu_as_writes() {
+    let src = "        .word y(TLSLDO) + 4, y(TLSLDM) + 4, y(TLSLDM) + 8, y(TLSGD) + 4
+        .section .tdata, \"awT\", %progbits
+        .word 0
+y:      .word 1
+";
+    assert_eq!(
+        hex(&text_for("arm", src)),
+        "08 00 00 00 00 00 00 00 08 00 00 00 04 00 00 00"
+    );
+}
+
+/// `(tlscall)` gives a branch the descriptor call's relocation and leaves its
+/// displacement zero, and `.tlsdescseq` marks the instruction after it.
+#[test]
+fn a_tlscall_suffix_and_the_descriptor_sequence() {
+    let src = "        bl x(tlscall)
+        blx x(tlscall)
+        .tlsdescseq x
+        add r0, pc, r0
+";
+    assert_eq!(
+        reloc_kinds("arm", src),
+        vec![
+            (0, R_ARM_TLS_CALL),
+            (4, R_ARM_TLS_CALL),
+            (8, R_ARM_TLS_DESCSEQ)
+        ]
+    );
+    assert_eq!(
+        hex(&text_for("arm", src)),
+        "00 00 00 eb 00 00 00 fa 00 00 8f e0"
+    );
+    let src = "        bl x(tlscall)
+        .tlsdescseq x
+        add r0, pc
+        nop
+";
+    assert_eq!(
+        reloc_kinds("thumb", src),
+        vec![(0, R_ARM_THM_TLS_CALL), (4, R_ARM_THM_TLS_DESCSEQ)]
+    );
+    assert_eq!(hex(&text_for("thumb", src)), "00 f0 00 f8 78 44 00 bf");
+}
+
+/// What GNU as refuses about them, refused here too.
+#[test]
+fn the_thread_local_operands_gnu_as_refuses() {
+    let e = errors_for("arm", " .word x(TLSGD)\n .data\nx: .word 0\n");
+    assert!(e.contains("as a thread-local variable"), "{e}");
+    let e = errors_for("arm", " .type x, %function\n .word x(TPOFF)\n");
+    assert!(e.contains("accessing function `x`"), "{e}");
+    let e = errors_for("arm", " nop\n .tlsdescseq x\n");
+    assert!(e.contains("covers the 4 bytes after it"), "{e}");
+    let e = errors_for("thumb", " nop\n .tlsdescseq x\n nop\n");
+    assert!(e.contains("only 2 follow"), "{e}");
+    let e = errors_for("arm", " .tlsdescseq 4\n nop\n");
+    assert!(e.contains("expects a symbol"), "{e}");
+    let e = errors_for("arm", " bl x(TLSGD)\n");
+    assert!(e.contains("unrecognized relocation suffix"), "{e}");
+    let e = errors_for("arm", " bl x(tlscall) + 4\n");
+    assert!(e.contains("nothing may follow"), "{e}");
+}

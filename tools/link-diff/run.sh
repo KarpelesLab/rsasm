@@ -47,13 +47,16 @@
 #   in the x86-64 and i386 rows, where the linker turns each of them into
 #   local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`,
 #   `@TPOFF` and `@NTPOFF`, and the descriptor pair `@TLSDESC`/`@TLSCALL`.
-#   The other three still have none -- ARM's `(TLSGD)`, AArch64's
-#   `:tprel_g0:`, PowerPC's `@tprel` and `@dtprel` -- but no longer for want
-#   of `STT_TLS`, which a symbol in a thread-local section now has on every
-#   target. What each lacks is its own: the relocations, the operand syntax
-#   that selects them, and the marker relocations that cover no field but
-#   tell the linker which instructions to rewrite (ARM's `(tlscall)` and
-#   `.tlsdescseq`, AArch64's `.tlsdesccall`, PowerPC's `@tls` and
+#   They are in the ARM and Thumb rows too: `(TLSGD)`, `(TLSLDM)` and
+#   `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's `(TLSDESC)`
+#   with the `(tlscall)` branch and the `.tlsdescseq` marks, which GNU ld
+#   rewrites into initial-exec loads. The other two still have none --
+#   AArch64's `:tprel_g0:`, PowerPC's `@tprel` and `@dtprel` -- but no
+#   longer for want of `STT_TLS`, which a symbol in a thread-local section
+#   now has on every target. What each lacks is its own: the relocations,
+#   the operand syntax that selects them, and the marker relocations that
+#   cover no field but tell the linker which instructions to rewrite
+#   (AArch64's `.tlsdesccall`, PowerPC's `@tls` and
 #   `bl __tls_get_addr(sym@tlsgd)`); each backend says where it refuses them.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
