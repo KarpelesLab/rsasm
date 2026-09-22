@@ -558,12 +558,20 @@ the addresses of symbols". The harness halves a batch a tool gave up on
 until it finds the case, drops that reference for it, and counts it as
 `skipped`.
 
+A share of the cases is a branch to the label the harness defines after
+every case, over a gap drawn from the distances that sit on and just past
+the reach of each branch form. An instruction on its own never reaches the
+part of an assembler that chooses a branch's width, and that is where the
+RL78's two differences are.
+
 Running them found, in SPARC: `mov<cc> %fccN` encoded with the integer
 condition codes instead of the floating-point ones, `movre`/`movrne`, the
 missing `swap`, `ldstub`, `taddcctv`, `tsubcctv`, `clrb`/`clrh`/`clrx` and
 `b`, an address whose base register is the hardwired zero (`[ 0x66 ]`,
 `jmpl -2347, %l2`), and the two-operand trap written as one address. MIPS,
-SuperH, RX, RL78, V850 and the Z80 found nothing.
+SuperH, RX, V850 and the Z80 found nothing, and the RL78's two are GNU as's:
+it wraps the field of the `br $!` it expands a long branch into, and it
+writes six bytes where a three-byte conditional branch still reaches.
 
 ## The 6502, the 8080 and NASM source
 
