@@ -1,0 +1,123 @@
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        jarl    helper, lp
+        jr      helper
+        jarl    weakfn, lp
+        movhi   hi(target), r0, r11
+        movea   lo(target), r11, r11
+        jmp     [r11]
+--- b.s
+        .text
+        .globl  helper, target
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        jarl    _start, lp
+        jr      _start
+        jmp     [lp]
+weakfn:
+        jmp     [lp]
+target: nop
+
+=== halves of another object's address
+--- a.s
+        .text
+        .globl  _start
+_start:
+        movhi   hi(target), r0, r10
+        movea   lo(target), r10, r10
+        movhi   hi(bssvar), r0, r11
+        movea   lo(bssvar), r11, r11
+        movhi   hi(rodata), r0, r12
+        movea   lo(rodata), r12, r12
+        movhi   hi(target + 8), r0, r13
+        jmp     [lp]
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .long   0x11223344
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .long   target
+        .long   target + 16
+        .long   wsym
+        .long   com1
+        .long   bssvar
+        .long   after - dptr
+        .size   dptr, . - dptr
+after:  .long   0
+        .text
+        .globl  _start
+_start: jmp     [lp]
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 4
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        jarl    both, lp
+        jarl    weakonly, lp
+        movhi   hi(both), r0, r10
+        movea   lo(both), r10, r10
+        jmp     [lp]
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   halt
+        halt
+        .weak   weakonly
+weakonly:
+        jmp     [lp]
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 4
+        .text
+        .globl  _start
+_start:
+        movhi   hi(shared), r0, r10
+        movea   lo(shared), r10, r10
+        movhi   hi(bigger), r0, r11
+        movea   lo(bigger), r11, r11
+        jmp     [lp]
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        movhi   hi(bigger), r0, r10
+        movea   lo(bigger), r10, r10
+        jmp     [lp]

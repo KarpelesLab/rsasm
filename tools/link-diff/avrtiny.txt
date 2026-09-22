@@ -1,0 +1,78 @@
+# The reduced AVR-tiny core (-mmcu=avrtiny, -m avrtiny), which has neither
+# `call` nor `jmp` and only r16-r31.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        rcall   helper
+        rjmp    helper
+        rcall   weakfn
+        breq    helper
+        ldi     r24, lo8(target)
+        ldi     r25, hi8(target)
+        ret
+--- b.s
+        .text
+        .globl  helper, target
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        rcall   _start
+        rjmp    _start
+        ret
+weakfn:
+        ret
+target: nop
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .word   target
+        .word   target + 16
+        .word   wsym
+        .word   com1
+        .word   bssvar
+        .word   after - dptr
+        .size   dptr, . - dptr
+after:  .word   0
+        .text
+        .globl  _start
+_start: ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 2
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 2, 2
+        .comm   bigger, 8, 2
+        .text
+        .globl  _start
+_start:
+        ldi     r24, lo8(shared)
+        ldi     r30, lo8(bigger)
+        ldi     r31, hi8(bigger)
+        ret
+--- b.s
+        .comm   shared, 2, 2
+        .comm   bigger, 64, 2
+        .text
+        .globl  reader
+reader:
+        ldi     r24, lo8(bigger)
+        ret

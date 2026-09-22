@@ -1,0 +1,212 @@
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        call    helper
+        call    weakfn
+        call    absent
+        jmp     helper
+        je      helper
+        jne     weakfn
+        jmp     *helper@GOTPCREL(%rip)
+        ret
+        .weak   absent
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        call    _start
+        jmp     _start
+        loop    helper
+        ret
+weakfn:
+        ret
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .quad   target
+        .quad   target + 16
+        .quad   target - 8
+        .long   target - .
+        .quad   wsym
+        .quad   com1
+        .quad   bssvar
+        .long   after - dptr
+        .size   dptr, . - dptr
+after:
+        .text
+        .globl  _start
+_start: leaq    dptr(%rip), %rax
+        movq    bssvar(%rip), %rcx
+        movq    com1(%rip), %rdx
+        ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    both
+        call    weakonly
+        movq    $both, %rax
+        ret
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   int3
+        int3
+        .weak   weakonly
+weakonly:
+        ret
+
+=== aliases, late .globl and hidden symbols across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    alias
+        call    late
+        call    hid
+        jmp     galias
+        ret
+--- b.s
+        .text
+        .set    alias, real
+        .globl  alias
+        .globl  galias
+real:   nop
+galias: nop
+hid:    nop
+late:   nop
+        .globl  late
+        .globl  hid
+        .hidden hid
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .globl  _start
+_start:
+        movl    shared(%rip), %eax
+        movq    bigger(%rip), %rcx
+        movq    $shared, %rdx
+        ret
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        movq    $bigger, %rax
+        movl    shared(%rip), %ecx
+        ret
+
+=== references into another object's sections
+--- a.s
+        .section .rodata
+        .globl  table
+table:  .quad   entry0
+        .quad   entry1
+        .long   entry0 - table
+        .long   0
+        .section .text.hot,"ax",@progbits
+        .globl  _start
+_start:
+        call    entry0
+        call    entry1
+        leaq    table(%rip), %rax
+        ret
+--- b.s
+        .section .text.hot,"ax",@progbits
+        .globl  entry0, entry1
+entry0: nop
+        nop
+entry1: ret
+        .section .rodata
+        .globl  msg
+msg:    .asciz  "linked"
+
+=== the GOT and the PLT
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    helper@PLT
+        movq    shared@GOTPCREL(%rip), %rax
+        movl    shared@GOTPCREL(%rip), %ecx
+        addq    shared@GOTPCREL(%rip), %rdx
+        testq   %rax, shared@GOTPCREL(%rip)
+        push    shared@GOTPCREL(%rip)
+        movq    hidden@GOTPCREL(%rip), %r8
+        jmp     helper@PLT
+--- b.s
+        .text
+        .globl  helper
+helper: ret
+        .globl  hidden
+        .hidden hidden
+hidden: ret
+        .data
+        .globl  shared
+shared: .quad   42
+
+=== three objects, with local labels in another section
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    second
+        call    third
+        leaq    .Lmsg(%rip), %rax
+        movq    shared(%rip), %rcx
+        movq    first_table(%rip), %rdx
+        ret
+        .section .rodata
+.Lmsg:  .asciz  "one"
+        .globl  first_table
+first_table:
+        .quad   .Lmsg
+        .quad   second
+        .long   .Lmsg - first_table
+        .long   0
+--- b.s
+        .text
+        .globl  second
+second: call    third
+        leaq    .Lb(%rip), %rdx
+        movq    $.Lb, %rsi
+        ret
+        .section .rodata
+.Lb:    .asciz  "two"
+--- c.s
+        .text
+        .globl  third
+third:  ret
+        .data
+        .globl  shared
+shared: .quad   0x1122334455667788

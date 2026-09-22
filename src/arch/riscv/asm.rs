@@ -21,9 +21,9 @@ pub struct Asm<'c, 'a> {
     /// A shorter candidate for a single relaxable branch or jump. Layout picks
     /// this one unless the displacement turns out not to fit.
     alt: Option<Buf>,
-    /// A longer candidate, for a conditional branch whose target is out of
-    /// reach of every real branch: the opposite branch over a `jal`. Layout
-    /// falls back to this one last.
+    /// A longer candidate, for a conditional branch whose target neither the
+    /// branch's own reach nor the assembler can be sure of: the opposite
+    /// branch over a `jal`. Layout falls back to this one last.
     long: Option<Buf>,
 }
 
@@ -75,10 +75,33 @@ impl<'c, 'a> Asm<'c, 'a> {
         self.alt = Some(buf);
     }
 
+    /// The candidate a branch takes when its own reach is not enough, or when
+    /// the target is a symbol this object cannot see: the branch with its
+    /// condition inverted, over a `jal x0` that carries the relocation.
+    /// The opposite branch over a `j`, for a target the plain branch cannot
+    /// be shown to reach.
+    ///
+    /// `short_inverse` is the two-byte form of that opposite branch where
+    /// the C extension has one. Taking it moves the jump, and so the
+    /// distance the branch skips, from eight bytes to six; GNU as and
+    /// llvm-mc both do this, and a fuzz run against them is what found it.
+    fn set_long(&mut self, word: u32, short_inverse: Option<u16>, target: &Imm) {
+        let mut buf = Buf::default();
+        match short_inverse {
+            Some(w) => buf.push(Insn::short(encode::cb_imm(u64::from(w), 6) as u16)),
+            // The B-type immediate for a displacement of 8, which jumps over
+            // the four-byte `j`: `imm[4:1]` is `0100` and every other bit is
+            // zero.
+            None => buf.push(Insn::full((word ^ 0x0000_1000) | 0x0000_0400)),
+        }
+        buf.push(Insn::full(0x0000_006f).with_fix(target.expr, encode::kind_jal(), target.span));
+        self.long = Some(buf);
+    }
+
     pub fn finish(self) -> Vec<Variant> {
         // Shortest first: layout takes the first candidate whose fixups all
         // fit, and grows the choice when one does not.
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(3);
         if let Some(short) = self.alt {
             out.push(short.finish());
         }
@@ -209,26 +232,14 @@ impl<'c, 'a> Asm<'c, 'a> {
                 short_inverse = Some(compress::c_branch(funct3 != 0, test));
             }
         }
-        // Past +-4 KiB no conditional branch reaches at all, and the way
-        // out is the opposite branch over an unconditional jump, which
-        // reaches +-1 MiB. GNU as and llvm-mc both write this pair, and
-        // take the two-byte form of the opposite branch where it exists --
-        // which moves the jump, and so the distance the branch skips, from
-        // eight bytes to six.
-        let inverse = word ^ (1 << 12);
-        let jal = Insn::full(encode::rd(0x0000_006f, reg::ZERO.bits())).with_fix(
-            target.expr,
-            encode::kind_jal(),
-            target.span,
-        );
-        let mut long = Buf::default();
-        match short_inverse {
-            Some(w) => long.push(Insn::short(encode::cb_imm(u64::from(w), 6) as u16)),
-            None => long.push(Insn::full(encode::b_imm(u64::from(inverse), 8) as u32)),
-        }
-        long.push(jal);
-        self.long = Some(long);
         self.emit_fixed(Insn::full(word).with_fix(target.expr, encode::kind_branch(), target.span));
+        // A conditional branch reaches +-4 KiB, which is not far enough for a
+        // target in another object, nor for one further off in this one:
+        // both references write the branch inverted over a `j`, whose
+        // +-1 MiB the linker can also relax further. Layout takes it only
+        // when the plain branch does not reach, which for a symbol this
+        // object cannot see is always.
+        self.set_long(word, short_inverse, target);
         Some(())
     }
 

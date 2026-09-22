@@ -98,7 +98,10 @@ but 18 forms where both manuals show MAME to be wrong.
 - several targets in one file, switched with `.arch`; see
   [Multi-architecture files](#multi-architecture-files)
 - ELF relocatable objects, 32- and 64-bit, REL or RELA as each psABI requires,
-  flat binaries, and flat images as Intel HEX (`-f ihex`)
+  flat binaries, and flat images as Intel HEX (`-f ihex`); a GOT load on one
+  of the instruction forms a linker may rewrite into a direct reference takes
+  the relaxable relocation GNU as gives it — `R_386_GOT32X`, or
+  `R_X86_64_GOTPCRELX` and its REX form
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -130,7 +133,10 @@ but 18 forms where both manuals show MAME to be wrong.
   aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
   `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
   `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
-  the two instruction sets, and `$a`/`$t`/`$d` mapping symbols; the whole
+  the two instruction sets, `$a`/`$t`/`$d` mapping symbols, and the
+  `.ARM.attributes` section the linker reads to decide what the program may
+  contain — without it GNU ld assumes the oldest architecture and routes
+  every interworking call through a veneer; the whole
   ARMv7-A/R/M instruction set with the security, virtualization and divide
   extensions, and with it the floating-point unit up to VFPv4 and NEON --
   the vector arithmetic over `d` and `q` registers, the shifts, the widening
@@ -841,7 +847,7 @@ Three differences remain, and the corpora leave them out:
 
 ## Verification
 
-Nine differential harnesses assemble the same source with rsasm and with an
+Ten differential harnesses assemble the same source with rsasm and with an
 independent assembler, and compare the bytes:
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
@@ -870,6 +876,27 @@ independent assembler, and compare the bytes:
   arithmetic a linker would otherwise do — `adrp` pages, `@ha`, `%pcrel_lo`,
   distances between sections. 205 of 205 match across thirty-one variants.
   `tools/oracles/build.sh` builds the linkers alongside the assemblers.
+- `tools/link-diff/run.sh` against a link of a *whole program*: two or three
+  objects that reference each other, assembled by the reference assembler and
+  by rsasm, each set linked by the same GNU ld 2.47 with the same script, and
+  the linked images and symbol tables compared. Bytes alone cannot show a
+  relocation that names the wrong symbol or carries the wrong addend — the
+  field it covers is zero in both objects — and flat-diff only ever links one
+  object, so nothing else here depends on a symbol being resolved across a
+  file boundary. Per target the programs cover calls and branches between
+  objects, absolute and PC-relative data references with addends, the halves
+  of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `hi()`/`lo()`), literal
+  pools and constant pools loading another object's symbols, ARM/Thumb
+  interworking, `@GOTPCREL`, `@GOT` and `@PLT` where the backend has them,
+  weak definitions a second object overrides, `.comm` symbols merged between
+  objects with different sizes, `.bss`, and references into another object's
+  sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,
+  V850/RH850, AVR and RISC-V — are linked a second time with `--relax`, which
+  is what their difference records, `R_MSP430_SYM_DIFF` pairs and `.avr.prop`
+  exist for. Two more rows link [PE/COFF](#pecoff) objects into an image with
+  GNU ld for mingw, where what a link has to get right is `@IMGREL`,
+  `.secrel32` and `.secidx` and the addend a COFF relocation keeps in its
+  field. 229 of 229 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 403 of 403
@@ -1023,7 +1050,7 @@ each binding — local, global, weak, hidden and the other visibilities, `.set`
 aliases either way round, `.globl` after use, another section, undefined —
 through branches, calls, PC-relative loads and data.
 
-All nine run in CI. The expected bytes in the hermetic tests under `tests/` were
+All ten run in CI. The expected bytes in the hermetic tests under `tests/` were
 taken from these runs rather than written by hand: a test that only checks
 rsasm against rsasm can never find a wrong encoding.
 

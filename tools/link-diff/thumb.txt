@@ -1,0 +1,183 @@
+=== calls and branches between objects
+--- a.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  _start
+        .thumb_func
+        .type   _start, %function
+_start:
+        bl      helper
+        b.w     helper
+        beq.w   helper
+        bne.w   weakfn
+        bl      weakfn
+        bl      absent
+        bx      lr
+        .weak   absent
+--- b.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  helper
+        .weak   weakfn
+        .thumb_func
+        .type   helper, %function
+helper:
+        bl      _start
+        b.w     _start
+        bx      lr
+        .thumb_func
+weakfn:
+        bx      lr
+
+=== interworking with an ARM function in another object
+--- a.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  _start
+        .thumb_func
+        .type   _start, %function
+_start:
+        bl      armfn
+        blx     armfn
+        bl      thumbfn
+        bx      lr
+--- b.s
+        .syntax unified
+        .text
+        .arm
+        .globl  armfn
+        .type   armfn, %function
+armfn:  bl      thumbfn
+        bx      lr
+        .thumb
+        .globl  thumbfn
+        .thumb_func
+        .type   thumbfn, %function
+thumbfn:
+        bx      lr
+        nop
+
+=== literal pools loading another object's symbols
+--- a.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  _start
+        .thumb_func
+_start:
+        ldr     r0, =target
+        ldr     r1, =target + 8
+        ldr     r2, =0x12345678
+        ldr     r3, =weakfn
+        adr     r4, _start
+        bx      lr
+        .ltorg
+--- b.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  target
+        .weak   weakfn
+        .thumb_func
+target: bx      lr
+        .thumb_func
+weakfn: bx      lr
+
+=== data references between objects
+--- a.s
+        .syntax unified
+        .data
+        .globl  dptr
+        .type   dptr, %object
+dptr:   .word   target
+        .word   target + 16
+        .word   target - .
+        .word   wsym
+        .word   com1
+        .word   bssvar
+        .word   after - dptr
+        .size   dptr, . - dptr
+after:  .word   0
+        .syntax unified
+        .text
+        .thumb
+        .globl  _start
+        .thumb_func
+_start: bx      lr
+--- b.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  target
+        .thumb_func
+        .type   target, %function
+target: bx      lr
+        .weak   wsym
+        .thumb_func
+wsym:   bx      lr
+        .comm   com1, 8, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, %object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  _start
+        .thumb_func
+_start:
+        bl      both
+        bl      weakonly
+        ldr     r0, =both
+        bx      lr
+        .ltorg
+        .weak   both
+        .thumb_func
+both:   nop
+        nop
+--- b.s
+        .syntax unified
+        .text
+        .thumb
+        .globl  both
+        .thumb_func
+both:   bkpt    #1
+        bkpt    #1
+        .weak   weakonly
+        .thumb_func
+weakonly:
+        bx      lr
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .syntax unified
+        .text
+        .thumb
+        .globl  _start
+        .thumb_func
+_start:
+        ldr     r0, =shared
+        ldr     r1, =bigger
+        bx      lr
+        .ltorg
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .syntax unified
+        .text
+        .thumb
+        .globl  reader
+        .thumb_func
+reader:
+        ldr     r0, =bigger
+        bx      lr
+        .ltorg

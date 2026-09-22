@@ -1,0 +1,129 @@
+# PE/COFF programs for tools/link-diff, i386.
+#
+# The i386 image base is 0x400000, so a 32-bit absolute reference does fit
+# here, which is what `IMAGE_REL_I386_DIR32` is for; `@IMGREL`, `.secrel32`
+# and `.secidx` are the same as on x86-64.
+#
+# Names carry a leading underscore in this ABI, and a COFF `.comm` takes its
+# alignment as a power of two rather than as a byte count.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    _helper
+        jmp     _helper
+        je      _helper
+        call    _weakfn
+        movl    $_table, %eax
+        ret
+        .section .rdata,"dr"
+        .globl  _table
+_table: .long   _helper
+        .long   _dat
+--- b.s
+        .text
+        .globl  _helper
+        .weak   _weakfn
+_helper:
+        call    _start
+        jmp     _start
+        ret
+_weakfn:
+        ret
+        .data
+        .globl  _dat
+_dat:   .long   0x11223344
+
+=== image-relative and section-relative references between objects
+--- a.s
+        .section .rdata,"dr"
+        .globl  _entries
+_entries:
+        .rva    _helper
+        .rva    _dat
+        .secrel32 _helper
+        .secrel32 _dat
+        .secidx _helper
+        .secidx _dat
+        .long   0
+        .text
+        .globl  _start
+_start:
+        movl    $_entries, %eax
+        call    _helper
+        ret
+--- b.s
+        .text
+        .globl  _helper
+_helper: ret
+        .data
+        .globl  _dat
+_dat:   .long   0
+
+=== addends on references between objects
+--- a.s
+        .data
+        .globl  _dptr
+_dptr:  .long   _target
+        .long   _target + 16
+        .long   _target - 8
+        .long   _target@IMGREL
+        .long   _target@IMGREL + 4
+        .long   _bssvar
+        .text
+        .globl  _start
+_start:
+        movl    $_target, %eax
+        movl    $_target + 16, %ecx
+        movl    _bssvar, %edx
+        ret
+--- b.s
+        .text
+        .globl  _target
+_target: nop
+        nop
+        .bss
+        .globl  _bssvar
+_bssvar: .space 16
+
+=== a weak external overridden by a strong definition in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    _both
+        call    _weakonly
+        ret
+        .weak   _both
+_both:  nop
+        nop
+--- b.s
+        .text
+        .globl  _both
+_both:  int3
+        int3
+        .weak   _weakonly
+_weakonly:
+        ret
+
+=== common symbols merged between objects
+--- a.s
+        .comm   _shared, 4, 2
+        .comm   _bigger, 8, 3
+        .text
+        .globl  _start
+_start:
+        movl    _shared, %eax
+        movl    $_bigger, %ecx
+        ret
+--- b.s
+        .comm   _shared, 4, 2
+        .comm   _bigger, 64, 5
+        .text
+        .globl  _reader
+_reader:
+        movl    $_bigger, %eax
+        movl    _shared, %ecx
+        ret

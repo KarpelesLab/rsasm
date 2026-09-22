@@ -1,0 +1,169 @@
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, %function
+_start:
+        bl      helper
+        b       helper
+        bl      weakfn
+        b.eq    helper
+        cbz     x0, helper
+        tbz     x1, #3, helper
+        bl      absent
+        ret
+        .weak   absent
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+        .type   helper, %function
+helper:
+        bl      _start
+        b       _start
+        b.ne    _start
+        ret
+weakfn:
+        ret
+
+=== page-relative addressing across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        adrp    x0, target
+        add     x0, x0, :lo12:target
+        adrp    x1, target + 16
+        add     x1, x1, :lo12:(target + 16)
+        adrp    x2, bssvar
+        ldr     x2, [x2, :lo12:bssvar]
+        adr     x3, _start
+        adrp    x4, rodata
+        add     x4, x4, :lo12:rodata
+        ret
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .quad   0x1122334455667788
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== literal pools loading another object's symbols
+--- a.s
+        .text
+        .globl  _start
+_start:
+        ldr     x0, =target
+        ldr     w1, =target
+        ldr     x2, =target + 0x10
+        ldr     x3, =0x123456789
+        ldr     x4, =weakfn
+        ret
+        .ltorg
+--- b.s
+        .text
+        .globl  target
+        .weak   weakfn
+target: ret
+weakfn: ret
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, %object
+dptr:   .quad   target
+        .quad   target + 16
+        .word   target
+        .word   after - dptr
+        .quad   wsym
+        .quad   com1
+        .quad   bssvar
+        .size   dptr, . - dptr
+after:  .quad   0
+        .text
+        .globl  _start
+_start: ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, %function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, %object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== the GOT
+--- a.s
+        .text
+        .globl  _start
+_start:
+        adrp    x0, :got:shared
+        ldr     x0, [x0, :got_lo12:shared]
+        adrp    x1, :got:helper
+        ldr     x1, [x1, :got_lo12:helper]
+        bl      helper
+        ret
+--- b.s
+        .text
+        .globl  helper
+helper: ret
+        .data
+        .globl  shared
+shared: .quad   42
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        bl      both
+        bl      weakonly
+        adrp    x0, both
+        add     x0, x0, :lo12:both
+        ret
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   brk     #1
+        brk     #1
+        .weak   weakonly
+weakonly:
+        ret
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .globl  _start
+_start:
+        adrp    x0, shared
+        ldr     w0, [x0, :lo12:shared]
+        adrp    x1, bigger
+        ldr     x1, [x1, :lo12:bigger]
+        ret
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        adrp    x0, bigger
+        add     x0, x0, :lo12:bigger
+        ret

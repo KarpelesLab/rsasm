@@ -1,0 +1,135 @@
+# PE/COFF programs for tools/link-diff, x86-64.
+#
+# A Windows object has no GOT and no PLT, so what a link has to get right
+# here is the other half: `@IMGREL` (`IMAGE_REL_AMD64_ADDR32NB`, the address
+# relative to the image base), `.secrel32` and `.secidx`, and the addend a
+# COFF relocation keeps in the field it covers rather than beside it.
+#
+# The image base is 0x140000000, so an absolute 32-bit reference to a symbol
+# does not fit; the addresses here are either 64-bit, RIP-relative or
+# image-relative.
+#
+# A COFF `.comm` takes its alignment as a power of two, not as a byte count,
+# and neither assembler will go past 2^5.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    helper
+        jmp     helper
+        je      helper
+        call    weakfn
+        leaq    table(%rip), %rax
+        movq    helper@GOTPCREL(%rip), %rcx
+        ret
+        .section .rdata,"dr"
+        .globl  table
+table:  .quad   helper
+        .quad   dat
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+helper:
+        call    _start
+        jmp     _start
+        ret
+weakfn:
+        ret
+        .data
+        .globl  dat
+dat:    .quad   0x1122334455667788
+
+=== image-relative and section-relative references between objects
+--- a.s
+        .section .rdata,"dr"
+        .globl  entries
+entries:
+        .rva    helper
+        .rva    dat
+        .long   0
+        .secrel32 helper
+        .secrel32 dat
+        .secidx helper
+        .secidx dat
+        .text
+        .globl  _start
+_start:
+        leaq    entries(%rip), %rax
+        call    helper
+        ret
+--- b.s
+        .text
+        .globl  helper
+helper: ret
+        .data
+        .globl  dat
+dat:    .quad   0
+
+=== addends on references between objects
+--- a.s
+        .data
+        .globl  dptr
+dptr:   .quad   target
+        .quad   target + 16
+        .quad   target - 8
+        .long   target@IMGREL
+        .long   target@IMGREL + 4
+        .quad   bssvar
+        .text
+        .globl  _start
+_start:
+        leaq    target(%rip), %rax
+        leaq    target + 16(%rip), %rcx
+        movq    bssvar(%rip), %rdx
+        ret
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== a weak external overridden by a strong definition in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    both
+        call    weakonly
+        ret
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   int3
+        int3
+        .weak   weakonly
+weakonly:
+        ret
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 2
+        .comm   bigger, 8, 3
+        .text
+        .globl  _start
+_start:
+        movl    shared(%rip), %eax
+        movq    bigger(%rip), %rcx
+        ret
+--- b.s
+        .comm   shared, 4, 2
+        .comm   bigger, 64, 5
+        .text
+        .globl  reader
+reader:
+        leaq    bigger(%rip), %rax
+        movl    shared(%rip), %ecx
+        ret
