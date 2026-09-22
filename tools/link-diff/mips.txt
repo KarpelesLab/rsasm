@@ -1,0 +1,161 @@
+# MIPS programs for tools/link-diff.
+#
+# Every object here defines something in `.text`, `.data` and `.bss`. That is
+# not decoration: llvm-mc creates all three in every object whether or not the
+# source uses them, and on MIPS it gives them an alignment of 16, so an empty
+# `.data` in the reference's second object pads the linked `.data` out by up
+# to 15 bytes that rsasm -- which writes no empty sections, as
+# `tools/mc-diff/canon.sh` records -- has nothing to match. Keeping each
+# section non-empty on both sides leaves the comparison about relocations.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .set    noreorder
+        .globl  _start
+        .type   _start, @function
+_start:
+        jal     helper
+        nop
+        j       helper
+        nop
+        beq     $4, $5, helper
+        nop
+        bne     $4, $5, weakfn
+        nop
+        bal     helper
+        nop
+        jr      $31
+        nop
+--- b.s
+        .text
+        .set    noreorder
+        .globl  helper
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        jal     _start
+        nop
+        j       _start
+        nop
+        jr      $31
+        nop
+weakfn:
+        jr      $31
+        nop
+
+=== halves of another object's address
+--- a.s
+        .text
+        .set    noreorder
+        .globl  _start
+_start:
+        lui     $4, %hi(target)
+        addiu   $4, $4, %lo(target)
+        lui     $5, %hi(bssvar)
+        lw      $5, %lo(bssvar)($5)
+        lui     $6, %hi(rodata)
+        addiu   $6, $6, %lo(rodata)
+        jr      $31
+        nop
+--- b.s
+        .text
+        .set    noreorder
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .word   0x11223344
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .word   target
+        .word   target + 16
+        .word   wsym
+        .word   com1
+        .word   bssvar
+        .word   after - dptr
+        .size   dptr, . - dptr
+after:  .word   0
+        .text
+        .set    noreorder
+        .globl  _start
+_start: jr      $31
+        nop
+--- b.s
+        .text
+        .set    noreorder
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .data
+        .word   0x55667788
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .set    noreorder
+        .globl  _start
+_start:
+        jal     both
+        nop
+        jal     weakonly
+        nop
+        lui     $4, %hi(both)
+        addiu   $4, $4, %lo(both)
+        jr      $31
+        nop
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .set    noreorder
+        .globl  both
+both:   break
+        break
+        .weak   weakonly
+weakonly:
+        jr      $31
+        nop
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .set    noreorder
+        .globl  _start
+_start:
+        lui     $4, %hi(shared)
+        lw      $4, %lo(shared)($4)
+        lui     $5, %hi(bigger)
+        addiu   $5, $5, %lo(bigger)
+        jr      $31
+        nop
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .set    noreorder
+        .globl  reader
+reader:
+        lui     $4, %hi(bigger)
+        addiu   $4, $4, %lo(bigger)
+        jr      $31
+        nop

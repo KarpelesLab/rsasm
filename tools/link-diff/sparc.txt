@@ -1,0 +1,141 @@
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, #function
+_start:
+        call    helper
+        nop
+        ba      helper
+        nop
+        be      helper
+        nop
+        bne     weakfn
+        nop
+        call    weakfn
+        nop
+        retl
+        nop
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+        .type   helper, #function
+helper:
+        call    _start
+        nop
+        ba      _start
+        nop
+        retl
+        nop
+weakfn:
+        retl
+        nop
+
+=== halves of another object's address
+--- a.s
+        .text
+        .globl  _start
+_start:
+        sethi   %hi(target), %o0
+        or      %o0, %lo(target), %o0
+        sethi   %hi(bssvar), %o1
+        ld      [%o1 + %lo(bssvar)], %o1
+        sethi   %hi(rodata), %o2
+        or      %o2, %lo(rodata), %o2
+        retl
+        nop
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .word   0x11223344
+        .bss
+        .globl  bssvar
+bssvar: .skip   16
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, #object
+dptr:   .word   target
+        .word   target + 16
+        .word   wsym
+        .word   com1
+        .word   bssvar
+        .word   after - dptr
+        .size   dptr, . - dptr
+after:  .word   0
+        .text
+        .globl  _start
+_start: retl
+        nop
+--- b.s
+        .text
+        .globl  target
+        .type   target, #function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .data
+        .word   0x55667788
+        .bss
+        .globl  bssvar
+        .type   bssvar, #object
+bssvar: .skip   16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    both
+        nop
+        call    weakonly
+        nop
+        sethi   %hi(both), %o0
+        or      %o0, %lo(both), %o0
+        retl
+        nop
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   ta      1
+        ta      1
+        .weak   weakonly
+weakonly:
+        retl
+        nop
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .globl  _start
+_start:
+        sethi   %hi(shared), %o0
+        ld      [%o0 + %lo(shared)], %o0
+        sethi   %hi(bigger), %o1
+        or      %o1, %lo(bigger), %o1
+        retl
+        nop
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        sethi   %hi(bigger), %o0
+        or      %o0, %lo(bigger), %o0
+        retl
+        nop

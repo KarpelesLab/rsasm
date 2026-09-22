@@ -81,9 +81,10 @@ pub(crate) fn map(machine: u16, class: RelocClass, elf: u32) -> Option<u16> {
             // R_X86_64_32 and _32S; the linker writes the same 32 bits, and
             // COFF has no separate sign-extending form.
             (_, 10 | 11) => AMD64_ADDR32,
-            // R_X86_64_PC32, _PLT32 and _GOTPCREL: a call, a jump and a
-            // RIP-relative load are all plain PC-relative references here.
-            (_, 2 | 4 | 9) => AMD64_REL32,
+            // R_X86_64_PC32, _PLT32, _GOTPCREL and the two relaxable
+            // `@GOTPCREL` forms: a call, a jump and a RIP-relative load are
+            // all plain PC-relative references here.
+            (_, 2 | 4 | 9 | 41 | 42) => AMD64_REL32,
             _ => return None,
         }),
         MACHINE_I386 => Some(match (class, elf) {
