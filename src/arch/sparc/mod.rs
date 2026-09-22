@@ -23,7 +23,7 @@ use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi};
 use crate::lexer::{Punct, TokKind};
 use crate::section::Variant;
-use encode::BranchSuffix;
+use encode::{BranchKind, BranchSuffix};
 use insn::Form;
 use operand::OperandParser;
 
@@ -143,7 +143,8 @@ impl Architecture for Sparc {
     }
 
     /// DWARF numbers the integer registers as the encoding does, and the
-    /// floating-point ones from 32.
+    /// floating-point ones from 32 — by name, so V9's `%f62` is 94 even
+    /// though the encoding gives it the field value 31.
     fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
         let r = reg::lookup(name.strip_prefix('%')?)?;
         match r.class {
@@ -174,13 +175,28 @@ impl Architecture for Sparc {
             // so they have to come off before the operands are split on
             // commas.
             let sfx = match def.form {
-                Form::Branch { .. } | Form::BranchReg(_) => branch_suffix(cx, &mut cur)?,
+                Form::Branch { .. } | Form::BranchFloat(_) | Form::BranchReg(_) => {
+                    branch_suffix(cx, &mut cur)?
+                }
                 _ => BranchSuffix::default(),
             };
             let ops = OperandParser { cx }.parse_list(&cur)?;
             return match def.form {
                 Form::Branch { cond, predicted } => {
-                    encode::branch(cx, &m, req.span, cond, predicted, sfx, &ops)
+                    let kind = BranchKind {
+                        cond,
+                        predicted,
+                        float: false,
+                    };
+                    encode::branch(cx, &m, req.span, kind, sfx, &ops)
+                }
+                Form::BranchFloat(cond) => {
+                    let kind = BranchKind {
+                        cond,
+                        predicted: false,
+                        float: true,
+                    };
+                    encode::branch(cx, &m, req.span, kind, sfx, &ops)
                 }
                 Form::BranchReg(rcond) => encode::branch_reg(cx, &m, req.span, rcond, sfx, &ops),
                 form => encode::encode(cx, &m, req.span, form, &ops),

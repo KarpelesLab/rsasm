@@ -59,7 +59,7 @@ assembler, not against rsasm's own idea of the manual. See
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 736 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 306 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 609 |

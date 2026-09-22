@@ -27,9 +27,9 @@
 //! constraint that shapes most SPARC code — anything bigger has to be built
 //! with `sethi`.
 
-use super::insn::Form;
+use super::insn::{Form, StateOp};
 use super::operand::{Addr, Imm, ImmPart, Offset, Operand, OperandKind};
-use super::reg::{self, Reg, RegClass};
+use super::reg::{self, FpWidth, Reg, RegClass};
 use super::reloc;
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
@@ -47,6 +47,14 @@ pub const OP2_BPCC: u32 = 1;
 pub const OP2_BICC: u32 = 2;
 pub const OP2_BPR: u32 = 3;
 pub const OP2_SETHI: u32 = 4;
+pub const OP2_FBPFCC: u32 = 5;
+pub const OP2_FBFCC: u32 = 6;
+
+/// `op3` of the two floating-point operation spaces, which hold everything
+/// the `%f` registers do: `FPop1` is the arithmetic and `FPop2` the compares
+/// and the conditional moves.
+pub const OP3_FPOP1: u32 = 0x34;
+pub const OP3_FPOP2: u32 = 0x35;
 
 /// Bit 13: 1 selects the 13-bit signed immediate, 0 the `rs2` register.
 pub const I_BIT: u32 = 1 << 13;
@@ -329,17 +337,77 @@ pub fn int_reg(cx: &mut AsmCtx<'_>, op: &Operand, what: &str) -> Option<Reg> {
     }
 }
 
-/// A register operand that must be a float register.
-pub fn float_reg(cx: &mut AsmCtx<'_>, op: &Operand, what: &str) -> Option<Reg> {
-    match op.float_reg() {
-        Some(r) => Some(r),
-        None => {
+/// A register operand that must be a float register of `width`, returned as
+/// the five-bit field value it encodes to.
+///
+/// The width is what makes `%f32` legal or not: only a double or quad
+/// operand can reach the upper half of V9's register file, and only a
+/// register that starts a pair or a quad can name one.
+pub fn float_field(cx: &mut AsmCtx<'_>, op: &Operand, width: FpWidth, what: &str) -> Option<u32> {
+    let Some(r) = op.float_reg() else {
+        cx.error(
+            op.span,
+            format!(
+                "expected a float register as the {what}, found {}",
+                op.describe()
+            ),
+        );
+        return None;
+    };
+    // The upper half of the register file arrived with V9; a V8 target has
+    // only 32 of them however wide the operand is.
+    if r.num >= 32 && cx.state.bits < 64 {
+        cx.error(
+            op.span,
+            format!(
+                "`{}` is a SPARC V9 register; this target has only `%f0`-`%f31`",
+                reg::name_of(r)
+            ),
+        );
+        return None;
+    }
+    if !width.allows(r.num) {
+        let limit = match width {
+            FpWidth::Single => "`%f0`-`%f31`",
+            FpWidth::Double => "an even `%f0`-`%f62`",
+            FpWidth::Quad => "a multiple of four from `%f0` to `%f60`",
+        };
+        cx.error(
+            op.span,
+            format!(
+                "`{}` cannot name a {}-precision operand; the {what} must be {limit}",
+                reg::name_of(r),
+                width.name(),
+            ),
+        );
+        return None;
+    }
+    Some(reg::fp_field(width, r.num))
+}
+
+/// The `rd` and `op3` of a `%fsr` or `%fq` transfer.
+///
+/// These are opcodes of their own rather than a register in a field: `ld`
+/// and `st` reach `%fsr` at `op3` 0x21 and 0x25, `ldx` and `stx` reach all 64
+/// bits of it at the same pair with `rd` = 1, and `std %fq` reads the
+/// exception queue at 0x26. Anything else -- `ldd [x], %fsr`, `ldx [x], %fq`
+/// -- is a combination no opcode exists for, and GNU as refuses it too.
+fn state_reg(
+    cx: &mut AsmCtx<'_>,
+    m: &str,
+    op: &Operand,
+    r: Reg,
+    state: Option<StateOp>,
+    store: bool,
+) -> Option<(u32, u32)> {
+    let fsr = r.num == 0;
+    match state {
+        Some(StateOp::Fsr(rd)) if fsr => Some((u32::from(rd), if store { 0x25 } else { 0x21 })),
+        Some(StateOp::Fq) if !fsr => Some((0, 0x26)),
+        _ => {
             cx.error(
                 op.span,
-                format!(
-                    "expected a float register as the {what}, found {}",
-                    op.describe()
-                ),
+                format!("`{m}` cannot transfer `{}`", reg::name_of(r)),
             );
             None
         }
@@ -428,9 +496,9 @@ fn arity(cx: &mut AsmCtx<'_>, m: &str, span: Span, ops: &[Operand], want: &[usiz
     false
 }
 
-/// The address operand of `jmpl`, `call`, `flush` and `return`, which SPARC
-/// writes without brackets.
-fn target(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<Addr> {
+/// The address operand of `jmpl`, `jmp`, `call`, `flush` and `return`, which
+/// SPARC writes without brackets.
+pub fn target(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<Addr> {
     if let Some(imm) = op.imm() {
         return Some(Addr {
             base: reg::G0,
@@ -467,6 +535,64 @@ fn cc_fields(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<(u32, u32)> {
             );
             None
         }
+    }
+}
+
+/// The bank number of a `%fccN` operand, for the instructions that take no
+/// other kind.
+fn fcc_field(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<u32> {
+    match op.reg() {
+        Some(r) if r.class == RegClass::Fcc => Some(u32::from(r.num)),
+        _ => {
+            cx.error(
+                op.span,
+                format!(
+                    "expected a floating-point condition-code register (`%fcc0`-`%fcc3`), found {}",
+                    op.describe()
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// The two-bit bank a V9 `Tcc` names. Only the integer pair can be named:
+/// there is no trap on a floating-point comparison.
+fn trap_cc(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<u32> {
+    if cx.state.bits < 64 {
+        cx.error(
+            op.span,
+            "a trap that names a condition-code register is a SPARC V9 instruction; \
+             this target is V8",
+        );
+        return None;
+    }
+    let (cc2, cc10) = cc_fields(cx, op)?;
+    if cc2 == 0 {
+        cx.error(
+            op.span,
+            "a trap tests the integer condition codes; name `%icc` or `%xcc`",
+        );
+        return None;
+    }
+    Some(cc10)
+}
+
+/// Why a conditional move's name does not go with the bank it was given.
+fn not_a_condition(m: &str, cc2: u32) -> String {
+    format!(
+        "`{m}` is not a condition of {}",
+        if cc2 == 1 { "`%icc`" } else { "a `%fcc`" }
+    )
+}
+
+/// `opf_low` for the floating-point move of a given width. The
+/// register-tested form is the same three values four higher.
+fn fp_move_opf(width: FpWidth) -> u32 {
+    match width {
+        FpWidth::Single => 1,
+        FpWidth::Double => 2,
+        FpWidth::Quad => 3,
     }
 }
 
@@ -532,10 +658,17 @@ pub fn encode(
                 (&ops[1], &ops[0])
             };
             // `ld`/`st`/`ldd`/`std` choose their opcode from the register
-            // class: the float forms are separate instructions.
+            // class: the float forms are separate instructions, and `%fsr`
+            // and `%fq` are two more.
             let (rd, op3) = match (data.reg(), f.fop3) {
-                (Some(r), Some(fop3)) if r.is_float() => (r, fop3),
-                (Some(r), _) if r.is_int() && !f.float_only => (r, f.op3),
+                (Some(r), Some(fop3)) if r.is_float() => (
+                    float_field(cx, data, f.fwidth, "data register")?,
+                    u32::from(fop3),
+                ),
+                (Some(r), _) if r.is_int() && !f.float_only => (u32::from(r.num), u32::from(f.op3)),
+                (Some(r), _) if r.class == RegClass::FpState => {
+                    state_reg(cx, m, data, r, f.state, f.store)?
+                }
                 _ => {
                     let want = if f.float_only {
                         "a float register"
@@ -565,7 +698,7 @@ pub fn encode(
                 return None;
             };
             let (rs1, low, fixup) = address(cx, &addr)?;
-            let word = format3(OP_MEM, u32::from(rd.num), u32::from(op3), rs1, low);
+            let word = format3(OP_MEM, rd, op3, rs1, low);
             Some(one(pack(word, fixup)))
         }
 
@@ -688,6 +821,14 @@ pub fn encode(
         }
 
         Form::Trap(cond) => {
+            // V9 made `Tcc` name the bank it tests, in a two-bit field
+            // carved out of the immediate. `%icc` is zero there, so the V8
+            // spelling without a bank is the same word.
+            let (cc, ops) = if ops.first().is_some_and(Operand::is_cc) {
+                (trap_cc(cx, &ops[0])? << 11, &ops[1..])
+            } else {
+                (0, ops)
+            };
             if !arity(cx, m, span, ops, &[1, 2]) {
                 return None;
             }
@@ -699,7 +840,7 @@ pub fn encode(
                 && !matches!(addr.offset, Offset::None)
             {
                 let (rs1, low, fixup) = address(cx, &addr)?;
-                let word = format3(OP_ALU, u32::from(cond), 0x3a, rs1, low);
+                let word = format3(OP_ALU, u32::from(cond), 0x3a, rs1, cc | low);
                 return Some(one(pack(word, fixup)));
             }
             let (rs1, src) = if ops.len() == 2 {
@@ -708,7 +849,7 @@ pub fn encode(
                 (reg::G0.num, &ops[0])
             };
             let (low, fixup) = source(cx, src)?;
-            let word = format3(OP_ALU, u32::from(cond), 0x3a, u32::from(rs1), low);
+            let word = format3(OP_ALU, u32::from(cond), 0x3a, u32::from(rs1), cc | low);
             Some(one(pack(word, fixup)))
         }
 
@@ -750,49 +891,110 @@ pub fn encode(
             Some(one(pack(word, fixup)))
         }
 
-        Form::FpBin(opf) => {
+        Form::FpBin { opf, src, dst } => {
             if !arity(cx, m, span, ops, &[3]) {
                 return None;
             }
-            let rs1 = float_reg(cx, &ops[0], "first source")?;
-            let rs2 = float_reg(cx, &ops[1], "second source")?;
-            let rd = float_reg(cx, &ops[2], "destination")?;
+            let rs1 = float_field(cx, &ops[0], src, "first source")?;
+            let rs2 = float_field(cx, &ops[1], src, "second source")?;
+            let rd = float_field(cx, &ops[2], dst, "destination")?;
             Some(one(Word::plain(format3(
                 OP_ALU,
-                u32::from(rd.num),
-                0x34,
-                u32::from(rs1.num),
-                (u32::from(opf) << 5) | u32::from(rs2.num),
+                rd,
+                OP3_FPOP1,
+                rs1,
+                (u32::from(opf) << 5) | rs2,
             ))))
         }
 
-        Form::FpUn(opf) => {
+        Form::FpUn { opf, src, dst } => {
             if !arity(cx, m, span, ops, &[2]) {
                 return None;
             }
-            let rs2 = float_reg(cx, &ops[0], "source")?;
-            let rd = float_reg(cx, &ops[1], "destination")?;
+            let rs2 = float_field(cx, &ops[0], src, "source")?;
+            let rd = float_field(cx, &ops[1], dst, "destination")?;
             Some(one(Word::plain(format3(
                 OP_ALU,
-                u32::from(rd.num),
-                0x34,
+                rd,
+                OP3_FPOP1,
                 0,
-                (u32::from(opf) << 5) | u32::from(rs2.num),
+                (u32::from(opf) << 5) | rs2,
             ))))
         }
 
-        Form::FpCmp(opf) => {
-            if !arity(cx, m, span, ops, &[2]) {
+        Form::FpCmp { opf, width } => {
+            if !arity(cx, m, span, ops, &[2, 3]) {
                 return None;
             }
-            let rs1 = float_reg(cx, &ops[0], "first source")?;
-            let rs2 = float_reg(cx, &ops[1], "second source")?;
+            // V9 gave the floating-point unit four condition-code banks, and
+            // a compare says which one it writes in the field an arithmetic
+            // instruction would use for its destination. Left out, it is
+            // `%fcc0`, which is the V8 instruction unchanged.
+            let (fcc, rest) = if ops.len() == 3 {
+                if cx.state.bits < 64 {
+                    cx.error(
+                        ops[0].span,
+                        format!(
+                            "`{m}` with a condition-code register is a SPARC V9 \
+                             instruction; this target is V8"
+                        ),
+                    );
+                    return None;
+                }
+                (fcc_field(cx, &ops[0])?, &ops[1..])
+            } else {
+                (0, ops)
+            };
+            let rs1 = float_field(cx, &rest[0], width, "first source")?;
+            let rs2 = float_field(cx, &rest[1], width, "second source")?;
             Some(one(Word::plain(format3(
                 OP_ALU,
-                0,
-                0x35,
+                fcc,
+                OP3_FPOP2,
+                rs1,
+                (u32::from(opf) << 5) | rs2,
+            ))))
+        }
+
+        Form::FpMovCc { icc, fcc, width } => {
+            if !arity(cx, m, span, ops, &[3]) {
+                return None;
+            }
+            let (cc2, cc10) = cc_fields(cx, &ops[0])?;
+            let Some(cond) = (if cc2 == 1 { icc } else { fcc }) else {
+                cx.error(span, not_a_condition(m, cc2));
+                return None;
+            };
+            // `opf_cc` numbers all six banks in one three-bit field, the
+            // four `%fcc`s first and the integer pair above them, rather
+            // than splitting them across the word as `MOVcc` does.
+            let opf_cc = if cc2 == 1 { 4 + cc10 } else { cc10 };
+            let rs2 = float_field(cx, &ops[1], width, "source")?;
+            let rd = float_field(cx, &ops[2], width, "destination")?;
+            Some(one(Word::plain(format3(
+                OP_ALU,
+                rd,
+                OP3_FPOP2,
+                u32::from(cond),
+                (opf_cc << 11) | (fp_move_opf(width) << 5) | rs2,
+            ))))
+        }
+
+        Form::FpMovReg { rcond, width } => {
+            if !arity(cx, m, span, ops, &[3]) {
+                return None;
+            }
+            let rs1 = int_reg(cx, &ops[0], "tested register")?;
+            let rs2 = float_field(cx, &ops[1], width, "source")?;
+            let rd = float_field(cx, &ops[2], width, "destination")?;
+            // The register-tested move is the same opcode with bit 13 clear,
+            // and its `opf_low` is four above the condition-code form's.
+            Some(one(Word::plain(format3(
+                OP_ALU,
+                rd,
+                OP3_FPOP2,
                 u32::from(rs1.num),
-                (u32::from(opf) << 5) | u32::from(rs2.num),
+                (u32::from(rcond) << 10) | ((fp_move_opf(width) + 4) << 5) | rs2,
             ))))
         }
 
@@ -804,13 +1006,7 @@ pub fn encode(
             // `cc2` is 1 for `%icc` and `%xcc` and 0 for a `%fccN`, which is
             // also which condition table the name is read from.
             let Some(cond) = (if cc2 == 1 { icc } else { fcc }) else {
-                cx.error(
-                    span,
-                    format!(
-                        "`{m}` is not a condition of {}",
-                        if cc2 == 1 { "`%icc`" } else { "a `%fcc`" }
-                    ),
-                );
+                cx.error(span, not_a_condition(m, cc2));
                 return None;
             };
             // `cc1cc0` sits at bits 12-11, inside what would be the immediate
@@ -860,7 +1056,7 @@ pub fn encode(
 
         // Branches never reach here: they are assembled by `branch` below,
         // after their `,a` / `,pt` suffixes have been consumed.
-        Form::Branch { .. } | Form::BranchReg(_) => None,
+        Form::Branch { .. } | Form::BranchFloat(_) | Form::BranchReg(_) => None,
     }
 }
 
@@ -881,22 +1077,38 @@ pub struct BranchSuffix {
     pub predict: Option<bool>,
 }
 
-/// A conditional branch: `Bicc` (22-bit) or, with a condition-code operand,
-/// the V9 `BPcc` (19-bit and predicted).
+/// What a conditional branch's mnemonic said, apart from its suffixes.
+#[derive(Copy, Clone, Debug)]
+pub struct BranchKind {
+    pub cond: u8,
+    /// `bp<cc>`, which is the V9 predicted form whatever the operands are.
+    pub predicted: bool,
+    /// `fb<cc>`, which is the other pair of opcodes and the other condition
+    /// table; the two families are the same word otherwise, and neither
+    /// accepts the other's condition-code bank.
+    pub float: bool,
+}
+
+/// A conditional branch: `Bicc` / `FBfcc` with 22 bits of displacement or,
+/// with a condition-code operand, the V9 `BPcc` / `FBPfcc`, which spend
+/// three of those bits on the bank and the prediction hint.
 pub fn branch(
     cx: &mut AsmCtx<'_>,
     m: &str,
     span: Span,
-    cond: u8,
-    predicted: bool,
+    BranchKind {
+        cond,
+        predicted,
+        float,
+    }: BranchKind,
     sfx: BranchSuffix,
     ops: &[Operand],
 ) -> Option<Vec<Variant>> {
     let a = u32::from(sfx.annul) << 4;
     let rd = a | u32::from(cond);
 
-    let use_bpcc = predicted || (ops.len() == 2 && ops[0].is_cc());
-    let (target_op, imm_bits) = if use_bpcc {
+    let banked = predicted || (ops.len() == 2 && ops[0].is_cc());
+    let (target_op, imm_bits) = if banked {
         // `be %icc, x` shares its mnemonic with the V8 `be x`, so the table
         // cannot mark it V9-only; the operand is what gives it away.
         if cx.state.bits < 64 {
@@ -912,8 +1124,15 @@ pub fn branch(
             return None;
         }
         let (cc2, cc10) = cc_fields(cx, &ops[0])?;
-        if cc2 == 0 {
-            cx.error(ops[0].span, "floating-point condition codes need `fb<cc>`");
+        if (cc2 == 0) != float {
+            cx.error(
+                ops[0].span,
+                if float {
+                    "a floating-point branch tests a `%fcc`; `%icc` and `%xcc` need `b<cc>`"
+                } else {
+                    "floating-point condition codes need `fb<cc>`"
+                },
+            );
             return None;
         }
         let p = u32::from(sfx.predict.unwrap_or(true));
@@ -923,7 +1142,14 @@ pub fn branch(
             return None;
         }
         if sfx.predict.is_some() {
-            cx.error(span, "`,pn` and `,pt` need a `%icc` or `%xcc` operand");
+            cx.error(
+                span,
+                if float {
+                    "`,pn` and `,pt` need a `%fcc` operand"
+                } else {
+                    "`,pn` and `,pt` need a `%icc` or `%xcc` operand"
+                },
+            );
             return None;
         }
         (&ops[0], 0)
@@ -933,8 +1159,13 @@ pub fn branch(
         cx.error(target_op.span, "expected a branch target");
         return None;
     };
-    let op2 = if use_bpcc { OP2_BPCC } else { OP2_BICC };
-    let kind = if use_bpcc {
+    let op2 = match (banked, float) {
+        (false, false) => OP2_BICC,
+        (false, true) => OP2_FBFCC,
+        (true, false) => OP2_BPCC,
+        (true, true) => OP2_FBPFCC,
+    };
+    let kind = if banked {
         disp19_fixup()
     } else {
         disp22_fixup()
