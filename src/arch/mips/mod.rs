@@ -13,6 +13,7 @@
 //! as `li` and `la` are still expanded, since almost no real source avoids
 //! them.
 
+pub(crate) mod abi;
 pub mod encode;
 pub mod insn;
 pub mod operand;
@@ -85,6 +86,12 @@ impl Architecture for Mips {
 
     fn elf_machine(&self) -> u16 {
         8 // EM_MIPS
+    }
+
+    /// `.reginfo` (or, on n64, `.MIPS.options`) and `.MIPS.abiflags`, which
+    /// llvm-mc writes into every MIPS object; see [`abi`].
+    fn elf_attributes(&self, state: &ArchState) -> Vec<crate::arch::AttrSection> {
+        abi::sections(self.bits, self.endian, state)
     }
 
     /// What llvm-mc writes for the default CPUs: MIPS32 with the o32 ABI and
