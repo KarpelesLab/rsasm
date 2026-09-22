@@ -97,7 +97,16 @@ KNOWN = [("does not fit in the 32-bit word", "literal wider than a word"),
 # documentation says why this one is deliberate, and
 # tools/mc-diff/arm-relocs.txt holds the case.
 KNOWN_GAS = [("misaligned branch destination",
-              "an ARM branch to a target GNU as checks before the linker")]
+              "an ARM branch to a target GNU as checks before the linker"),
+             # `adr r4, l0 + 2` where `l0` is a Thumb label: GNU as folds the
+             # interworking bit into the value, reads the result as odd and
+             # stops ("invalid immediate for address calculation (value =
+             # 0xFFFFFFFFFFFFFFFE)"). llvm-mc assembles it, as a `subw` from
+             # `pc` rather than an `add`, and so does rsasm. The three do not
+             # agree on the value, which is why this only records that GNU as
+             # refuses it and settles nothing else.
+             ("invalid immediate for address calculation",
+              "GNU as folds the interworking bit into an `adr` expression")]
 
 # Parts of the language a run can leave out, for bisecting a finding.
 FEATURES = ["vldr", "subsec", "macro", "sections", "state", "data", "adr",
