@@ -121,3 +121,34 @@ reader:
         lis     3, bigger@ha
         addi    3, 3, bigger@l
         blr
+
+=== calls through the PLT and around it, and GOT entries
+--- a.s
+        .text
+        .globl  _start
+_start:
+        bl      helper@plt
+        b       helper@plt
+        bl      weakfn@plt
+        bl      helper@local
+        bl      here@plt
+        bl      here@local
+        lis     3, gvar@got@ha
+        lwz     3, gvar@got@l(3)
+        lis     4, helper@got@ha
+        addi    4, 4, helper@got@l
+        addi    5, 5, gvar@got
+        blr
+here:   blr
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+        .type   helper, %function
+helper: blr
+weakfn: blr
+        .data
+        .globl  gvar
+        .type   gvar, %object
+gvar:   .long   0x11223344
+        .size   gvar, 4

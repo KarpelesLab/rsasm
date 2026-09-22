@@ -39,12 +39,13 @@
 #   binaries and Intel HEX for them, not ELF, so there is nothing to link.
 # * The GOT and PLT modifiers only appear where the backend has them: x86-64
 #   (`@GOTPCREL`, `@PLT`), i386 (`@GOT`, `@GOTOFF`, `@PLT`,
-#   `_GLOBAL_OFFSET_TABLE_`) and AArch64 (`:got:`, `:got_lo12:`). The ARM
-#   backend has no `sym(GOT)`, `sym(PLT)` or `:lower16:`/`:upper16:`
-#   operands, the AArch64 one no `:abs_g0_nc:` and its relatives, and the
-#   PowerPC one refuses `bl foo@plt` and the `@higher` and `@highest` halves
-#   rather than guessing at them; those sources are not in the corpora
-#   because rsasm does not assemble them at all.
+#   `_GLOBAL_OFFSET_TABLE_`), AArch64 (`:got:`, `:got_lo12:`) and PowerPC
+#   (`@plt`, `@local`, `@got`, `@toc` and the halves of a 64-bit address).
+#   The ARM backend has no `sym(GOT)`, `sym(PLT)` or `:lower16:`/`:upper16:`
+#   operands and the AArch64 one no `:abs_g0_nc:` and its relatives; those
+#   sources are not in the corpora because rsasm does not assemble them at
+#   all. Nor are PowerPC's `@tprel` and `@dtprel` families, which
+#   `src/arch/powerpc/encode.rs` says why it refuses.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot
