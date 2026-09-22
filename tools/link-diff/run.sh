@@ -210,8 +210,10 @@ link() { # out linkflags sections objects...
     "$link_ld" "${ldflags[@]}" -e _start --no-insert-timestamp -o "$out.elf" "$@" \
       > "$d/log" 2>&1 ||
       { echo "LINK-ERROR: $(head -3 "$d/log" | tr '\n' ' ')"; return 1; }
-    llvm-objdump -h -s "$out.elf" 2> "$d/log" | tail -n +3 > "$out.bin" ||
+    llvm-objdump -h -s "$out.elf" > "$d/od" 2> "$d/log" ||
       { echo "LINK-ERROR: objdump: $(head -1 "$d/log")"; return 1; }
+    # Past the first two lines, which name the file.
+    tail -n +3 "$d/od" > "$out.bin"
     return 0
   fi
   "$link_ld" "${ldflags[@]}" -e "$base" -T "$d/link.ld" -o "$out.elf" "$@" > "$d/log" 2>&1 ||
