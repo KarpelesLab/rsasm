@@ -4384,124 +4384,124 @@ orr v31.8h, #255, lsl #8
 orr v7.8b, v4.8b, v26.8b
 pmul v0.16b, v0.16b, v0.16b
 pmul v0.8b, v0.8b, v0.8b
-pmul v17.16b, v17.16b, v22.16b
-pmul v28.8b, v23.8b, v29.8b
+pmul v15.8b, v28.8b, v3.8b
+pmul v20.16b, v25.16b, v23.16b
 pmul v31.16b, v31.16b, v31.16b
 pmul v31.8b, v31.8b, v31.8b
 pmull v0.1q, v0.1d, v0.1d
 pmull v0.8h, v0.8b, v0.8b
-pmull v15.1q, v28.1d, v3.1d
+pmull v24.1q, v4.1d, v22.1d
 pmull v31.1q, v31.1d, v31.1d
 pmull v31.8h, v31.8b, v31.8b
-pmull v7.8h, v3.8b, v5.8b
+pmull v5.8h, v22.8b, v12.8b
 pmull2 v0.1q, v0.2d, v0.2d
 pmull2 v0.8h, v0.16b, v0.16b
-pmull2 v2.8h, v17.16b, v23.16b
+pmull2 v1.8h, v22.16b, v11.16b
+pmull2 v2.1q, v15.2d, v6.2d
 pmull2 v31.1q, v31.2d, v31.2d
 pmull2 v31.8h, v31.16b, v31.16b
-pmull2 v5.1q, v22.2d, v12.2d
 raddhn v0.2s, v0.2d, v0.2d
 raddhn v0.4h, v0.4s, v0.4s
 raddhn v0.8b, v0.8h, v0.8h
-raddhn v10.2s, v30.2d, v10.2d
-raddhn v26.4h, v9.4s, v25.4s
+raddhn v26.8b, v0.8h, v11.8h
+raddhn v3.4h, v8.4s, v10.4s
 raddhn v31.2s, v31.2d, v31.2d
 raddhn v31.4h, v31.4s, v31.4s
 raddhn v31.8b, v31.8h, v31.8h
-raddhn v8.8b, v0.8h, v26.8h
+raddhn v8.2s, v0.2d, v26.2d
 raddhn2 v0.16b, v0.8h, v0.8h
 raddhn2 v0.4s, v0.2d, v0.2d
 raddhn2 v0.8h, v0.4s, v0.4s
-raddhn2 v25.8h, v25.4s, v27.4s
-raddhn2 v26.4s, v0.2d, v11.2d
-raddhn2 v3.16b, v8.8h, v10.8h
+raddhn2 v16.4s, v7.2d, v16.2d
+raddhn2 v2.8h, v27.4s, v15.4s
+raddhn2 v25.16b, v25.8h, v27.8h
 raddhn2 v31.16b, v31.8h, v31.8h
 raddhn2 v31.4s, v31.2d, v31.2d
 raddhn2 v31.8h, v31.4s, v31.4s
 rax1 v0.2d, v0.2d, v0.2d
-rax1 v26.2d, v2.2d, v23.2d
+rax1 v27.2d, v23.2d, v3.2d
 rax1 v31.2d, v31.2d, v31.2d
 rbit v0.16b, v0.16b
 rbit v0.8b, v0.8b
-rbit v27.16b, v23.16b
+rbit v0.8b, v3.8b
+rbit v30.16b, v19.16b
 rbit v31.16b, v31.16b
 rbit v31.8b, v31.8b
-rbit v7.8b, v31.8b
 rdsvl x0, #-32
-rdsvl x2, #27
+rdsvl x15, #3
 rdsvl xzr, #31
 rdvl x0, #-32
-rdvl x2, #22
+rdvl x26, #-21
 rdvl xzr, #31
 rev16 v0.16b, v0.16b
 rev16 v0.8b, v0.8b
-rev16 v28.8b, v30.8b
-rev16 v31.16b, v10.16b
+rev16 v10.16b, v8.16b
 rev16 v31.16b, v31.16b
 rev16 v31.8b, v31.8b
+rev16 v7.8b, v27.8b
 rev32 v0.16b, v0.16b
 rev32 v0.4h, v0.4h
 rev32 v0.8b, v0.8b
 rev32 v0.8h, v0.8h
-rev32 v1.8h, v18.8h
-rev32 v10.16b, v8.16b
+rev32 v1.4h, v18.4h
+rev32 v1.8b, v7.8b
+rev32 v2.8h, v0.8h
 rev32 v31.16b, v31.16b
 rev32 v31.4h, v31.4h
 rev32 v31.8b, v31.8b
 rev32 v31.8h, v31.8h
-rev32 v4.8b, v7.8b
-rev32 v7.4h, v27.4h
+rev32 v4.16b, v7.16b
 rev64 v0.16b, v0.16b
 rev64 v0.2s, v0.2s
+rev64 v0.2s, v28.2s
 rev64 v0.4h, v0.4h
 rev64 v0.4s, v0.4s
-rev64 v0.4s, v28.4s
 rev64 v0.8b, v0.8b
 rev64 v0.8h, v0.8h
-rev64 v1.16b, v7.16b
-rev64 v1.8h, v23.8h
-rev64 v2.2s, v0.2s
-rev64 v25.8b, v12.8b
-rev64 v26.4h, v13.4h
+rev64 v1.4s, v23.4s
+rev64 v25.4h, v12.4h
+rev64 v26.16b, v13.16b
+rev64 v26.8h, v29.8h
 rev64 v31.16b, v31.16b
 rev64 v31.2s, v31.2s
 rev64 v31.4h, v31.4h
 rev64 v31.4s, v31.4s
 rev64 v31.8b, v31.8b
 rev64 v31.8h, v31.8h
+rev64 v6.8b, v2.8b
 rshrn v0.2s, v0.2d, #1
 rshrn v0.4h, v0.4s, #1
 rshrn v0.8b, v0.8h, #1
-rshrn v12.8b, v22.8h, #3
-rshrn v23.2s, v21.2d, #14
-rshrn v23.4h, v26.4s, #15
+rshrn v12.2s, v22.2d, #9
+rshrn v14.8b, v17.8h, #8
+rshrn v30.4h, v9.4s, #1
 rshrn v31.2s, v31.2d, #32
 rshrn v31.4h, v31.4s, #16
 rshrn v31.8b, v31.8h, #8
 rshrn2 v0.16b, v0.8h, #1
 rshrn2 v0.4s, v0.2d, #1
 rshrn2 v0.8h, v0.4s, #1
-rshrn2 v14.4s, v17.2d, #29
-rshrn2 v30.16b, v9.8h, #1
+rshrn2 v11.4s, v12.2d, #30
+rshrn2 v12.8h, v3.4s, #3
 rshrn2 v31.16b, v31.8h, #8
 rshrn2 v31.4s, v31.2d, #32
 rshrn2 v31.8h, v31.4s, #16
-rshrn2 v5.8h, v27.4s, #11
+rshrn2 v5.16b, v27.8h, #6
 rsubhn v0.2s, v0.2d, v0.2d
 rsubhn v0.4h, v0.4s, v0.4s
 rsubhn v0.8b, v0.8h, v0.8h
-rsubhn v1.8b, v7.8h, v24.8h
-rsubhn v13.4h, v6.4s, v14.4s
-rsubhn v2.2s, v11.2d, v23.2d
+rsubhn v1.2s, v7.2d, v24.2d
+rsubhn v10.4h, v19.4s, v14.4s
+rsubhn v16.8b, v12.8h, v10.8h
 rsubhn v31.2s, v31.2d, v31.2d
 rsubhn v31.4h, v31.4s, v31.4s
 rsubhn v31.8b, v31.8h, v31.8h
 rsubhn2 v0.16b, v0.8h, v0.8h
 rsubhn2 v0.4s, v0.2d, v0.2d
 rsubhn2 v0.8h, v0.4s, v0.4s
-rsubhn2 v10.16b, v19.8h, v14.8h
-rsubhn2 v16.4s, v12.2d, v10.2d
-rsubhn2 v30.8h, v18.4s, v27.4s
+rsubhn2 v14.8h, v2.4s, v0.4s
+rsubhn2 v24.4s, v23.2d, v21.2d
+rsubhn2 v30.16b, v18.8h, v27.8h
 rsubhn2 v31.16b, v31.8h, v31.8h
 rsubhn2 v31.4s, v31.2d, v31.2d
 rsubhn2 v31.8h, v31.4s, v31.4s
@@ -4511,107 +4511,107 @@ saba v0.4h, v0.4h, v0.4h
 saba v0.4s, v0.4s, v0.4s
 saba v0.8b, v0.8b, v0.8b
 saba v0.8h, v0.8h, v0.8h
-saba v1.2s, v7.2s, v23.2s
-saba v26.8h, v19.8h, v23.8h
-saba v27.4s, v25.4s, v3.4s
-saba v27.8b, v5.8b, v0.8b
-saba v28.16b, v3.16b, v22.16b
+saba v16.8h, v7.8h, v30.8h
+saba v26.4s, v19.4s, v23.4s
+saba v26.8b, v3.8b, v20.8b
+saba v27.2s, v25.2s, v3.2s
+saba v27.4h, v5.4h, v0.4h
 saba v31.16b, v31.16b, v31.16b
 saba v31.2s, v31.2s, v31.2s
 saba v31.4h, v31.4h, v31.4h
 saba v31.4s, v31.4s, v31.4s
 saba v31.8b, v31.8b, v31.8b
 saba v31.8h, v31.8h, v31.8h
-saba v6.4h, v18.4h, v30.4h
+saba v6.16b, v18.16b, v30.16b
 sabal v0.2d, v0.2s, v0.2s
 sabal v0.4s, v0.4h, v0.4h
 sabal v0.8h, v0.8b, v0.8b
-sabal v2.2d, v13.2s, v0.2s
+sabal v24.4s, v8.4h, v12.4h
 sabal v31.2d, v31.2s, v31.2s
 sabal v31.4s, v31.4h, v31.4h
 sabal v31.8h, v31.8b, v31.8b
-sabal v4.4s, v12.4h, v8.4h
-sabal v5.8h, v14.8b, v16.8b
+sabal v5.2d, v14.2s, v16.2s
+sabal v8.8h, v5.8b, v1.8b
 sabal2 v0.2d, v0.4s, v0.4s
 sabal2 v0.4s, v0.8h, v0.8h
 sabal2 v0.8h, v0.16b, v0.16b
-sabal2 v24.2d, v8.4s, v12.4s
-sabal2 v27.8h, v27.16b, v3.16b
+sabal2 v1.4s, v11.8h, v23.8h
+sabal2 v17.8h, v11.16b, v20.16b
+sabal2 v27.2d, v27.4s, v3.4s
 sabal2 v31.2d, v31.4s, v31.4s
 sabal2 v31.4s, v31.8h, v31.8h
 sabal2 v31.8h, v31.16b, v31.16b
-sabal2 v8.4s, v5.8h, v1.8h
 sabd v0.16b, v0.16b, v0.16b
 sabd v0.2s, v0.2s, v0.2s
 sabd v0.4h, v0.4h, v0.4h
 sabd v0.4s, v0.4s, v0.4s
 sabd v0.8b, v0.8b, v0.8b
 sabd v0.8h, v0.8h, v0.8h
-sabd v11.2s, v23.2s, v9.2s
-sabd v11.4s, v0.4s, v28.4s
-sabd v14.8h, v16.8h, v31.8h
-sabd v17.8b, v26.8b, v12.8b
-sabd v21.16b, v2.16b, v21.16b
+sabd v10.8b, v21.8b, v11.8b
+sabd v11.2s, v0.2s, v28.2s
+sabd v14.4s, v16.4s, v31.4s
+sabd v17.4h, v26.4h, v12.4h
 sabd v31.16b, v31.16b, v31.16b
 sabd v31.2s, v31.2s, v31.2s
 sabd v31.4h, v31.4h, v31.4h
 sabd v31.4s, v31.4s, v31.4s
 sabd v31.8b, v31.8b, v31.8b
 sabd v31.8h, v31.8h, v31.8h
-sabd v5.4h, v7.4h, v31.4h
+sabd v5.16b, v7.16b, v31.16b
+sabd v7.8h, v20.8h, v4.8h
 sabdl v0.2d, v0.2s, v0.2s
 sabdl v0.4s, v0.4h, v0.4h
 sabdl v0.8h, v0.8b, v0.8b
-sabdl v1.4s, v2.4h, v15.4h
-sabdl v10.2d, v20.2s, v13.2s
-sabdl v14.8h, v26.8b, v2.8b
+sabdl v10.4s, v31.4h, v23.4h
+sabdl v14.2d, v26.2s, v2.2s
+sabdl v16.8h, v18.8b, v31.8b
 sabdl v31.2d, v31.2s, v31.2s
 sabdl v31.4s, v31.4h, v31.4h
 sabdl v31.8h, v31.8b, v31.8b
 sabdl2 v0.2d, v0.4s, v0.4s
 sabdl2 v0.4s, v0.8h, v0.8h
 sabdl2 v0.8h, v0.16b, v0.16b
-sabdl2 v10.2d, v31.4s, v23.4s
-sabdl2 v16.4s, v18.8h, v31.8h
-sabdl2 v22.8h, v11.16b, v27.16b
+sabdl2 v13.4s, v6.8h, v19.8h
+sabdl2 v22.2d, v11.4s, v27.4s
 sabdl2 v31.2d, v31.4s, v31.4s
 sabdl2 v31.4s, v31.8h, v31.8h
 sabdl2 v31.8h, v31.16b, v31.16b
+sabdl2 v7.8h, v2.16b, v27.16b
 sadalp v0.1d, v0.2s
 sadalp v0.2d, v0.4s
 sadalp v0.2s, v0.4h
 sadalp v0.4h, v0.8b
 sadalp v0.4s, v0.8h
+sadalp v0.4s, v7.8h
 sadalp v0.8h, v0.16b
-sadalp v1.2s, v0.4h
-sadalp v12.2d, v22.4s
-sadalp v18.4h, v9.8b
-sadalp v19.8h, v30.16b
-sadalp v27.4s, v4.8h
+sadalp v1.1d, v0.2s
+sadalp v18.2d, v9.4s
+sadalp v19.4h, v30.8b
+sadalp v27.2s, v4.4h
 sadalp v31.1d, v31.2s
 sadalp v31.2d, v31.4s
 sadalp v31.2s, v31.4h
 sadalp v31.4h, v31.8b
 sadalp v31.4s, v31.8h
 sadalp v31.8h, v31.16b
-sadalp v9.1d, v20.2s
+sadalp v9.8h, v10.16b
 saddl v0.2d, v0.2s, v0.2s
 saddl v0.4s, v0.4h, v0.4h
 saddl v0.8h, v0.8b, v0.8b
-saddl v13.8h, v19.8b, v14.8b
-saddl v26.4s, v16.4h, v25.4h
+saddl v13.2d, v19.2s, v14.2s
+saddl v24.8h, v11.8b, v21.8b
+saddl v30.4s, v4.4h, v17.4h
 saddl v31.2d, v31.2s, v31.2s
 saddl v31.4s, v31.4h, v31.4h
 saddl v31.8h, v31.8b, v31.8b
-saddl v9.2d, v2.2s, v1.2s
 saddl2 v0.2d, v0.4s, v0.4s
 saddl2 v0.4s, v0.8h, v0.8h
 saddl2 v0.8h, v0.16b, v0.16b
-saddl2 v24.4s, v11.8h, v21.8h
-saddl2 v30.2d, v4.4s, v17.4s
+saddl2 v14.4s, v0.8h, v1.8h
+saddl2 v16.8h, v6.16b, v25.16b
+saddl2 v31.2d, v25.4s, v9.4s
 saddl2 v31.2d, v31.4s, v31.4s
 saddl2 v31.4s, v31.8h, v31.8h
-saddl2 v31.8h, v25.16b, v9.16b
 saddl2 v31.8h, v31.16b, v31.16b
 saddlp v0.1d, v0.2s
 saddlp v0.2d, v0.4s
@@ -4619,105 +4619,105 @@ saddlp v0.2s, v0.4h
 saddlp v0.4h, v0.8b
 saddlp v0.4s, v0.8h
 saddlp v0.8h, v0.16b
-saddlp v12.4s, v29.8h
-saddlp v16.8h, v15.16b
-saddlp v29.1d, v1.2s
-saddlp v3.4h, v8.8b
-saddlp v30.2d, v13.4s
+saddlp v12.2s, v29.4h
+saddlp v13.8h, v16.16b
+saddlp v16.4h, v15.8b
+saddlp v3.2d, v8.4s
 saddlp v31.1d, v31.2s
 saddlp v31.2d, v31.4s
 saddlp v31.2s, v31.4h
 saddlp v31.4h, v31.8b
 saddlp v31.4s, v31.8h
 saddlp v31.8h, v31.16b
-saddlp v5.2s, v2.4h
+saddlp v5.1d, v2.2s
+saddlp v6.4s, v5.8h
 saddlv d0, v0.4s
-saddlv d25, v7.4s
+saddlv d20, v21.4s
 saddlv d31, v31.4s
 saddlv h0, v0.16b
 saddlv h0, v0.8b
-saddlv h20, v21.8b
-saddlv h28, v15.16b
+saddlv h19, v10.8b
+saddlv h2, v25.16b
 saddlv h31, v31.16b
 saddlv h31, v31.8b
 saddlv s0, v0.4h
 saddlv s0, v0.8h
-saddlv s19, v10.8h
-saddlv s2, v25.4h
+saddlv s10, v14.4h
+saddlv s28, v7.8h
 saddlv s31, v31.4h
 saddlv s31, v31.8h
 saddw v0.2d, v0.2d, v0.2s
 saddw v0.4s, v0.4s, v0.4h
 saddw v0.8h, v0.8h, v0.8b
-saddw v11.8h, v1.8h, v19.8b
-saddw v27.4s, v6.4s, v17.4h
+saddw v10.4s, v15.4s, v3.4h
+saddw v11.2d, v1.2d, v19.2s
+saddw v24.8h, v27.8h, v26.8b
 saddw v31.2d, v31.2d, v31.2s
 saddw v31.4s, v31.4s, v31.4h
 saddw v31.8h, v31.8h, v31.8b
-saddw v5.2d, v26.2d, v26.2s
 saddw2 v0.2d, v0.2d, v0.4s
 saddw2 v0.4s, v0.4s, v0.8h
 saddw2 v0.8h, v0.8h, v0.16b
-saddw2 v10.2d, v15.2d, v3.4s
-saddw2 v15.8h, v28.8h, v26.16b
-saddw2 v24.4s, v27.4s, v26.8h
+saddw2 v15.2d, v28.2d, v26.4s
+saddw2 v25.8h, v31.8h, v16.16b
 saddw2 v31.2d, v31.2d, v31.4s
 saddw2 v31.4s, v31.4s, v31.8h
 saddw2 v31.8h, v31.8h, v31.16b
+saddw2 v8.4s, v27.4s, v14.8h
 scvtf d0, d0
 scvtf d0, d0, #1
-scvtf d0, d26, #5
 scvtf d0, w0
 scvtf d0, w0, #1
 scvtf d0, x0
 scvtf d0, x0, #1
-scvtf d1, w12
-scvtf d15, x9, #21
+scvtf d0, x26, #5
+scvtf d15, w9, #11
+scvtf d24, d25, #35
+scvtf d28, d17
 scvtf d31, d31
 scvtf d31, d31, #64
 scvtf d31, wzr
-scvtf d31, wzr, #23
 scvtf d31, wzr, #32
 scvtf d31, xzr
 scvtf d31, xzr, #64
-scvtf d4, d26
-scvtf d8, x8
+scvtf d4, x26
+scvtf d8, w8
 scvtf h0, h0
 scvtf h0, h0, #1
 scvtf h0, w0
 scvtf h0, w0, #1
 scvtf h0, x0
 scvtf h0, x0, #1
-scvtf h1, x10, #42
-scvtf h19, h23, #11
-scvtf h22, x23
-scvtf h24, w25, #18
-scvtf h28, w17
+scvtf h1, w10, #21
+scvtf h19, x23, #41
+scvtf h22, w23
+scvtf h24, h19, #5
+scvtf h25, h3
 scvtf h31, h31
 scvtf h31, h31, #16
 scvtf h31, wzr
 scvtf h31, wzr, #32
 scvtf h31, xzr
 scvtf h31, xzr, #64
-scvtf h6, h5
+scvtf h6, x5
 scvtf s0, s0
 scvtf s0, s0, #1
-scvtf s0, s14
 scvtf s0, w0
 scvtf s0, w0, #1
 scvtf s0, x0
 scvtf s0, x0, #1
-scvtf s20, x26
-scvtf s24, w19, #9
-scvtf s25, w3
-scvtf s3, s30, #16
-scvtf s30, xzr, #21
+scvtf s0, x14
+scvtf s20, w26
+scvtf s21, s0
+scvtf s3, x30, #32
+scvtf s30, wzr, #11
 scvtf s31, s31
 scvtf s31, s31, #32
 scvtf s31, wzr
 scvtf s31, wzr, #32
 scvtf s31, xzr
 scvtf s31, xzr, #64
+scvtf s4, s22, #14
 scvtf v0.2d, v0.2d
 scvtf v0.2d, v0.2d, #1
 scvtf v0.2s, v0.2s
@@ -4728,16 +4728,16 @@ scvtf v0.4s, v0.4s
 scvtf v0.4s, v0.4s, #1
 scvtf v0.8h, v0.8h
 scvtf v0.8h, v0.8h, #1
-scvtf v13.8h, v12.8h
-scvtf v17.2s, v4.2s, #5
-scvtf v21.2d, v0.2d
-scvtf v25.4h, v9.4h
-scvtf v27.4h, v27.4h, #16
-scvtf v3.4s, v1.4s
-scvtf v30.4s, v12.4s, #12
+scvtf v13.4s, v12.4s
+scvtf v13.8h, v21.8h
+scvtf v17.2d, v4.2d, #10
+scvtf v25.2s, v9.2s
+scvtf v27.2s, v27.2s, #32
+scvtf v3.4h, v1.4h
+scvtf v30.4h, v12.4h, #6
+scvtf v31.2d, v3.2d
 scvtf v31.2d, v31.2d
 scvtf v31.2d, v31.2d, #64
-scvtf v31.2s, v3.2s
 scvtf v31.2s, v31.2s
 scvtf v31.2s, v31.2s, #32
 scvtf v31.4h, v31.4h
@@ -4746,84 +4746,84 @@ scvtf v31.4s, v31.4s
 scvtf v31.4s, v31.4s, #32
 scvtf v31.8h, v31.8h
 scvtf v31.8h, v31.8h, #16
-scvtf v4.2d, v22.2d, #27
-scvtf v4.8h, v6.8h, #3
+scvtf v4.4s, v6.4s, #6
+scvtf v7.8h, v13.8h, #16
 sdot v0.2s, v0.8b, v0.4b[0]
 sdot v0.2s, v0.8b, v0.8b
 sdot v0.4s, v0.16b, v0.16b
 sdot v0.4s, v0.16b, v0.4b[0]
-sdot v12.4s, v24.16b, v14.4b[0]
-sdot v14.2s, v27.8b, v23.4b[1]
+sdot v12.2s, v24.8b, v14.4b[0]
+sdot v15.4s, v21.16b, v1.4b[2]
+sdot v21.4s, v16.16b, v23.16b
 sdot v31.2s, v31.8b, v31.4b[3]
 sdot v31.2s, v31.8b, v31.8b
 sdot v31.4s, v31.16b, v31.16b
 sdot v31.4s, v31.16b, v31.4b[3]
-sdot v5.4s, v13.16b, v28.16b
-sdot v9.2s, v4.8b, v3.8b
+sdot v5.2s, v13.8b, v28.8b
 setffr
 sha1c q0, s0, v0.4s
-sha1c q2, s7, v0.4s
 sha1c q31, s31, v31.4s
+sha1c q6, s28, v11.4s
 sha1h s0, s0
-sha1h s13, s9
 sha1h s31, s31
+sha1h s8, s9
 sha1m q0, s0, v0.4s
 sha1m q31, s31, v31.4s
-sha1m q6, s28, v11.4s
+sha1m q9, s31, v6.4s
 sha1p q0, s0, v0.4s
+sha1p q30, s1, v28.4s
 sha1p q31, s31, v31.4s
-sha1p q8, s9, v15.4s
 sha1su0 v0.4s, v0.4s, v0.4s
+sha1su0 v14.4s, v24.4s, v22.4s
 sha1su0 v31.4s, v31.4s, v31.4s
-sha1su0 v9.4s, v31.4s, v6.4s
 sha1su1 v0.4s, v0.4s
-sha1su1 v30.4s, v1.4s
+sha1su1 v11.4s, v2.4s
 sha1su1 v31.4s, v31.4s
 sha256h q0, q0, v0.4s
-sha256h q14, q24, v22.4s
+sha256h q18, q27, v0.4s
 sha256h q31, q31, v31.4s
 sha256h2 q0, q0, v0.4s
-sha256h2 q11, q2, v12.4s
+sha256h2 q28, q9, v23.4s
 sha256h2 q31, q31, v31.4s
 sha256su0 v0.4s, v0.4s
-sha256su0 v18.4s, v27.4s
+sha256su0 v31.4s, v18.4s
 sha256su0 v31.4s, v31.4s
 sha256su1 v0.4s, v0.4s, v0.4s
-sha256su1 v28.4s, v9.4s, v23.4s
+sha256su1 v12.4s, v10.4s, v7.4s
 sha256su1 v31.4s, v31.4s, v31.4s
 sha512h q0, q0, v0.2d
-sha512h q31, q18, v12.2d
+sha512h q0, q29, v19.2d
 sha512h q31, q31, v31.2d
 sha512h2 q0, q0, v0.2d
-sha512h2 q12, q10, v7.2d
 sha512h2 q31, q31, v31.2d
+sha512h2 q7, q15, v30.2d
 sha512su0 v0.2d, v0.2d
-sha512su0 v0.2d, v29.2d
+sha512su0 v23.2d, v28.2d
 sha512su0 v31.2d, v31.2d
 sha512su1 v0.2d, v0.2d, v0.2d
+sha512su1 v24.2d, v20.2d, v13.2d
 sha512su1 v31.2d, v31.2d, v31.2d
-sha512su1 v7.2d, v15.2d, v30.2d
 shadd v0.16b, v0.16b, v0.16b
 shadd v0.2s, v0.2s, v0.2s
 shadd v0.4h, v0.4h, v0.4h
 shadd v0.4s, v0.4s, v0.4s
 shadd v0.8b, v0.8b, v0.8b
 shadd v0.8h, v0.8h, v0.8h
-shadd v13.8b, v14.8b, v13.8b
-shadd v18.4s, v19.4s, v12.4s
-shadd v23.16b, v28.16b, v2.16b
-shadd v23.4h, v4.4h, v2.4h
-shadd v24.2s, v20.2s, v13.2s
+shadd v13.4h, v14.4h, v13.4h
+shadd v18.2s, v19.2s, v12.2s
+shadd v23.16b, v4.16b, v2.16b
+shadd v28.8b, v11.8b, v2.8b
+shadd v28.8h, v29.8h, v4.8h
 shadd v31.16b, v31.16b, v31.16b
 shadd v31.2s, v31.2s, v31.2s
 shadd v31.4h, v31.4h, v31.4h
 shadd v31.4s, v31.4s, v31.4s
 shadd v31.8b, v31.8b, v31.8b
 shadd v31.8h, v31.8h, v31.8h
-shadd v6.8h, v6.8h, v23.8h
+shadd v6.4s, v6.4s, v23.4s
 shl d0, d0, #0
+shl d29, d22, #8
 shl d31, d31, #63
-shl d7, d7, #19
 shl v0.16b, v0.16b, #0
 shl v0.2d, v0.2d, #0
 shl v0.2s, v0.2s, #0
@@ -4831,13 +4831,12 @@ shl v0.4h, v0.4h, #0
 shl v0.4s, v0.4s, #0
 shl v0.8b, v0.8b, #0
 shl v0.8h, v0.8h, #0
-shl v17.8h, v31.8h, #2
-shl v20.16b, v12.16b, #3
-shl v21.4s, v31.4s, #18
-shl v24.4h, v25.4h, #11
-shl v27.2s, v25.2s, #1
-shl v27.8b, v22.8b, #5
-shl v29.2d, v22.2d, #8
+shl v17.4s, v31.4s, #4
+shl v21.2s, v31.2s, #18
+shl v24.2d, v25.2d, #45
+shl v27.16b, v25.16b, #0
+shl v27.4h, v22.4h, #11
+shl v3.8h, v6.8h, #7
 shl v31.16b, v31.16b, #7
 shl v31.2d, v31.2d, #63
 shl v31.2s, v31.2s, #31
@@ -4845,39 +4844,40 @@ shl v31.4h, v31.4h, #15
 shl v31.4s, v31.4s, #31
 shl v31.8b, v31.8b, #7
 shl v31.8h, v31.8h, #15
+shl v8.8b, v27.8b, #4
 shll v0.2d, v0.2s, #32
 shll v0.4s, v0.4h, #16
 shll v0.8h, v0.8b, #8
-shll v20.8h, v13.8b, #8
-shll v3.4s, v6.4h, #16
+shll v20.2d, v13.2s, #32
+shll v21.4s, v25.4h, #16
+shll v3.8h, v0.8b, #8
 shll v31.2d, v31.2s, #32
 shll v31.4s, v31.4h, #16
 shll v31.8h, v31.8b, #8
-shll v8.2d, v27.2s, #32
 shll2 v0.2d, v0.4s, #32
 shll2 v0.4s, v0.8h, #16
 shll2 v0.8h, v0.16b, #8
-shll2 v16.8h, v21.16b, #8
-shll2 v21.2d, v25.4s, #32
-shll2 v3.4s, v0.8h, #16
+shll2 v16.2d, v21.4s, #32
+shll2 v16.4s, v11.8h, #16
 shll2 v31.2d, v31.4s, #32
 shll2 v31.4s, v31.8h, #16
 shll2 v31.8h, v31.16b, #8
+shll2 v6.8h, v3.16b, #8
 shrn v0.2s, v0.2d, #1
 shrn v0.4h, v0.4s, #1
 shrn v0.8b, v0.8h, #1
-shrn v16.2s, v11.2d, #10
-shrn v20.8b, v6.8h, #1
+shrn v1.8b, v25.8h, #7
+shrn v20.2s, v6.2d, #3
+shrn v30.4h, v28.4s, #1
 shrn v31.2s, v31.2d, #32
 shrn v31.4h, v31.4s, #16
 shrn v31.8b, v31.8h, #8
-shrn v6.4h, v3.4s, #6
 shrn2 v0.16b, v0.8h, #1
 shrn2 v0.4s, v0.2d, #1
 shrn2 v0.8h, v0.4s, #1
-shrn2 v1.4s, v25.2d, #28
-shrn2 v17.8h, v19.4s, #4
-shrn2 v30.16b, v28.8h, #1
+shrn2 v15.4s, v12.2d, #30
+shrn2 v16.8h, v20.4s, #16
+shrn2 v17.16b, v19.8h, #2
 shrn2 v31.16b, v31.8h, #8
 shrn2 v31.4s, v31.2d, #32
 shrn2 v31.8h, v31.4s, #16
@@ -4887,20 +4887,20 @@ shsub v0.4h, v0.4h, v0.4h
 shsub v0.4s, v0.4s, v0.4s
 shsub v0.8b, v0.8b, v0.8b
 shsub v0.8h, v0.8h, v0.8h
-shsub v11.2s, v21.2s, v19.2s
-shsub v22.4s, v25.4s, v23.4s
-shsub v26.4h, v21.4h, v30.4h
-shsub v27.8h, v9.8h, v19.8h
+shsub v10.8h, v29.8h, v6.8h
+shsub v22.2s, v25.2s, v23.2s
+shsub v26.16b, v21.16b, v30.16b
+shsub v27.4s, v9.4s, v19.4s
 shsub v31.16b, v31.16b, v31.16b
 shsub v31.2s, v31.2s, v31.2s
 shsub v31.4h, v31.4h, v31.4h
 shsub v31.4s, v31.4s, v31.4s
 shsub v31.8b, v31.8b, v31.8b
 shsub v31.8h, v31.8h, v31.8h
-shsub v5.8b, v9.8b, v10.8b
-shsub v8.16b, v11.16b, v6.16b
+shsub v5.4h, v9.4h, v10.4h
+shsub v5.8b, v13.8b, v26.8b
 sli d0, d0, #0
-sli d20, d22, #35
+sli d30, d29, #13
 sli d31, d31, #63
 sli v0.16b, v0.16b, #0
 sli v0.2d, v0.2d, #0
@@ -4909,46 +4909,46 @@ sli v0.4h, v0.4h, #0
 sli v0.4s, v0.4s, #0
 sli v0.8b, v0.8b, #0
 sli v0.8h, v0.8h, #0
-sli v12.4s, v31.4s, #28
-sli v13.16b, v5.16b, #6
-sli v17.4h, v12.4h, #7
-sli v24.8h, v22.8h, #11
-sli v30.2d, v29.2d, #13
+sli v0.8h, v14.8h, #8
+sli v12.2s, v31.2s, #28
+sli v17.2d, v12.2d, #30
+sli v22.8b, v23.8b, #4
+sli v24.4s, v22.4s, #23
+sli v31.16b, v31.16b, #2
 sli v31.16b, v31.16b, #7
 sli v31.2d, v31.2d, #63
-sli v31.2s, v31.2s, #11
 sli v31.2s, v31.2s, #31
+sli v31.4h, v27.4h, #6
 sli v31.4h, v31.4h, #15
 sli v31.4s, v31.4s, #31
-sli v31.8b, v27.8b, #3
 sli v31.8b, v31.8b, #7
 sli v31.8h, v31.8h, #15
 sm3partw1 v0.4s, v0.4s, v0.4s
-sm3partw1 v17.4s, v9.4s, v6.4s
+sm3partw1 v12.4s, v24.4s, v29.4s
 sm3partw1 v31.4s, v31.4s, v31.4s
 sm3partw2 v0.4s, v0.4s, v0.4s
-sm3partw2 v3.4s, v26.4s, v8.4s
+sm3partw2 v3.4s, v25.4s, v5.4s
 sm3partw2 v31.4s, v31.4s, v31.4s
 sm3ss1 v0.4s, v0.4s, v0.4s, v0.4s
-sm3ss1 v12.4s, v24.4s, v29.4s, v14.4s
+sm3ss1 v17.4s, v3.4s, v29.4s, v31.4s
 sm3ss1 v31.4s, v31.4s, v31.4s, v31.4s
 sm3tt1a v0.4s, v0.4s, v0.s[0]
-sm3tt1a v3.4s, v25.4s, v5.s[0]
+sm3tt1a v3.4s, v16.4s, v4.s[2]
 sm3tt1a v31.4s, v31.4s, v31.s[3]
 sm3tt1b v0.4s, v0.4s, v0.s[0]
-sm3tt1b v17.4s, v3.4s, v29.s[3]
+sm3tt1b v28.4s, v14.4s, v2.s[2]
 sm3tt1b v31.4s, v31.4s, v31.s[3]
 sm3tt2a v0.4s, v0.4s, v0.s[0]
-sm3tt2a v3.4s, v16.4s, v4.s[2]
+sm3tt2a v16.4s, v14.4s, v31.s[2]
 sm3tt2a v31.4s, v31.4s, v31.s[3]
 sm3tt2b v0.4s, v0.4s, v0.s[0]
-sm3tt2b v28.4s, v14.4s, v2.s[2]
+sm3tt2b v31.4s, v30.4s, v3.s[2]
 sm3tt2b v31.4s, v31.4s, v31.s[3]
 sm4e v0.4s, v0.4s
-sm4e v16.4s, v14.4s
+sm4e v20.4s, v22.4s
 sm4e v31.4s, v31.4s
 sm4ekey v0.4s, v0.4s, v0.4s
-sm4ekey v20.4s, v22.4s, v22.4s
+sm4ekey v23.4s, v25.4s, v6.4s
 sm4ekey v31.4s, v31.4s, v31.4s
 smax v0.16b, v0.16b, v0.16b
 smax v0.2s, v0.2s, v0.2s
@@ -4956,61 +4956,62 @@ smax v0.4h, v0.4h, v0.4h
 smax v0.4s, v0.4s, v0.4s
 smax v0.8b, v0.8b, v0.8b
 smax v0.8h, v0.8h, v0.8h
-smax v13.4h, v12.4h, v13.4h
-smax v16.8h, v10.8h, v3.8h
-smax v18.2s, v14.2s, v7.2s
-smax v23.4s, v8.4s, v30.4s
-smax v29.16b, v21.16b, v25.16b
+smax v13.16b, v12.16b, v13.16b
+smax v16.4s, v10.4s, v3.4s
+smax v16.8h, v19.8h, v3.8h
+smax v19.8b, v31.8b, v21.8b
+smax v23.2s, v8.2s, v30.2s
 smax v31.16b, v31.16b, v31.16b
 smax v31.2s, v31.2s, v31.2s
 smax v31.4h, v31.4h, v31.4h
 smax v31.4s, v31.4s, v31.4s
 smax v31.8b, v31.8b, v31.8b
 smax v31.8h, v31.8h, v31.8h
-smax v9.8b, v31.8b, v20.8b
+smax v9.4h, v31.4h, v20.4h
 smax w0, w0, #-128
 smax w0, w0, w0
-smax w23, w25, w6
-smax w9, w8, #-88
+smax w14, w16, w28
+smax w25, w26, #-26
 smax wzr, wzr, #127
 smax wzr, wzr, wzr
 smax x0, x0, #-128
 smax x0, x0, x0
-smax x14, x16, x28
-smax x25, x26, #-26
+smax x18, x14, #-65
+smax x29, x21, x25
 smax xzr, xzr, #127
 smax xzr, xzr, xzr
 smaxp v0.16b, v0.16b, v0.16b
-smaxp v0.16b, v0.16b, v21.16b
 smaxp v0.2s, v0.2s, v0.2s
 smaxp v0.4h, v0.4h, v0.4h
 smaxp v0.4s, v0.4s, v0.4s
 smaxp v0.8b, v0.8b, v0.8b
 smaxp v0.8h, v0.8h, v0.8h
-smaxp v11.4s, v2.4s, v6.4s
-smaxp v17.8b, v11.8b, v27.8b
-smaxp v20.2s, v20.2s, v27.2s
-smaxp v28.4h, v29.4h, v10.4h
+smaxp v10.8h, v7.8h, v27.8h
+smaxp v11.2s, v2.2s, v6.2s
+smaxp v17.4h, v11.4h, v27.4h
+smaxp v28.16b, v29.16b, v10.16b
+smaxp v29.8b, v27.8b, v7.8b
 smaxp v31.16b, v31.16b, v31.16b
 smaxp v31.2s, v31.2s, v31.2s
 smaxp v31.4h, v31.4h, v31.4h
 smaxp v31.4s, v31.4s, v31.4s
 smaxp v31.8b, v31.8b, v31.8b
 smaxp v31.8h, v31.8h, v31.8h
-smaxp v9.8h, v5.8h, v0.8h
+smaxp v9.4s, v5.4s, v0.4s
 smaxv b0, v0.16b
 smaxv b0, v0.8b
+smaxv b13, v15.8b
+smaxv b29, v16.16b
 smaxv b31, v31.16b
 smaxv b31, v31.8b
-smaxv b4, v10.16b
 smaxv h0, v0.4h
 smaxv h0, v0.8h
-smaxv h1, v0.8h
+smaxv h18, v21.8h
+smaxv h24, v30.4h
 smaxv h31, v31.4h
 smaxv h31, v31.8h
-smaxv h5, v30.4h
 smaxv s0, v0.4s
-smaxv s18, v21.4s
+smaxv s11, v30.4s
 smaxv s31, v31.4s
 smin v0.16b, v0.16b, v0.16b
 smin v0.2s, v0.2s, v0.2s
@@ -5018,12 +5019,12 @@ smin v0.4h, v0.4h, v0.4h
 smin v0.4s, v0.4s, v0.4s
 smin v0.8b, v0.8b, v0.8b
 smin v0.8h, v0.8h, v0.8h
-smin v12.4s, v31.4s, v30.4s
-smin v13.2s, v17.2s, v7.2s
-smin v14.16b, v31.16b, v0.16b
-smin v17.8h, v13.8h, v20.8h
-smin v23.4h, v21.4h, v18.4h
-smin v24.8b, v17.8b, v21.8b
+smin v10.8b, v24.8b, v2.8b
+smin v12.2s, v31.2s, v30.2s
+smin v13.8h, v17.8h, v15.8h
+smin v17.4s, v13.4s, v20.4s
+smin v23.16b, v21.16b, v18.16b
+smin v24.4h, v17.4h, v21.4h
 smin v31.16b, v31.16b, v31.16b
 smin v31.2s, v31.2s, v31.2s
 smin v31.4h, v31.4h, v31.4h
@@ -5032,14 +5033,14 @@ smin v31.8b, v31.8b, v31.8b
 smin v31.8h, v31.8h, v31.8h
 smin w0, w0, #-128
 smin w0, w0, w0
-smin w11, w30, #101
-smin w24, w27, w8
+smin w1, w29, w1
+smin w9, w30, #-76
 smin wzr, wzr, #127
 smin wzr, wzr, wzr
 smin x0, x0, #-128
 smin x0, x0, x0
-smin x1, x29, x1
-smin x9, x30, #-76
+smin x13, x17, #-70
+smin x14, xzr, x0
 smin xzr, xzr, #127
 smin xzr, xzr, xzr
 sminp v0.16b, v0.16b, v0.16b
@@ -5048,12 +5049,12 @@ sminp v0.4h, v0.4h, v0.4h
 sminp v0.4s, v0.4s, v0.4s
 sminp v0.8b, v0.8b, v0.8b
 sminp v0.8h, v0.8h, v0.8h
-sminp v14.4s, v6.4s, v31.4s
-sminp v16.2s, v26.2s, v5.2s
-sminp v21.4h, v24.4h, v11.4h
-sminp v23.8h, v31.8h, v25.8h
-sminp v27.8b, v9.8b, v2.8b
-sminp v31.16b, v22.16b, v8.16b
+sminp v14.2s, v6.2s, v31.2s
+sminp v20.8b, v30.8b, v26.8b
+sminp v21.16b, v24.16b, v11.16b
+sminp v23.4s, v31.4s, v25.4s
+sminp v27.4h, v9.4h, v2.4h
+sminp v29.8h, v18.8h, v13.8h
 sminp v31.16b, v31.16b, v31.16b
 sminp v31.2s, v31.2s, v31.2s
 sminp v31.4h, v31.4h, v31.4h
@@ -5062,94 +5063,94 @@ sminp v31.8b, v31.8b, v31.8b
 sminp v31.8h, v31.8h, v31.8h
 sminv b0, v0.16b
 sminv b0, v0.8b
-sminv b13, v12.8b
+sminv b1, v25.16b
+sminv b25, v16.8b
 sminv b31, v31.16b
 sminv b31, v31.8b
-sminv b6, v3.16b
 sminv h0, v0.4h
 sminv h0, v0.8h
-sminv h10, v29.8h
-sminv h24, v1.4h
+sminv h26, v22.4h
+sminv h29, v8.8h
 sminv h31, v31.4h
 sminv h31, v31.8h
 sminv s0, v0.4s
-sminv s29, v8.4s
+sminv s25, v11.4s
 sminv s31, v31.4s
 smlal v0.2d, v0.2s, v0.2s
 smlal v0.2d, v0.2s, v0.s[0]
 smlal v0.4s, v0.4h, v0.4h
 smlal v0.4s, v0.4h, v0.h[0]
 smlal v0.8h, v0.8b, v0.8b
-smlal v12.4s, v12.4h, v20.4h
-smlal v18.4s, v22.4h, v9.h[0]
-smlal v25.2d, v11.2s, v19.s[1]
-smlal v27.8h, v30.8b, v0.8b
+smlal v12.2d, v12.2s, v20.2s
+smlal v18.2d, v22.2s, v19.s[0]
+smlal v26.8h, v24.8b, v25.8b
+smlal v27.4s, v30.4h, v0.4h
 smlal v31.2d, v31.2s, v31.2s
 smlal v31.2d, v31.2s, v31.s[3]
 smlal v31.4s, v31.4h, v15.h[7]
 smlal v31.4s, v31.4h, v31.4h
 smlal v31.8h, v31.8b, v31.8b
-smlal v4.2d, v29.2s, v12.2s
+smlal v6.4s, v8.4h, v6.h[1]
 smlal2 v0.2d, v0.4s, v0.4s
 smlal2 v0.2d, v0.4s, v0.s[0]
 smlal2 v0.4s, v0.8h, v0.8h
 smlal2 v0.4s, v0.8h, v0.h[0]
 smlal2 v0.8h, v0.16b, v0.16b
-smlal2 v10.4s, v10.8h, v4.h[6]
-smlal2 v19.8h, v24.16b, v21.16b
-smlal2 v26.2d, v24.4s, v25.s[0]
+smlal2 v10.2d, v10.4s, v9.s[3]
+smlal2 v12.4s, v12.8h, v9.h[4]
+smlal2 v19.4s, v24.8h, v21.8h
+smlal2 v30.8h, v18.16b, v14.16b
 smlal2 v31.2d, v31.4s, v31.4s
 smlal2 v31.2d, v31.4s, v31.s[3]
+smlal2 v31.2d, v8.4s, v5.4s
 smlal2 v31.4s, v31.8h, v15.h[7]
 smlal2 v31.4s, v31.8h, v31.8h
-smlal2 v31.4s, v8.8h, v5.8h
 smlal2 v31.8h, v31.16b, v31.16b
-smlal2 v6.2d, v8.4s, v12.4s
 smlsl v0.2d, v0.2s, v0.2s
 smlsl v0.2d, v0.2s, v0.s[0]
 smlsl v0.4s, v0.4h, v0.4h
 smlsl v0.4s, v0.4h, v0.h[0]
 smlsl v0.8h, v0.8b, v0.8b
-smlsl v11.8h, v3.8b, v8.8b
-smlsl v17.2d, v27.2s, v26.2s
-smlsl v29.4s, v3.4h, v20.4h
-smlsl v30.4s, v18.4h, v2.h[3]
+smlsl v11.4s, v3.4h, v8.4h
+smlsl v15.4s, v10.4h, v1.h[1]
+smlsl v20.8h, v24.8b, v17.8b
+smlsl v29.2d, v3.2s, v20.2s
+smlsl v30.2d, v18.2s, v5.s[1]
 smlsl v31.2d, v31.2s, v31.2s
 smlsl v31.2d, v31.2s, v31.s[3]
 smlsl v31.4s, v31.4h, v15.h[7]
 smlsl v31.4s, v31.4h, v31.4h
 smlsl v31.8h, v31.8b, v31.8b
-smlsl v9.2d, v0.2s, v17.s[1]
 smlsl2 v0.2d, v0.4s, v0.4s
 smlsl2 v0.2d, v0.4s, v0.s[0]
 smlsl2 v0.4s, v0.8h, v0.8h
 smlsl2 v0.4s, v0.8h, v0.h[0]
 smlsl2 v0.8h, v0.16b, v0.16b
-smlsl2 v12.8h, v18.16b, v12.16b
-smlsl2 v15.2d, v10.4s, v3.4s
-smlsl2 v16.4s, v14.8h, v19.8h
-smlsl2 v2.4s, v26.8h, v14.h[5]
-smlsl2 v20.2d, v24.4s, v17.s[0]
+smlsl2 v12.4s, v18.8h, v12.8h
+smlsl2 v16.2d, v14.4s, v19.4s
+smlsl2 v17.4s, v24.8h, v13.h[5]
+smlsl2 v2.2d, v26.4s, v28.s[2]
+smlsl2 v26.8h, v31.16b, v20.16b
 smlsl2 v31.2d, v31.4s, v31.4s
 smlsl2 v31.2d, v31.4s, v31.s[3]
 smlsl2 v31.4s, v31.8h, v15.h[7]
 smlsl2 v31.4s, v31.8h, v31.8h
 smlsl2 v31.8h, v31.16b, v31.16b
 smmla v0.4s, v0.16b, v0.16b
-smmla v15.4s, v12.16b, v3.16b
+smmla v15.4s, v11.16b, v25.16b
 smmla v31.4s, v31.16b, v31.16b
 smov w0, v0.b[0]
 smov w0, v0.h[0]
-smov w1, v3.h[0]
-smov w15, v11.b[12]
+smov w15, v30.b[10]
+smov w30, v4.h[0]
 smov wzr, v31.b[15]
 smov wzr, v31.h[7]
 smov x0, v0.b[0]
 smov x0, v0.h[0]
 smov x0, v0.s[0]
-smov x15, v30.b[10]
-smov x30, v4.h[0]
-smov x4, v20.s[3]
+smov x12, v8.s[3]
+smov x24, v7.h[4]
+smov x4, v20.b[13]
 smov xzr, v31.b[15]
 smov xzr, v31.h[7]
 smov xzr, v31.s[3]
@@ -5158,11 +5159,11 @@ smull v0.2d, v0.2s, v0.s[0]
 smull v0.4s, v0.4h, v0.4h
 smull v0.4s, v0.4h, v0.h[0]
 smull v0.8h, v0.8b, v0.8b
-smull v15.2d, v19.2s, v3.s[1]
-smull v15.4s, v27.4h, v2.h[1]
-smull v20.2d, v7.2s, v17.2s
-smull v25.8h, v22.8b, v3.8b
-smull v26.4s, v28.4h, v3.4h
+smull v12.4s, v27.4h, v13.h[5]
+smull v15.2d, v27.2s, v4.s[0]
+smull v25.4s, v22.4h, v3.4h
+smull v26.2d, v28.2s, v3.2s
+smull v28.8h, v13.8b, v26.8b
 smull v31.2d, v31.2s, v31.2s
 smull v31.2d, v31.2s, v31.s[3]
 smull v31.4s, v31.4h, v15.h[7]
@@ -5173,28 +5174,28 @@ smull2 v0.2d, v0.4s, v0.s[0]
 smull2 v0.4s, v0.8h, v0.8h
 smull2 v0.4s, v0.8h, v0.h[0]
 smull2 v0.8h, v0.16b, v0.16b
-smull2 v12.2d, v27.4s, v26.4s
-smull2 v28.2d, v13.4s, v26.s[3]
-smull2 v29.8h, v31.16b, v0.16b
+smull2 v13.4s, v2.8h, v6.h[7]
+smull2 v29.4s, v31.8h, v0.8h
 smull2 v31.2d, v31.4s, v31.4s
 smull2 v31.2d, v31.4s, v31.s[3]
 smull2 v31.4s, v31.8h, v15.h[7]
 smull2 v31.4s, v31.8h, v31.8h
+smull2 v31.8h, v23.16b, v24.16b
 smull2 v31.8h, v31.16b, v31.16b
-smull2 v5.4s, v7.8h, v14.h[4]
-smull2 v8.4s, v21.8h, v28.8h
+smull2 v5.2d, v7.4s, v29.s[2]
+smull2 v8.2d, v21.4s, v28.4s
 sqabs b0, b0
-sqabs b1, b14
+sqabs b28, b12
 sqabs b31, b31
 sqabs d0, d0
-sqabs d20, d16
 sqabs d31, d31
+sqabs d4, d30
 sqabs h0, h0
-sqabs h28, h12
+sqabs h25, h9
 sqabs h31, h31
 sqabs s0, s0
+sqabs s1, s3
 sqabs s31, s31
-sqabs s4, s30
 sqabs v0.16b, v0.16b
 sqabs v0.2d, v0.2d
 sqabs v0.2s, v0.2s
@@ -5202,13 +5203,11 @@ sqabs v0.4h, v0.4h
 sqabs v0.4s, v0.4s
 sqabs v0.8b, v0.8b
 sqabs v0.8h, v0.8h
-sqabs v1.2d, v3.2d
-sqabs v1.4s, v1.4s
-sqabs v11.2s, v10.2s
-sqabs v19.8b, v5.8b
-sqabs v22.4h, v20.4h
-sqabs v23.8h, v16.8h
-sqabs v25.16b, v9.16b
+sqabs v1.2s, v1.2s
+sqabs v11.16b, v10.16b
+sqabs v19.4h, v5.4h
+sqabs v22.2d, v20.2d
+sqabs v23.4s, v16.4s
 sqabs v31.16b, v31.16b
 sqabs v31.2d, v31.2d
 sqabs v31.2s, v31.2s
@@ -5216,17 +5215,19 @@ sqabs v31.4h, v31.4h
 sqabs v31.4s, v31.4s
 sqabs v31.8b, v31.8b
 sqabs v31.8h, v31.8h
+sqabs v8.8b, v25.8b
+sqabs v9.8h, v10.8h
 sqadd b0, b0, b0
-sqadd b23, b1, b1
+sqadd b17, b30, b3
 sqadd b31, b31, b31
 sqadd d0, d0, d0
-sqadd d27, d22, d12
+sqadd d15, d12, d15
 sqadd d31, d31, d31
 sqadd h0, h0, h0
-sqadd h17, h30, h3
 sqadd h31, h31, h31
+sqadd h6, h6, h3
 sqadd s0, s0, s0
-sqadd s15, s12, s15
+sqadd s13, s28, s10
 sqadd s31, s31, s31
 sqadd v0.16b, v0.16b, v0.16b
 sqadd v0.2d, v0.2d, v0.2d
@@ -5235,12 +5236,13 @@ sqadd v0.4h, v0.4h, v0.4h
 sqadd v0.4s, v0.4s, v0.4s
 sqadd v0.8b, v0.8b, v0.8b
 sqadd v0.8h, v0.8h, v0.8h
-sqadd v11.2s, v10.2s, v19.2s
-sqadd v13.2d, v28.2d, v10.2d
-sqadd v13.4s, v20.4s, v19.4s
-sqadd v15.8h, v15.8h, v9.8h
-sqadd v2.8b, v23.8b, v11.8b
-sqadd v24.4h, v6.4h, v7.4h
+sqadd v0.8h, v11.8h, v25.8h
+sqadd v11.16b, v10.16b, v19.16b
+sqadd v13.2s, v20.2s, v19.2s
+sqadd v15.4s, v15.4s, v9.4s
+sqadd v2.4h, v23.4h, v11.4h
+sqadd v24.2d, v6.2d, v7.2d
+sqadd v25.8b, v11.8b, v23.8b
 sqadd v31.16b, v31.16b, v31.16b
 sqadd v31.2d, v31.2d, v31.2d
 sqadd v31.2s, v31.2s, v31.2s
@@ -5248,7 +5250,6 @@ sqadd v31.4h, v31.4h, v31.4h
 sqadd v31.4s, v31.4s, v31.4s
 sqadd v31.8b, v31.8b, v31.8b
 sqadd v31.8h, v31.8h, v31.8h
-sqadd v6.16b, v6.16b, v3.16b
 sqdecb x0
 sqdecb x0, #0
 sqdecb x0, #0, mul #1
@@ -5259,15 +5260,16 @@ sqdecb x0, w0, #0
 sqdecb x0, w0, #0, mul #1
 sqdecb x0, w0, pow2
 sqdecb x0, w0, pow2, mul #1
-sqdecb x14, #30, mul #4
-sqdecb x22, mul4, mul #3
-sqdecb x22, w22, #28, mul #14
-sqdecb x22, w22, vl5, mul #13
-sqdecb x26, #26
-sqdecb x26, w26, all
-sqdecb x27, w27
-sqdecb x28, vl128
-sqdecb x3, w3, #3
+sqdecb x14, w14, mul3, mul #4
+sqdecb x20, vl7, mul #11
+sqdecb x22, #28, mul #3
+sqdecb x22, vl128
+sqdecb x22, w22
+sqdecb x22, w22, #10, mul #13
+sqdecb x26, w26, #5
+sqdecb x26, w26, vl256
+sqdecb x28, #25
+sqdecb x3
 sqdecb xzr
 sqdecb xzr, #31
 sqdecb xzr, #31, mul #16
@@ -5288,16 +5290,16 @@ sqdecd x0, w0, #0
 sqdecd x0, w0, #0, mul #1
 sqdecd x0, w0, pow2
 sqdecd x0, w0, pow2, mul #1
-sqdecd x11, w11, #24
-sqdecd x2, #6, mul #10
-sqdecd x2, w2, vl3
-sqdecd x20, w20
-sqdecd x20, w20, vl6, mul #8
-sqdecd x22
-sqdecd x26, #17
-sqdecd x26, vl16
-sqdecd x29, w29, #3, mul #1
-sqdecd x7, pow2, mul #13
+sqdecd x11
+sqdecd x18, vl7, mul #1
+sqdecd x2, w2, #7
+sqdecd x2, w2, vl3, mul #10
+sqdecd x20, w20, #12, mul #8
+sqdecd x24, vl3
+sqdecd x26, #19
+sqdecd x26, w26, vl8
+sqdecd x29, w29
+sqdecd x7, #1, mul #13
 sqdecd xzr
 sqdecd xzr, #31
 sqdecd xzr, #31, mul #16
@@ -5313,26 +5315,26 @@ sqdech x0, #0
 sqdech x0, #0, mul #1
 sqdech x0, pow2
 sqdech x0, pow2, mul #1
+sqdech x0, vl2
 sqdech x0, w0
 sqdech x0, w0, #0
 sqdech x0, w0, #0, mul #1
 sqdech x0, w0, pow2
 sqdech x0, w0, pow2, mul #1
-sqdech x12, w12, #29, mul #8
-sqdech x13, w13, vl256, mul #5
-sqdech x15, #7, mul #9
-sqdech x16, w16, mul3
-sqdech x19, w19
-sqdech x22, #8
-sqdech x22, vl6, mul #13
-sqdech x22, w22, #13
-sqdech x8, vl1
-sqdech x9
+sqdech x12, w12
+sqdech x13, w13, #26, mul #5
+sqdech x15, w15, vl3, mul #9
+sqdech x16, w16, #30
+sqdech x22
+sqdech x22, #12, mul #13
+sqdech x22, w22, vl4
+sqdech x8, #2
 sqdech xzr
 sqdech xzr, #31
 sqdech xzr, #31, mul #16
 sqdech xzr, all
 sqdech xzr, all, mul #16
+sqdech xzr, pow2, mul #5
 sqdech xzr, wzr
 sqdech xzr, wzr, #31
 sqdech xzr, wzr, #31, mul #16
@@ -5341,23 +5343,23 @@ sqdech xzr, wzr, all, mul #16
 sqdecw x0
 sqdecw x0, #0
 sqdecw x0, #0, mul #1
+sqdecw x0, #14, mul #9
 sqdecw x0, pow2
 sqdecw x0, pow2, mul #1
-sqdecw x0, vl7, mul #9
 sqdecw x0, w0
 sqdecw x0, w0, #0
 sqdecw x0, w0, #0, mul #1
 sqdecw x0, w0, pow2
 sqdecw x0, w0, pow2, mul #1
-sqdecw x1, w1, #18
-sqdecw x21, vl7
-sqdecw x22, #19
-sqdecw x23, w23
-sqdecw x26, #26, mul #13
-sqdecw x26, w26, vl16, mul #16
-sqdecw x28, w28, vl1
-sqdecw x29
-sqdecw x9, w9, #20, mul #11
+sqdecw x1
+sqdecw x1, vl32
+sqdecw x21, #14
+sqdecw x22, w22, vl16
+sqdecw x26, w26, #18, mul #16
+sqdecw x26, w26, vl256, mul #13
+sqdecw x28, w28, #3
+sqdecw x6, mul3, mul #13
+sqdecw x9, w9
 sqdecw xzr
 sqdecw xzr, #31
 sqdecw xzr, #31, mul #16
@@ -5370,88 +5372,88 @@ sqdecw xzr, wzr, all
 sqdecw xzr, wzr, all, mul #16
 sqdmlal d0, s0, s0
 sqdmlal d0, s0, v0.s[0]
-sqdmlal d29, s4, v28.s[1]
+sqdmlal d16, s25, s30
+sqdmlal d31, s12, v5.s[3]
 sqdmlal d31, s31, s31
 sqdmlal d31, s31, v31.s[3]
-sqdmlal d6, s6, s15
 sqdmlal s0, h0, h0
 sqdmlal s0, h0, v0.h[0]
-sqdmlal s16, h25, h30
-sqdmlal s31, h12, v2.h[6]
+sqdmlal s1, h18, v0.h[3]
+sqdmlal s23, h29, h16
 sqdmlal s31, h31, h31
 sqdmlal s31, h31, v15.h[7]
 sqdmlal v0.2d, v0.2s, v0.2s
 sqdmlal v0.2d, v0.2s, v0.s[0]
 sqdmlal v0.4s, v0.4h, v0.4h
 sqdmlal v0.4s, v0.4h, v0.h[0]
-sqdmlal v1.2d, v18.2s, v1.s[1]
-sqdmlal v1.4s, v18.4h, v21.4h
-sqdmlal v23.2d, v29.2s, v16.2s
+sqdmlal v1.2d, v18.2s, v21.2s
+sqdmlal v17.4s, v9.4h, v11.h[6]
+sqdmlal v30.4s, v21.4h, v2.4h
+sqdmlal v31.2d, v26.2s, v28.s[3]
 sqdmlal v31.2d, v31.2s, v31.2s
 sqdmlal v31.2d, v31.2s, v31.s[3]
-sqdmlal v31.4s, v26.4h, v14.h[7]
 sqdmlal v31.4s, v31.4h, v15.h[7]
 sqdmlal v31.4s, v31.4h, v31.4h
 sqdmlal2 v0.2d, v0.4s, v0.4s
 sqdmlal2 v0.2d, v0.4s, v0.s[0]
 sqdmlal2 v0.4s, v0.8h, v0.8h
 sqdmlal2 v0.4s, v0.8h, v0.h[0]
-sqdmlal2 v14.4s, v24.8h, v27.8h
-sqdmlal2 v17.2d, v9.4s, v22.s[3]
-sqdmlal2 v26.4s, v6.8h, v13.h[5]
-sqdmlal2 v30.2d, v21.4s, v2.4s
+sqdmlal2 v14.2d, v24.4s, v27.4s
+sqdmlal2 v25.4s, v3.8h, v30.8h
+sqdmlal2 v26.2d, v6.4s, v27.s[2]
 sqdmlal2 v31.2d, v31.4s, v31.4s
 sqdmlal2 v31.2d, v31.4s, v31.s[3]
 sqdmlal2 v31.4s, v31.8h, v15.h[7]
 sqdmlal2 v31.4s, v31.8h, v31.8h
+sqdmlal2 v7.4s, v7.8h, v5.h[3]
 sqdmlsl d0, s0, s0
 sqdmlsl d0, s0, v0.s[0]
-sqdmlsl d19, s27, s15
-sqdmlsl d21, s30, v18.s[1]
+sqdmlsl d0, s24, s24
+sqdmlsl d12, s1, v14.s[1]
 sqdmlsl d31, s31, s31
 sqdmlsl d31, s31, v31.s[3]
 sqdmlsl s0, h0, h0
 sqdmlsl s0, h0, v0.h[0]
-sqdmlsl s0, h24, h24
-sqdmlsl s12, h1, v7.h[2]
+sqdmlsl s28, h11, v9.h[5]
 sqdmlsl s31, h31, h31
 sqdmlsl s31, h31, v15.h[7]
+sqdmlsl s5, h21, h25
 sqdmlsl v0.2d, v0.2s, v0.2s
 sqdmlsl v0.2d, v0.2s, v0.s[0]
 sqdmlsl v0.4s, v0.4h, v0.4h
 sqdmlsl v0.4s, v0.4h, v0.h[0]
-sqdmlsl v24.4s, v17.4h, v9.4h
-sqdmlsl v26.4s, v13.4h, v1.h[4]
-sqdmlsl v28.2d, v11.2s, v19.s[2]
+sqdmlsl v12.4s, v6.4h, v15.h[7]
+sqdmlsl v18.4s, v30.4h, v10.4h
+sqdmlsl v24.2d, v17.2s, v9.2s
+sqdmlsl v26.2d, v13.2s, v3.s[2]
 sqdmlsl v31.2d, v31.2s, v31.2s
 sqdmlsl v31.2d, v31.2s, v31.s[3]
 sqdmlsl v31.4s, v31.4h, v15.h[7]
 sqdmlsl v31.4s, v31.4h, v31.4h
-sqdmlsl v5.2d, v21.2s, v25.2s
 sqdmlsl2 v0.2d, v0.4s, v0.4s
 sqdmlsl2 v0.2d, v0.4s, v0.s[0]
 sqdmlsl2 v0.4s, v0.8h, v0.8h
 sqdmlsl2 v0.4s, v0.8h, v0.h[0]
-sqdmlsl2 v12.2d, v6.4s, v31.s[3]
-sqdmlsl2 v18.2d, v30.4s, v10.4s
-sqdmlsl2 v26.4s, v0.8h, v8.8h
-sqdmlsl2 v26.4s, v25.8h, v0.h[2]
+sqdmlsl2 v17.4s, v0.8h, v11.8h
+sqdmlsl2 v18.4s, v30.8h, v1.h[5]
+sqdmlsl2 v26.2d, v0.4s, v8.4s
+sqdmlsl2 v26.2d, v25.4s, v1.s[1]
 sqdmlsl2 v31.2d, v31.4s, v31.4s
 sqdmlsl2 v31.2d, v31.4s, v31.s[3]
 sqdmlsl2 v31.4s, v31.8h, v15.h[7]
 sqdmlsl2 v31.4s, v31.8h, v31.8h
 sqdmulh h0, h0, h0
 sqdmulh h0, h0, v0.h[0]
-sqdmulh h1, h31, v8.h[5]
-sqdmulh h27, h25, h11
+sqdmulh h19, h25, v11.h[2]
+sqdmulh h24, h6, h28
 sqdmulh h31, h31, h31
 sqdmulh h31, h31, v15.h[7]
 sqdmulh s0, s0, s0
 sqdmulh s0, s0, v0.s[0]
-sqdmulh s19, s25, v23.s[1]
-sqdmulh s24, s6, s28
+sqdmulh s13, s21, s1
 sqdmulh s31, s31, s31
 sqdmulh s31, s31, v31.s[3]
+sqdmulh s5, s5, v13.s[0]
 sqdmulh v0.2s, v0.2s, v0.2s
 sqdmulh v0.2s, v0.2s, v0.s[0]
 sqdmulh v0.4h, v0.4h, v0.4h
@@ -5460,12 +5462,13 @@ sqdmulh v0.4s, v0.4s, v0.4s
 sqdmulh v0.4s, v0.4s, v0.s[0]
 sqdmulh v0.8h, v0.8h, v0.8h
 sqdmulh v0.8h, v0.8h, v0.h[0]
-sqdmulh v13.2s, v21.2s, v1.2s
-sqdmulh v14.8h, v5.8h, v5.h[5]
-sqdmulh v15.4h, v1.4h, v2.h[5]
-sqdmulh v17.4s, v6.4s, v20.s[0]
-sqdmulh v22.8h, v5.8h, v7.8h
-sqdmulh v25.4h, v29.4h, v14.4h
+sqdmulh v14.4s, v5.4s, v11.s[2]
+sqdmulh v15.2s, v1.2s, v4.s[2]
+sqdmulh v17.4h, v6.4h, v10.h[0]
+sqdmulh v22.4s, v5.4s, v7.4s
+sqdmulh v23.8h, v15.8h, v11.8h
+sqdmulh v25.2s, v29.2s, v14.2s
+sqdmulh v3.8h, v27.8h, v11.h[5]
 sqdmulh v31.2s, v31.2s, v31.2s
 sqdmulh v31.2s, v31.2s, v31.s[3]
 sqdmulh v31.4h, v31.4h, v15.h[7]
@@ -5474,44 +5477,43 @@ sqdmulh v31.4s, v31.4s, v31.4s
 sqdmulh v31.4s, v31.4s, v31.s[3]
 sqdmulh v31.8h, v31.8h, v15.h[7]
 sqdmulh v31.8h, v31.8h, v31.8h
-sqdmulh v5.2s, v5.2s, v13.s[0]
-sqdmulh v6.4s, v7.4s, v12.4s
+sqdmulh v6.4h, v7.4h, v12.4h
 sqdmull d0, s0, s0
 sqdmull d0, s0, v0.s[0]
-sqdmull d1, s22, v9.s[2]
-sqdmull d24, s17, s11
+sqdmull d13, s19, v12.s[2]
+sqdmull d26, s26, s21
 sqdmull d31, s31, s31
 sqdmull d31, s31, v31.s[3]
 sqdmull s0, h0, h0
 sqdmull s0, h0, v0.h[0]
-sqdmull s13, h19, v6.h[4]
-sqdmull s26, h26, h21
+sqdmull s14, h30, v11.h[4]
+sqdmull s27, h3, h9
 sqdmull s31, h31, h31
 sqdmull s31, h31, v15.h[7]
 sqdmull v0.2d, v0.2s, v0.2s
 sqdmull v0.2d, v0.2s, v0.s[0]
 sqdmull v0.4s, v0.4h, v0.4h
 sqdmull v0.4s, v0.4h, v0.h[0]
-sqdmull v14.2d, v30.2s, v23.s[2]
-sqdmull v22.4s, v8.4h, v9.h[4]
-sqdmull v27.2d, v3.2s, v9.2s
+sqdmull v14.4s, v28.4h, v3.h[5]
+sqdmull v22.2d, v8.2s, v18.s[2]
+sqdmull v23.4s, v20.4h, v15.4h
 sqdmull v31.2d, v31.2s, v31.2s
 sqdmull v31.2d, v31.2s, v31.s[3]
 sqdmull v31.4s, v31.4h, v15.h[7]
 sqdmull v31.4s, v31.4h, v31.4h
-sqdmull v5.4s, v27.4h, v15.4h
+sqdmull v5.2d, v27.2s, v15.2s
 sqdmull2 v0.2d, v0.4s, v0.4s
 sqdmull2 v0.2d, v0.4s, v0.s[0]
 sqdmull2 v0.4s, v0.8h, v0.8h
 sqdmull2 v0.4s, v0.8h, v0.h[0]
-sqdmull2 v14.2d, v28.4s, v7.s[2]
-sqdmull2 v23.2d, v20.4s, v15.4s
-sqdmull2 v23.4s, v2.8h, v7.8h
+sqdmull2 v23.2d, v2.4s, v7.4s
 sqdmull2 v31.2d, v31.4s, v31.4s
 sqdmull2 v31.2d, v31.4s, v31.s[3]
 sqdmull2 v31.4s, v31.8h, v15.h[7]
 sqdmull2 v31.4s, v31.8h, v31.8h
-sqdmull2 v8.4s, v31.8h, v12.h[4]
+sqdmull2 v4.4s, v15.8h, v30.8h
+sqdmull2 v8.2d, v31.4s, v24.s[2]
+sqdmull2 v8.4s, v30.8h, v8.h[4]
 sqincb x0
 sqincb x0, #0
 sqincb x0, #0, mul #1
@@ -5522,17 +5524,16 @@ sqincb x0, w0, #0
 sqincb x0, w0, #0, mul #1
 sqincb x0, w0, pow2
 sqincb x0, w0, pow2, mul #1
-sqincb x13, w13, #20
-sqincb x15, w15, mul4, mul #14
-sqincb x17
-sqincb x21, vl6
-sqincb x21, w21, vl256
-sqincb x22, w22, #30, mul #5
-sqincb x26, vl4, mul #3
-sqincb x3, w3
-sqincb x6, #27
+sqincb x13
+sqincb x15, w15, #28, mul #14
+sqincb x18, vl4, mul #7
+sqincb x19, vl256
+sqincb x21, #12
+sqincb x21, w21, #27
+sqincb x22, w22
+sqincb x26, #9, mul #3
+sqincb x6, w6, vl256
 sqincb xzr
-sqincb xzr, #15, mul #8
 sqincb xzr, #31
 sqincb xzr, #31, mul #16
 sqincb xzr, all
@@ -5542,26 +5543,26 @@ sqincb xzr, wzr, #31
 sqincb xzr, wzr, #31, mul #16
 sqincb xzr, wzr, all
 sqincb xzr, wzr, all, mul #16
+sqincb xzr, wzr, vl7, mul #8
 sqincd x0
 sqincd x0, #0
 sqincd x0, #0, mul #1
+sqincd x0, #12
 sqincd x0, pow2
 sqincd x0, pow2, mul #1
-sqincd x0, vl6
 sqincd x0, w0
 sqincd x0, w0, #0
 sqincd x0, w0, #0, mul #1
-sqincd x0, w0, #8
 sqincd x0, w0, pow2
 sqincd x0, w0, pow2, mul #1
-sqincd x1, w1, vl3
-sqincd x18, w18
-sqincd x19
-sqincd x2, w2, #6, mul #6
-sqincd x26, w26, vl3, mul #12
-sqincd x3, #8, mul #9
-sqincd x5, #0
-sqincd x7, pow2, mul #9
+sqincd x1, w1, #7
+sqincd x15, vl7
+sqincd x2, w2
+sqincd x26, w26, #6, mul #12
+sqincd x3, w3, vl4, mul #9
+sqincd x30, vl16, mul #10
+sqincd x5, w5, pow2
+sqincd x7, #1, mul #9
 sqincd xzr
 sqincd xzr, #31
 sqincd xzr, #31, mul #16
@@ -5580,18 +5581,17 @@ sqinch x0, pow2, mul #1
 sqinch x0, w0
 sqinch x0, w0, #0
 sqinch x0, w0, #0, mul #1
-sqinch x0, w0, #5
 sqinch x0, w0, pow2
 sqinch x0, w0, pow2, mul #1
-sqinch x10, #28, mul #8
-sqinch x16, w16, #12, mul #15
-sqinch x2, w2, vl5, mul #14
-sqinch x28, vl32, mul #7
-sqinch x3, #22
-sqinch x5
-sqinch x5, w5, vl1
-sqinch x7, w7
-sqinch x8, vl1
+sqinch x10, vl3
+sqinch x10, w10, all, mul #15
+sqinch x16, w16
+sqinch x2, w2, #10, mul #14
+sqinch x28, #21, mul #7
+sqinch x3, w3, vl64
+sqinch x5, w5, #3
+sqinch x7, vl8, mul #2
+sqinch x8, #2
 sqinch xzr
 sqinch xzr, #31
 sqinch xzr, #31, mul #16
@@ -5612,16 +5612,16 @@ sqincw x0, w0, #0
 sqincw x0, w0, #0, mul #1
 sqincw x0, w0, pow2
 sqincw x0, w0, pow2, mul #1
-sqincw x10, vl256, mul #12
+sqincw x10, #27, mul #12
 sqincw x10, w10
-sqincw x10, w10, #28, mul #8
-sqincw x11, #26, mul #14
-sqincw x16, all
-sqincw x17, #7
-sqincw x22, w22, vl16
-sqincw x24, w24, vl1, mul #14
-sqincw x26
-sqincw x7, w7, #29
+sqincw x11, w11, vl256, mul #14
+sqincw x16, #13
+sqincw x16, vl16
+sqincw x17, w17, vl3
+sqincw x22, w22, #19
+sqincw x24, w24, #3, mul #14
+sqincw x4, vl16, mul #4
+sqincw x7
 sqincw xzr
 sqincw xzr, #31
 sqincw xzr, #31, mul #16
@@ -5633,16 +5633,16 @@ sqincw xzr, wzr, #31, mul #16
 sqincw xzr, wzr, all
 sqincw xzr, wzr, all, mul #16
 sqneg b0, b0
-sqneg b15, b16
+sqneg b13, b7
 sqneg b31, b31
 sqneg d0, d0
-sqneg d1, d30
+sqneg d1, d11
 sqneg d31, d31
 sqneg h0, h0
-sqneg h13, h7
+sqneg h12, h18
 sqneg h31, h31
 sqneg s0, s0
-sqneg s1, s11
+sqneg s26, s28
 sqneg s31, s31
 sqneg v0.16b, v0.16b
 sqneg v0.2d, v0.2d
@@ -5651,11 +5651,11 @@ sqneg v0.4h, v0.4h
 sqneg v0.4s, v0.4s
 sqneg v0.8b, v0.8b
 sqneg v0.8h, v0.8h
-sqneg v1.8b, v8.8b
-sqneg v12.16b, v18.16b
-sqneg v24.4h, v24.4h
-sqneg v26.2d, v28.2d
-sqneg v29.8h, v7.8h
+sqneg v1.4h, v8.4h
+sqneg v24.2d, v24.2d
+sqneg v26.8b, v4.8b
+sqneg v27.8h, v6.8h
+sqneg v29.4s, v7.4s
 sqneg v31.16b, v31.16b
 sqneg v31.2d, v31.2d
 sqneg v31.2s, v31.2s
@@ -5663,20 +5663,20 @@ sqneg v31.4h, v31.4h
 sqneg v31.4s, v31.4s
 sqneg v31.8b, v31.8b
 sqneg v31.8h, v31.8h
-sqneg v9.2s, v20.2s
-sqneg v9.4s, v30.4s
+sqneg v9.16b, v20.16b
+sqneg v9.2s, v30.2s
 sqrdmlah h0, h0, h0
 sqrdmlah h0, h0, v0.h[0]
-sqrdmlah h24, h23, v14.h[6]
+sqrdmlah h10, h24, h23
+sqrdmlah h17, h4, v8.h[7]
 sqrdmlah h31, h31, h31
 sqrdmlah h31, h31, v15.h[7]
-sqrdmlah h31, h4, h25
 sqrdmlah s0, s0, s0
 sqrdmlah s0, s0, v0.s[0]
-sqrdmlah s10, s24, s23
-sqrdmlah s17, s4, v16.s[3]
+sqrdmlah s16, s31, s14
 sqrdmlah s31, s31, s31
 sqrdmlah s31, s31, v31.s[3]
+sqrdmlah s8, s0, v13.s[3]
 sqrdmlah v0.2s, v0.2s, v0.2s
 sqrdmlah v0.2s, v0.2s, v0.s[0]
 sqrdmlah v0.4h, v0.4h, v0.4h
@@ -5685,48 +5685,47 @@ sqrdmlah v0.4s, v0.4s, v0.4s
 sqrdmlah v0.4s, v0.4s, v0.s[0]
 sqrdmlah v0.8h, v0.8h, v0.8h
 sqrdmlah v0.8h, v0.8h, v0.h[0]
-sqrdmlah v11.4s, v14.4s, v2.s[2]
-sqrdmlah v16.2s, v31.2s, v14.2s
-sqrdmlah v20.8h, v2.8h, v8.h[0]
+sqrdmlah v11.4h, v14.4h, v1.h[5]
+sqrdmlah v16.8h, v13.8h, v5.h[3]
+sqrdmlah v20.4s, v2.4s, v16.s[0]
+sqrdmlah v31.2s, v17.2s, v3.s[3]
 sqrdmlah v31.2s, v31.2s, v31.2s
 sqrdmlah v31.2s, v31.2s, v31.s[3]
-sqrdmlah v31.4h, v17.4h, v1.h[6]
 sqrdmlah v31.4h, v31.4h, v15.h[7]
 sqrdmlah v31.4h, v31.4h, v31.4h
 sqrdmlah v31.4s, v31.4s, v31.4s
 sqrdmlah v31.4s, v31.4s, v31.s[3]
 sqrdmlah v31.8h, v31.8h, v15.h[7]
 sqrdmlah v31.8h, v31.8h, v31.8h
-sqrdmlah v8.2s, v0.2s, v13.s[3]
-sqrdmlah v8.4s, v7.4s, v12.4s
-sqrdmlah v9.4h, v23.4h, v19.4h
-sqrdmlah v9.8h, v2.8h, v19.8h
+sqrdmlah v8.4h, v7.4h, v12.4h
+sqrdmlah v9.2s, v23.2s, v19.2s
+sqrdmlah v9.4s, v2.4s, v19.4s
+sqrdmlah v9.8h, v12.8h, v5.8h
 sqrdmlsh h0, h0, h0
 sqrdmlsh h0, h0, v0.h[0]
-sqrdmlsh h19, h30, v9.h[0]
-sqrdmlsh h30, h28, h17
+sqrdmlsh h20, h22, v13.h[5]
+sqrdmlsh h30, h9, h18
 sqrdmlsh h31, h31, h31
 sqrdmlsh h31, h31, v15.h[7]
 sqrdmlsh s0, s0, s0
 sqrdmlsh s0, s0, v0.s[0]
-sqrdmlsh s20, s22, v27.s[2]
-sqrdmlsh s30, s9, s18
+sqrdmlsh s24, s11, v22.s[0]
+sqrdmlsh s28, s4, s29
 sqrdmlsh s31, s31, s31
 sqrdmlsh s31, s31, v31.s[3]
 sqrdmlsh v0.2s, v0.2s, v0.2s
 sqrdmlsh v0.2s, v0.2s, v0.s[0]
+sqrdmlsh v0.2s, v11.2s, v13.s[0]
 sqrdmlsh v0.4h, v0.4h, v0.4h
 sqrdmlsh v0.4h, v0.4h, v0.h[0]
-sqrdmlsh v0.4h, v11.4h, v6.h[1]
+sqrdmlsh v0.4h, v23.4h, v26.4h
 sqrdmlsh v0.4s, v0.4s, v0.4s
 sqrdmlsh v0.4s, v0.4s, v0.s[0]
-sqrdmlsh v0.4s, v23.4s, v26.4s
 sqrdmlsh v0.8h, v0.8h, v0.8h
 sqrdmlsh v0.8h, v0.8h, v0.h[0]
-sqrdmlsh v16.8h, v6.8h, v8.h[3]
-sqrdmlsh v24.2s, v11.2s, v22.s[0]
-sqrdmlsh v28.2s, v4.2s, v29.2s
-sqrdmlsh v29.8h, v26.8h, v2.8h
+sqrdmlsh v16.4s, v6.4s, v17.s[1]
+sqrdmlsh v17.8h, v9.8h, v4.h[6]
+sqrdmlsh v29.4s, v26.4s, v2.4s
 sqrdmlsh v31.2s, v31.2s, v31.2s
 sqrdmlsh v31.2s, v31.2s, v31.s[3]
 sqrdmlsh v31.4h, v31.4h, v15.h[7]
@@ -5735,35 +5734,36 @@ sqrdmlsh v31.4s, v31.4s, v31.4s
 sqrdmlsh v31.4s, v31.4s, v31.s[3]
 sqrdmlsh v31.8h, v31.8h, v15.h[7]
 sqrdmlsh v31.8h, v31.8h, v31.8h
-sqrdmlsh v5.4h, v21.4h, v4.4h
-sqrdmlsh v9.4s, v16.4s, v30.s[1]
+sqrdmlsh v5.2s, v21.2s, v4.2s
+sqrdmlsh v7.8h, v18.8h, v7.8h
+sqrdmlsh v9.4h, v16.4h, v15.h[3]
 sqrdmulh h0, h0, h0
 sqrdmulh h0, h0, v0.h[0]
-sqrdmulh h12, h22, v7.h[7]
-sqrdmulh h2, h9, h23
+sqrdmulh h13, h21, v4.h[3]
+sqrdmulh h14, h0, h7
 sqrdmulh h31, h31, h31
 sqrdmulh h31, h31, v15.h[7]
 sqrdmulh s0, s0, s0
 sqrdmulh s0, s0, v0.s[0]
-sqrdmulh s13, s21, v9.s[1]
-sqrdmulh s14, s0, s7
+sqrdmulh s20, s11, v16.s[0]
+sqrdmulh s28, s15, s12
 sqrdmulh s31, s31, s31
 sqrdmulh s31, s31, v31.s[3]
 sqrdmulh v0.2s, v0.2s, v0.2s
 sqrdmulh v0.2s, v0.2s, v0.s[0]
+sqrdmulh v0.2s, v22.2s, v5.2s
 sqrdmulh v0.4h, v0.4h, v0.4h
 sqrdmulh v0.4h, v0.4h, v0.h[0]
-sqrdmulh v0.4h, v22.4h, v5.4h
+sqrdmulh v0.4h, v21.4h, v7.h[5]
 sqrdmulh v0.4s, v0.4s, v0.4s
 sqrdmulh v0.4s, v0.4s, v0.s[0]
-sqrdmulh v0.4s, v21.4s, v15.s[2]
 sqrdmulh v0.8h, v0.8h, v0.8h
 sqrdmulh v0.8h, v0.8h, v0.h[0]
-sqrdmulh v15.8h, v21.8h, v11.h[1]
-sqrdmulh v16.4s, v20.4s, v8.4s
-sqrdmulh v20.2s, v11.2s, v16.s[0]
-sqrdmulh v26.4h, v11.4h, v11.h[1]
-sqrdmulh v28.2s, v15.2s, v12.2s
+sqrdmulh v15.4s, v21.4s, v22.s[0]
+sqrdmulh v16.4h, v20.4h, v8.4h
+sqrdmulh v17.8h, v29.8h, v15.8h
+sqrdmulh v2.8h, v14.8h, v13.h[5]
+sqrdmulh v26.2s, v11.2s, v23.s[0]
 sqrdmulh v31.2s, v31.2s, v31.2s
 sqrdmulh v31.2s, v31.2s, v31.s[3]
 sqrdmulh v31.4h, v31.4h, v15.h[7]
@@ -5772,19 +5772,19 @@ sqrdmulh v31.4s, v31.4s, v31.4s
 sqrdmulh v31.4s, v31.4s, v31.s[3]
 sqrdmulh v31.8h, v31.8h, v15.h[7]
 sqrdmulh v31.8h, v31.8h, v31.8h
-sqrdmulh v4.8h, v13.8h, v21.8h
+sqrdmulh v4.4s, v13.4s, v21.4s
 sqrshl b0, b0, b0
+sqrshl b31, b2, b10
 sqrshl b31, b31, b31
-sqrshl b5, b26, b9
 sqrshl d0, d0, d0
-sqrshl d18, d5, d4
 sqrshl d31, d31, d31
+sqrshl d8, d1, d14
 sqrshl h0, h0, h0
-sqrshl h31, h2, h10
+sqrshl h3, h12, h3
 sqrshl h31, h31, h31
 sqrshl s0, s0, s0
 sqrshl s31, s31, s31
-sqrshl s8, s1, s14
+sqrshl s5, s27, s23
 sqrshl v0.16b, v0.16b, v0.16b
 sqrshl v0.2d, v0.2d, v0.2d
 sqrshl v0.2s, v0.2s, v0.2s
@@ -5792,11 +5792,12 @@ sqrshl v0.4h, v0.4h, v0.4h
 sqrshl v0.4s, v0.4s, v0.4s
 sqrshl v0.8b, v0.8b, v0.8b
 sqrshl v0.8h, v0.8h, v0.8h
-sqrshl v12.8b, v23.8b, v3.8b
-sqrshl v14.4s, v29.4s, v30.4s
-sqrshl v16.8h, v31.8h, v29.8h
-sqrshl v23.4h, v17.4h, v0.4h
-sqrshl v3.16b, v12.16b, v3.16b
+sqrshl v12.4h, v23.4h, v3.4h
+sqrshl v13.8h, v4.8h, v30.8h
+sqrshl v14.2s, v29.2s, v30.2s
+sqrshl v16.4s, v31.4s, v29.4s
+sqrshl v23.2d, v17.2d, v0.2d
+sqrshl v28.8b, v3.8b, v10.8b
 sqrshl v31.16b, v31.16b, v31.16b
 sqrshl v31.2d, v31.2d, v31.2d
 sqrshl v31.2s, v31.2s, v31.2s
@@ -5804,86 +5805,85 @@ sqrshl v31.4h, v31.4h, v31.4h
 sqrshl v31.4s, v31.4s, v31.4s
 sqrshl v31.8b, v31.8b, v31.8b
 sqrshl v31.8h, v31.8h, v31.8h
-sqrshl v5.2d, v27.2d, v23.2d
-sqrshl v5.2s, v3.2s, v13.2s
+sqrshl v5.16b, v3.16b, v13.16b
 sqrshrn b0, h0, #1
-sqrshrn b12, h25, #5
+sqrshrn b17, h20, #1
 sqrshrn b31, h31, #8
 sqrshrn h0, s0, #1
-sqrshrn h31, s11, #14
 sqrshrn h31, s31, #16
+sqrshrn h9, s7, #3
 sqrshrn s0, d0, #1
-sqrshrn s17, d20, #3
+sqrshrn s3, d29, #24
 sqrshrn s31, d31, #32
 sqrshrn v0.2s, v0.2d, #1
 sqrshrn v0.4h, v0.4s, #1
 sqrshrn v0.8b, v0.8h, #1
-sqrshrn v22.8b, v2.8h, #3
-sqrshrn v3.4h, v29.4s, #12
+sqrshrn v22.2s, v2.2d, #11
+sqrshrn v25.4h, v30.4s, #8
+sqrshrn v27.8b, v23.8h, #4
 sqrshrn v31.2s, v31.2d, #32
 sqrshrn v31.4h, v31.4s, #16
 sqrshrn v31.8b, v31.8h, #8
-sqrshrn v9.2s, v7.2d, #5
 sqrshrn2 v0.16b, v0.8h, #1
 sqrshrn2 v0.4s, v0.2d, #1
 sqrshrn2 v0.8h, v0.4s, #1
-sqrshrn2 v16.4s, v19.2d, #24
-sqrshrn2 v21.16b, v19.8h, #7
-sqrshrn2 v21.8h, v19.4s, #4
+sqrshrn2 v2.8h, v21.4s, #14
+sqrshrn2 v21.16b, v19.8h, #2
+sqrshrn2 v26.4s, v8.2d, #26
 sqrshrn2 v31.16b, v31.8h, #8
 sqrshrn2 v31.4s, v31.2d, #32
 sqrshrn2 v31.8h, v31.4s, #16
 sqrshrun b0, h0, #1
-sqrshrun b11, h4, #8
 sqrshrun b31, h31, #8
+sqrshrun b6, h20, #5
 sqrshrun h0, s0, #1
-sqrshrun h11, s7, #14
+sqrshrun h14, s25, #7
 sqrshrun h31, s31, #16
 sqrshrun s0, d0, #1
+sqrshrun s15, d7, #11
 sqrshrun s31, d31, #32
-sqrshrun s6, d20, #18
 sqrshrun v0.2s, v0.2d, #1
 sqrshrun v0.4h, v0.4s, #1
 sqrshrun v0.8b, v0.8h, #1
-sqrshrun v14.2s, v25.2d, #13
-sqrshrun v15.4h, v7.4s, #6
-sqrshrun v23.8b, v11.8h, #6
+sqrshrun v11.8b, v21.8h, #2
+sqrshrun v23.2s, v11.2d, #21
+sqrshrun v23.4h, v13.4s, #4
 sqrshrun v31.2s, v31.2d, #32
 sqrshrun v31.4h, v31.4s, #16
 sqrshrun v31.8b, v31.8h, #8
 sqrshrun2 v0.16b, v0.8h, #1
 sqrshrun2 v0.4s, v0.2d, #1
 sqrshrun2 v0.8h, v0.4s, #1
-sqrshrun2 v10.16b, v4.8h, #2
-sqrshrun2 v16.8h, v8.4s, #10
+sqrshrun2 v16.16b, v8.8h, #5
+sqrshrun2 v28.8h, v15.4s, #8
 sqrshrun2 v31.16b, v31.8h, #8
 sqrshrun2 v31.4s, v31.2d, #32
 sqrshrun2 v31.8h, v31.4s, #16
-sqrshrun2 v4.4s, v14.2d, #14
+sqrshrun2 v4.4s, v20.2d, #9
 sqshl b0, b0, #0
 sqshl b0, b0, b0
-sqshl b26, b8, #6
-sqshl b27, b29, b5
+sqshl b15, b14, #2
+sqshl b30, b22, b31
 sqshl b31, b31, #7
 sqshl b31, b31, b31
 sqshl d0, d0, #0
 sqshl d0, d0, d0
-sqshl d15, d14, #17
-sqshl d30, d22, d31
+sqshl d14, d21, d8
+sqshl d14, d7, #19
 sqshl d31, d31, #63
 sqshl d31, d31, d31
 sqshl h0, h0, #0
 sqshl h0, h0, h0
-sqshl h14, h21, h8
-sqshl h14, h7, #4
+sqshl h11, h17, #4
 sqshl h31, h31, #15
 sqshl h31, h31, h31
+sqshl h7, h17, h21
 sqshl s0, s0, #0
 sqshl s0, s0, s0
-sqshl s11, s17, #8
+sqshl s28, s1, #0
 sqshl s31, s31, #31
 sqshl s31, s31, s31
-sqshl s7, s17, s21
+sqshl s8, s16, s19
 sqshl v0.16b, v0.16b, #0
 sqshl v0.16b, v0.16b, v0.16b
 sqshl v0.2d, v0.2d, #0
@@ -5898,19 +5898,20 @@ sqshl v0.8b, v0.8b, #0
 sqshl v0.8b, v0.8b, v0.8b
 sqshl v0.8h, v0.8h, #0
 sqshl v0.8h, v0.8h, v0.8h
-sqshl v1.8h, v22.8h, #8
-sqshl v10.2d, v19.2d, v12.2d
-sqshl v13.8b, v13.8b, v27.8b
-sqshl v14.4h, v20.4h, v10.4h
-sqshl v17.8b, v28.8b, #5
-sqshl v2.2s, v23.2s, #28
-sqshl v21.4s, v23.4s, #26
-sqshl v23.8h, v6.8h, v17.8h
-sqshl v24.4s, v4.4s, v24.4s
-sqshl v25.2s, v8.2s, v11.2s
-sqshl v28.16b, v1.16b, #0
-sqshl v29.4h, v19.4h, #0
-sqshl v3.2d, v25.2d, #16
+sqshl v1.8b, v22.8b, #4
+sqshl v10.16b, v19.16b, v12.16b
+sqshl v13.4s, v13.4s, v27.4s
+sqshl v14.2s, v20.2s, v10.2s
+sqshl v17.4s, v28.4s, #22
+sqshl v2.2d, v23.2d, #57
+sqshl v21.4h, v23.4h, #13
+sqshl v22.8h, v2.8h, v24.8h
+sqshl v23.8b, v6.8b, v17.8b
+sqshl v24.4h, v4.4h, v24.4h
+sqshl v25.2d, v8.2d, v11.2d
+sqshl v28.8h, v28.8h, #0
+sqshl v29.2s, v19.2s, #1
+sqshl v3.16b, v25.16b, #2
 sqshl v31.16b, v31.16b, #7
 sqshl v31.16b, v31.16b, v31.16b
 sqshl v31.2d, v31.2d, #63
@@ -5925,19 +5926,18 @@ sqshl v31.8b, v31.8b, #7
 sqshl v31.8b, v31.8b, v31.8b
 sqshl v31.8h, v31.8h, #15
 sqshl v31.8h, v31.8h, v31.8h
-sqshl v8.16b, v16.16b, v19.16b
 sqshlu b0, b0, #0
-sqshlu b19, b9, #0
+sqshlu b29, b28, #0
 sqshlu b31, b31, #7
 sqshlu d0, d0, #0
-sqshlu d3, d3, #14
+sqshlu d16, d22, #16
 sqshlu d31, d31, #63
 sqshlu h0, h0, #0
-sqshlu h29, h28, #1
+sqshlu h12, h23, #13
 sqshlu h31, h31, #15
 sqshlu s0, s0, #0
-sqshlu s16, s22, #8
 sqshlu s31, s31, #31
+sqshlu s4, s21, #22
 sqshlu v0.16b, v0.16b, #0
 sqshlu v0.2d, v0.2d, #0
 sqshlu v0.2s, v0.2s, #0
@@ -5945,12 +5945,13 @@ sqshlu v0.4h, v0.4h, #0
 sqshlu v0.4s, v0.4s, #0
 sqshlu v0.8b, v0.8b, #0
 sqshlu v0.8h, v0.8h, #0
-sqshlu v12.16b, v23.16b, #6
-sqshlu v2.4h, v11.4h, #5
-sqshlu v2.8h, v18.8h, #0
-sqshlu v20.2s, v9.2s, #22
-sqshlu v27.4s, v28.4s, #23
-sqshlu v28.8b, v22.8b, #5
+sqshlu v11.8b, v0.8b, #0
+sqshlu v2.2d, v11.2d, #21
+sqshlu v2.4s, v18.4s, #0
+sqshlu v20.16b, v9.16b, #5
+sqshlu v27.2s, v28.2s, #23
+sqshlu v28.4h, v22.4h, #11
+sqshlu v29.8h, v8.8h, #5
 sqshlu v31.16b, v31.16b, #7
 sqshlu v31.2d, v31.2d, #63
 sqshlu v31.2s, v31.2s, #31
@@ -5958,72 +5959,71 @@ sqshlu v31.4h, v31.4h, #15
 sqshlu v31.4s, v31.4s, #31
 sqshlu v31.8b, v31.8b, #7
 sqshlu v31.8h, v31.8h, #15
-sqshlu v4.2d, v21.2d, #44
 sqshrn b0, h0, #1
-sqshrn b29, h31, #6
+sqshrn b14, h18, #5
 sqshrn b31, h31, #8
 sqshrn h0, s0, #1
-sqshrn h2, s21, #3
+sqshrn h2, s27, #7
 sqshrn h31, s31, #16
 sqshrn s0, d0, #1
-sqshrn s14, d18, #17
 sqshrn s31, d31, #32
+sqshrn s6, d9, #9
 sqshrn v0.2s, v0.2d, #1
+sqshrn v0.2s, v2.2d, #12
 sqshrn v0.4h, v0.4s, #1
 sqshrn v0.8b, v0.8h, #1
-sqshrn v0.8b, v2.8h, #3
-sqshrn v2.2s, v27.2d, #14
+sqshrn v0.8b, v27.8h, #4
+sqshrn v14.4h, v28.4s, #1
 sqshrn v31.2s, v31.2d, #32
 sqshrn v31.4h, v31.4s, #16
 sqshrn v31.8b, v31.8h, #8
-sqshrn v6.4h, v9.4s, #5
 sqshrn2 v0.16b, v0.8h, #1
 sqshrn2 v0.4s, v0.2d, #1
-sqshrn2 v0.4s, v27.2d, #13
 sqshrn2 v0.8h, v0.4s, #1
-sqshrn2 v14.16b, v28.8h, #1
-sqshrn2 v26.8h, v23.4s, #14
+sqshrn2 v26.16b, v23.8h, #7
 sqshrn2 v31.16b, v31.8h, #8
 sqshrn2 v31.4s, v31.2d, #32
+sqshrn2 v31.8h, v10.4s, #13
 sqshrn2 v31.8h, v31.4s, #16
+sqshrn2 v6.4s, v0.2d, #13
 sqshrun b0, h0, #1
-sqshrun b25, h27, #8
 sqshrun b31, h31, #8
+sqshrun b7, h9, #8
 sqshrun h0, s0, #1
+sqshrun h13, s30, #15
 sqshrun h31, s31, #16
-sqshrun h7, s10, #4
 sqshrun s0, d0, #1
 sqshrun s31, d31, #32
-sqshrun s7, d9, #30
+sqshrun s5, d29, #14
 sqshrun v0.2s, v0.2d, #1
 sqshrun v0.4h, v0.4s, #1
 sqshrun v0.8b, v0.8h, #1
-sqshrun v13.2s, v30.2d, #30
+sqshrun v25.8b, v28.8h, #4
 sqshrun v31.2s, v31.2d, #32
 sqshrun v31.4h, v31.4s, #16
 sqshrun v31.8b, v31.8h, #8
-sqshrun v5.4h, v29.4s, #7
-sqshrun v7.8b, v30.8h, #4
+sqshrun v4.4h, v11.4s, #4
+sqshrun v7.2s, v30.2d, #15
 sqshrun2 v0.16b, v0.8h, #1
 sqshrun2 v0.4s, v0.2d, #1
 sqshrun2 v0.8h, v0.4s, #1
-sqshrun2 v25.4s, v28.2d, #13
-sqshrun2 v29.8h, v23.4s, #9
+sqshrun2 v2.8h, v31.4s, #4
+sqshrun2 v29.16b, v23.8h, #5
 sqshrun2 v31.16b, v31.8h, #8
 sqshrun2 v31.4s, v31.2d, #32
 sqshrun2 v31.8h, v31.4s, #16
-sqshrun2 v4.16b, v11.8h, #2
+sqshrun2 v5.4s, v26.2d, #17
 sqsub b0, b0, b0
-sqsub b31, b25, b31
+sqsub b10, b6, b21
 sqsub b31, b31, b31
 sqsub d0, d0, d0
-sqsub d19, d20, d1
+sqsub d24, d11, d9
 sqsub d31, d31, d31
 sqsub h0, h0, h0
-sqsub h10, h6, h21
+sqsub h15, h8, h12
 sqsub h31, h31, h31
 sqsub s0, s0, s0
-sqsub s24, s11, s9
+sqsub s27, s9, s29
 sqsub s31, s31, s31
 sqsub v0.16b, v0.16b, v0.16b
 sqsub v0.2d, v0.2d, v0.2d
@@ -6032,71 +6032,71 @@ sqsub v0.4h, v0.4h, v0.4h
 sqsub v0.4s, v0.4s, v0.4s
 sqsub v0.8b, v0.8b, v0.8b
 sqsub v0.8h, v0.8h, v0.8h
-sqsub v1.4s, v14.4s, v17.4s
-sqsub v13.8b, v24.8b, v22.8b
-sqsub v15.16b, v8.16b, v12.16b
-sqsub v16.4h, v0.4h, v30.4h
-sqsub v26.8h, v3.8h, v2.8h
-sqsub v27.2d, v9.2d, v29.2d
+sqsub v1.2s, v14.2s, v17.2s
+sqsub v13.4h, v24.4h, v22.4h
+sqsub v13.8h, v7.8h, v15.8h
+sqsub v16.2d, v0.2d, v30.2d
+sqsub v26.4s, v3.4s, v2.4s
 sqsub v31.16b, v31.16b, v31.16b
 sqsub v31.2d, v31.2d, v31.2d
 sqsub v31.2s, v31.2s, v31.2s
 sqsub v31.4h, v31.4h, v31.4h
 sqsub v31.4s, v31.4s, v31.4s
+sqsub v31.8b, v10.8b, v28.8b
 sqsub v31.8b, v31.8b, v31.8b
 sqsub v31.8h, v31.8h, v31.8h
-sqsub v6.2s, v29.2s, v18.2s
+sqsub v6.16b, v29.16b, v18.16b
 sqxtn b0, h0
-sqxtn b25, h29
+sqxtn b22, h7
 sqxtn b31, h31
 sqxtn h0, s0
-sqxtn h31, s18
+sqxtn h2, s24
 sqxtn h31, s31
 sqxtn s0, d0
-sqxtn s22, d7
+sqxtn s1, d3
 sqxtn s31, d31
 sqxtn v0.2s, v0.2d
 sqxtn v0.4h, v0.4s
 sqxtn v0.8b, v0.8h
-sqxtn v1.4h, v3.4s
-sqxtn v11.8b, v5.8h
-sqxtn v2.2s, v24.2d
+sqxtn v11.2s, v5.2d
+sqxtn v14.4h, v14.4s
+sqxtn v14.8b, v3.8h
 sqxtn v31.2s, v31.2d
 sqxtn v31.4h, v31.4s
 sqxtn v31.8b, v31.8h
 sqxtn2 v0.16b, v0.8h
 sqxtn2 v0.4s, v0.2d
 sqxtn2 v0.8h, v0.4s
-sqxtn2 v14.16b, v14.8h
-sqxtn2 v14.4s, v3.2d
-sqxtn2 v21.8h, v22.4s
+sqxtn2 v21.16b, v22.8h
 sqxtn2 v31.16b, v31.8h
 sqxtn2 v31.4s, v31.2d
 sqxtn2 v31.8h, v31.4s
+sqxtn2 v6.4s, v20.2d
+sqxtn2 v9.8h, v19.4s
 sqxtun b0, h0
-sqxtun b15, h3
+sqxtun b29, h22
 sqxtun b31, h31
 sqxtun h0, s0
-sqxtun h24, s23
+sqxtun h1, s17
 sqxtun h31, s31
 sqxtun s0, d0
-sqxtun s29, d22
+sqxtun s21, d23
 sqxtun s31, d31
 sqxtun v0.2s, v0.2d
 sqxtun v0.4h, v0.4s
 sqxtun v0.8b, v0.8h
-sqxtun v1.2s, v17.2d
-sqxtun v21.4h, v23.4s
+sqxtun v1.4h, v6.4s
+sqxtun v19.8b, v13.8h
 sqxtun v31.2s, v31.2d
 sqxtun v31.4h, v31.4s
 sqxtun v31.8b, v31.8h
-sqxtun v5.8b, v12.8h
+sqxtun v5.2s, v12.2d
 sqxtun2 v0.16b, v0.8h
 sqxtun2 v0.4s, v0.2d
 sqxtun2 v0.8h, v0.4s
-sqxtun2 v1.16b, v6.8h
-sqxtun2 v17.8h, v31.4s
-sqxtun2 v19.4s, v13.2d
+sqxtun2 v17.16b, v31.8h
+sqxtun2 v17.8h, v2.4s
+sqxtun2 v19.4s, v30.2d
 sqxtun2 v31.16b, v31.8h
 sqxtun2 v31.4s, v31.2d
 sqxtun2 v31.8h, v31.4s
@@ -6106,35 +6106,34 @@ srhadd v0.4h, v0.4h, v0.4h
 srhadd v0.4s, v0.4s, v0.4s
 srhadd v0.8b, v0.8b, v0.8b
 srhadd v0.8h, v0.8h, v0.8h
-srhadd v10.2s, v8.2s, v22.2s
-srhadd v17.8b, v9.8b, v2.8b
-srhadd v23.4s, v30.4s, v6.4s
-srhadd v3.8h, v8.8h, v15.8h
+srhadd v17.4h, v9.4h, v2.4h
+srhadd v22.8b, v17.8b, v8.8b
+srhadd v23.2s, v30.2s, v6.2s
+srhadd v3.4s, v8.4s, v15.4s
 srhadd v31.16b, v31.16b, v31.16b
 srhadd v31.2s, v31.2s, v31.2s
 srhadd v31.4h, v31.4h, v31.4h
 srhadd v31.4s, v31.4s, v31.4s
 srhadd v31.8b, v31.8b, v31.8b
 srhadd v31.8h, v31.8h, v31.8h
-srhadd v4.4h, v9.4h, v20.4h
-srhadd v5.16b, v30.16b, v28.16b
+srhadd v4.16b, v9.16b, v20.16b
+srhadd v7.8h, v2.8h, v2.8h
 sri d0, d0, #1
-sri d1, d4, #61
+sri d13, d22, #6
 sri d31, d31, #64
 sri v0.16b, v0.16b, #1
 sri v0.2d, v0.2d, #1
 sri v0.2s, v0.2s, #1
 sri v0.4h, v0.4h, #1
 sri v0.4s, v0.4s, #1
+sri v0.4s, v1.4s, #12
 sri v0.8b, v0.8b, #1
 sri v0.8h, v0.8h, #1
-sri v0.8h, v1.8h, #6
-sri v10.4h, v19.4h, #16
-sri v13.2d, v22.2d, #6
-sri v22.16b, v20.16b, #1
-sri v24.4s, v30.4s, #10
-sri v25.8b, v30.8b, #1
-sri v26.2s, v8.2s, #21
+sri v10.2d, v19.2d, #62
+sri v24.2s, v30.2s, #10
+sri v25.4h, v30.4h, #1
+sri v26.16b, v8.16b, #6
+sri v28.8h, v19.8h, #13
 sri v31.16b, v31.16b, #8
 sri v31.2d, v31.2d, #64
 sri v31.2s, v31.2s, #32
@@ -6142,8 +6141,9 @@ sri v31.4h, v31.4h, #16
 sri v31.4s, v31.4s, #32
 sri v31.8b, v31.8b, #8
 sri v31.8h, v31.8h, #16
+sri v7.8b, v12.8b, #2
 srshl d0, d0, d0
-srshl d2, d10, d22
+srshl d29, d24, d12
 srshl d31, d31, d31
 srshl v0.16b, v0.16b, v0.16b
 srshl v0.2d, v0.2d, v0.2d
@@ -6152,12 +6152,11 @@ srshl v0.4h, v0.4h, v0.4h
 srshl v0.4s, v0.4s, v0.4s
 srshl v0.8b, v0.8b, v0.8b
 srshl v0.8h, v0.8h, v0.8h
-srshl v10.16b, v27.16b, v18.16b
-srshl v16.4h, v19.4h, v28.4h
-srshl v21.2s, v24.2s, v7.2s
-srshl v21.4s, v0.4s, v14.4s
-srshl v22.8h, v14.8h, v18.8h
-srshl v29.2d, v24.2d, v12.2d
+srshl v16.2d, v19.2d, v28.2d
+srshl v21.16b, v24.16b, v7.16b
+srshl v21.2s, v0.2s, v14.2s
+srshl v21.8b, v29.8b, v31.8b
+srshl v22.4s, v14.4s, v18.4s
 srshl v31.16b, v31.16b, v31.16b
 srshl v31.2d, v31.2d, v31.2d
 srshl v31.2s, v31.2s, v31.2s
@@ -6165,9 +6164,10 @@ srshl v31.4h, v31.4h, v31.4h
 srshl v31.4s, v31.4s, v31.4s
 srshl v31.8b, v31.8b, v31.8b
 srshl v31.8h, v31.8h, v31.8h
-srshl v6.8b, v24.8b, v4.8b
+srshl v6.4h, v24.4h, v4.4h
+srshl v8.8h, v15.8h, v3.8h
 srshr d0, d0, #1
-srshr d3, d20, #51
+srshr d27, d22, #52
 srshr d31, d31, #64
 srshr v0.16b, v0.16b, #1
 srshr v0.2d, v0.2d, #1
@@ -6176,12 +6176,11 @@ srshr v0.4h, v0.4h, #1
 srshr v0.4s, v0.4s, #1
 srshr v0.8b, v0.8b, #1
 srshr v0.8h, v0.8h, #1
-srshr v16.2s, v0.2s, #25
-srshr v16.4s, v4.4s, #10
-srshr v17.16b, v11.16b, #2
-srshr v20.8h, v23.8h, #4
-srshr v27.2d, v22.2d, #52
-srshr v30.4h, v17.4h, #14
+srshr v16.16b, v0.16b, #7
+srshr v16.2s, v4.2s, #10
+srshr v2.8b, v28.8b, #1
+srshr v20.4s, v23.4s, #8
+srshr v30.2d, v17.2d, #54
 srshr v31.16b, v31.16b, #8
 srshr v31.2d, v31.2d, #64
 srshr v31.2s, v31.2s, #32
@@ -6189,9 +6188,10 @@ srshr v31.4h, v31.4h, #16
 srshr v31.4s, v31.4s, #32
 srshr v31.8b, v31.8b, #8
 srshr v31.8h, v31.8h, #16
-srshr v4.8b, v13.8b, #7
+srshr v4.4h, v13.4h, #14
+srshr v4.8h, v25.8h, #7
 srsra d0, d0, #1
-srsra d26, d12, #25
+srsra d20, d15, #53
 srsra d31, d31, #64
 srsra v0.16b, v0.16b, #1
 srsra v0.2d, v0.2d, #1
@@ -6200,11 +6200,11 @@ srsra v0.4h, v0.4h, #1
 srsra v0.4s, v0.4s, #1
 srsra v0.8b, v0.8b, #1
 srsra v0.8h, v0.8h, #1
-srsra v1.16b, v6.16b, #1
-srsra v1.8b, v6.8b, #3
-srsra v13.2s, v23.2s, #20
-srsra v18.8h, v14.8h, #10
-srsra v20.2d, v15.2d, #53
+srsra v1.4h, v6.4h, #6
+srsra v11.8h, v31.8h, #16
+srsra v13.16b, v23.16b, #5
+srsra v18.4s, v14.4s, #20
+srsra v30.8b, v19.8b, #8
 srsra v31.16b, v31.16b, #8
 srsra v31.2d, v31.2d, #64
 srsra v31.2s, v31.2s, #32
@@ -6212,11 +6212,11 @@ srsra v31.4h, v31.4h, #16
 srsra v31.4s, v31.4s, #32
 srsra v31.8b, v31.8b, #8
 srsra v31.8h, v31.8h, #16
-srsra v8.4h, v21.4h, #13
-srsra v9.4s, v16.4s, #12
+srsra v8.2d, v21.2d, #52
+srsra v9.2s, v16.2s, #12
 sshl d0, d0, d0
+sshl d27, d12, d6
 sshl d31, d31, d31
-sshl d9, d25, d22
 sshl v0.16b, v0.16b, v0.16b
 sshl v0.2d, v0.2d, v0.2d
 sshl v0.2s, v0.2s, v0.2s
@@ -6224,12 +6224,12 @@ sshl v0.4h, v0.4h, v0.4h
 sshl v0.4s, v0.4s, v0.4s
 sshl v0.8b, v0.8b, v0.8b
 sshl v0.8h, v0.8h, v0.8h
-sshl v10.4s, v14.4s, v8.4s
-sshl v11.4h, v18.4h, v31.4h
-sshl v20.8h, v1.8h, v1.8h
-sshl v27.2d, v12.2d, v6.2d
-sshl v27.8b, v29.8b, v16.8b
-sshl v30.16b, v13.16b, v30.16b
+sshl v10.2s, v14.2s, v8.2s
+sshl v11.2d, v18.2d, v31.2d
+sshl v11.8b, v19.8b, v25.8b
+sshl v20.4s, v1.4s, v1.4s
+sshl v27.4h, v29.4h, v16.4h
+sshl v29.8h, v2.8h, v31.8h
 sshl v31.16b, v31.16b, v31.16b
 sshl v31.2d, v31.2d, v31.2d
 sshl v31.2s, v31.2s, v31.2s
@@ -6237,27 +6237,27 @@ sshl v31.4h, v31.4h, v31.4h
 sshl v31.4s, v31.4s, v31.4s
 sshl v31.8b, v31.8b, v31.8b
 sshl v31.8h, v31.8h, v31.8h
-sshl v7.2s, v11.2s, v2.2s
+sshl v7.16b, v11.16b, v2.16b
 sshll v0.2d, v0.2s, #0
 sshll v0.4s, v0.4h, #0
 sshll v0.8h, v0.8b, #0
-sshll v11.2d, v19.2s, #25
-sshll v25.8h, v29.8b, #0
-sshll v29.4s, v2.4h, #15
+sshll v0.8h, v2.8b, #0
+sshll v25.2d, v29.2s, #0
+sshll v29.4s, v5.4h, #2
 sshll v31.2d, v31.2s, #31
 sshll v31.4s, v31.4h, #15
 sshll v31.8h, v31.8b, #7
 sshll2 v0.2d, v0.4s, #0
 sshll2 v0.4s, v0.8h, #0
-sshll2 v0.4s, v2.8h, #1
 sshll2 v0.8h, v0.16b, #0
-sshll2 v13.8h, v20.16b, #7
-sshll2 v29.2d, v5.4s, #4
+sshll2 v13.2d, v20.4s, #31
+sshll2 v14.4s, v12.8h, #11
+sshll2 v21.8h, v13.16b, #1
 sshll2 v31.2d, v31.4s, #31
 sshll2 v31.4s, v31.8h, #15
 sshll2 v31.8h, v31.16b, #7
 sshr d0, d0, #1
-sshr d12, d0, #27
+sshr d19, d20, #57
 sshr d31, d31, #64
 sshr v0.16b, v0.16b, #1
 sshr v0.2d, v0.2d, #1
@@ -6266,12 +6266,12 @@ sshr v0.4h, v0.4h, #1
 sshr v0.4s, v0.4s, #1
 sshr v0.8b, v0.8b, #1
 sshr v0.8h, v0.8h, #1
-sshr v12.2s, v21.2s, #24
-sshr v19.2d, v20.2d, #57
-sshr v20.8b, v28.8b, #4
-sshr v23.4s, v18.4s, #8
-sshr v27.16b, v27.16b, #4
-sshr v3.8h, v31.8h, #10
+sshr v12.16b, v21.16b, #6
+sshr v12.8h, v29.8h, #5
+sshr v20.4h, v28.4h, #7
+sshr v23.2s, v18.2s, #8
+sshr v3.4s, v31.4s, #20
+sshr v30.8b, v9.8b, #5
 sshr v31.16b, v31.16b, #8
 sshr v31.2d, v31.2d, #64
 sshr v31.2s, v31.2s, #32
@@ -6279,9 +6279,9 @@ sshr v31.4h, v31.4h, #16
 sshr v31.4s, v31.4s, #32
 sshr v31.8b, v31.8b, #8
 sshr v31.8h, v31.8h, #16
-sshr v8.4h, v7.4h, #7
+sshr v8.2d, v7.2d, #26
 ssra d0, d0, #1
-ssra d30, d9, #40
+ssra d28, d23, #55
 ssra d31, d31, #64
 ssra v0.16b, v0.16b, #1
 ssra v0.2d, v0.2d, #1
@@ -6290,12 +6290,12 @@ ssra v0.4h, v0.4h, #1
 ssra v0.4s, v0.4s, #1
 ssra v0.8b, v0.8b, #1
 ssra v0.8h, v0.8h, #1
-ssra v10.4h, v30.4h, #8
-ssra v12.16b, v29.16b, #3
-ssra v12.4s, v14.4s, #2
-ssra v2.8h, v2.8h, #7
-ssra v28.2d, v23.2d, #55
-ssra v28.8b, v31.8b, #1
+ssra v10.2d, v30.2d, #31
+ssra v12.2s, v14.2s, #2
+ssra v15.8h, v14.8h, #11
+ssra v16.8b, v17.8b, #4
+ssra v2.4s, v2.4s, #14
+ssra v28.4h, v31.4h, #1
 ssra v31.16b, v31.16b, #8
 ssra v31.2d, v31.2d, #64
 ssra v31.2s, v31.2s, #32
@@ -6303,40 +6303,40 @@ ssra v31.4h, v31.4h, #16
 ssra v31.4s, v31.4s, #32
 ssra v31.8b, v31.8b, #8
 ssra v31.8h, v31.8h, #16
-ssra v7.2s, v8.2s, #21
+ssra v7.16b, v8.16b, #6
 ssubl v0.2d, v0.2s, v0.2s
 ssubl v0.4s, v0.4h, v0.4h
 ssubl v0.8h, v0.8b, v0.8b
-ssubl v14.8h, v30.8b, v17.8b
-ssubl v26.2d, v8.2s, v1.2s
-ssubl v28.4s, v0.4h, v0.4h
+ssubl v14.2d, v30.2s, v17.2s
+ssubl v22.8h, v10.8b, v30.8b
+ssubl v25.4s, v26.4h, v6.4h
 ssubl v31.2d, v31.2s, v31.2s
 ssubl v31.4s, v31.4h, v31.4h
 ssubl v31.8h, v31.8b, v31.8b
 ssubl2 v0.2d, v0.4s, v0.4s
 ssubl2 v0.4s, v0.8h, v0.8h
 ssubl2 v0.8h, v0.16b, v0.16b
-ssubl2 v22.4s, v10.8h, v30.8h
-ssubl2 v23.8h, v17.16b, v4.16b
-ssubl2 v25.2d, v26.4s, v6.4s
+ssubl2 v11.8h, v20.16b, v27.16b
+ssubl2 v23.2d, v17.4s, v4.4s
+ssubl2 v25.4s, v21.8h, v29.8h
 ssubl2 v31.2d, v31.4s, v31.4s
 ssubl2 v31.4s, v31.8h, v31.8h
 ssubl2 v31.8h, v31.16b, v31.16b
 ssubw v0.2d, v0.2d, v0.2s
 ssubw v0.4s, v0.4s, v0.4h
+ssubw v0.4s, v5.4s, v14.4h
 ssubw v0.8h, v0.8h, v0.8b
-ssubw v14.4s, v30.4s, v25.4h
-ssubw v17.2d, v8.2d, v11.2s
+ssubw v19.8h, v8.8h, v10.8b
 ssubw v31.2d, v31.2d, v31.2s
 ssubw v31.4s, v31.4s, v31.4h
 ssubw v31.8h, v31.8h, v31.8b
-ssubw v4.8h, v8.8h, v0.8b
+ssubw v4.2d, v8.2d, v0.2s
 ssubw2 v0.2d, v0.2d, v0.4s
-ssubw2 v0.2d, v5.2d, v14.4s
 ssubw2 v0.4s, v0.4s, v0.8h
 ssubw2 v0.8h, v0.8h, v0.16b
-ssubw2 v19.4s, v8.4s, v10.8h
-ssubw2 v29.8h, v10.8h, v3.16b
+ssubw2 v20.8h, v4.8h, v30.16b
+ssubw2 v29.2d, v10.2d, v3.4s
+ssubw2 v29.4s, v16.4s, v4.8h
 ssubw2 v31.2d, v31.2d, v31.4s
 ssubw2 v31.4s, v31.4s, v31.8h
 ssubw2 v31.8h, v31.8h, v31.16b
@@ -6355,27 +6355,27 @@ st1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0], x0
 st1 { v0.1d }, [x0]
 st1 { v0.1d }, [x0], #8
 st1 { v0.1d }, [x0], x0
+st1 { v0.1d }, [x25], x0
 st1 { v0.1d, v1.1d }, [x0]
 st1 { v0.1d, v1.1d }, [x0], #16
 st1 { v0.1d, v1.1d }, [x0], x0
 st1 { v0.1d, v1.1d, v2.1d }, [x0]
 st1 { v0.1d, v1.1d, v2.1d }, [x0], #24
 st1 { v0.1d, v1.1d, v2.1d }, [x0], x0
+st1 { v0.1d, v1.1d, v2.1d }, [x10], x5
+st1 { v0.1d, v1.1d, v2.1d }, [x1], #24
 st1 { v0.1d, v1.1d, v2.1d, v3.1d }, [x0]
 st1 { v0.1d, v1.1d, v2.1d, v3.1d }, [x0], #32
 st1 { v0.1d, v1.1d, v2.1d, v3.1d }, [x0], x0
 st1 { v0.2d }, [x0]
 st1 { v0.2d }, [x0], #16
 st1 { v0.2d }, [x0], x0
-st1 { v0.2d }, [x25]
 st1 { v0.2d, v1.2d }, [x0]
 st1 { v0.2d, v1.2d }, [x0], #32
 st1 { v0.2d, v1.2d }, [x0], x0
 st1 { v0.2d, v1.2d, v2.2d }, [x0]
 st1 { v0.2d, v1.2d, v2.2d }, [x0], #48
 st1 { v0.2d, v1.2d, v2.2d }, [x0], x0
-st1 { v0.2d, v1.2d, v2.2d }, [x10]
-st1 { v0.2d, v1.2d, v2.2d }, [x1], x23
 st1 { v0.2d, v1.2d, v2.2d, v3.2d }, [x0]
 st1 { v0.2d, v1.2d, v2.2d, v3.2d }, [x0], #64
 st1 { v0.2d, v1.2d, v2.2d, v3.2d }, [x0], x0
@@ -6451,95 +6451,95 @@ st1 { v0.h }[0], [x0], x0
 st1 { v0.s }[0], [x0]
 st1 { v0.s }[0], [x0], #4
 st1 { v0.s }[0], [x0], x0
-st1 { v1.16b }, [x26]
-st1 { v1.4h, v2.4h, v3.4h }, [x11], #24
-st1 { v1.8h }, [x5], x24
-st1 { v10.16b }, [x21], #16
-st1 { v10.1d, v11.1d, v12.1d }, [x13], x25
-st1 { v10.2s, v11.2s, v12.2s }, [x7]
-st1 { v10.8b, v11.8b, v12.8b, v13.8b }, [x28], #32
-st1 { v10.8h, v11.8h, v12.8h }, [x30], x11
-st1 { v10.s }[0], [x15]
-st1 { v11.4s }, [x10], x13
-st1 { v11.h }[7], [x19]
-st1 { v12.8h, v13.8h }, [x21], #32
-st1 { v13.1d }, [x8]
-st1 { v14.4h }, [x4], #8
-st1 { v14.4s, v15.4s }, [x14], #32
-st1 { v14.8b }, [x19], #8
-st1 { v15.2s, v16.2s, v17.2s, v18.2s }, [x14]
-st1 { v15.8h, v16.8h, v17.8h, v18.8h }, [x13], #64
-st1 { v16.16b, v17.16b, v18.16b }, [x3], x26
-st1 { v16.8h, v17.8h, v18.8h, v19.8h }, [x7]
-st1 { v16.d }[0], [x0], #8
-st1 { v16.h }[6], [x12], #2
-st1 { v16.s }[3], [x26], x3
-st1 { v17.16b, v18.16b, v19.16b, v20.16b }, [x2], x13
-st1 { v17.4h, v18.4h, v19.4h, v20.4h }, [x23], #32
-st1 { v17.8h, v18.8h, v19.8h }, [x0], #48
-st1 { v17.b }[14], [x5]
-st1 { v18.1d }, [x22], #8
-st1 { v18.2d, v19.2d }, [x1], x9
-st1 { v18.2s }, [x11], #8
-st1 { v19.1d }, [x18], x30
-st1 { v19.1d, v20.1d, v21.1d, v22.1d }, [x11]
-st1 { v19.1d, v20.1d, v21.1d, v22.1d }, [x25], #32
-st1 { v19.4h, v20.4h }, [x27], #16
-st1 { v19.4s, v20.4s, v21.4s }, [x15], x12
-st1 { v19.8h, v20.8h, v21.8h, v22.8h }, [x9], x24
-st1 { v20.2s, v21.2s, v22.2s }, [x4], #24
-st1 { v20.4s, v21.4s, v22.4s, v23.4s }, [x10], #64
-st1 { v21.16b, v22.16b, v23.16b }, [x13], #48
-st1 { v21.16b, v22.16b, v23.16b, v24.16b }, [x15]
-st1 { v21.1d, v22.1d }, [x2], #16
-st1 { v21.2d, v22.2d }, [x25], #32
-st1 { v21.8h, v22.8h }, [x17], x20
-st1 { v21.h }[6], [x21], x17
-st1 { v22.2d, v23.2d, v24.2d, v25.2d }, [x14]
-st1 { v23.2d }, [x19], #16
-st1 { v23.2d, v24.2d, v25.2d, v26.2d }, [x2], x1
-st1 { v23.4s, v24.4s }, [x8]
-st1 { v24.2s, v25.2s }, [x9]
-st1 { v24.4h, v25.4h }, [x20]
-st1 { v24.8b, v25.8b, v26.8b }, [x27], x11
-st1 { v25.4s, v26.4s, v27.4s, v28.4s }, [x21]
-st1 { v25.8b, v26.8b, v27.8b }, [x12]
-st1 { v25.d }[1], [x10]
-st1 { v26.16b, v27.16b, v28.16b }, [x6]
-st1 { v26.2s, v27.2s, v28.2s, v29.2s }, [x2], x24
-st1 { v26.4h }, [x16]
-st1 { v26.4h, v27.4h }, [x7], x21
-st1 { v26.b }[6], [x24], #1
-st1 { v27.16b, v28.16b }, [x19], x13
-st1 { v27.16b, v28.16b }, [x1]
-st1 { v27.2d, v28.2d, v29.2d, v30.2d }, [x0], #64
-st1 { v27.4h, v28.4h, v29.4h }, [x29]
+st1 { v1.4h, v2.4h, v3.4h }, [x11]
+st1 { v1.8b }, [x5], #8
+st1 { v10.16b }, [x21]
+st1 { v10.16b, v11.16b, v12.16b }, [x13], #48
+st1 { v10.2d, v11.2d, v12.2d }, [x7], x24
+st1 { v10.8b, v11.8b, v12.8b }, [x30], #24
+st1 { v10.8b, v11.8b, v12.8b, v13.8b }, [x28]
+st1 { v10.h }[1], [x15], x2
+st1 { v11.4h }, [x10], #8
+st1 { v11.d }[1], [x19], xzr
+st1 { v12.8h, v13.8h }, [x21]
+st1 { v13.16b }, [x8], x16
+st1 { v14.4h }, [x4]
+st1 { v14.4s, v15.4s }, [x14]
+st1 { v14.8b }, [x19]
+st1 { v15.2d, v16.2d, v17.2d, v18.2d }, [x14], x17
+st1 { v15.8h, v16.8h, v17.8h, v18.8h }, [x13]
+st1 { v16.8b, v17.8b, v18.8b, v19.8b }, [x7], x26
+st1 { v16.8h, v17.8h }, [x3], #32
+st1 { v16.d }[0], [x0]
+st1 { v16.h }[6], [x12]
+st1 { v16.h }[7], [x26], #2
+st1 { v17.4h, v18.4h, v19.4h, v20.4h }, [x23]
+st1 { v17.8h, v18.8h, v19.8h }, [x0]
+st1 { v17.8h, v18.8h, v19.8h }, [x2], #48
+st1 { v17.8h, v18.8h, v19.8h, v20.8h }, [x29], x5
+st1 { v18.1d }, [x22]
+st1 { v18.1d, v19.1d }, [x1], #16
+st1 { v18.2s }, [x11]
+st1 { v19.16b }, [x18], #16
+st1 { v19.16b, v20.16b, v21.16b, v22.16b }, [x11], x13
+st1 { v19.1d, v20.1d, v21.1d, v22.1d }, [x25]
+st1 { v19.4h, v20.4h }, [x27]
+st1 { v19.4h, v20.4h, v21.4h }, [x15], #24
+st1 { v19.8b, v20.8b, v21.8b, v22.8b }, [x9], #32
+st1 { v20.2s, v21.2s, v22.2s }, [x4]
+st1 { v20.4s, v21.4s, v22.4s, v23.4s }, [x10]
+st1 { v21.16b, v22.16b, v23.16b }, [x13]
+st1 { v21.1d, v22.1d }, [x2]
+st1 { v21.2d, v22.2d }, [x25]
+st1 { v21.8b, v22.8b }, [x17], #16
+st1 { v21.8h, v22.8h, v23.8h }, [x15], x30
+st1 { v21.d }[1], [x21], #8
+st1 { v22.1d, v23.1d, v24.1d, v25.1d }, [x14], x29
+st1 { v23.1d, v24.1d, v25.1d, v26.1d }, [x2], #32
+st1 { v23.2d }, [x19]
+st1 { v23.4h, v24.4h }, [x8], x18
+st1 { v24.2d, v25.2d }, [x9], x29
+st1 { v24.2s, v25.2s }, [x20], x1
+st1 { v24.4s, v25.4s, v26.4s }, [x27], #48
+st1 { v25.4h, v26.4h, v27.4h, v28.4h }, [x21], x16
+st1 { v25.4s, v26.4s, v27.4s }, [x12], x20
+st1 { v25.b }[10], [x10], x7
+st1 { v26.2d, v27.2d, v28.2d, v29.2d }, [x2], #64
+st1 { v26.2s }, [x16], x14
+st1 { v26.2s, v27.2s }, [x7], #16
+st1 { v26.8h, v27.8h }, [x6], x24
+st1 { v26.b }[6], [x24]
+st1 { v27.2d, v28.2d, v29.2d, v30.2d }, [x0]
+st1 { v27.2s, v28.2s, v29.2s }, [x29], x17
+st1 { v27.8h }, [x19]
 st1 { v27.8h }, [x19], #16
-st1 { v28.1d, v29.1d, v30.1d, v31.1d }, [x1], x2
-st1 { v28.2d, v29.2d, v30.2d }, [x1], #48
-st1 { v28.8b, v29.8b, v30.8b }, [x18], #24
-st1 { v28.s }[2], [x24], #4
-st1 { v29.16b, v30.16b }, [x20], #32
-st1 { v29.2d, v30.2d }, [x2]
-st1 { v29.2s, v30.2s }, [x26], x5
-st1 { v29.4h, v30.4h, v31.4h, v0.4h }, [x30], x3
-st1 { v29.4s }, [x20]
-st1 { v29.4s, v30.4s, v31.4s }, [x0]
-st1 { v29.d }[0], [x16], x26
-st1 { v3.16b, v4.16b, v5.16b, v6.16b }, [x2], #64
-st1 { v3.1d, v4.1d, v5.1d }, [x24]
-st1 { v3.2d }, [x15], x5
-st1 { v3.2s }, [x23], x6
-st1 { v3.2s }, [x2]
-st1 { v3.4h, v4.4h, v5.4h, v6.4h }, [x7]
-st1 { v3.4s, v4.4s, v5.4s, v6.4s }, [x5], x6
-st1 { v30.1d, v31.1d }, [x3], x18
-st1 { v30.8h }, [x18]
-st1 { v30.8h, v31.8h, v0.8h }, [x10]
+st1 { v27.8h }, [x1], x2
+st1 { v27.s }[1], [x0], #4
+st1 { v28.16b, v29.16b, v30.16b, v31.16b }, [x1], #64
+st1 { v28.2d, v29.2d, v30.2d }, [x1]
+st1 { v28.8b, v29.8b, v30.8b }, [x18]
+st1 { v28.s }[2], [x24]
+st1 { v29.16b, v30.16b }, [x20]
+st1 { v29.1d, v30.1d }, [x2], x16
+st1 { v29.2d, v30.2d }, [x26], #32
+st1 { v29.2s, v30.2s, v31.2s, v0.2s }, [x30], #32
+st1 { v29.4h }, [x20], x23
+st1 { v29.4h, v30.4h, v31.4h }, [x0], xzr
+st1 { v29.b }[2], [x16], #1
+st1 { v3.16b, v4.16b, v5.16b }, [x24], x0
+st1 { v3.16b, v4.16b, v5.16b, v6.16b }, [x2]
+st1 { v3.1d }, [x15], #8
+st1 { v3.2d }, [x23], #16
+st1 { v3.2d }, [x2], x25
+st1 { v3.2s, v4.2s, v5.2s, v6.2s }, [x7], x22
+st1 { v3.4h, v4.4h, v5.4h, v6.4h }, [x5], #32
+st1 { v30.16b, v31.16b }, [x3], #32
+st1 { v30.8b }, [x18], x6
+st1 { v30.8b, v31.8b, v0.8b }, [x10], x16
+st1 { v30.s }[2], [x9], x11
 st1 { v31.16b }, [sp]
 st1 { v31.16b }, [sp], #16
 st1 { v31.16b }, [sp], xzr
-st1 { v31.16b }, [x16], x14
 st1 { v31.16b, v0.16b }, [sp]
 st1 { v31.16b, v0.16b }, [sp], #32
 st1 { v31.16b, v0.16b }, [sp], xzr
@@ -6570,6 +6570,7 @@ st1 { v31.2d, v0.2d }, [sp], xzr
 st1 { v31.2d, v0.2d, v1.2d }, [sp]
 st1 { v31.2d, v0.2d, v1.2d }, [sp], #48
 st1 { v31.2d, v0.2d, v1.2d }, [sp], xzr
+st1 { v31.2d, v0.2d, v1.2d }, [x23], #48
 st1 { v31.2d, v0.2d, v1.2d, v2.2d }, [sp]
 st1 { v31.2d, v0.2d, v1.2d, v2.2d }, [sp], #64
 st1 { v31.2d, v0.2d, v1.2d, v2.2d }, [sp], xzr
@@ -6579,11 +6580,10 @@ st1 { v31.2s }, [sp], xzr
 st1 { v31.2s, v0.2s }, [sp]
 st1 { v31.2s, v0.2s }, [sp], #16
 st1 { v31.2s, v0.2s }, [sp], xzr
-st1 { v31.2s, v0.2s }, [x27], #16
+st1 { v31.2s, v0.2s }, [x27]
 st1 { v31.2s, v0.2s, v1.2s }, [sp]
 st1 { v31.2s, v0.2s, v1.2s }, [sp], #24
 st1 { v31.2s, v0.2s, v1.2s }, [sp], xzr
-st1 { v31.2s, v0.2s, v1.2s }, [x23], x27
 st1 { v31.2s, v0.2s, v1.2s, v2.2s }, [sp]
 st1 { v31.2s, v0.2s, v1.2s, v2.2s }, [sp], #32
 st1 { v31.2s, v0.2s, v1.2s, v2.2s }, [sp], xzr
@@ -6602,7 +6602,8 @@ st1 { v31.4h, v0.4h, v1.4h, v2.4h }, [sp], xzr
 st1 { v31.4s }, [sp]
 st1 { v31.4s }, [sp], #16
 st1 { v31.4s }, [sp], xzr
-st1 { v31.4s }, [x19], #16
+st1 { v31.4s }, [x19]
+st1 { v31.4s }, [x25], #16
 st1 { v31.4s, v0.4s }, [sp]
 st1 { v31.4s, v0.4s }, [sp], #32
 st1 { v31.4s, v0.4s }, [sp], xzr
@@ -6615,7 +6616,6 @@ st1 { v31.4s, v0.4s, v1.4s, v2.4s }, [sp], xzr
 st1 { v31.8b }, [sp]
 st1 { v31.8b }, [sp], #8
 st1 { v31.8b }, [sp], xzr
-st1 { v31.8b }, [x25], x0
 st1 { v31.8b, v0.8b }, [sp]
 st1 { v31.8b, v0.8b }, [sp], #16
 st1 { v31.8b, v0.8b }, [sp], xzr
@@ -6637,10 +6637,10 @@ st1 { v31.8h, v0.8h, v1.8h }, [sp], xzr
 st1 { v31.8h, v0.8h, v1.8h, v2.8h }, [sp]
 st1 { v31.8h, v0.8h, v1.8h, v2.8h }, [sp], #64
 st1 { v31.8h, v0.8h, v1.8h, v2.8h }, [sp], xzr
+st1 { v31.8h, v0.8h, v1.8h, v2.8h }, [x14], #64
 st1 { v31.b }[15], [sp]
 st1 { v31.b }[15], [sp], #1
 st1 { v31.b }[15], [sp], xzr
-st1 { v31.b }[7], [x30], x16
 st1 { v31.d }[1], [sp]
 st1 { v31.d }[1], [sp], #8
 st1 { v31.d }[1], [sp], xzr
@@ -6650,20 +6650,20 @@ st1 { v31.h }[7], [sp], xzr
 st1 { v31.s }[3], [sp]
 st1 { v31.s }[3], [sp], #4
 st1 { v31.s }[3], [sp], xzr
-st1 { v4.2s, v5.2s, v6.2s, v7.2s }, [x12], #32
-st1 { v4.4s, v5.4s }, [x7], x29
-st1 { v4.4s, v5.4s, v6.4s }, [x4], #48
-st1 { v4.8b, v5.8b, v6.8b, v7.8b }, [x22], x5
-st1 { v5.8b, v6.8b }, [x22]
-st1 { v5.8b, v6.8b, v7.8b, v8.8b }, [x28]
-st1 { v6.1d, v7.1d, v8.1d }, [x17], #24
-st1 { v7.4h, v8.4h, v9.4h }, [x27], x19
-st1 { v7.8b }, [x3]
-st1 { v8.4h }, [x24], x13
-st1 { v8.8b, v9.8b }, [x12], x29
-st1 { v8.8h, v9.8h }, [x29]
-st1 { v9.1d, v10.1d }, [x22]
-st1 { v9.8b, v10.8b }, [x15], #16
+st1 { v4.2s, v5.2s, v6.2s, v7.2s }, [x12]
+st1 { v4.4h, v5.4h }, [x7], #16
+st1 { v4.4s, v5.4s, v6.4s }, [x4]
+st1 { v4.4s, v5.4s, v6.4s, v7.4s }, [x22], #64
+st1 { v5.4s, v6.4s }, [x22], x29
+st1 { v5.4s, v6.4s, v7.4s, v8.4s }, [x28], xzr
+st1 { v6.1d, v7.1d, v8.1d }, [x17]
+st1 { v7.2s, v8.2s, v9.2s }, [x27], #24
+st1 { v7.4s }, [x3], x4
+st1 { v8.2s }, [x24], #8
+st1 { v8.4s, v9.4s }, [x12], #32
+st1 { v8.8b, v9.8b }, [x29], x11
+st1 { v9.16b, v10.16b }, [x22], x28
+st1 { v9.8b, v10.8b }, [x15]
 st2 { v0.16b, v1.16b }, [x0]
 st2 { v0.16b, v1.16b }, [x0], #32
 st2 { v0.16b, v1.16b }, [x0], x0
@@ -6697,44 +6697,44 @@ st2 { v0.h, v1.h }[0], [x0], x0
 st2 { v0.s, v1.s }[0], [x0]
 st2 { v0.s, v1.s }[0], [x0], #8
 st2 { v0.s, v1.s }[0], [x0], x0
-st2 { v1.8h, v2.8h }, [x30], #32
-st2 { v10.8b, v11.8b }, [x14]
-st2 { v12.d, v13.d }[0], [x6], x10
-st2 { v14.h, v15.h }[4], [x21]
-st2 { v15.4s, v16.4s }, [x28], x25
-st2 { v16.2s, v17.2s }, [x7], x15
-st2 { v16.4h, v17.4h }, [x19], x1
-st2 { v16.d, v17.d }[0], [x16]
-st2 { v17.4s, v18.4s }, [x3]
-st2 { v17.h, v18.h }[3], [x23], x3
-st2 { v18.h, v19.h }[4], [x11], #4
-st2 { v20.4h, v21.4h }, [x0]
-st2 { v20.8h, v21.8h }, [x11], x18
-st2 { v20.b, v21.b }[11], [x5], x14
-st2 { v21.b, v22.b }[2], [x25]
-st2 { v22.2d, v23.2d }, [x10], x3
-st2 { v22.b, v23.b }[15], [sp], #2
-st2 { v22.d, v23.d }[1], [x5], #16
-st2 { v22.s, v23.s }[0], [x1], x3
-st2 { v24.s, v25.s }[2], [x8]
-st2 { v25.2s, v26.2s }, [x6], #16
-st2 { v25.8b, v26.8b }, [x27], #16
-st2 { v26.16b, v27.16b }, [x21]
-st2 { v26.8b, v27.8b }, [x20], x7
-st2 { v28.2d, v29.2d }, [x17]
-st2 { v29.16b, v30.16b }, [x28], #32
-st2 { v29.8h, v30.8h }, [sp]
-st2 { v3.4s, v4.4s }, [x21], #32
+st2 { v1.8h, v2.8h }, [x30]
+st2 { v10.4s, v11.4s }, [x14], x28
+st2 { v12.b, v13.b }[6], [x6], #2
+st2 { v14.d, v15.d }[1], [x21], x29
+st2 { v15.4h, v16.4h }, [x28], #16
+st2 { v15.s, v16.s }[3], [x22], x16
+st2 { v16.2d, v17.2d }, [x7], #32
+st2 { v16.2s, v17.2s }, [x19], #16
+st2 { v16.b, v17.b }[6], [x16], x13
+st2 { v17.4h, v18.4h }, [x3], x14
+st2 { v17.d, v18.d }[0], [x23], #16
+st2 { v18.h, v19.h }[4], [x11]
+st2 { v20.2s, v21.2s }, [x0], x0
+st2 { v20.8b, v21.8b }, [x11], #16
+st2 { v20.8h, v21.8h }, [x22], #32
+st2 { v21.8h, v22.8h }, [x4], x25
+st2 { v22.16b, v23.16b }, [x10], #32
+st2 { v22.b, v23.b }[15], [sp]
+st2 { v22.d, v23.d }[1], [x5]
+st2 { v22.h, v23.h }[1], [x1], #4
+st2 { v24.h, v25.h }[4], [x8], x1
+st2 { v25.2s, v26.2s }, [x6]
+st2 { v25.8b, v26.8b }, [x27]
+st2 { v26.4s, v27.4s }, [x20], #32
+st2 { v28.16b, v29.16b }, [x17], x16
+st2 { v29.16b, v30.16b }, [x28]
+st2 { v29.8b, v30.8b }, [sp], x29
+st2 { v3.4s, v4.4s }, [x21]
 st2 { v31.16b, v0.16b }, [sp]
 st2 { v31.16b, v0.16b }, [sp], #32
 st2 { v31.16b, v0.16b }, [sp], xzr
 st2 { v31.2d, v0.2d }, [sp]
 st2 { v31.2d, v0.2d }, [sp], #32
 st2 { v31.2d, v0.2d }, [sp], xzr
+st2 { v31.2d, v0.2d }, [x25], x11
 st2 { v31.2s, v0.2s }, [sp]
 st2 { v31.2s, v0.2s }, [sp], #16
 st2 { v31.2s, v0.2s }, [sp], xzr
-st2 { v31.2s, v0.2s }, [x25]
 st2 { v31.4h, v0.4h }, [sp]
 st2 { v31.4h, v0.4h }, [sp], #16
 st2 { v31.4h, v0.4h }, [sp], xzr
@@ -6759,10 +6759,10 @@ st2 { v31.h, v0.h }[7], [sp], xzr
 st2 { v31.s, v0.s }[3], [sp]
 st2 { v31.s, v0.s }[3], [sp], #8
 st2 { v31.s, v0.s }[3], [sp], xzr
-st2 { v5.2d, v6.2d }, [sp], #32
-st2 { v7.4h, v8.4h }, [x1], #16
-st2 { v9.16b, v10.16b }, [x28], x10
-st2 { v9.s, v10.s }[0], [x23], #8
+st2 { v5.2d, v6.2d }, [sp]
+st2 { v6.s, v7.s }[1], [x2], #8
+st2 { v7.4h, v8.4h }, [x1]
+st2 { v9.s, v10.s }[0], [x23]
 st3 { v0.16b, v1.16b, v2.16b }, [x0]
 st3 { v0.16b, v1.16b, v2.16b }, [x0], #48
 st3 { v0.16b, v1.16b, v2.16b }, [x0], x0
@@ -6778,7 +6778,7 @@ st3 { v0.4h, v1.4h, v2.4h }, [x0], x0
 st3 { v0.4s, v1.4s, v2.4s }, [x0]
 st3 { v0.4s, v1.4s, v2.4s }, [x0], #48
 st3 { v0.4s, v1.4s, v2.4s }, [x0], x0
-st3 { v0.4s, v1.4s, v2.4s }, [x1], #48
+st3 { v0.4s, v1.4s, v2.4s }, [x1]
 st3 { v0.8b, v1.8b, v2.8b }, [x0]
 st3 { v0.8b, v1.8b, v2.8b }, [x0], #24
 st3 { v0.8b, v1.8b, v2.8b }, [x0], x0
@@ -6791,37 +6791,37 @@ st3 { v0.b, v1.b, v2.b }[0], [x0], x0
 st3 { v0.d, v1.d, v2.d }[0], [x0]
 st3 { v0.d, v1.d, v2.d }[0], [x0], #24
 st3 { v0.d, v1.d, v2.d }[0], [x0], x0
+st3 { v0.d, v1.d, v2.d }[1], [x25], x5
 st3 { v0.h, v1.h, v2.h }[0], [x0]
 st3 { v0.h, v1.h, v2.h }[0], [x0], #6
 st3 { v0.h, v1.h, v2.h }[0], [x0], x0
-st3 { v0.h, v1.h, v2.h }[5], [x25]
 st3 { v0.s, v1.s, v2.s }[0], [x0]
 st3 { v0.s, v1.s, v2.s }[0], [x0], #12
 st3 { v0.s, v1.s, v2.s }[0], [x0], x0
-st3 { v1.d, v2.d, v3.d }[1], [x0], x4
-st3 { v10.16b, v11.16b, v12.16b }, [x12]
-st3 { v13.8b, v14.8b, v15.8b }, [x22]
-st3 { v14.s, v15.s, v16.s }[3], [x12], #12
-st3 { v15.2d, v16.2d, v17.2d }, [x24]
-st3 { v17.b, v18.b, v19.b }[6], [x22], #3
-st3 { v17.h, v18.h, v19.h }[1], [x17], #6
-st3 { v17.s, v18.s, v19.s }[1], [x1]
-st3 { v18.4s, v19.4s, v20.4s }, [x26], x16
-st3 { v19.16b, v20.16b, v21.16b }, [x18], x18
-st3 { v19.8b, v20.8b, v21.8b }, [x13], x2
-st3 { v19.s, v20.s, v21.s }[3], [x19], x29
-st3 { v2.4h, v3.4h, v4.4h }, [x15]
-st3 { v2.8h, v3.8h, v4.8h }, [x15], x6
-st3 { v2.b, v3.b, v4.b }[5], [x12], x12
-st3 { v20.4h, v21.4h, v22.4h }, [x27], #24
-st3 { v20.8h, v21.8h, v22.8h }, [x10]
-st3 { v22.2s, v23.2s, v24.2s }, [x18]
-st3 { v22.4h, v23.4h, v24.4h }, [x30], x15
-st3 { v26.b, v27.b, v28.b }[2], [x9]
-st3 { v27.2s, v28.2s, v29.2s }, [x10], x6
-st3 { v29.2s, v30.2s, v31.2s }, [x6], #24
-st3 { v3.8b, v4.8b, v5.8b }, [x18], #24
-st3 { v30.8h, v31.8h, v0.8h }, [x16], #48
+st3 { v1.b, v2.b, v3.b }[9], [x0], #3
+st3 { v1.s, v2.s, v3.s }[3], [x12], #12
+st3 { v13.4s, v14.4s, v15.4s }, [x22], x29
+st3 { v14.s, v15.s, v16.s }[3], [x12]
+st3 { v15.16b, v16.16b, v17.16b }, [x24], x18
+st3 { v17.b, v18.b, v19.b }[6], [x22]
+st3 { v17.h, v18.h, v19.h }[1], [x17]
+st3 { v17.h, v18.h, v19.h }[2], [x1], x6
+st3 { v17.s, v18.s, v19.s }[0], [x23], x8
+st3 { v18.4h, v19.4h, v20.4h }, [x26], #24
+st3 { v19.4s, v20.4s, v21.4s }, [x13], #48
+st3 { v19.h, v20.h, v21.h }[6], [x19], #6
+st3 { v2.2s, v3.2s, v4.2s }, [x15], x13
+st3 { v2.8b, v3.8b, v4.8b }, [x15], #24
+st3 { v2.8h, v3.8h, v4.8h }, [x10], #48
+st3 { v20.4h, v21.4h, v22.4h }, [x27]
+st3 { v20.8b, v21.8b, v22.8b }, [x10], x18
+st3 { v22.2d, v23.2d, v24.2d }, [x18], x16
+st3 { v22.2s, v23.2s, v24.2s }, [x30], #24
+st3 { v26.8h, v27.8h, v28.8h }, [x4], x9
+st3 { v27.2d, v28.2d, v29.2d }, [x10], #48
+st3 { v29.2s, v30.2s, v31.2s }, [x6]
+st3 { v3.8b, v4.8b, v5.8b }, [x18]
+st3 { v30.8h, v31.8h, v0.8h }, [x16]
 st3 { v31.16b, v0.16b, v1.16b }, [sp]
 st3 { v31.16b, v0.16b, v1.16b }, [sp], #48
 st3 { v31.16b, v0.16b, v1.16b }, [sp], xzr
@@ -6846,22 +6846,22 @@ st3 { v31.8h, v0.8h, v1.8h }, [sp], xzr
 st3 { v31.b, v0.b, v1.b }[15], [sp]
 st3 { v31.b, v0.b, v1.b }[15], [sp], #3
 st3 { v31.b, v0.b, v1.b }[15], [sp], xzr
+st3 { v31.d, v0.d, v1.d }[0], [x27], #24
 st3 { v31.d, v0.d, v1.d }[1], [sp]
 st3 { v31.d, v0.d, v1.d }[1], [sp], #24
 st3 { v31.d, v0.d, v1.d }[1], [sp], xzr
-st3 { v31.h, v0.h, v1.h }[3], [x27], x11
 st3 { v31.h, v0.h, v1.h }[7], [sp]
 st3 { v31.h, v0.h, v1.h }[7], [sp], #6
 st3 { v31.h, v0.h, v1.h }[7], [sp], xzr
 st3 { v31.s, v0.s, v1.s }[3], [sp]
 st3 { v31.s, v0.s, v1.s }[3], [sp], #12
 st3 { v31.s, v0.s, v1.s }[3], [sp], xzr
-st3 { v6.d, v7.d, v8.d }[1], [x20], #24
-st3 { v7.4s, v8.4s, v9.4s }, [x18]
-st3 { v8.16b, v9.16b, v10.16b }, [x18], #48
-st3 { v8.2d, v9.2d, v10.2d }, [x3], #48
-st3 { v8.d, v9.d, v10.d }[0], [x21]
-st3 { v9.2d, v10.2d, v11.2d }, [x5], x6
+st3 { v6.d, v7.d, v8.d }[1], [x20]
+st3 { v7.4h, v8.4h, v9.4h }, [x18], x19
+st3 { v8.16b, v9.16b, v10.16b }, [x18]
+st3 { v8.2d, v9.2d, v10.2d }, [x3]
+st3 { v8.b, v9.b, v10.b }[1], [x21], x1
+st3 { v9.16b, v10.16b, v11.16b }, [x5], #48
 st4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0]
 st4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0], #64
 st4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0], x0
@@ -6883,10 +6883,10 @@ st4 { v0.8b, v1.8b, v2.8b, v3.8b }, [x0], x0
 st4 { v0.8h, v1.8h, v2.8h, v3.8h }, [x0]
 st4 { v0.8h, v1.8h, v2.8h, v3.8h }, [x0], #64
 st4 { v0.8h, v1.8h, v2.8h, v3.8h }, [x0], x0
+st4 { v0.8h, v1.8h, v2.8h, v3.8h }, [x4], x1
 st4 { v0.b, v1.b, v2.b, v3.b }[0], [x0]
 st4 { v0.b, v1.b, v2.b, v3.b }[0], [x0], #4
 st4 { v0.b, v1.b, v2.b, v3.b }[0], [x0], x0
-st4 { v0.b, v1.b, v2.b, v3.b }[2], [x1]
 st4 { v0.d, v1.d, v2.d, v3.d }[0], [x0]
 st4 { v0.d, v1.d, v2.d, v3.d }[0], [x0], #32
 st4 { v0.d, v1.d, v2.d, v3.d }[0], [x0], x0
@@ -6896,42 +6896,41 @@ st4 { v0.h, v1.h, v2.h, v3.h }[0], [x0], x0
 st4 { v0.s, v1.s, v2.s, v3.s }[0], [x0]
 st4 { v0.s, v1.s, v2.s, v3.s }[0], [x0], #16
 st4 { v0.s, v1.s, v2.s, v3.s }[0], [x0], x0
-st4 { v1.4s, v2.4s, v3.4s, v4.4s }, [x17], x6
-st4 { v1.d, v2.d, v3.d, v4.d }[1], [x9], x7
-st4 { v10.2s, v11.2s, v12.2s, v13.2s }, [x10]
-st4 { v10.h, v11.h, v12.h, v13.h }[7], [x11], x3
-st4 { v11.d, v12.d, v13.d, v14.d }[1], [x5], #32
-st4 { v13.8b, v14.8b, v15.8b, v16.8b }, [x13]
-st4 { v13.b, v14.b, v15.b, v16.b }[14], [x6], #4
-st4 { v15.2d, v16.2d, v17.2d, v18.2d }, [x18], x22
-st4 { v17.8h, v18.8h, v19.8h, v20.8h }, [x5], #64
-st4 { v18.2d, v19.2d, v20.2d, v21.2d }, [x23]
-st4 { v19.8h, v20.8h, v21.8h, v22.8h }, [x20]
-st4 { v19.s, v20.s, v21.s, v22.s }[3], [x24], #16
-st4 { v2.4h, v3.4h, v4.4h, v5.4h }, [x29]
-st4 { v20.16b, v21.16b, v22.16b, v23.16b }, [x17]
-st4 { v20.8b, v21.8b, v22.8b, v23.8b }, [x29], x22
-st4 { v20.b, v21.b, v22.b, v23.b }[6], [x18], x11
-st4 { v21.4s, v22.4s, v23.4s, v24.4s }, [x10]
-st4 { v23.4h, v24.4h, v25.4h, v26.4h }, [x6], #32
-st4 { v23.h, v24.h, v25.h, v26.h }[1], [x22], #8
-st4 { v23.h, v24.h, v25.h, v26.h }[6], [x19]
-st4 { v25.2s, v26.2s, v27.2s, v28.2s }, [x29], x24
-st4 { v25.4s, v26.4s, v27.4s, v28.4s }, [x8], #64
-st4 { v26.8b, v27.8b, v28.8b, v29.8b }, [x11], #32
-st4 { v27.2s, v28.2s, v29.2s, v30.2s }, [x18], #32
-st4 { v27.d, v28.d, v29.d, v30.d }[1], [x6]
-st4 { v29.16b, v30.16b, v31.16b, v0.16b }, [sp], #64
-st4 { v3.4h, v4.4h, v5.4h, v6.4h }, [sp], x23
-st4 { v3.s, v4.s, v5.s, v6.s }[0], [x24], x1
-st4 { v3.s, v4.s, v5.s, v6.s }[1], [x22]
+st4 { v1.4h, v2.4h, v3.4h, v4.4h }, [x17], #32
+st4 { v1.b, v2.b, v3.b, v4.b }[14], [x9], #4
+st4 { v10.2d, v11.2d, v12.2d, v13.2d }, [x10], x28
+st4 { v10.d, v11.d, v12.d, v13.d }[1], [x11], #32
+st4 { v11.d, v12.d, v13.d, v14.d }[1], [x5]
+st4 { v13.4s, v14.4s, v15.4s, v16.4s }, [x13], x17
+st4 { v13.b, v14.b, v15.b, v16.b }[14], [x6]
+st4 { v15.16b, v16.16b, v17.16b, v18.16b }, [x18], #64
+st4 { v17.8h, v18.8h, v19.8h, v20.8h }, [x5]
+st4 { v18.16b, v19.16b, v20.16b, v21.16b }, [x23], x6
+st4 { v19.8b, v20.8b, v21.8b, v22.8b }, [x20], x23
+st4 { v19.s, v20.s, v21.s, v22.s }[3], [x24]
+st4 { v2.2s, v3.2s, v4.2s, v5.2s }, [x29], x17
+st4 { v20.4s, v21.4s, v22.4s, v23.4s }, [x29], #64
+st4 { v20.8h, v21.8h, v22.8h, v23.8h }, [x12], #64
+st4 { v21.4h, v22.4h, v23.4h, v24.4h }, [x10], x8
+st4 { v23.4h, v24.4h, v25.4h, v26.4h }, [x6]
+st4 { v23.d, v24.d, v25.d, v26.d }[1], [x19], x28
+st4 { v23.h, v24.h, v25.h, v26.h }[1], [x22]
+st4 { v25.2d, v26.2d, v27.2d, v28.2d }, [x29], #64
+st4 { v25.4s, v26.4s, v27.4s, v28.4s }, [x8]
+st4 { v26.8b, v27.8b, v28.8b, v29.8b }, [x11]
+st4 { v27.2s, v28.2s, v29.2s, v30.2s }, [x18]
+st4 { v27.b, v28.b, v29.b, v30.b }[8], [x6], x6
+st4 { v29.16b, v30.16b, v31.16b, v0.16b }, [sp]
+st4 { v3.2s, v4.2s, v5.2s, v6.2s }, [sp], #32
+st4 { v3.h, v4.h, v5.h, v6.h }[0], [x24], #8
+st4 { v3.h, v4.h, v5.h, v6.h }[3], [x22], x19
 st4 { v31.16b, v0.16b, v1.16b, v2.16b }, [sp]
 st4 { v31.16b, v0.16b, v1.16b, v2.16b }, [sp], #64
 st4 { v31.16b, v0.16b, v1.16b, v2.16b }, [sp], xzr
 st4 { v31.2d, v0.2d, v1.2d, v2.2d }, [sp]
 st4 { v31.2d, v0.2d, v1.2d, v2.2d }, [sp], #64
 st4 { v31.2d, v0.2d, v1.2d, v2.2d }, [sp], xzr
-st4 { v31.2d, v0.2d, v1.2d, v2.2d }, [x16], #64
+st4 { v31.2d, v0.2d, v1.2d, v2.2d }, [x16]
 st4 { v31.2s, v0.2s, v1.2s, v2.2s }, [sp]
 st4 { v31.2s, v0.2s, v1.2s, v2.2s }, [sp], #32
 st4 { v31.2s, v0.2s, v1.2s, v2.2s }, [sp], xzr
@@ -6956,58 +6955,59 @@ st4 { v31.d, v0.d, v1.d, v2.d }[1], [sp], xzr
 st4 { v31.h, v0.h, v1.h, v2.h }[7], [sp]
 st4 { v31.h, v0.h, v1.h, v2.h }[7], [sp], #8
 st4 { v31.h, v0.h, v1.h, v2.h }[7], [sp], xzr
+st4 { v31.s, v0.s, v1.s, v2.s }[2], [x3], x15
 st4 { v31.s, v0.s, v1.s, v2.s }[3], [sp]
 st4 { v31.s, v0.s, v1.s, v2.s }[3], [sp], #16
 st4 { v31.s, v0.s, v1.s, v2.s }[3], [sp], xzr
-st4 { v4.16b, v5.16b, v6.16b, v7.16b }, [x15], x23
-st4 { v8.8h, v9.8h, v10.8h, v11.8h }, [x6], x30
+st4 { v8.8b, v9.8b, v10.8b, v11.8b }, [x6], #32
+st4 { v9.s, v10.s, v11.s, v12.s }[1], [x6], #16
 stl1 { v0.d }[0], [x0]
-stl1 { v17.d }[0], [x27]
 stl1 { v31.d }[1], [sp]
+stl1 { v4.d }[1], [x20]
 stlur b0, [x0, #-256]
 stlur b0, [x0]
-stlur b2, [x21, #240]
-stlur b21, [x6]
+stlur b20, [x22, #65]
+stlur b24, [x16]
 stlur b31, [sp, #255]
 stlur b31, [sp]
 stlur d0, [x0, #-256]
 stlur d0, [x0]
-stlur d20, [x22, #65]
-stlur d24, [x16]
+stlur d26, [x30, #182]
+stlur d30, [x4]
 stlur d31, [sp, #255]
 stlur d31, [sp]
 stlur h0, [x0, #-256]
 stlur h0, [x0]
-stlur h26, [x30, #182]
-stlur h30, [x4]
+stlur h18, [x24, #-70]
 stlur h31, [sp, #255]
 stlur h31, [sp]
+stlur h4, [x26]
 stlur q0, [x0, #-256]
 stlur q0, [x0]
-stlur q18, [x24, #-70]
+stlur q11, [x27]
+stlur q12, [x12, #-57]
 stlur q31, [sp, #255]
 stlur q31, [sp]
-stlur q4, [x26]
 stlur s0, [x0, #-256]
 stlur s0, [x0]
-stlur s11, [x27]
-stlur s12, [x12, #-57]
+stlur s10, [x1, #135]
 stlur s31, [sp, #255]
 stlur s31, [sp]
+stlur s5, [x29]
 stlur w0, [x0, #-256]
 stlur w0, [x0]
-stlur w30, [x29]
-stlur w4, [x19, #65]
+stlur w14, [x7, #-147]
+stlur w24, [x29]
 stlur wzr, [sp, #255]
 stlur wzr, [sp]
 stlur x0, [x0, #-256]
 stlur x0, [x0]
-stlur x14, [x7, #-147]
-stlur x24, [x29]
+stlur x2, [x21, #240]
+stlur x21, [x6]
 stlur xzr, [sp, #255]
 stlur xzr, [sp]
 sub d0, d0, d0
-sub d15, d10, d5
+sub d26, d21, d20
 sub d31, d31, d31
 sub v0.16b, v0.16b, v0.16b
 sub v0.2d, v0.2d, v0.2d
@@ -7016,12 +7016,12 @@ sub v0.4h, v0.4h, v0.4h
 sub v0.4s, v0.4s, v0.4s
 sub v0.8b, v0.8b, v0.8b
 sub v0.8h, v0.8h, v0.8h
-sub v10.8h, v23.8h, v13.8h
-sub v14.4s, v16.4s, v8.4s
-sub v15.16b, v25.16b, v5.16b
-sub v20.2s, v7.2s, v14.2s
-sub v20.4h, v27.4h, v29.4h
-sub v26.2d, v21.2d, v20.2d
+sub v10.4s, v23.4s, v13.4s
+sub v14.2s, v16.2s, v8.2s
+sub v15.8b, v24.8b, v17.8b
+sub v18.8h, v25.8h, v8.8h
+sub v20.16b, v7.16b, v14.16b
+sub v20.2d, v27.2d, v29.2d
 sub v31.16b, v31.16b, v31.16b
 sub v31.2d, v31.2d, v31.2d
 sub v31.2s, v31.2s, v31.2s
@@ -7029,48 +7029,48 @@ sub v31.4h, v31.4h, v31.4h
 sub v31.4s, v31.4s, v31.4s
 sub v31.8b, v31.8b, v31.8b
 sub v31.8h, v31.8h, v31.8h
-sub v7.8b, v25.8b, v26.8b
+sub v7.4h, v25.4h, v26.4h
 subhn v0.2s, v0.2d, v0.2d
 subhn v0.4h, v0.4s, v0.4s
 subhn v0.8b, v0.8h, v0.8h
-subhn v13.8b, v0.8h, v12.8h
-subhn v22.2s, v2.2d, v10.2d
-subhn v25.4h, v6.4s, v1.4s
+subhn v13.2s, v0.2d, v12.2d
+subhn v16.4h, v31.4s, v19.4s
+subhn v20.8b, v11.8h, v31.8h
 subhn v31.2s, v31.2d, v31.2d
 subhn v31.4h, v31.4s, v31.4s
 subhn v31.8b, v31.8h, v31.8h
 subhn2 v0.16b, v0.8h, v0.8h
 subhn2 v0.4s, v0.2d, v0.2d
 subhn2 v0.8h, v0.4s, v0.4s
-subhn2 v16.16b, v31.8h, v19.8h
-subhn2 v20.4s, v11.2d, v31.2d
-subhn2 v20.8h, v2.4s, v9.4s
+subhn2 v1.8h, v16.4s, v21.4s
+subhn2 v20.16b, v2.8h, v9.8h
 subhn2 v31.16b, v31.8h, v31.8h
 subhn2 v31.4s, v31.2d, v31.2d
 subhn2 v31.8h, v31.4s, v31.4s
+subhn2 v5.4s, v31.2d, v0.2d
 subpt sp, sp, xzr
 subpt sp, sp, xzr, lsl #7
 subpt x0, x0, x0
 subpt x0, x0, x0, lsl #0
-subpt x17, x21, x19
-subpt x3, x13, x5, lsl #1
+subpt x0, x28, x27, lsl #7
+subpt x18, x3, x2
 sudot v0.2s, v0.8b, v0.4b[0]
 sudot v0.4s, v0.16b, v0.4b[0]
-sudot v25.4s, v22.16b, v12.4b[3]
-sudot v26.2s, v5.8b, v28.4b[2]
+sudot v17.4s, v31.16b, v1.4b[1]
+sudot v24.2s, v5.8b, v22.4b[1]
 sudot v31.2s, v31.8b, v31.4b[3]
 sudot v31.4s, v31.16b, v31.4b[3]
 suqadd b0, b0
-suqadd b0, b25
+suqadd b17, b13
 suqadd b31, b31
 suqadd d0, d0
+suqadd d31, d20
 suqadd d31, d31
-suqadd d6, d16
 suqadd h0, h0
-suqadd h17, h13
+suqadd h2, h11
 suqadd h31, h31
 suqadd s0, s0
-suqadd s31, s20
+suqadd s17, s4
 suqadd s31, s31
 suqadd v0.16b, v0.16b
 suqadd v0.2d, v0.2d
@@ -7079,12 +7079,12 @@ suqadd v0.4h, v0.4h
 suqadd v0.4s, v0.4s
 suqadd v0.8b, v0.8b
 suqadd v0.8h, v0.8h
-suqadd v12.8h, v18.8h
-suqadd v16.8b, v31.8b
-suqadd v17.2d, v4.2d
-suqadd v2.16b, v11.16b
-suqadd v2.2s, v3.2s
-suqadd v22.4h, v10.4h
+suqadd v12.4s, v18.4s
+suqadd v16.4h, v31.4h
+suqadd v19.8h, v4.8h
+suqadd v2.16b, v3.16b
+suqadd v22.2d, v10.2d
+suqadd v23.8b, v12.8b
 suqadd v31.16b, v31.16b
 suqadd v31.2d, v31.2d
 suqadd v31.2s, v31.2s
@@ -7092,25 +7092,25 @@ suqadd v31.4h, v31.4h
 suqadd v31.4s, v31.4s
 suqadd v31.8b, v31.8b
 suqadd v31.8h, v31.8h
-suqadd v6.4s, v4.4s
+suqadd v6.2s, v4.2s
 sxtl v0.2d, v0.2s
 sxtl v0.4s, v0.4h
 sxtl v0.8h, v0.8b
-sxtl v16.4s, v5.4h
-sxtl v29.2d, v27.2s
+sxtl v22.4s, v12.4h
+sxtl v23.8h, v21.8b
 sxtl v31.2d, v31.2s
 sxtl v31.4s, v31.4h
 sxtl v31.8h, v31.8b
-sxtl v7.8h, v0.8b
+sxtl v7.2d, v0.2s
 sxtl2 v0.2d, v0.4s
 sxtl2 v0.4s, v0.8h
 sxtl2 v0.8h, v0.16b
-sxtl2 v10.8h, v20.16b
-sxtl2 v22.2d, v12.4s
-sxtl2 v23.4s, v21.8h
+sxtl2 v10.2d, v20.4s
+sxtl2 v2.8h, v11.16b
 sxtl2 v31.2d, v31.4s
 sxtl2 v31.4s, v31.8h
 sxtl2 v31.8h, v31.16b
+sxtl2 v8.4s, v24.8h
 tbl v0.16b, { v0.16b }, v0.16b
 tbl v0.16b, { v0.16b, v1.16b }, v0.16b
 tbl v0.16b, { v0.16b, v1.16b, v2.16b }, v0.16b
@@ -7119,22 +7119,22 @@ tbl v0.8b, { v0.16b }, v0.8b
 tbl v0.8b, { v0.16b, v1.16b }, v0.8b
 tbl v0.8b, { v0.16b, v1.16b, v2.16b }, v0.8b
 tbl v0.8b, { v0.16b, v1.16b, v2.16b, v3.16b }, v0.8b
-tbl v11.16b, { v21.16b, v22.16b, v23.16b, v24.16b }, v1.16b
-tbl v12.8b, { v1.16b, v2.16b, v3.16b, v4.16b }, v5.8b
-tbl v2.16b, { v11.16b }, v18.16b
-tbl v2.16b, { v5.16b, v6.16b }, v11.16b
-tbl v24.16b, { v14.16b, v15.16b, v16.16b }, v13.16b
-tbl v24.8b, { v16.16b }, v0.8b
+tbl v11.16b, { v21.16b, v22.16b }, v1.16b
+tbl v12.8b, { v1.16b, v2.16b }, v5.8b
+tbl v24.16b, { v14.16b }, v13.16b
+tbl v24.16b, { v16.16b, v17.16b, v18.16b }, v0.16b
+tbl v28.8b, { v6.16b, v7.16b, v8.16b }, v12.8b
 tbl v31.16b, { v31.16b }, v31.16b
 tbl v31.16b, { v31.16b, v0.16b }, v31.16b
 tbl v31.16b, { v31.16b, v0.16b, v1.16b }, v31.16b
 tbl v31.16b, { v31.16b, v0.16b, v1.16b, v2.16b }, v31.16b
+tbl v31.16b, { v4.16b, v5.16b, v6.16b, v7.16b }, v13.16b
 tbl v31.8b, { v31.16b }, v31.8b
 tbl v31.8b, { v31.16b, v0.16b }, v31.8b
 tbl v31.8b, { v31.16b, v0.16b, v1.16b }, v31.8b
 tbl v31.8b, { v31.16b, v0.16b, v1.16b, v2.16b }, v31.8b
-tbl v31.8b, { v4.16b, v5.16b }, v13.8b
-tbl v8.8b, { v30.16b, v31.16b, v0.16b }, v16.8b
+tbl v8.8b, { v14.16b, v15.16b, v16.16b, v17.16b }, v16.8b
+tbl v8.8b, { v30.16b }, v16.8b
 tbx v0.16b, { v0.16b }, v0.16b
 tbx v0.16b, { v0.16b, v1.16b }, v0.16b
 tbx v0.16b, { v0.16b, v1.16b, v2.16b }, v0.16b
@@ -7143,12 +7143,10 @@ tbx v0.8b, { v0.16b }, v0.8b
 tbx v0.8b, { v0.16b, v1.16b }, v0.8b
 tbx v0.8b, { v0.16b, v1.16b, v2.16b }, v0.8b
 tbx v0.8b, { v0.16b, v1.16b, v2.16b, v3.16b }, v0.8b
-tbx v10.8b, { v4.16b, v5.16b, v6.16b }, v3.8b
-tbx v12.16b, { v14.16b }, v27.16b
-tbx v17.8b, { v20.16b, v21.16b, v22.16b, v23.16b }, v25.8b
-tbx v29.8b, { v2.16b }, v24.8b
-tbx v3.16b, { v31.16b, v0.16b, v1.16b, v2.16b }, v16.16b
-tbx v30.16b, { v21.16b, v22.16b }, v1.16b
+tbx v10.8b, { v4.16b }, v3.8b
+tbx v17.8b, { v20.16b, v21.16b }, v25.8b
+tbx v29.16b, { v2.16b, v3.16b, v4.16b }, v24.16b
+tbx v3.16b, { v31.16b, v0.16b }, v16.16b
 tbx v31.16b, { v31.16b }, v31.16b
 tbx v31.16b, { v31.16b, v0.16b }, v31.16b
 tbx v31.16b, { v31.16b, v0.16b, v1.16b }, v31.16b
@@ -7157,8 +7155,10 @@ tbx v31.8b, { v31.16b }, v31.8b
 tbx v31.8b, { v31.16b, v0.16b }, v31.8b
 tbx v31.8b, { v31.16b, v0.16b, v1.16b }, v31.8b
 tbx v31.8b, { v31.16b, v0.16b, v1.16b, v2.16b }, v31.8b
-tbx v6.16b, { v1.16b, v2.16b, v3.16b }, v27.16b
-tbx v8.8b, { v8.16b, v9.16b }, v3.8b
+tbx v5.8b, { v11.16b, v12.16b, v13.16b }, v15.8b
+tbx v6.16b, { v1.16b }, v27.16b
+tbx v8.16b, { v8.16b, v9.16b, v10.16b, v11.16b }, v3.16b
+tbx v9.8b, { v26.16b, v27.16b, v28.16b, v29.16b }, v15.8b
 trn1 v0.16b, v0.16b, v0.16b
 trn1 v0.2d, v0.2d, v0.2d
 trn1 v0.2s, v0.2s, v0.2s
@@ -7166,20 +7166,20 @@ trn1 v0.4h, v0.4h, v0.4h
 trn1 v0.4s, v0.4s, v0.4s
 trn1 v0.8b, v0.8b, v0.8b
 trn1 v0.8h, v0.8h, v0.8h
-trn1 v15.16b, v27.16b, v20.16b
-trn1 v16.2d, v25.2d, v23.2d
-trn1 v20.8b, v27.8b, v3.8b
+trn1 v0.8h, v1.8h, v18.8h
+trn1 v20.4h, v27.4h, v3.4h
 trn1 v31.16b, v31.16b, v31.16b
+trn1 v31.2d, v24.2d, v29.2d
 trn1 v31.2d, v31.2d, v31.2d
 trn1 v31.2s, v31.2s, v31.2s
-trn1 v31.4h, v24.4h, v29.4h
 trn1 v31.4h, v31.4h, v31.4h
 trn1 v31.4s, v31.4s, v31.4s
 trn1 v31.8b, v31.8b, v31.8b
 trn1 v31.8h, v31.8h, v31.8h
-trn1 v5.8h, v18.8h, v0.8h
-trn1 v8.2s, v1.2s, v20.2s
-trn1 v8.4s, v14.4s, v28.4s
+trn1 v5.4s, v18.4s, v0.4s
+trn1 v8.16b, v1.16b, v20.16b
+trn1 v8.2s, v14.2s, v28.2s
+trn1 v8.8b, v28.8b, v10.8b
 trn2 v0.16b, v0.16b, v0.16b
 trn2 v0.2d, v0.2d, v0.2d
 trn2 v0.2s, v0.2s, v0.2s
@@ -7187,12 +7187,11 @@ trn2 v0.4h, v0.4h, v0.4h
 trn2 v0.4s, v0.4s, v0.4s
 trn2 v0.8b, v0.8b, v0.8b
 trn2 v0.8h, v0.8h, v0.8h
-trn2 v1.8b, v11.8b, v28.8b
-trn2 v16.4s, v16.4s, v7.4s
-trn2 v18.2d, v8.2d, v16.2d
-trn2 v28.4h, v14.4h, v22.4h
-trn2 v28.8h, v16.8h, v26.8h
-trn2 v29.2s, v11.2s, v18.2s
+trn2 v1.4h, v11.4h, v28.4h
+trn2 v16.2s, v16.2s, v7.2s
+trn2 v28.2d, v14.2d, v22.2d
+trn2 v28.4s, v16.4s, v26.4s
+trn2 v29.16b, v11.16b, v18.16b
 trn2 v31.16b, v31.16b, v31.16b
 trn2 v31.2d, v31.2d, v31.2d
 trn2 v31.2s, v31.2s, v31.2s
@@ -7200,19 +7199,20 @@ trn2 v31.4h, v31.4h, v31.4h
 trn2 v31.4s, v31.4s, v31.4s
 trn2 v31.8b, v31.8b, v31.8b
 trn2 v31.8h, v31.8h, v31.8h
-trn2 v7.16b, v13.16b, v0.16b
+trn2 v5.8b, v25.8b, v10.8b
+trn2 v7.8h, v20.8h, v2.8h
 uaba v0.16b, v0.16b, v0.16b
 uaba v0.2s, v0.2s, v0.2s
 uaba v0.4h, v0.4h, v0.4h
 uaba v0.4s, v0.4s, v0.4s
 uaba v0.8b, v0.8b, v0.8b
 uaba v0.8h, v0.8h, v0.8h
-uaba v15.8h, v27.8h, v11.8h
-uaba v16.2s, v22.2s, v23.2s
-uaba v17.16b, v6.16b, v19.16b
-uaba v2.4s, v1.4s, v30.4s
-uaba v21.8b, v22.8b, v20.8b
-uaba v26.4h, v28.4h, v18.4h
+uaba v15.4s, v27.4s, v11.4s
+uaba v19.8h, v31.8h, v29.8h
+uaba v2.2s, v1.2s, v30.2s
+uaba v21.4h, v22.4h, v20.4h
+uaba v26.16b, v28.16b, v18.16b
+uaba v30.8b, v27.8b, v28.8b
 uaba v31.16b, v31.16b, v31.16b
 uaba v31.2s, v31.2s, v31.2s
 uaba v31.4h, v31.4h, v31.4h
@@ -7222,54 +7222,54 @@ uaba v31.8h, v31.8h, v31.8h
 uabal v0.2d, v0.2s, v0.2s
 uabal v0.4s, v0.4h, v0.4h
 uabal v0.8h, v0.8b, v0.8b
-uabal v22.2d, v3.2s, v10.2s
-uabal v28.8h, v30.8b, v20.8b
+uabal v28.2d, v30.2s, v20.2s
+uabal v29.4s, v1.4h, v5.4h
 uabal v31.2d, v31.2s, v31.2s
 uabal v31.4s, v31.4h, v31.4h
 uabal v31.8h, v31.8b, v31.8b
-uabal v7.4s, v6.4h, v21.4h
+uabal v6.8h, v9.8b, v7.8b
 uabal2 v0.2d, v0.4s, v0.4s
 uabal2 v0.4s, v0.8h, v0.8h
 uabal2 v0.8h, v0.16b, v0.16b
-uabal2 v27.8h, v23.16b, v29.16b
-uabal2 v29.2d, v1.4s, v5.4s
+uabal2 v21.8h, v13.16b, v14.16b
+uabal2 v27.2d, v23.4s, v29.4s
 uabal2 v31.2d, v31.4s, v31.4s
+uabal2 v31.4s, v31.8h, v3.8h
 uabal2 v31.4s, v31.8h, v31.8h
 uabal2 v31.8h, v31.16b, v31.16b
-uabal2 v6.4s, v9.8h, v7.8h
 uabd v0.16b, v0.16b, v0.16b
 uabd v0.2s, v0.2s, v0.2s
 uabd v0.4h, v0.4h, v0.4h
 uabd v0.4s, v0.4s, v0.4s
 uabd v0.8b, v0.8b, v0.8b
 uabd v0.8h, v0.8h, v0.8h
-uabd v20.8h, v12.8h, v18.8h
-uabd v24.4s, v17.4s, v26.4s
-uabd v25.4h, v18.4h, v1.4h
-uabd v25.8b, v6.8b, v1.8b
+uabd v10.8b, v7.8b, v6.8b
+uabd v20.4s, v12.4s, v18.4s
+uabd v24.2s, v17.2s, v26.2s
+uabd v25.16b, v18.16b, v1.16b
+uabd v25.4h, v6.4h, v1.4h
 uabd v31.16b, v31.16b, v31.16b
 uabd v31.2s, v31.2s, v31.2s
 uabd v31.4h, v31.4h, v31.4h
 uabd v31.4s, v31.4s, v31.4s
 uabd v31.8b, v31.8b, v31.8b
+uabd v31.8h, v10.8h, v1.8h
 uabd v31.8h, v31.8h, v31.8h
-uabd v7.2s, v13.2s, v4.2s
-uabd v9.16b, v9.16b, v3.16b
 uabdl v0.2d, v0.2s, v0.2s
 uabdl v0.4s, v0.4h, v0.4h
 uabdl v0.8h, v0.8b, v0.8b
-uabdl v3.4s, v27.4h, v10.4h
-uabdl v3.8h, v17.8b, v0.8b
+uabdl v15.4s, v19.4h, v10.4h
+uabdl v21.8h, v11.8b, v13.8b
+uabdl v3.2d, v17.2s, v0.2s
 uabdl v31.2d, v31.2s, v31.2s
 uabdl v31.4s, v31.4h, v31.4h
 uabdl v31.8h, v31.8b, v31.8b
-uabdl v4.2d, v25.2s, v30.2s
 uabdl2 v0.2d, v0.4s, v0.4s
 uabdl2 v0.4s, v0.8h, v0.8h
 uabdl2 v0.8h, v0.16b, v0.16b
-uabdl2 v15.2d, v19.4s, v10.4s
-uabdl2 v21.4s, v11.8h, v13.8h
-uabdl2 v28.8h, v28.16b, v16.16b
+uabdl2 v20.4s, v12.8h, v28.8h
+uabdl2 v24.8h, v19.16b, v21.16b
+uabdl2 v28.2d, v28.4s, v16.4s
 uabdl2 v31.2d, v31.4s, v31.4s
 uabdl2 v31.4s, v31.8h, v31.8h
 uabdl2 v31.8h, v31.16b, v31.16b
@@ -7279,103 +7279,103 @@ uadalp v0.2s, v0.4h
 uadalp v0.4h, v0.8b
 uadalp v0.4s, v0.8h
 uadalp v0.8h, v0.16b
-uadalp v12.4s, v2.8h
-uadalp v14.8h, v20.16b
-uadalp v17.2d, v0.4s
-uadalp v18.1d, v10.2s
-uadalp v18.4h, v25.8b
+uadalp v12.2s, v2.4h
+uadalp v14.4h, v20.8b
+uadalp v18.2d, v25.4s
+uadalp v2.4s, v20.8h
+uadalp v26.8h, v29.16b
 uadalp v31.1d, v31.2s
 uadalp v31.2d, v31.4s
 uadalp v31.2s, v31.4h
 uadalp v31.4h, v31.8b
 uadalp v31.4s, v31.8h
 uadalp v31.8h, v31.16b
-uadalp v9.2s, v15.4h
+uadalp v9.1d, v15.2s
 uaddl v0.2d, v0.2s, v0.2s
 uaddl v0.4s, v0.4h, v0.4h
 uaddl v0.8h, v0.8b, v0.8b
-uaddl v1.8h, v25.8b, v17.8b
-uaddl v2.2d, v3.2s, v3.2s
+uaddl v1.2d, v25.2s, v17.2s
+uaddl v15.8h, v27.8b, v24.8b
+uaddl v3.4s, v5.4h, v6.4h
 uaddl v31.2d, v31.2s, v31.2s
-uaddl v31.4s, v22.4h, v25.4h
 uaddl v31.4s, v31.4h, v31.4h
 uaddl v31.8h, v31.8b, v31.8b
 uaddl2 v0.2d, v0.4s, v0.4s
 uaddl2 v0.4s, v0.8h, v0.8h
 uaddl2 v0.8h, v0.16b, v0.16b
-uaddl2 v15.4s, v27.8h, v24.8h
-uaddl2 v22.8h, v10.16b, v24.16b
-uaddl2 v3.2d, v5.4s, v6.4s
+uaddl2 v11.4s, v13.8h, v27.8h
+uaddl2 v22.2d, v10.4s, v24.4s
 uaddl2 v31.2d, v31.4s, v31.4s
 uaddl2 v31.4s, v31.8h, v31.8h
 uaddl2 v31.8h, v31.16b, v31.16b
+uaddl2 v4.8h, v21.16b, v15.16b
 uaddlp v0.1d, v0.2s
 uaddlp v0.2d, v0.4s
 uaddlp v0.2s, v0.4h
 uaddlp v0.4h, v0.8b
 uaddlp v0.4s, v0.8h
 uaddlp v0.8h, v0.16b
-uaddlp v17.2s, v14.4h
-uaddlp v18.2d, v6.4s
-uaddlp v24.1d, v28.2s
-uaddlp v28.4s, v25.8h
-uaddlp v30.8h, v6.16b
+uaddlp v13.4s, v15.8h
+uaddlp v17.1d, v14.2s
+uaddlp v25.8h, v19.16b
+uaddlp v28.2s, v25.4h
+uaddlp v30.4h, v6.8b
 uaddlp v31.1d, v31.2s
 uaddlp v31.2d, v31.4s
 uaddlp v31.2s, v31.4h
 uaddlp v31.4h, v31.8b
 uaddlp v31.4s, v31.8h
 uaddlp v31.8h, v31.16b
-uaddlp v4.4h, v9.8b
+uaddlp v4.2d, v9.4s
 uaddlv d0, v0.4s
+uaddlv d26, v13.4s
 uaddlv d31, v31.4s
-uaddlv d9, v25.4s
 uaddlv h0, v0.16b
 uaddlv h0, v0.8b
-uaddlv h2, v6.16b
-uaddlv h26, v13.8b
+uaddlv h2, v21.8b
+uaddlv h28, v14.16b
 uaddlv h31, v31.16b
 uaddlv h31, v31.8b
 uaddlv s0, v0.4h
 uaddlv s0, v0.8h
-uaddlv s2, v21.8h
-uaddlv s28, v14.4h
+uaddlv s14, v20.4h
+uaddlv s22, v31.8h
 uaddlv s31, v31.4h
 uaddlv s31, v31.8h
 uaddw v0.2d, v0.2d, v0.2s
 uaddw v0.4s, v0.4s, v0.4h
 uaddw v0.8h, v0.8h, v0.8b
-uaddw v15.2d, v15.2d, v3.2s
-uaddw v17.8h, v11.8h, v16.8b
-uaddw v23.4s, v7.4s, v12.4h
+uaddw v17.2d, v11.2d, v16.2s
+uaddw v17.4s, v5.4s, v28.4h
 uaddw v31.2d, v31.2d, v31.2s
 uaddw v31.4s, v31.4s, v31.4h
 uaddw v31.8h, v31.8h, v31.8b
+uaddw v8.8h, v5.8h, v27.8b
 uaddw2 v0.2d, v0.2d, v0.4s
 uaddw2 v0.4s, v0.4s, v0.8h
 uaddw2 v0.8h, v0.8h, v0.16b
-uaddw2 v13.8h, v0.8h, v31.16b
-uaddw2 v17.2d, v5.2d, v28.4s
+uaddw2 v13.2d, v0.2d, v31.4s
+uaddw2 v17.4s, v21.4s, v9.8h
+uaddw2 v23.8h, v23.8h, v7.16b
 uaddw2 v31.2d, v31.2d, v31.4s
 uaddw2 v31.4s, v31.4s, v31.8h
 uaddw2 v31.8h, v31.8h, v31.16b
-uaddw2 v8.4s, v5.4s, v27.8h
 ucvtf d0, d0
 ucvtf d0, d0, #1
 ucvtf d0, w0
 ucvtf d0, w0, #1
 ucvtf d0, x0
 ucvtf d0, x0, #1
-ucvtf d11, w0, #29
-ucvtf d16, x25
-ucvtf d27, d20
-ucvtf d30, d15, #39
+ucvtf d10, d16, #17
+ucvtf d16, w25
+ucvtf d27, x20
+ucvtf d3, d5
+ucvtf d30, x15, #39
 ucvtf d31, d31
 ucvtf d31, d31, #64
-ucvtf d31, w29
+ucvtf d31, w0, #12
 ucvtf d31, wzr
 ucvtf d31, wzr, #32
-ucvtf d31, x0, #24
 ucvtf d31, xzr
 ucvtf d31, xzr, #64
 ucvtf h0, h0
@@ -7384,36 +7384,36 @@ ucvtf h0, w0
 ucvtf h0, w0, #1
 ucvtf h0, x0
 ucvtf h0, x0, #1
-ucvtf h10, w16, #9
-ucvtf h14, h4
-ucvtf h18, x7, #50
-ucvtf h23, x25
-ucvtf h3, w5
+ucvtf h14, x4
+ucvtf h18, w7, #25
+ucvtf h23, w25
+ucvtf h25, h28, #14
+ucvtf h3, h0
 ucvtf h31, h31
 ucvtf h31, h31, #16
 ucvtf h31, wzr
 ucvtf h31, wzr, #32
 ucvtf h31, xzr
 ucvtf h31, xzr, #64
-ucvtf h6, h15, #13
+ucvtf h6, x15, #51
 ucvtf s0, s0
 ucvtf s0, s0, #1
 ucvtf s0, w0
 ucvtf s0, w0, #1
 ucvtf s0, x0
 ucvtf s0, x0, #1
-ucvtf s10, s19, #21
-ucvtf s2, x4
-ucvtf s25, w28, #27
-ucvtf s3, w0
+ucvtf s10, x19, #42
+ucvtf s2, w4
+ucvtf s24, s6, #3
+ucvtf s31, s23
 ucvtf s31, s31
 ucvtf s31, s31, #32
+ucvtf s31, w15, #15
 ucvtf s31, wzr
 ucvtf s31, wzr, #32
-ucvtf s31, x15, #29
 ucvtf s31, xzr
 ucvtf s31, xzr, #64
-ucvtf s8, s9
+ucvtf s8, x9
 ucvtf v0.2d, v0.2d
 ucvtf v0.2d, v0.2d, #1
 ucvtf v0.2s, v0.2s
@@ -7424,15 +7424,14 @@ ucvtf v0.4s, v0.4s
 ucvtf v0.4s, v0.4s, #1
 ucvtf v0.8h, v0.8h
 ucvtf v0.8h, v0.8h, #1
-ucvtf v14.4h, v11.4h
-ucvtf v17.8h, v7.8h, #9
-ucvtf v19.4s, v11.4s, #29
-ucvtf v24.2d, v6.2d, #5
-ucvtf v26.2s, v24.2s
-ucvtf v27.4h, v25.4h, #11
-ucvtf v28.2s, v15.2s, #14
-ucvtf v3.8h, v4.8h
-ucvtf v31.2d, v23.2d
+ucvtf v0.8h, v19.8h, #8
+ucvtf v14.2s, v11.2s
+ucvtf v17.4s, v7.4s, #18
+ucvtf v19.4h, v11.4h, #15
+ucvtf v26.2d, v24.2d
+ucvtf v27.2s, v25.2s, #21
+ucvtf v28.2d, v15.2d, #27
+ucvtf v3.4s, v4.4s
 ucvtf v31.2d, v31.2d
 ucvtf v31.2d, v31.2d, #64
 ucvtf v31.2s, v31.2s
@@ -7443,15 +7442,16 @@ ucvtf v31.4s, v31.4s
 ucvtf v31.4s, v31.4s, #32
 ucvtf v31.8h, v31.8h
 ucvtf v31.8h, v31.8h, #16
-ucvtf v6.4s, v22.4s
+ucvtf v6.4h, v22.4h
+ucvtf v6.8h, v8.8h
 udot v0.2s, v0.8b, v0.4b[0]
 udot v0.2s, v0.8b, v0.8b
+udot v0.2s, v15.8b, v26.4b[3]
 udot v0.4s, v0.16b, v0.16b
 udot v0.4s, v0.16b, v0.4b[0]
-udot v0.4s, v15.16b, v26.4b[3]
-udot v24.2s, v23.8b, v30.4b[2]
-udot v29.2s, v5.8b, v16.8b
-udot v30.4s, v19.16b, v20.16b
+udot v21.4s, v6.16b, v25.4b[2]
+udot v24.4s, v8.16b, v4.16b
+udot v30.2s, v19.8b, v20.8b
 udot v31.2s, v31.8b, v31.4b[3]
 udot v31.2s, v31.8b, v31.8b
 udot v31.4s, v31.16b, v31.16b
@@ -7462,127 +7462,127 @@ uhadd v0.4h, v0.4h, v0.4h
 uhadd v0.4s, v0.4s, v0.4s
 uhadd v0.8b, v0.8b, v0.8b
 uhadd v0.8h, v0.8h, v0.8h
-uhadd v15.2s, v14.2s, v7.2s
-uhadd v17.8h, v27.8h, v8.8h
-uhadd v23.4s, v3.4s, v14.4s
-uhadd v26.16b, v11.16b, v11.16b
-uhadd v29.8b, v1.8b, v14.8b
+uhadd v17.4s, v27.4s, v8.4s
+uhadd v23.2s, v3.2s, v14.2s
+uhadd v26.8b, v15.8b, v19.8b
+uhadd v29.4h, v1.4h, v14.4h
 uhadd v31.16b, v31.16b, v31.16b
 uhadd v31.2s, v31.2s, v31.2s
 uhadd v31.4h, v31.4h, v31.4h
 uhadd v31.4s, v31.4s, v31.4s
 uhadd v31.8b, v31.8b, v31.8b
 uhadd v31.8h, v31.8h, v31.8h
-uhadd v6.4h, v10.4h, v27.4h
+uhadd v6.16b, v10.16b, v27.16b
+uhadd v9.8h, v20.8h, v1.8h
 uhsub v0.16b, v0.16b, v0.16b
 uhsub v0.2s, v0.2s, v0.2s
 uhsub v0.4h, v0.4h, v0.4h
 uhsub v0.4s, v0.4s, v0.4s
 uhsub v0.8b, v0.8b, v0.8b
 uhsub v0.8h, v0.8h, v0.8h
-uhsub v13.16b, v28.16b, v16.16b
-uhsub v17.8b, v16.8b, v19.8b
-uhsub v19.8h, v15.8h, v3.8h
-uhsub v22.4h, v13.4h, v15.4h
+uhsub v17.4h, v16.4h, v19.4h
+uhsub v19.4s, v15.4s, v3.4s
+uhsub v22.16b, v13.16b, v15.16b
+uhsub v28.8h, v21.8h, v30.8h
 uhsub v31.16b, v31.16b, v31.16b
 uhsub v31.2s, v31.2s, v31.2s
 uhsub v31.4h, v31.4h, v31.4h
 uhsub v31.4s, v31.4s, v31.4s
 uhsub v31.8b, v31.8b, v31.8b
 uhsub v31.8h, v31.8h, v31.8h
-uhsub v6.2s, v29.2s, v15.2s
-uhsub v6.4s, v4.4s, v22.4s
+uhsub v6.2s, v4.2s, v22.2s
+uhsub v8.8b, v5.8b, v13.8b
 umax v0.16b, v0.16b, v0.16b
-umax v0.16b, v19.16b, v30.16b
 umax v0.2s, v0.2s, v0.2s
 umax v0.4h, v0.4h, v0.4h
 umax v0.4s, v0.4s, v0.4s
 umax v0.8b, v0.8b, v0.8b
 umax v0.8h, v0.8h, v0.8h
-umax v13.2s, v28.2s, v22.2s
-umax v14.8h, v18.8h, v23.8h
-umax v15.4h, v15.4h, v22.4h
-umax v30.4s, v30.4s, v13.4s
+umax v11.8h, v2.8h, v31.8h
+umax v14.4s, v18.4s, v23.4s
+umax v15.16b, v15.16b, v22.16b
+umax v16.8b, v10.8b, v4.8b
+umax v30.2s, v30.2s, v13.2s
 umax v31.16b, v31.16b, v31.16b
 umax v31.2s, v31.2s, v31.2s
 umax v31.4h, v31.4h, v31.4h
 umax v31.4s, v31.4s, v31.4s
 umax v31.8b, v31.8b, v31.8b
 umax v31.8h, v31.8h, v31.8h
-umax v5.8b, v7.8b, v27.8b
+umax v5.4h, v7.4h, v27.4h
 umax w0, w0, #0
 umax w0, w0, w0
-umax w17, w21, #42
-umax w28, w23, w27
+umax w22, w12, #62
+umax w24, w28, w22
 umax wzr, wzr, #255
 umax wzr, wzr, wzr
 umax x0, x0, #0
 umax x0, x0, x0
-umax x22, x12, #62
-umax x24, x28, x22
+umax x0, x19, x30
+umax x13, x28, #183
 umax xzr, xzr, #255
 umax xzr, xzr, xzr
 umaxp v0.16b, v0.16b, v0.16b
 umaxp v0.2s, v0.2s, v0.2s
 umaxp v0.4h, v0.4h, v0.4h
+umaxp v0.4h, v10.4h, v18.4h
 umaxp v0.4s, v0.4s, v0.4s
 umaxp v0.8b, v0.8b, v0.8b
-umaxp v0.8b, v10.8b, v18.8b
 umaxp v0.8h, v0.8h, v0.8h
-umaxp v10.4h, v9.4h, v5.4h
-umaxp v13.2s, v12.2s, v3.2s
-umaxp v20.8h, v15.8h, v22.8h
-umaxp v21.16b, v17.16b, v21.16b
+umaxp v10.16b, v9.16b, v5.16b
+umaxp v12.8h, v10.8h, v4.8h
+umaxp v19.8b, v0.8b, v28.8b
+umaxp v20.4s, v15.4s, v22.4s
 umaxp v31.16b, v31.16b, v31.16b
 umaxp v31.2s, v31.2s, v31.2s
 umaxp v31.4h, v31.4h, v31.4h
 umaxp v31.4s, v31.4s, v31.4s
 umaxp v31.8b, v31.8b, v31.8b
 umaxp v31.8h, v31.8h, v31.8h
-umaxp v8.4s, v22.4s, v23.4s
+umaxp v8.2s, v22.2s, v23.2s
 umaxv b0, v0.16b
 umaxv b0, v0.8b
-umaxv b12, v1.16b
-umaxv b28, v18.8b
+umaxv b13, v22.8b
+umaxv b21, v0.16b
 umaxv b31, v31.16b
 umaxv b31, v31.8b
 umaxv h0, v0.4h
 umaxv h0, v0.8h
-umaxv h30, v24.8h
-umaxv h31, v23.4h
+umaxv h11, v21.8h
+umaxv h22, v5.4h
 umaxv h31, v31.4h
 umaxv h31, v31.8h
 umaxv s0, v0.4s
-umaxv s11, v21.4s
 umaxv s31, v31.4s
+umaxv s4, v23.4s
 umin v0.16b, v0.16b, v0.16b
 umin v0.2s, v0.2s, v0.2s
 umin v0.4h, v0.4h, v0.4h
 umin v0.4s, v0.4s, v0.4s
 umin v0.8b, v0.8b, v0.8b
 umin v0.8h, v0.8h, v0.8h
-umin v14.2s, v25.2s, v20.2s
-umin v21.4h, v19.4h, v9.4h
-umin v24.16b, v3.16b, v22.16b
-umin v29.4s, v1.4s, v29.4s
-umin v3.8h, v8.8h, v6.8h
+umin v10.8b, v26.8b, v13.8b
+umin v21.16b, v19.16b, v9.16b
+umin v29.2s, v1.2s, v29.2s
+umin v3.4s, v8.4s, v6.4s
 umin v31.16b, v31.16b, v31.16b
 umin v31.2s, v31.2s, v31.2s
 umin v31.4h, v31.4h, v31.4h
 umin v31.4s, v31.4s, v31.4s
 umin v31.8b, v31.8b, v31.8b
 umin v31.8h, v31.8h, v31.8h
-umin v6.8b, v19.8b, v0.8b
+umin v6.4h, v19.4h, v0.4h
+umin v6.8h, v28.8h, v25.8h
 umin w0, w0, #0
 umin w0, w0, w0
-umin w4, w23, #105
-umin w8, w20, w18
+umin w11, w30, w30
+umin w17, w14, #201
 umin wzr, wzr, #255
 umin wzr, wzr, wzr
 umin x0, x0, #0
 umin x0, x0, x0
-umin x11, x30, x30
-umin x17, x14, #201
+umin x14, x25, #163
+umin x24, x3, x22
 umin xzr, xzr, #255
 umin xzr, xzr, xzr
 uminp v0.16b, v0.16b, v0.16b
@@ -7591,73 +7591,73 @@ uminp v0.4h, v0.4h, v0.4h
 uminp v0.4s, v0.4s, v0.4s
 uminp v0.8b, v0.8b, v0.8b
 uminp v0.8h, v0.8h, v0.8h
-uminp v13.4h, v23.4h, v23.4h
-uminp v14.16b, v0.16b, v8.16b
-uminp v2.2s, v12.2s, v24.2s
-uminp v23.4s, v0.4s, v19.4s
-uminp v3.8b, v18.8b, v26.8b
+uminp v10.8b, v9.8b, v10.8b
+uminp v13.16b, v23.16b, v23.16b
+uminp v23.2s, v0.2s, v19.2s
+uminp v24.8h, v28.8h, v8.8h
+uminp v3.4h, v18.4h, v26.4h
 uminp v31.16b, v31.16b, v31.16b
 uminp v31.2s, v31.2s, v31.2s
 uminp v31.4h, v31.4h, v31.4h
 uminp v31.4s, v31.4s, v31.4s
 uminp v31.8b, v31.8b, v31.8b
 uminp v31.8h, v31.8h, v31.8h
-uminp v4.8h, v6.8h, v24.8h
+uminp v4.4s, v6.4s, v24.4s
 uminv b0, v0.16b
 uminv b0, v0.8b
-uminv b13, v22.16b
-uminv b25, v10.8b
+uminv b29, v31.16b
 uminv b31, v31.16b
 uminv b31, v31.8b
+uminv b6, v30.8b
 uminv h0, v0.4h
 uminv h0, v0.8h
-uminv h17, v2.8h
-uminv h27, v7.4h
+uminv h0, v14.4h
+uminv h13, v31.8h
 uminv h31, v31.4h
 uminv h31, v31.8h
 uminv s0, v0.4s
-uminv s13, v31.4s
 uminv s31, v31.4s
+uminv s7, v18.4s
 umlal v0.2d, v0.2s, v0.2s
 umlal v0.2d, v0.2s, v0.s[0]
 umlal v0.4s, v0.4h, v0.4h
 umlal v0.4s, v0.4h, v0.h[0]
 umlal v0.8h, v0.8b, v0.8b
-umlal v13.8h, v10.8b, v27.8b
-umlal v19.4s, v30.4h, v14.h[5]
-umlal v21.4s, v18.4h, v7.4h
-umlal v26.2d, v18.2s, v21.2s
+umlal v13.4s, v10.4h, v27.4h
+umlal v19.2d, v30.2s, v28.s[2]
+umlal v21.2d, v18.2s, v7.2s
+umlal v29.8h, v29.8b, v4.8b
 umlal v31.2d, v31.2s, v31.2s
 umlal v31.2d, v31.2s, v31.s[3]
 umlal v31.4s, v31.4h, v15.h[7]
 umlal v31.4s, v31.4h, v31.4h
 umlal v31.8h, v31.8b, v31.8b
-umlal v7.2d, v18.2s, v16.s[0]
+umlal v4.4s, v19.4h, v14.h[0]
 umlal2 v0.2d, v0.4s, v0.4s
 umlal2 v0.2d, v0.4s, v0.s[0]
 umlal2 v0.4s, v0.8h, v0.8h
 umlal2 v0.4s, v0.8h, v0.h[0]
 umlal2 v0.8h, v0.16b, v0.16b
-umlal2 v10.4s, v28.8h, v17.8h
-umlal2 v12.8h, v3.16b, v1.16b
-umlal2 v20.4s, v25.8h, v2.h[1]
-umlal2 v29.2d, v29.4s, v4.s[3]
+umlal2 v10.2d, v28.4s, v17.4s
+umlal2 v12.4s, v3.8h, v1.8h
+umlal2 v2.8h, v10.16b, v27.16b
+umlal2 v20.2d, v25.4s, v5.s[0]
+umlal2 v28.4s, v23.8h, v6.h[3]
 umlal2 v31.2d, v31.4s, v31.4s
 umlal2 v31.2d, v31.4s, v31.s[3]
 umlal2 v31.4s, v31.8h, v15.h[7]
 umlal2 v31.4s, v31.8h, v31.8h
 umlal2 v31.8h, v31.16b, v31.16b
-umlal2 v4.2d, v19.4s, v29.4s
 umlsl v0.2d, v0.2s, v0.2s
 umlsl v0.2d, v0.2s, v0.s[0]
 umlsl v0.4s, v0.4h, v0.4h
 umlsl v0.4s, v0.4h, v0.h[0]
 umlsl v0.8h, v0.8b, v0.8b
-umlsl v10.2d, v18.2s, v10.s[3]
-umlsl v15.8h, v4.8b, v17.8b
-umlsl v20.4s, v2.4h, v1.h[7]
-umlsl v23.4s, v25.4h, v1.4h
-umlsl v24.2d, v7.2s, v23.2s
+umlsl v15.4s, v4.4h, v17.4h
+umlsl v15.8h, v6.8b, v7.8b
+umlsl v20.2d, v2.2s, v2.s[3]
+umlsl v23.2d, v25.2s, v1.2s
+umlsl v25.4s, v9.4h, v4.h[6]
 umlsl v31.2d, v31.2s, v31.2s
 umlsl v31.2d, v31.2s, v31.s[3]
 umlsl v31.4s, v31.4h, v15.h[7]
@@ -7668,72 +7668,72 @@ umlsl2 v0.2d, v0.4s, v0.s[0]
 umlsl2 v0.4s, v0.8h, v0.8h
 umlsl2 v0.4s, v0.8h, v0.h[0]
 umlsl2 v0.8h, v0.16b, v0.16b
-umlsl2 v1.4s, v26.8h, v29.8h
-umlsl2 v15.2d, v6.4s, v7.s[0]
-umlsl2 v25.2d, v9.4s, v9.4s
-umlsl2 v28.4s, v27.8h, v15.h[5]
-umlsl2 v30.8h, v20.16b, v10.16b
+umlsl2 v1.2d, v26.4s, v29.4s
+umlsl2 v24.8h, v8.16b, v30.16b
+umlsl2 v28.2d, v27.4s, v30.s[2]
+umlsl2 v30.4s, v20.8h, v10.8h
 umlsl2 v31.2d, v31.4s, v31.4s
 umlsl2 v31.2d, v31.4s, v31.s[3]
 umlsl2 v31.4s, v31.8h, v15.h[7]
 umlsl2 v31.4s, v31.8h, v31.8h
 umlsl2 v31.8h, v31.16b, v31.16b
+umlsl2 v7.4s, v14.8h, v11.h[3]
 ummla v0.4s, v0.16b, v0.16b
+ummla v16.4s, v19.16b, v4.16b
 ummla v31.4s, v31.16b, v31.16b
-ummla v8.4s, v7.16b, v17.16b
 umov w0, v0.b[0]
 umov w0, v0.h[0]
 umov w0, v0.s[0]
-umov w10, v2.s[3]
-umov w16, v19.b[2]
-umov w9, v1.h[1]
+umov w10, v2.b[13]
+umov w13, v29.s[1]
+umov w27, v30.h[3]
 umov wzr, v31.b[15]
 umov wzr, v31.h[7]
 umov wzr, v31.s[3]
 umov x0, v0.d[0]
-umov x27, v30.d[0]
+umov x2, v6.d[0]
 umov xzr, v31.d[1]
 umull v0.2d, v0.2s, v0.2s
 umull v0.2d, v0.2s, v0.s[0]
 umull v0.4s, v0.4h, v0.4h
 umull v0.4s, v0.4h, v0.h[0]
 umull v0.8h, v0.8b, v0.8b
-umull v12.8h, v9.8b, v31.8b
-umull v14.4s, v12.4h, v9.h[7]
-umull v15.2d, v1.2s, v26.s[2]
-umull v21.2d, v26.2s, v2.2s
+umull v12.4s, v9.4h, v31.4h
+umull v13.8h, v14.8b, v11.8b
+umull v14.2d, v12.2s, v18.s[3]
+umull v18.4s, v18.4h, v11.h[1]
 umull v31.2d, v31.2s, v31.2s
 umull v31.2d, v31.2s, v31.s[3]
 umull v31.4s, v31.4h, v15.h[7]
 umull v31.4s, v31.4h, v31.4h
 umull v31.8h, v31.8b, v31.8b
-umull v8.4s, v28.4h, v27.4h
+umull v8.2d, v28.2s, v27.2s
 umull2 v0.2d, v0.4s, v0.4s
 umull2 v0.2d, v0.4s, v0.s[0]
 umull2 v0.4s, v0.8h, v0.8h
 umull2 v0.4s, v0.8h, v0.h[0]
 umull2 v0.8h, v0.16b, v0.16b
-umull2 v13.2d, v14.4s, v11.s[0]
-umull2 v18.2d, v18.4s, v23.4s
-umull2 v2.4s, v10.8h, v14.h[6]
-umull2 v22.8h, v18.16b, v0.16b
-umull2 v23.4s, v2.8h, v30.8h
+umull2 v2.2d, v10.4s, v29.s[3]
+umull2 v22.4s, v18.8h, v0.8h
+umull2 v23.2d, v2.4s, v30.4s
+umull2 v25.8h, v20.16b, v30.16b
+umull2 v26.4s, v15.8h, v13.h[5]
 umull2 v31.2d, v31.4s, v31.4s
 umull2 v31.2d, v31.4s, v31.s[3]
 umull2 v31.4s, v31.8h, v15.h[7]
 umull2 v31.4s, v31.8h, v31.8h
 umull2 v31.8h, v31.16b, v31.16b
 uqadd b0, b0, b0
-uqadd b13, b5, b17
+uqadd b18, b18, b22
 uqadd b31, b31, b31
 uqadd d0, d0, d0
-uqadd d17, d19, d11
+uqadd d20, d26, d24
 uqadd d31, d31, d31
 uqadd h0, h0, h0
-uqadd h18, h18, h22
+uqadd h11, h29, h7
 uqadd h31, h31, h31
 uqadd s0, s0, s0
-uqadd s20, s26, s24
+uqadd s28, s16, s14
 uqadd s31, s31, s31
 uqadd v0.16b, v0.16b, v0.16b
 uqadd v0.2d, v0.2d, v0.2d
@@ -7742,13 +7742,13 @@ uqadd v0.4h, v0.4h, v0.4h
 uqadd v0.4s, v0.4s, v0.4s
 uqadd v0.8b, v0.8b, v0.8b
 uqadd v0.8h, v0.8h, v0.8h
-uqadd v11.16b, v29.16b, v7.16b
-uqadd v11.2s, v24.2s, v25.2s
-uqadd v22.8h, v0.8h, v12.8h
-uqadd v23.8b, v27.8b, v14.8b
-uqadd v27.4s, v0.4s, v3.4s
-uqadd v28.2d, v16.2d, v14.2d
-uqadd v28.4h, v3.4h, v3.4h
+uqadd v11.16b, v24.16b, v25.16b
+uqadd v22.4s, v0.4s, v12.4s
+uqadd v23.4h, v27.4h, v14.4h
+uqadd v26.8h, v19.8h, v16.8h
+uqadd v27.2s, v0.2s, v3.2s
+uqadd v28.2d, v3.2d, v3.2d
+uqadd v30.8b, v20.8b, v26.8b
 uqadd v31.16b, v31.16b, v31.16b
 uqadd v31.2d, v31.2d, v31.2d
 uqadd v31.2s, v31.2s, v31.2s
@@ -7761,10 +7761,11 @@ uqdecb w0, #0
 uqdecb w0, #0, mul #1
 uqdecb w0, pow2
 uqdecb w0, pow2, mul #1
-uqdecb w18, vl6
-uqdecb w25, vl256, mul #12
-uqdecb w8, #11, mul #8
-uqdecb w9, #30
+uqdecb w18, #12
+uqdecb w2, vl8, mul #6
+uqdecb w25, #26, mul #12
+uqdecb w26, vl2
+uqdecb w8
 uqdecb wzr
 uqdecb wzr, #31
 uqdecb wzr, #31, mul #16
@@ -7775,11 +7776,11 @@ uqdecb x0, #0
 uqdecb x0, #0, mul #1
 uqdecb x0, pow2
 uqdecb x0, pow2, mul #1
-uqdecb x11, #11, mul #15
-uqdecb x2, #16
-uqdecb x2, mul3
-uqdecb x26
-uqdecb x7, vl7, mul #8
+uqdecb x11
+uqdecb x2, #30
+uqdecb x20, vl2, mul #13
+uqdecb x7, #14, mul #8
+uqdecb x7, pow2
 uqdecb xzr
 uqdecb xzr, #31
 uqdecb xzr, #31, mul #16
@@ -7790,11 +7791,11 @@ uqdecd w0, #0
 uqdecd w0, #0, mul #1
 uqdecd w0, pow2
 uqdecd w0, pow2, mul #1
-uqdecd w13, #17, mul #2
-uqdecd w16, vl4, mul #3
-uqdecd w20, #4
-uqdecd w7
-uqdecd w7, vl4
+uqdecd w13
+uqdecd w15, vl5, mul #1
+uqdecd w16, #8, mul #3
+uqdecd w16, vl7
+uqdecd w7, #8
 uqdecd wzr
 uqdecd wzr, #31
 uqdecd wzr, #31, mul #16
@@ -7805,11 +7806,11 @@ uqdecd x0, #0
 uqdecd x0, #0, mul #1
 uqdecd x0, pow2
 uqdecd x0, pow2, mul #1
-uqdecd x15, #10
-uqdecd x16
-uqdecd x19, vl256, mul #15
-uqdecd x20, #21, mul #13
-uqdecd x5, mul3
+uqdecd x19, #27, mul #15
+uqdecd x20
+uqdecd x4, vl256, mul #2
+uqdecd x5, #30
+uqdecd x8, vl16
 uqdecd xzr
 uqdecd xzr, #31
 uqdecd xzr, #31, mul #16
@@ -7820,11 +7821,11 @@ uqdech w0, #0
 uqdech w0, #0, mul #1
 uqdech w0, pow2
 uqdech w0, pow2, mul #1
-uqdech w14, vl32, mul #6
-uqdech w16, #29, mul #11
-uqdech w26, vl64
-uqdech w30, #1
-uqdech w5
+uqdech w14, #20, mul #6
+uqdech w16
+uqdech w2, pow2, mul #6
+uqdech w26, #23
+uqdech w6, vl64
 uqdech wzr
 uqdech wzr, #31
 uqdech wzr, #31, mul #16
@@ -7833,13 +7834,12 @@ uqdech wzr, all, mul #16
 uqdech x0
 uqdech x0, #0
 uqdech x0, #0, mul #1
-uqdech x0, #16, mul #15
 uqdech x0, pow2
 uqdech x0, pow2, mul #1
-uqdech x2, #0
-uqdech x4, vl7
-uqdech x6
-uqdech x6, vl6, mul #11
+uqdech x19, vl2
+uqdech x23, vl5, mul #12
+uqdech x4, #14
+uqdech x6, #12, mul #11
 uqdech xzr
 uqdech xzr, #31
 uqdech xzr, #31, mul #16
@@ -7850,11 +7850,11 @@ uqdecw w0, #0
 uqdecw w0, #0, mul #1
 uqdecw w0, pow2
 uqdecw w0, pow2, mul #1
-uqdecw w11
-uqdecw w11, vl16, mul #2
-uqdecw w13, #5
-uqdecw w24, #13, mul #14
-uqdecw w29, vl16
+uqdecw w11, #19, mul #2
+uqdecw w17, vl16, mul #12
+uqdecw w24
+uqdecw w29, #19
+uqdecw w30, vl4
 uqdecw wzr
 uqdecw wzr, #31
 uqdecw wzr, #31, mul #16
@@ -7865,11 +7865,11 @@ uqdecw x0, #0
 uqdecw x0, #0, mul #1
 uqdecw x0, pow2
 uqdecw x0, pow2, mul #1
-uqdecw x17, #19
-uqdecw x20, #28, mul #9
-uqdecw x20, vl128, mul #16
-uqdecw x29, vl7
-uqdecw x30
+uqdecw x20
+uqdecw x20, #25, mul #16
+uqdecw x26, vl5
+uqdecw x29, #15
+uqdecw x5, vl4, mul #14
 uqdecw xzr
 uqdecw xzr, #31
 uqdecw xzr, #31, mul #16
@@ -7880,27 +7880,27 @@ uqincb w0, #0
 uqincb w0, #0, mul #1
 uqincb w0, pow2
 uqincb w0, pow2, mul #1
-uqincb w19, #8, mul #12
-uqincb w2
-uqincb w20, vl2
-uqincb w22, vl5, mul #13
-uqincb w28, #2
+uqincb w16, vl7
+uqincb w19
+uqincb w20, #4
+uqincb w22, #11, mul #13
 uqincb wzr
 uqincb wzr, #31
 uqincb wzr, #31, mul #16
 uqincb wzr, all
 uqincb wzr, all, mul #16
+uqincb wzr, vl32, mul #2
 uqincb x0
 uqincb x0, #0
 uqincb x0, #0, mul #1
 uqincb x0, pow2
 uqincb x0, pow2, mul #1
-uqincb x16
-uqincb x16, vl7
-uqincb x20, #11, mul #12
-uqincb x7, vl16, mul #13
+uqincb x16, #15
+uqincb x20
+uqincb x27, vl4
+uqincb x5, vl64, mul #4
+uqincb x7, #18, mul #13
 uqincb xzr
-uqincb xzr, #21
 uqincb xzr, #31
 uqincb xzr, #31, mul #16
 uqincb xzr, all
@@ -7910,11 +7910,11 @@ uqincd w0, #0
 uqincd w0, #0, mul #1
 uqincd w0, pow2
 uqincd w0, pow2, mul #1
+uqincd w18, mul3
 uqincd w27
-uqincd w27, #1, mul #6
-uqincd w27, mul3
-uqincd w28, vl3, mul #2
-uqincd w5, #23
+uqincd w27, #30
+uqincd w28, #6, mul #2
+uqincd w30, vl5, mul #2
 uqincd wzr
 uqincd wzr, #31
 uqincd wzr, #31, mul #16
@@ -7925,11 +7925,11 @@ uqincd x0, #0
 uqincd x0, #0, mul #1
 uqincd x0, pow2
 uqincd x0, pow2, mul #1
-uqincd x1, vl64
-uqincd x18
-uqincd x19, vl2, mul #11
-uqincd x21, #22, mul #3
-uqincd x30, #11
+uqincd x1, #23
+uqincd x19, #4, mul #11
+uqincd x21
+uqincd x5, mul4, mul #7
+uqincd x7, vl4
 uqincd xzr
 uqincd xzr, #31
 uqincd xzr, #31, mul #16
@@ -7940,12 +7940,12 @@ uqinch w0, #0
 uqinch w0, #0, mul #1
 uqinch w0, pow2
 uqinch w0, pow2, mul #1
-uqinch w1, vl7
-uqinch w21
-uqinch w24, vl4, mul #13
-uqinch w7, #8, mul #3
+uqinch w1, #15
+uqinch w15, vl16
+uqinch w24, #8, mul #13
+uqinch w6, vl16, mul #6
+uqinch w7
 uqinch wzr
-uqinch wzr, #2
 uqinch wzr, #31
 uqinch wzr, #31, mul #16
 uqinch wzr, all
@@ -7955,11 +7955,11 @@ uqinch x0, #0
 uqinch x0, #0, mul #1
 uqinch x0, pow2
 uqinch x0, pow2, mul #1
-uqinch x1, mul4, mul #11
-uqinch x12, vl8
-uqinch x15
-uqinch x25, #12, mul #7
-uqinch x6, #19
+uqinch x1, #28, mul #11
+uqinch x12, #17
+uqinch x24, vl1, mul #4
+uqinch x25
+uqinch x25, vl128
 uqinch xzr
 uqinch xzr, #31
 uqinch xzr, #31, mul #16
@@ -7968,13 +7968,13 @@ uqinch xzr, all, mul #16
 uqincw w0
 uqincw w0, #0
 uqincw w0, #0, mul #1
+uqincw w0, #2, mul #7
 uqincw w0, pow2
 uqincw w0, pow2, mul #1
-uqincw w0, vl1, mul #7
-uqincw w19, #27
-uqincw w20
-uqincw w5, #6, mul #11
-uqincw w6, vl256
+uqincw w15, vl4
+uqincw w2, vl32, mul #10
+uqincw w5
+uqincw w6, #27
 uqincw wzr
 uqincw wzr, #31
 uqincw wzr, #31, mul #16
@@ -7983,13 +7983,12 @@ uqincw wzr, all, mul #16
 uqincw x0
 uqincw x0, #0
 uqincw x0, #0, mul #1
-uqincw x0, #8, mul #14
 uqincw x0, pow2
 uqincw x0, pow2, mul #1
-uqincw x15
-uqincw x17, vl128
-uqincw x2, #21
-uqincw x7, vl16, mul #14
+uqincw x17, #24
+uqincw x28, mul4, mul #16
+uqincw x30, vl2
+uqincw x7, #18, mul #14
 uqincw xzr
 uqincw xzr, #31
 uqincw xzr, #31, mul #16
@@ -7997,16 +7996,16 @@ uqincw xzr, all
 uqincw xzr, all, mul #16
 uqrshl b0, b0, b0
 uqrshl b31, b31, b31
-uqrshl b7, b6, b18
+uqrshl b5, b28, b20
 uqrshl d0, d0, d0
-uqrshl d21, d17, d11
+uqrshl d16, d22, d17
 uqrshl d31, d31, d31
 uqrshl h0, h0, h0
+uqrshl h25, h0, h22
 uqrshl h31, h31, h31
-uqrshl h5, h28, h20
 uqrshl s0, s0, s0
-uqrshl s16, s22, s17
 uqrshl s31, s31, s31
+uqrshl s4, s27, s7
 uqrshl v0.16b, v0.16b, v0.16b
 uqrshl v0.2d, v0.2d, v0.2d
 uqrshl v0.2s, v0.2s, v0.2s
@@ -8014,11 +8013,11 @@ uqrshl v0.4h, v0.4h, v0.4h
 uqrshl v0.4s, v0.4s, v0.4s
 uqrshl v0.8b, v0.8b, v0.8b
 uqrshl v0.8h, v0.8h, v0.8h
-uqrshl v15.4s, v26.4s, v30.4s
-uqrshl v25.16b, v0.16b, v22.16b
-uqrshl v25.4h, v29.4h, v24.4h
-uqrshl v26.8b, v28.8b, v0.8b
-uqrshl v30.8h, v7.8h, v12.8h
+uqrshl v1.8h, v20.8h, v8.8h
+uqrshl v15.2s, v26.2s, v30.2s
+uqrshl v25.2d, v29.2d, v24.2d
+uqrshl v26.4h, v28.4h, v0.4h
+uqrshl v30.4s, v7.4s, v12.4s
 uqrshl v31.16b, v31.16b, v31.16b
 uqrshl v31.2d, v31.2d, v31.2d
 uqrshl v31.2s, v31.2s, v31.2s
@@ -8026,57 +8025,57 @@ uqrshl v31.4h, v31.4h, v31.4h
 uqrshl v31.4s, v31.4s, v31.4s
 uqrshl v31.8b, v31.8b, v31.8b
 uqrshl v31.8h, v31.8h, v31.8h
-uqrshl v4.2d, v27.2d, v7.2d
-uqrshl v9.2s, v14.2s, v3.2s
+uqrshl v7.8b, v7.8b, v1.8b
+uqrshl v9.16b, v14.16b, v3.16b
 uqrshrn b0, h0, #1
-uqrshrn b3, h26, #4
+uqrshrn b13, h15, #5
 uqrshrn b31, h31, #8
 uqrshrn h0, s0, #1
-uqrshrn h18, s30, #1
+uqrshrn h26, s20, #11
 uqrshrn h31, s31, #16
 uqrshrn s0, d0, #1
-uqrshrn s13, d15, #20
+uqrshrn s12, d27, #10
 uqrshrn s31, d31, #32
 uqrshrn v0.2s, v0.2d, #1
 uqrshrn v0.4h, v0.4s, #1
 uqrshrn v0.8b, v0.8h, #1
-uqrshrn v12.4h, v27.4s, #5
-uqrshrn v26.2s, v20.2d, #22
+uqrshrn v19.8b, v11.8h, #1
+uqrshrn v2.4h, v3.4s, #4
 uqrshrn v31.2s, v31.2d, #32
 uqrshrn v31.4h, v31.4s, #16
 uqrshrn v31.8b, v31.8h, #8
-uqrshrn v4.8b, v18.8h, #1
+uqrshrn v4.2s, v18.2d, #2
 uqrshrn2 v0.16b, v0.8h, #1
 uqrshrn2 v0.4s, v0.2d, #1
 uqrshrn2 v0.8h, v0.4s, #1
-uqrshrn2 v20.4s, v11.2d, #19
-uqrshrn2 v30.8h, v6.4s, #9
+uqrshrn2 v30.16b, v6.8h, #5
 uqrshrn2 v31.16b, v31.8h, #8
 uqrshrn2 v31.4s, v31.2d, #32
 uqrshrn2 v31.8h, v31.4s, #16
-uqrshrn2 v7.16b, v28.8h, #6
+uqrshrn2 v4.4s, v31.2d, #9
+uqrshrn2 v5.8h, v23.4s, #5
 uqshl b0, b0, #0
 uqshl b0, b0, b0
-uqshl b10, b9, #7
-uqshl b30, b2, b26
+uqshl b26, b20, b16
+uqshl b28, b16, #1
 uqshl b31, b31, #7
 uqshl b31, b31, b31
 uqshl d0, d0, #0
 uqshl d0, d0, d0
-uqshl d26, d20, d16
-uqshl d28, d16, #9
+uqshl d21, d19, #48
+uqshl d24, d19, d18
 uqshl d31, d31, #63
 uqshl d31, d31, d31
 uqshl h0, h0, #0
 uqshl h0, h0, h0
-uqshl h21, h19, #12
-uqshl h24, h19, h18
+uqshl h26, h0, #2
+uqshl h31, h20, h27
 uqshl h31, h31, #15
 uqshl h31, h31, h31
 uqshl s0, s0, #0
 uqshl s0, s0, s0
-uqshl s26, s0, #5
-uqshl s31, s20, s27
+uqshl s15, s5, #3
+uqshl s27, s20, s23
 uqshl s31, s31, #31
 uqshl s31, s31, s31
 uqshl v0.16b, v0.16b, #0
@@ -8093,18 +8092,18 @@ uqshl v0.8b, v0.8b, #0
 uqshl v0.8b, v0.8b, v0.8b
 uqshl v0.8h, v0.8h, #0
 uqshl v0.8h, v0.8h, v0.8h
-uqshl v1.4h, v15.4h, #9
-uqshl v11.2s, v10.2s, #18
-uqshl v15.16b, v5.16b, #0
-uqshl v15.4h, v8.4h, v27.4h
-uqshl v16.4s, v24.4s, v26.4s
-uqshl v17.8b, v14.8b, v31.8b
-uqshl v19.2s, v21.2s, v4.2s
-uqshl v2.8b, v1.8b, #4
-uqshl v24.8h, v5.8h, #4
-uqshl v27.16b, v20.16b, v23.16b
-uqshl v3.4s, v31.4s, #28
-uqshl v30.8h, v14.8h, v3.8h
+uqshl v1.2s, v15.2s, #18
+uqshl v11.2d, v10.2d, #37
+uqshl v15.2s, v8.2s, v27.2s
+uqshl v16.4h, v24.4h, v26.4h
+uqshl v17.4s, v14.4s, v31.4s
+uqshl v19.2d, v21.2d, v4.2d
+uqshl v2.4s, v1.4s, #18
+uqshl v2.8h, v8.8h, #14
+uqshl v22.8h, v1.8h, v4.8h
+uqshl v24.8b, v5.8b, #2
+uqshl v3.4h, v31.4h, #14
+uqshl v30.8b, v14.8b, v3.8b
 uqshl v31.16b, v31.16b, #7
 uqshl v31.16b, v31.16b, v31.16b
 uqshl v31.2d, v31.2d, #63
@@ -8119,46 +8118,46 @@ uqshl v31.8b, v31.8b, #7
 uqshl v31.8b, v31.8b, v31.8b
 uqshl v31.8h, v31.8h, #15
 uqshl v31.8h, v31.8h, v31.8h
-uqshl v4.2d, v19.2d, v16.2d
-uqshl v9.2d, v8.2d, #19
+uqshl v4.16b, v19.16b, v16.16b
+uqshl v9.16b, v8.16b, #2
 uqshrn b0, h0, #1
-uqshrn b0, h26, #4
+uqshrn b23, h5, #8
 uqshrn b31, h31, #8
 uqshrn h0, s0, #1
-uqshrn h27, s19, #7
+uqshrn h1, s17, #14
 uqshrn h31, s31, #16
 uqshrn s0, d0, #1
-uqshrn s23, d5, #31
+uqshrn s10, d27, #25
 uqshrn s31, d31, #32
 uqshrn v0.2s, v0.2d, #1
 uqshrn v0.4h, v0.4s, #1
 uqshrn v0.8b, v0.8h, #1
-uqshrn v1.2s, v17.2d, #28
-uqshrn v10.4h, v27.4s, #13
+uqshrn v15.8b, v22.8h, #6
+uqshrn v23.4h, v13.4s, #8
 uqshrn v31.2s, v31.2d, #32
 uqshrn v31.4h, v31.4s, #16
 uqshrn v31.8b, v31.8h, #8
-uqshrn v9.8b, v22.8h, #4
+uqshrn v9.2s, v22.2d, #14
 uqshrn2 v0.16b, v0.8h, #1
 uqshrn2 v0.4s, v0.2d, #1
 uqshrn2 v0.8h, v0.4s, #1
-uqshrn2 v14.8h, v21.4s, #2
-uqshrn2 v15.4s, v22.2d, #24
-uqshrn2 v23.16b, v13.8h, #4
+uqshrn2 v14.16b, v21.8h, #1
+uqshrn2 v29.4s, v24.2d, #29
 uqshrn2 v31.16b, v31.8h, #8
 uqshrn2 v31.4s, v31.2d, #32
 uqshrn2 v31.8h, v31.4s, #16
+uqshrn2 v8.8h, v7.4s, #9
 uqsub b0, b0, b0
+uqsub b18, b29, b10
 uqsub b31, b31, b31
-uqsub b7, b15, b5
 uqsub d0, d0, d0
-uqsub d29, d12, d12
+uqsub d13, d11, d3
 uqsub d31, d31, d31
 uqsub h0, h0, h0
-uqsub h18, h29, h10
+uqsub h31, h15, h28
 uqsub h31, h31, h31
 uqsub s0, s0, s0
-uqsub s13, s11, s3
+uqsub s24, s11, s30
 uqsub s31, s31, s31
 uqsub v0.16b, v0.16b, v0.16b
 uqsub v0.2d, v0.2d, v0.2d
@@ -8167,65 +8166,65 @@ uqsub v0.4h, v0.4h, v0.4h
 uqsub v0.4s, v0.4s, v0.4s
 uqsub v0.8b, v0.8b, v0.8b
 uqsub v0.8h, v0.8h, v0.8h
-uqsub v12.2s, v24.2s, v16.2s
-uqsub v17.8h, v10.8h, v25.8h
-uqsub v22.4h, v30.4h, v18.4h
-uqsub v24.2d, v11.2d, v30.2d
-uqsub v31.16b, v15.16b, v28.16b
+uqsub v11.8h, v1.8h, v13.8h
+uqsub v12.16b, v24.16b, v16.16b
+uqsub v13.8b, v1.8b, v3.8b
+uqsub v17.4s, v10.4s, v25.4s
+uqsub v22.2d, v30.2d, v18.2d
 uqsub v31.16b, v31.16b, v31.16b
 uqsub v31.2d, v31.2d, v31.2d
+uqsub v31.2s, v14.2s, v16.2s
 uqsub v31.2s, v31.2s, v31.2s
 uqsub v31.4h, v31.4h, v31.4h
-uqsub v31.4s, v14.4s, v16.4s
 uqsub v31.4s, v31.4s, v31.4s
 uqsub v31.8b, v31.8b, v31.8b
 uqsub v31.8h, v31.8h, v31.8h
-uqsub v5.8b, v1.8b, v23.8b
+uqsub v5.4h, v1.4h, v23.4h
 uqxtn b0, h0
-uqxtn b0, h3
+uqxtn b15, h10
 uqxtn b31, h31
 uqxtn h0, s0
-uqxtn h11, s28
+uqxtn h15, s25
 uqxtn h31, s31
 uqxtn s0, d0
-uqxtn s15, d10
+uqxtn s17, d20
 uqxtn s31, d31
 uqxtn v0.2s, v0.2d
 uqxtn v0.4h, v0.4s
 uqxtn v0.8b, v0.8h
-uqxtn v15.2s, v25.2d
-uqxtn v17.4h, v20.4s
-uqxtn v22.8b, v29.8h
+uqxtn v11.8b, v30.8h
+uqxtn v22.2s, v29.2d
+uqxtn v29.4h, v10.4s
 uqxtn v31.2s, v31.2d
 uqxtn v31.4h, v31.4s
 uqxtn v31.8b, v31.8h
 uqxtn2 v0.16b, v0.8h
 uqxtn2 v0.4s, v0.2d
 uqxtn2 v0.8h, v0.4s
-uqxtn2 v11.4s, v30.2d
-uqxtn2 v14.8h, v7.4s
-uqxtn2 v29.16b, v10.8h
+uqxtn2 v14.16b, v7.8h
 uqxtn2 v31.16b, v31.8h
 uqxtn2 v31.4s, v31.2d
+uqxtn2 v31.8h, v29.4s
 uqxtn2 v31.8h, v31.4s
+uqxtn2 v5.4s, v28.2d
 urecpe v0.2s, v0.2s
 urecpe v0.4s, v0.4s
-urecpe v24.4s, v2.4s
+urecpe v1.4s, v12.4s
 urecpe v31.2s, v31.2s
 urecpe v31.4s, v31.4s
-urecpe v4.2s, v1.2s
+urecpe v4.2s, v13.2s
 urhadd v0.16b, v0.16b, v0.16b
 urhadd v0.2s, v0.2s, v0.2s
-urhadd v0.2s, v8.2s, v11.2s
 urhadd v0.4h, v0.4h, v0.4h
 urhadd v0.4s, v0.4s, v0.4s
 urhadd v0.8b, v0.8b, v0.8b
 urhadd v0.8h, v0.8h, v0.8h
-urhadd v1.16b, v12.16b, v23.16b
-urhadd v11.4s, v12.4s, v30.4s
-urhadd v15.8b, v10.8b, v9.8b
-urhadd v15.8h, v15.8h, v17.8h
-urhadd v25.4h, v20.4h, v7.4h
+urhadd v11.2s, v12.2s, v30.2s
+urhadd v13.8h, v21.8h, v15.8h
+urhadd v15.4h, v10.4h, v9.4h
+urhadd v15.4s, v15.4s, v17.4s
+urhadd v25.16b, v20.16b, v7.16b
+urhadd v25.8b, v6.8b, v30.8b
 urhadd v31.16b, v31.16b, v31.16b
 urhadd v31.2s, v31.2s, v31.2s
 urhadd v31.4h, v31.4h, v31.4h
@@ -8233,7 +8232,7 @@ urhadd v31.4s, v31.4s, v31.4s
 urhadd v31.8b, v31.8b, v31.8b
 urhadd v31.8h, v31.8h, v31.8h
 urshl d0, d0, d0
-urshl d27, d8, d10
+urshl d14, d31, d20
 urshl d31, d31, d31
 urshl v0.16b, v0.16b, v0.16b
 urshl v0.2d, v0.2d, v0.2d
@@ -8242,12 +8241,11 @@ urshl v0.4h, v0.4h, v0.4h
 urshl v0.4s, v0.4s, v0.4s
 urshl v0.8b, v0.8b, v0.8b
 urshl v0.8h, v0.8h, v0.8h
-urshl v10.16b, v25.16b, v17.16b
-urshl v10.8h, v14.8h, v27.8h
-urshl v12.4h, v2.4h, v20.4h
-urshl v14.2d, v31.2d, v20.2d
-urshl v20.2s, v7.2s, v9.2s
-urshl v25.4s, v19.4s, v2.4s
+urshl v1.8h, v9.8h, v2.8h
+urshl v10.4s, v14.4s, v27.4s
+urshl v12.2d, v2.2d, v20.2d
+urshl v20.16b, v7.16b, v9.16b
+urshl v25.2s, v19.2s, v2.2s
 urshl v31.16b, v31.16b, v31.16b
 urshl v31.2d, v31.2d, v31.2d
 urshl v31.2s, v31.2s, v31.2s
@@ -8255,9 +8253,10 @@ urshl v31.4h, v31.4h, v31.4h
 urshl v31.4s, v31.4s, v31.4s
 urshl v31.8b, v31.8b, v31.8b
 urshl v31.8h, v31.8h, v31.8h
-urshl v9.8b, v24.8b, v22.8b
+urshl v5.8b, v21.8b, v1.8b
+urshl v9.4h, v24.4h, v22.4h
 urshr d0, d0, #1
-urshr d25, d4, #54
+urshr d13, d5, #2
 urshr d31, d31, #64
 urshr v0.16b, v0.16b, #1
 urshr v0.2d, v0.2d, #1
@@ -8266,13 +8265,12 @@ urshr v0.4h, v0.4h, #1
 urshr v0.4s, v0.4s, #1
 urshr v0.8b, v0.8b, #1
 urshr v0.8h, v0.8h, #1
-urshr v13.2d, v5.2d, #2
-urshr v13.2s, v20.2s, #21
-urshr v2.16b, v2.16b, #2
-urshr v2.4h, v26.4h, #16
-urshr v22.8b, v17.8b, #5
-urshr v28.4s, v21.4s, #5
-urshr v3.8h, v0.8h, #10
+urshr v13.16b, v20.16b, #6
+urshr v2.2d, v26.2d, #64
+urshr v22.4h, v17.4h, #10
+urshr v28.2s, v21.2s, #5
+urshr v3.4s, v0.4s, #20
+urshr v3.8b, v30.8b, #6
 urshr v31.16b, v31.16b, #8
 urshr v31.2d, v31.2d, #64
 urshr v31.2s, v31.2s, #32
@@ -8280,15 +8278,16 @@ urshr v31.4h, v31.4h, #16
 urshr v31.4s, v31.4s, #32
 urshr v31.8b, v31.8b, #8
 urshr v31.8h, v31.8h, #16
+urshr v8.8h, v2.8h, #7
 ursqrte v0.2s, v0.2s
 ursqrte v0.4s, v0.4s
-ursqrte v21.2s, v27.2s
+ursqrte v11.4s, v29.4s
+ursqrte v20.2s, v11.2s
 ursqrte v31.2s, v31.2s
-ursqrte v31.4s, v30.4s
 ursqrte v31.4s, v31.4s
 ursra d0, d0, #1
-ursra d11, d29, #6
 ursra d31, d31, #64
+ursra d5, d9, #20
 ursra v0.16b, v0.16b, #1
 ursra v0.2d, v0.2d, #1
 ursra v0.2s, v0.2s, #1
@@ -8296,11 +8295,11 @@ ursra v0.4h, v0.4h, #1
 ursra v0.4s, v0.4s, #1
 ursra v0.8b, v0.8b, #1
 ursra v0.8h, v0.8h, #1
-ursra v1.8h, v20.8h, #12
-ursra v12.2s, v11.2s, #4
-ursra v14.4s, v6.4s, #3
-ursra v14.8b, v2.8b, #4
-ursra v3.16b, v7.16b, #5
+ursra v1.4s, v20.4s, #23
+ursra v12.16b, v11.16b, #1
+ursra v14.2s, v6.2s, #3
+ursra v14.4h, v2.4h, #8
+ursra v3.8b, v28.8b, #8
 ursra v31.16b, v31.16b, #8
 ursra v31.2d, v31.2d, #64
 ursra v31.2s, v31.2s, #32
@@ -8308,23 +8307,23 @@ ursra v31.4h, v31.4h, #16
 ursra v31.4s, v31.4s, #32
 ursra v31.8b, v31.8b, #8
 ursra v31.8h, v31.8h, #16
-ursra v5.2d, v9.2d, #20
-ursra v5.4h, v8.4h, #13
+ursra v5.2d, v8.2d, #50
+ursra v7.8h, v22.8h, #2
 usdot v0.2s, v0.8b, v0.4b[0]
 usdot v0.2s, v0.8b, v0.8b
 usdot v0.4s, v0.16b, v0.16b
 usdot v0.4s, v0.16b, v0.4b[0]
-usdot v12.4s, v28.16b, v10.4b[3]
-usdot v17.2s, v9.8b, v27.8b
-usdot v29.2s, v17.8b, v28.4b[3]
+usdot v12.2s, v28.8b, v10.4b[3]
+usdot v12.4s, v8.16b, v2.16b
+usdot v20.4s, v15.16b, v28.4b[3]
 usdot v31.2s, v31.8b, v31.4b[3]
 usdot v31.2s, v31.8b, v31.8b
 usdot v31.4s, v31.16b, v31.16b
 usdot v31.4s, v31.16b, v31.4b[3]
-usdot v9.4s, v20.16b, v9.16b
+usdot v9.2s, v20.8b, v9.8b
 ushl d0, d0, d0
-ushl d15, d10, d22
 ushl d31, d31, d31
+ushl d5, d8, d5
 ushl v0.16b, v0.16b, v0.16b
 ushl v0.2d, v0.2d, v0.2d
 ushl v0.2s, v0.2s, v0.2s
@@ -8332,9 +8331,11 @@ ushl v0.4h, v0.4h, v0.4h
 ushl v0.4s, v0.4s, v0.4s
 ushl v0.8b, v0.8b, v0.8b
 ushl v0.8h, v0.8h, v0.8h
-ushl v25.8h, v24.8h, v15.8h
-ushl v3.4h, v0.4h, v10.4h
-ushl v30.2s, v28.2s, v1.2s
+ushl v0.8h, v4.8h, v6.8h
+ushl v18.8b, v25.8b, v31.8b
+ushl v25.4s, v24.4s, v15.4s
+ushl v3.2d, v0.2d, v10.2d
+ushl v30.16b, v28.16b, v1.16b
 ushl v31.16b, v31.16b, v31.16b
 ushl v31.2d, v31.2d, v31.2d
 ushl v31.2s, v31.2s, v31.2s
@@ -8342,30 +8343,28 @@ ushl v31.4h, v31.4h, v31.4h
 ushl v31.4s, v31.4s, v31.4s
 ushl v31.8b, v31.8b, v31.8b
 ushl v31.8h, v31.8h, v31.8h
-ushl v5.2d, v8.2d, v5.2d
-ushl v6.4s, v23.4s, v3.4s
-ushl v8.8b, v6.8b, v20.8b
-ushl v9.16b, v0.16b, v3.16b
+ushl v6.2s, v23.2s, v3.2s
+ushl v8.4h, v6.4h, v20.4h
 ushll v0.2d, v0.2s, #0
 ushll v0.4s, v0.4h, #0
-ushll v0.4s, v4.4h, #3
 ushll v0.8h, v0.8b, #0
-ushll v18.2d, v25.2s, #31
-ushll v30.8h, v23.8b, #5
+ushll v21.4s, v29.4h, #13
+ushll v24.8h, v25.8b, #5
+ushll v30.2d, v23.2s, #20
 ushll v31.2d, v31.2s, #31
 ushll v31.4s, v31.4h, #15
 ushll v31.8h, v31.8b, #7
 ushll2 v0.2d, v0.4s, #0
 ushll2 v0.4s, v0.8h, #0
 ushll2 v0.8h, v0.16b, #0
-ushll2 v14.8h, v13.16b, #7
-ushll2 v21.2d, v29.4s, #26
-ushll2 v24.4s, v25.8h, #10
+ushll2 v14.2d, v13.4s, #28
+ushll2 v29.8h, v25.16b, #1
+ushll2 v3.4s, v30.8h, #15
 ushll2 v31.2d, v31.4s, #31
 ushll2 v31.4s, v31.8h, #15
 ushll2 v31.8h, v31.16b, #7
 ushr d0, d0, #1
-ushr d29, d20, #18
+ushr d24, d19, #56
 ushr d31, d31, #64
 ushr v0.16b, v0.16b, #1
 ushr v0.2d, v0.2d, #1
@@ -8374,11 +8373,10 @@ ushr v0.4h, v0.4h, #1
 ushr v0.4s, v0.4s, #1
 ushr v0.8b, v0.8b, #1
 ushr v0.8h, v0.8h, #1
-ushr v12.8h, v5.8h, #5
-ushr v18.16b, v11.16b, #3
-ushr v18.2s, v31.2s, #12
-ushr v24.2d, v19.2d, #56
-ushr v27.4s, v21.4s, #32
+ushr v12.4s, v5.4s, #10
+ushr v13.8b, v6.8b, #7
+ushr v18.16b, v31.16b, #3
+ushr v27.2s, v21.2s, #32
 ushr v31.16b, v31.16b, #8
 ushr v31.2d, v31.2d, #64
 ushr v31.2s, v31.2s, #32
@@ -8386,22 +8384,23 @@ ushr v31.4h, v31.4h, #16
 ushr v31.4s, v31.4s, #32
 ushr v31.8b, v31.8b, #8
 ushr v31.8h, v31.8h, #16
-ushr v7.4h, v2.4h, #8
-ushr v7.8b, v10.8b, #4
+ushr v7.2d, v2.2d, #32
+ushr v7.4h, v10.4h, #8
+ushr v7.8h, v27.8h, #9
 usmmla v0.4s, v0.16b, v0.16b
-usmmla v13.4s, v6.16b, v25.16b
+usmmla v10.4s, v7.16b, v30.16b
 usmmla v31.4s, v31.16b, v31.16b
 usqadd b0, b0
-usqadd b10, b7
+usqadd b2, b4
 usqadd b31, b31
 usqadd d0, d0
-usqadd d19, d14
+usqadd d3, d11
 usqadd d31, d31
 usqadd h0, h0
-usqadd h2, h4
 usqadd h31, h31
+usqadd h4, h4
 usqadd s0, s0
-usqadd s3, s11
+usqadd s19, s7
 usqadd s31, s31
 usqadd v0.16b, v0.16b
 usqadd v0.2d, v0.2d
@@ -8410,11 +8409,11 @@ usqadd v0.4h, v0.4h
 usqadd v0.4s, v0.4s
 usqadd v0.8b, v0.8b
 usqadd v0.8h, v0.8h
-usqadd v13.8h, v26.8h
-usqadd v19.2d, v7.2d
-usqadd v23.4h, v19.4h
-usqadd v27.2s, v4.2s
-usqadd v30.4s, v0.4s
+usqadd v11.8b, v8.8b
+usqadd v13.4s, v26.4s
+usqadd v23.2d, v19.2d
+usqadd v27.16b, v4.16b
+usqadd v30.2s, v0.2s
 usqadd v31.16b, v31.16b
 usqadd v31.2d, v31.2d
 usqadd v31.2s, v31.2s
@@ -8422,10 +8421,10 @@ usqadd v31.4h, v31.4h
 usqadd v31.4s, v31.4s
 usqadd v31.8b, v31.8b
 usqadd v31.8h, v31.8h
-usqadd v4.16b, v4.16b
-usqadd v6.8b, v21.8b
+usqadd v6.4h, v21.4h
+usqadd v9.8h, v19.8h
 usra d0, d0, #1
-usra d25, d23, #40
+usra d26, d7, #42
 usra d31, d31, #64
 usra v0.16b, v0.16b, #1
 usra v0.2d, v0.2d, #1
@@ -8434,12 +8433,12 @@ usra v0.4h, v0.4h, #1
 usra v0.4s, v0.4s, #1
 usra v0.8b, v0.8b, #1
 usra v0.8h, v0.8h, #1
-usra v11.8h, v0.8h, #4
-usra v15.2s, v9.2s, #16
-usra v17.4h, v12.4h, #16
-usra v22.4s, v22.4s, #16
-usra v26.2d, v7.2d, #42
-usra v28.16b, v27.16b, #2
+usra v10.8h, v10.8h, #13
+usra v11.4s, v0.4s, #8
+usra v15.16b, v9.16b, #4
+usra v17.2d, v12.2d, #63
+usra v22.2s, v22.2s, #16
+usra v27.8b, v7.8b, #1
 usra v31.16b, v31.16b, #8
 usra v31.2d, v31.2d, #64
 usra v31.2s, v31.2s, #32
@@ -8447,58 +8446,58 @@ usra v31.4h, v31.4h, #16
 usra v31.4s, v31.4s, #32
 usra v31.8b, v31.8b, #8
 usra v31.8h, v31.8h, #16
-usra v7.8b, v29.8b, #3
+usra v7.4h, v29.4h, #6
 usubl v0.2d, v0.2s, v0.2s
 usubl v0.4s, v0.4h, v0.4h
 usubl v0.8h, v0.8b, v0.8b
-usubl v12.4s, v24.4h, v20.4h
-usubl v2.2d, v24.2s, v22.2s
-usubl v21.8h, v6.8b, v1.8b
+usubl v21.2d, v6.2s, v1.2s
 usubl v31.2d, v31.2s, v31.2s
 usubl v31.4s, v31.4h, v31.4h
+usubl v31.4s, v6.4h, v27.4h
 usubl v31.8h, v31.8b, v31.8b
+usubl v6.8h, v29.8b, v1.8b
 usubl2 v0.2d, v0.4s, v0.4s
 usubl2 v0.4s, v0.8h, v0.8h
 usubl2 v0.8h, v0.16b, v0.16b
-usubl2 v1.8h, v26.16b, v10.16b
+usubl2 v1.2d, v26.4s, v10.4s
+usubl2 v1.8h, v1.16b, v10.16b
 usubl2 v31.2d, v31.4s, v31.4s
-usubl2 v31.2d, v6.4s, v27.4s
 usubl2 v31.4s, v31.8h, v31.8h
 usubl2 v31.8h, v31.16b, v31.16b
-usubl2 v6.4s, v29.8h, v1.8h
+usubl2 v8.4s, v4.8h, v8.8h
 usubw v0.2d, v0.2d, v0.2s
 usubw v0.4s, v0.4s, v0.4h
 usubw v0.8h, v0.8h, v0.8b
-usubw v22.8h, v13.8h, v5.8b
-usubw v31.2d, v28.2d, v29.2s
+usubw v0.8h, v17.8h, v28.8b
+usubw v22.2d, v13.2d, v5.2s
 usubw v31.2d, v31.2d, v31.2s
-usubw v31.4s, v19.4s, v3.4h
+usubw v31.4s, v12.4s, v21.4h
 usubw v31.4s, v31.4s, v31.4h
 usubw v31.8h, v31.8h, v31.8b
 usubw2 v0.2d, v0.2d, v0.4s
 usubw2 v0.4s, v0.4s, v0.8h
-usubw2 v0.4s, v17.4s, v28.8h
 usubw2 v0.8h, v0.8h, v0.16b
-usubw2 v15.8h, v23.8h, v1.16b
-usubw2 v31.2d, v12.2d, v21.4s
+usubw2 v15.2d, v23.2d, v1.4s
+usubw2 v28.4s, v23.4s, v7.8h
+usubw2 v3.8h, v12.8h, v20.16b
 usubw2 v31.2d, v31.2d, v31.4s
 usubw2 v31.4s, v31.4s, v31.8h
 usubw2 v31.8h, v31.8h, v31.16b
 uxtl v0.2d, v0.2s
 uxtl v0.4s, v0.4h
 uxtl v0.8h, v0.8b
-uxtl v16.2d, v20.2s
-uxtl v19.4s, v14.4h
-uxtl v21.8h, v20.8b
+uxtl v15.8h, v25.8b
+uxtl v21.2d, v20.2s
+uxtl v30.4s, v3.4h
 uxtl v31.2d, v31.2s
 uxtl v31.4s, v31.4h
 uxtl v31.8h, v31.8b
 uxtl2 v0.2d, v0.4s
 uxtl2 v0.4s, v0.8h
 uxtl2 v0.8h, v0.16b
-uxtl2 v1.8h, v10.16b
-uxtl2 v15.4s, v25.8h
-uxtl2 v30.2d, v3.4s
+uxtl2 v1.2d, v10.4s
+uxtl2 v13.8h, v20.16b
+uxtl2 v28.4s, v8.8h
 uxtl2 v31.2d, v31.4s
 uxtl2 v31.4s, v31.8h
 uxtl2 v31.8h, v31.16b
@@ -8509,11 +8508,12 @@ uzp1 v0.4h, v0.4h, v0.4h
 uzp1 v0.4s, v0.4s, v0.4s
 uzp1 v0.8b, v0.8b, v0.8b
 uzp1 v0.8h, v0.8h, v0.8h
-uzp1 v12.4h, v3.4h, v30.4h
-uzp1 v21.8b, v14.8b, v26.8b
-uzp1 v23.16b, v2.16b, v5.16b
-uzp1 v26.8h, v26.8h, v17.8h
-uzp1 v27.2s, v12.2s, v0.2s
+uzp1 v12.2d, v3.2d, v30.2d
+uzp1 v17.8b, v2.8b, v5.8b
+uzp1 v19.8h, v17.8h, v16.8h
+uzp1 v21.4h, v14.4h, v26.4h
+uzp1 v26.4s, v26.4s, v17.4s
+uzp1 v27.16b, v12.16b, v0.16b
 uzp1 v31.16b, v31.16b, v31.16b
 uzp1 v31.2d, v31.2d, v31.2d
 uzp1 v31.2s, v31.2s, v31.2s
@@ -8521,8 +8521,7 @@ uzp1 v31.4h, v31.4h, v31.4h
 uzp1 v31.4s, v31.4s, v31.4s
 uzp1 v31.8b, v31.8b, v31.8b
 uzp1 v31.8h, v31.8h, v31.8h
-uzp1 v6.2d, v9.2d, v30.2d
-uzp1 v9.4s, v8.4s, v0.4s
+uzp1 v9.2s, v8.2s, v0.2s
 uzp2 v0.16b, v0.16b, v0.16b
 uzp2 v0.2d, v0.2d, v0.2d
 uzp2 v0.2s, v0.2s, v0.2s
@@ -8530,13 +8529,13 @@ uzp2 v0.4h, v0.4h, v0.4h
 uzp2 v0.4s, v0.4s, v0.4s
 uzp2 v0.8b, v0.8b, v0.8b
 uzp2 v0.8h, v0.8h, v0.8h
-uzp2 v11.8b, v17.8b, v8.8b
-uzp2 v12.2s, v19.2s, v31.2s
-uzp2 v14.4h, v6.4h, v31.4h
-uzp2 v18.2d, v10.2d, v5.2d
-uzp2 v19.8h, v5.8h, v15.8h
-uzp2 v29.16b, v11.16b, v14.16b
-uzp2 v29.4s, v14.4s, v28.4s
+uzp2 v0.8h, v31.8h, v29.8h
+uzp2 v11.4h, v17.4h, v8.4h
+uzp2 v12.16b, v19.16b, v31.16b
+uzp2 v14.2d, v6.2d, v31.2d
+uzp2 v16.8b, v18.8b, v20.8b
+uzp2 v19.4s, v5.4s, v15.4s
+uzp2 v29.2s, v14.2s, v28.2s
 uzp2 v31.16b, v31.16b, v31.16b
 uzp2 v31.2d, v31.2d, v31.2d
 uzp2 v31.2s, v31.2s, v31.2s
@@ -8545,26 +8544,26 @@ uzp2 v31.4s, v31.4s, v31.4s
 uzp2 v31.8b, v31.8b, v31.8b
 uzp2 v31.8h, v31.8h, v31.8h
 xar v0.2d, v0.2d, v0.2d, #0
-xar v10.2d, v21.2d, v10.2d, #45
 xar v31.2d, v31.2d, v31.2d, #63
+xar v5.2d, v14.2d, v27.2d, #33
 xtn v0.2s, v0.2d
 xtn v0.4h, v0.4s
 xtn v0.8b, v0.8h
-xtn v11.4h, v17.4s
-xtn v23.2s, v17.2d
-xtn v25.8b, v9.8h
+xtn v19.8b, v27.8h
+xtn v25.2s, v9.2d
 xtn v31.2s, v31.2d
 xtn v31.4h, v31.4s
 xtn v31.8b, v31.8h
+xtn v8.4h, v25.4s
 xtn2 v0.16b, v0.8h
 xtn2 v0.4s, v0.2d
 xtn2 v0.8h, v0.4s
-xtn2 v13.8h, v11.4s
-xtn2 v19.4s, v27.2d
+xtn2 v13.16b, v11.8h
+xtn2 v29.4s, v22.2d
 xtn2 v31.16b, v31.8h
 xtn2 v31.4s, v31.2d
 xtn2 v31.8h, v31.4s
-xtn2 v8.16b, v25.8h
+xtn2 v6.8h, v15.4s
 zip1 v0.16b, v0.16b, v0.16b
 zip1 v0.2d, v0.2d, v0.2d
 zip1 v0.2s, v0.2s, v0.2s
@@ -8572,13 +8571,13 @@ zip1 v0.4h, v0.4h, v0.4h
 zip1 v0.4s, v0.4s, v0.4s
 zip1 v0.8b, v0.8b, v0.8b
 zip1 v0.8h, v0.8h, v0.8h
-zip1 v11.2d, v31.2d, v14.2d
-zip1 v12.8b, v29.8b, v2.8b
-zip1 v13.16b, v22.16b, v18.16b
-zip1 v18.2s, v18.2s, v17.2s
-zip1 v25.4h, v16.4h, v7.4h
-zip1 v26.4s, v22.4s, v17.4s
-zip1 v29.8h, v25.8h, v0.8h
+zip1 v12.4h, v29.4h, v2.4h
+zip1 v18.16b, v18.16b, v17.16b
+zip1 v25.2d, v16.2d, v7.2d
+zip1 v26.2s, v22.2s, v17.2s
+zip1 v27.8h, v0.8h, v11.8h
+zip1 v29.4s, v25.4s, v0.4s
+zip1 v3.8b, v4.8b, v2.8b
 zip1 v31.16b, v31.16b, v31.16b
 zip1 v31.2d, v31.2d, v31.2d
 zip1 v31.2s, v31.2s, v31.2s
@@ -8593,11 +8592,12 @@ zip2 v0.4h, v0.4h, v0.4h
 zip2 v0.4s, v0.4s, v0.4s
 zip2 v0.8b, v0.8b, v0.8b
 zip2 v0.8h, v0.8h, v0.8h
-zip2 v11.2s, v20.2s, v16.2s
-zip2 v17.4h, v18.4h, v22.4h
-zip2 v25.2d, v16.2d, v19.2d
-zip2 v25.8h, v0.8h, v19.8h
-zip2 v29.4s, v24.4s, v10.4s
+zip2 v0.8h, v23.8h, v23.8h
+zip2 v11.16b, v20.16b, v16.16b
+zip2 v14.8b, v21.8b, v19.8b
+zip2 v17.2d, v18.2d, v22.2d
+zip2 v25.4s, v0.4s, v19.4s
+zip2 v29.2s, v24.2s, v10.2s
 zip2 v31.16b, v31.16b, v31.16b
 zip2 v31.2d, v31.2d, v31.2d
 zip2 v31.2s, v31.2s, v31.2s
@@ -8605,5 +8605,4 @@ zip2 v31.4h, v31.4h, v31.4h
 zip2 v31.4s, v31.4s, v31.4s
 zip2 v31.8b, v31.8b, v31.8b
 zip2 v31.8h, v31.8h, v31.8h
-zip2 v4.16b, v22.16b, v15.16b
-zip2 v5.8b, v15.8b, v13.8b
+zip2 v5.4h, v15.4h, v13.4h

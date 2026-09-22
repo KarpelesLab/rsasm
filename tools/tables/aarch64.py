@@ -156,6 +156,8 @@ fcpy z0.<h|s|d>, p0/m, #1.0
 sel z0.<b|h|s|d>, p0, z0.<b|h|s|d>, z0.<b|h|s|d>
 pmov p0.<h|s|d>, z0
 pmov z0, p0.<h|s|d>
+pmov p0.b, z0[0]
+pmov z0[0], p0.b
 """
 
 
