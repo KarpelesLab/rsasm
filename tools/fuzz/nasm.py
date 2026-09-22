@@ -146,7 +146,9 @@ FORMATS = {
 # differences on every run reports nothing. Each is written where it would
 # have been generated; this is the list, with the whole of a case that shows
 # it. Where "NASM warns" is written, NASM assembles the line and prints a
-# warning, and rsasm stops.
+# warning, and rsasm stops. The numbers are the ones the rest of this script
+# refers to, so they stay put as entries are settled; 1 was `[esi*1]` and
+# `[esi*2]`, which is fixed and generated again.
 #
 #   2  `jmp short l`, `jmp near l`, `jz short l`: rsasm reads the keyword as
 #      an unexpected token.
