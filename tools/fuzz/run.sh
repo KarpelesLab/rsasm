@@ -34,13 +34,13 @@ root=$(cd "$here/../.." && pwd)
 # name | cases | extra arguments
 #
 # The counts are chosen so the whole set runs in a couple of minutes on a
-# four-core runner -- 745,000 cases in 1m48s, measured with `taskset -c 0-3`
+# four-core runner -- 748,000 cases in 2m10s, measured with `taskset -c 0-3`
 # -- and are scaled by --scale, so the nightly run at ten times that is
 # under twenty minutes. Instruction fuzzers compare a
 # case in a section of its own and batch 200 of them per assembler run, so
 # they are cheap; the whole-program ones (arm-programs, avr, mcs51, mos6502,
-# i8080, nasm) run one assembler per program and are an order of magnitude
-# dearer per case.
+# i8080, nec78k0, nasm) run one assembler per program and are an order of
+# magnitude dearer per case.
 FUZZERS="
 x86|80000|
 aarch64|60000|
@@ -61,6 +61,7 @@ z80|40000|
 mos6502|16000|
 i8080|12000|
 mcs51|3000|
+nec78k0|3000|
 nasm|1200|
 "
 

@@ -66,7 +66,7 @@ assembler, not against rsasm's own idea of the manual. See
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 528 |
 | TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 3699 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
-| NEC 78K0, in CA78K0 syntax | `78k0` | NEC code tables, MAME | — |
+| NEC 78K0, in CA78K0 syntax | `78k0` | AS | 1276 |
 | Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1935 |
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
 | MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
@@ -80,10 +80,12 @@ takes a Zilog address — and for the 8051, AS and SDCC's sdas8051. Tests also
 walk each complete opcode space and assert that exactly the documented
 encodings exist. They are for flat binaries, or Intel HEX; ELF has no class
 for a 16-bit target. See [the 8-bit dialect](#the-8-bit-dialect).
-The 78K0 has no freely available assembler: its table was extracted
-from NEC's instruction manual, checked against the byte counts in a second NEC
-manual, and cross-checked against MAME's disassembler, which agrees on all
-but 18 forms where both manuals show MAME to be wrong.
+The 78K0's table was extracted from NEC's instruction manual, checked against
+the byte counts in a second NEC manual, and cross-checked against MAME's
+disassembler, which agrees on all but 18 forms where both manuals show MAME to
+be wrong. CA78K0 itself is a proprietary Windows tool, but AS assembles the
+family too, under the CPU name `78070`, so the table is checked against it
+form by form and in random whole programs as well.
 
 ### Everything else
 
@@ -860,7 +862,8 @@ independent assembler, and compare the bytes:
   model, with corpora generated from GNU's own opcode table so that every
   form in it is assembled), SuperH, RX, RL78,
   V850/RH850, AVR, MSP430 and the Z80, vasm for Motorola syntax and for the Z80 and the
-  6502, cc65's ca65 for the 6502, AS for the 8080 and AS and SDCC's sdas8051
+  6502, cc65's ca65 for the 6502, AS for the 8080 and the 78K0, and AS and
+  SDCC's sdas8051
   for the 8051 (its Intel HEX against AS's `p2hex`), plus CC-RL, CC-RH and
   CC-RX source paired with its GNU-syntax equivalent. For ARM and Thumb it
   compares whole objects, local and mapping symbols included, against GNU as,
@@ -868,7 +871,7 @@ independent assembler, and compare the bytes:
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 24,103 of 24,103 match across fifty-six
+  from checksum-pinned sources. 25,382 of 25,382 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -957,10 +960,11 @@ and goes to llvm-mc and `riscv64-elf-as`; MIPS, SPARC, SuperH, RX, RL78,
 V850/RH850 and the Z80 take their cases from the *other* side of binutils —
 GNU objdump's disassembly of random bytes, which reaches every operand value
 a form allows and shares nothing with either assembler's parser — and go to
-whichever references that target has. The 6502 and the 8080 are fuzzed with
-whole programs against ca65 and the Macro Assembler AS, as the 8051 already
-was, and `nasm` source against NASM itself. `tools/fuzz/run.sh` runs all
-twenty with one seed and bounded counts — 745,000 cases in under two
+whichever references that target has. The 6502, the 8080 and the 78K0 are
+fuzzed with whole programs against ca65 and the Macro Assembler AS, as the
+8051 already was, and `nasm` source against NASM itself.
+`tools/fuzz/run.sh` runs all twenty-one with one seed and bounded counts —
+748,000 cases in a little over two
 minutes on a four-core runner — which is what CI runs on every pull
 request; the nightly run uses the date as its seed and ten times the cases.
 A fuzzer that compared nothing fails the job as loudly as one that found a

@@ -1,8 +1,10 @@
 //! Tests for the NEC/Renesas 78K0 backend, in CA78K0 syntax.
 //!
-//! There is no assembler to check against: CA78K0 is proprietary and Windows
-//! only, and neither binutils nor LLVM knows the 78K0. So the tests are built
-//! to make a mistake in the transcribed code table loud instead:
+//! CA78K0 is proprietary and Windows only, and neither binutils nor LLVM knows
+//! the 78K0, so these tests are built to make a mistake in the transcribed
+//! code table loud on their own; the Macro Assembler AS, which does assemble
+//! the family, is the second opinion, in `tools/xas-diff/78k0.txt` and
+//! `tools/fuzz/nec78k0.py`.
 //!
 //! 1. **Every row must parse.** `form::parse_row` rejects a row whose operand
 //!    column and code columns disagree, and `every_row_of_the_code_table_parses`
@@ -958,6 +960,25 @@ fn register_names_take_either_spelling_in_any_case() {
     enc("INCW RP2", "84");
     enc("PUSH AX\nPOP rp3", "b1 b6");
     enc("SEL RB3", "61 f8");
+}
+
+#[test]
+fn the_indirect_forms_take_either_spelling_too() {
+    // The Macro Assembler AS assembles each of these to the bytes on the
+    // right; see tools/xas-diff/78k0.txt.
+    enc("MOV A,[DE]\nMOV A,[RP2]", "85 85");
+    enc("MOV A,[HL]\nMOV A,[RP3]", "87 87");
+    enc("MOV A,[HL+5]\nMOV A,[RP3+5]", "ae 05 ae 05");
+    enc("MOV A,[HL+B]\nMOV A,[HL+R3]\nMOV A,[RP3+R3]", "ab ab ab");
+    enc("MOV A,[HL+C]\nMOV A,[RP3+R2]", "aa aa");
+    enc("MOV1 CY,[RP3].3\nSET1 [rp3].2", "71 b4 71 a2");
+    enc("ROL4 [RP3]\nXCH A,[RP2]", "31 80 05");
+    // The pairs that have no indirect form are still refused, rather than
+    // being read as an address that happens to be named like a register.
+    error_mentions("MOV A,[RP0]", "unsupported indirect operand");
+    error_mentions("MOV A,[RP1+2]", "unsupported indirect operand");
+    error_mentions("MOV A,[RP2+2]", "unsupported indirect operand");
+    error_mentions("MOV1 CY,[RP2].0", "only indirect byte");
 }
 
 #[test]
