@@ -399,6 +399,23 @@ fn thumb_adr_of_a_thumb_function() {
     );
 }
 
+/// The bit goes into the `adr`'s addend, not into the finished `S + A - P`:
+/// `md_convert_frag`'s `exp.X_add_number |= 1` adds one only where the addend
+/// is even, which shows where the function is at an odd address.
+#[test]
+fn thumb_adr_of_a_thumb_function_sets_the_bit_in_the_addend() {
+    assert_eq!(
+        hex(&text_for(
+            "thumb",
+            "adr r7, f\nadr r6, f + 1\nadr r5, f + 2\n.byte 1, 2, 3\n\
+             .thumb_func\nf: .p2align 2, 0\nadr r4, f\nadr r3, f + 1\n\
+             adr r2, f + 2\nbx lr\n"
+        )),
+        "0f f2 0c 07 0f f2 08 06 0f f2 06 05 01 02 03 00 \
+         af f2 04 04 af f2 06 03 af f2 0a 02 70 47 00 bf"
+    );
+}
+
 // ---- it blocks -----------------------------------------------------------------
 
 /// Instructions in an `it` block take its condition, and the 16-bit

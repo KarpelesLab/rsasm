@@ -164,6 +164,21 @@ f:      bx      lr
         .p2align 2, 0
         .thumb_func
 g:      bx      lr
+=== adr of a Thumb function at an odd address, with and without an addend
+# GNU as ORs the Thumb bit into the `adr`'s *addend*, not into the finished
+# `S + A - P`, so it adds one only where the addend is even -- which is what
+# tells the six of these apart, `f` being at an odd address.
+        .syntax unified
+        adr     r7, f
+        adr     r6, f + 1
+        adr     r5, f + 2
+        .byte   1, 2, 3
+        .thumb_func
+f:      .p2align 2, 0
+        adr     r4, f
+        adr     r3, f + 1
+        adr     r2, f + 2
+        bx      lr
 === it blocks and the instructions in them
         .syntax unified
 f:      it      eq

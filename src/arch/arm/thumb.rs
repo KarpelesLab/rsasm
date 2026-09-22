@@ -1664,7 +1664,14 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let span = ins.ops[1].span;
     let e = encode::thumb_function_address(cx, e);
     // Only the form GNU as relaxes learns about a Thumb function defined
-    // after the `adr`; see `Arm::interwork`.
+    // after the `adr`; see `Arm::interwork`. It sets the bit in the addend,
+    // which the rest of the expression is not part of, so the class carries
+    // the addend's parity to the point where the target is known.
+    let wide_class = if encode::odd_addend(cx, e) {
+        super::IW_THUMB_ADR_ODD
+    } else {
+        super::IW_THUMB_ADR
+    };
     let relaxed = low(rd) && ins.width == Width::Any;
     let mut out = Vec::new();
     if low(rd) && want_narrow(ins) {
@@ -1686,7 +1693,7 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if want_wide(ins) {
         let mut kind = adr32_kind();
         if relaxed {
-            kind = kind.link(LinkValue::Interwork(super::IW_THUMB_ADR));
+            kind = kind.link(LinkValue::Interwork(wide_class));
         }
         out.push(fixed(wide_bytes(0xf20f, (rd as u16) << 8), e, kind, span));
     }

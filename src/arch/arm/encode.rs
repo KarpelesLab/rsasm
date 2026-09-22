@@ -1148,6 +1148,63 @@ pub fn to_bl(w: u64) -> u64 {
     (w & 0x00ff_ffff) | 0xeb00_0000
 }
 
+/// Whether the addend of `e` — GNU as's `X_add_number`, the expression with
+/// every symbol in it taken to be zero — is odd, which is what decides
+/// whether a later `X_add_number |= 1` changes anything. A symbol the source
+/// has not reached yet counts as zero too, so that `adr r0, l1 + 1` reads the
+/// same whichever side of the `adr` `l1` is defined on.
+pub fn odd_addend(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    use crate::expr::{EvalCtx, EvalError, ExprArena, Value};
+    use crate::intern::Name;
+    use crate::lexer::LocalDir;
+    use crate::symbol::{SymbolId, SymbolTable, SymbolValue};
+
+    struct Addend<'a> {
+        exprs: &'a ExprArena,
+        symbols: &'a SymbolTable,
+        depth: u32,
+    }
+    impl EvalCtx for Addend<'_> {
+        fn lookup_symbol(&mut self, name: Name, span: Span) -> Result<Value, EvalError> {
+            match self.symbols.lookup(name) {
+                Some(id) => self.symbol_value(id, span),
+                None => Ok(Value::abs(0)),
+            }
+        }
+        fn symbol_value(&mut self, id: SymbolId, _: Span) -> Result<Value, EvalError> {
+            match self.symbols.get(id).value {
+                SymbolValue::Expr(e) if self.depth <= 64 => {
+                    self.depth += 1;
+                    let exprs = self.exprs;
+                    let v = crate::expr::eval(exprs, e, self);
+                    self.depth -= 1;
+                    v
+                }
+                _ => Ok(Value::abs(0)),
+            }
+        }
+        fn here(&mut self, _: Span) -> Result<Value, EvalError> {
+            Ok(Value::abs(0))
+        }
+        fn section_start(&mut self, _: Span) -> Result<Value, EvalError> {
+            Ok(Value::abs(0))
+        }
+        fn local_ref(&mut self, _: u32, _: LocalDir, _: Span) -> Result<Value, EvalError> {
+            Ok(Value::abs(0))
+        }
+        fn modifier(&mut self, _: Name, inner: Value, _: Span) -> Result<Value, EvalError> {
+            Ok(inner)
+        }
+    }
+    let exprs: &ExprArena = cx.exprs;
+    let mut env = Addend {
+        exprs,
+        symbols: cx.symbols,
+        depth: 0,
+    };
+    crate::expr::eval(exprs, e, &mut env).is_ok_and(|v| v.addend & 1 != 0)
+}
+
 /// Thumb `adr` of a Thumb function sets the address's low bit, as GNU as
 /// does where it already knows the label is one when it reads the `adr`.
 pub fn thumb_function_address(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
