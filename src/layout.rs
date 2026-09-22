@@ -216,9 +216,10 @@ impl Assembler {
         if !self.options.relocatable {
             return;
         }
-        let (arch, state) = self.target_state();
-        let sections = arch.elf_attributes(state);
-        for sec in sections {
+        // The lengths in a build-attributes section are written in the
+        // object's byte order.
+        let endian = self.target_state().0.endian();
+        for sec in self.attribute_sections() {
             let bytes = match &sec.body {
                 crate::arch::AttrBody::Bytes(b) => b.clone(),
                 crate::arch::AttrBody::Tags { vendor, tags } => {
@@ -232,7 +233,7 @@ impl Assembler {
                             Err(i) => tags.insert(i, (*tag, value.clone())),
                         }
                     }
-                    crate::arch::encode_attributes(vendor, &tags)
+                    crate::arch::encode_attributes(vendor, &tags, endian)
                 }
             };
             let name = self.interner.intern(sec.name);

@@ -261,6 +261,13 @@ impl Assembler {
                 true
             }
             _ if text.starts_with(".cfi_") => self.dir_cfi(&text, &mut cur, span),
+            // ---- build attributes -----------------------------------------
+            // Every ELF target has this one: the vendor-neutral attributes,
+            // which on PowerPC record the floating-point and vector ABIs a
+            // linker refuses to mix. A target's own directive
+            // (`.eabi_attribute`, `.attribute`) is the backend's.
+            ".gnu_attribute" => self.dir_gnu_attribute(&mut cur, span),
+
             // Recognised and ignored: they carry no information this assembler
             // acts on yet, and rejecting them would break real-world input.
             ".ident" | ".version" | ".line" => {
@@ -1349,6 +1356,52 @@ impl Assembler {
             return true;
         };
         self.include(&path, span);
+        true
+    }
+
+    /// `.gnu_attribute <tag>, <value>`: one tag of the object's
+    /// `.gnu.attributes`, which every ELF target has and no target of
+    /// rsasm's writes of its own accord. GNU as for PowerPC is what this
+    /// follows: the tag is a number, and the value a number or a string.
+    fn dir_gnu_attribute(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        let tok = cur.peek();
+        let TokKind::Int(tag) = tok.kind else {
+            self.diags
+                .error(tok.span, "`.gnu_attribute` expects a tag number");
+            cur.set_pos(cur.all().len());
+            return true;
+        };
+        if tag > u64::from(u32::MAX) {
+            self.diags
+                .error(tok.span, "`.gnu_attribute` tag is too large");
+            cur.set_pos(cur.all().len());
+            return true;
+        }
+        cur.advance();
+        if !cur.peek().is_punct(Punct::Comma) {
+            self.diags
+                .error(span, "`.gnu_attribute` expects a comma and a value");
+            cur.set_pos(cur.all().len());
+            return true;
+        }
+        cur.advance();
+        let tok = cur.peek();
+        let value = match tok.kind {
+            TokKind::Int(n) => crate::arch::AttrValue::Int(n),
+            TokKind::Str(i) => {
+                crate::arch::AttrValue::Str(String::from_utf8_lossy(self.pool.get(i)).into_owned())
+            }
+            _ => {
+                self.diags
+                    .error(tok.span, "`.gnu_attribute` expects a number or a string");
+                cur.set_pos(cur.all().len());
+                return true;
+            }
+        };
+        cur.advance();
+        self.attr_overrides
+            .retain(|&(v, t, _)| (v, t) != ("gnu", tag as u32));
+        self.attr_overrides.push(("gnu", tag as u32, value));
         true
     }
 

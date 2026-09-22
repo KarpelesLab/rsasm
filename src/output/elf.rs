@@ -283,13 +283,11 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // The sections the target writes of its own accord keep the type and
     // flags their psABI gives them, which the section model has no room for:
     // see `Architecture::elf_attributes`.
-    let attributes: HashMap<&'static str, (u32, u64)> = {
-        let (arch, state) = asm.target_state();
-        arch.elf_attributes(state)
-            .iter()
-            .map(|a| (a.name, (a.sh_type, a.sh_flags)))
-            .collect()
-    };
+    let attributes: HashMap<&'static str, (u32, u64)> = asm
+        .attribute_sections()
+        .iter()
+        .map(|a| (a.name, (a.sh_type, a.sh_flags)))
+        .collect();
     // A section with nothing in it but a label is written too, as both
     // references write it: the label needs a section to be in, and a
     // relocation against it one to name.

@@ -283,9 +283,19 @@ impl AttrSection {
 /// An ELF build-attributes section: `'A'`, then one vendor section holding a
 /// `File` subsection of `tag, value` pairs.
 ///
-/// Both lengths count themselves, and the order is the order of `tags`; GNU
-/// as and llvm-mc write them by increasing tag number.
-pub(crate) fn encode_attributes(vendor: &str, tags: &[(u32, AttrValue)]) -> Vec<u8> {
+/// Both lengths count themselves and are written in the object's byte order,
+/// so a big-endian PowerPC object's are not a little-endian ARM one's. The
+/// order is the order of `tags`; GNU as and llvm-mc write them by increasing
+/// tag number.
+pub(crate) fn encode_attributes(
+    vendor: &str,
+    tags: &[(u32, AttrValue)],
+    endian: Endian,
+) -> Vec<u8> {
+    let word = |v: u32| match endian {
+        Endian::Little => v.to_le_bytes(),
+        Endian::Big => v.to_be_bytes(),
+    };
     let mut body = Vec::new();
     for (tag, value) in tags {
         write_uleb(&mut body, u64::from(*tag));
@@ -299,10 +309,10 @@ pub(crate) fn encode_attributes(vendor: &str, tags: &[(u32, AttrValue)]) -> Vec<
     }
     // The `File` subsection: its tag, its length, and the pairs.
     let mut sub = vec![1u8];
-    sub.extend_from_slice(&(5 + body.len() as u32).to_le_bytes());
+    sub.extend_from_slice(&word(5 + body.len() as u32));
     sub.extend_from_slice(&body);
     let mut out = vec![b'A'];
-    out.extend_from_slice(&(4 + vendor.len() as u32 + 1 + sub.len() as u32).to_le_bytes());
+    out.extend_from_slice(&word(4 + vendor.len() as u32 + 1 + sub.len() as u32));
     out.extend_from_slice(vendor.as_bytes());
     out.push(0);
     out.extend_from_slice(&sub);

@@ -1554,6 +1554,29 @@ impl Assembler {
         self.slot_arch(slot)
     }
 
+    /// The sections the target writes into every object of its own accord,
+    /// and the one `.gnu_attribute` brings into being; see
+    /// [`Architecture::elf_attributes`](crate::arch::Architecture::elf_attributes).
+    /// Not API.
+    #[doc(hidden)]
+    pub fn attribute_sections(&self) -> Vec<crate::arch::AttrSection> {
+        let (arch, state) = self.target_state();
+        let mut sections = arch.elf_attributes(state);
+        // `.gnu_attribute` is every ELF target's, and none of them writes the
+        // vendor-neutral section of its own accord, so the directive is what
+        // brings it into being.
+        let has_gnu = |s: &crate::arch::AttrSection| matches!(&s.body, crate::arch::AttrBody::Tags { vendor, .. } if *vendor == "gnu");
+        if self.attr_overrides.iter().any(|&(v, _, _)| v == "gnu") && !sections.iter().any(has_gnu)
+        {
+            sections.push(crate::arch::AttrSection::attributes(
+                ".gnu.attributes",
+                "gnu",
+                Vec::new(),
+            ));
+        }
+        sections
+    }
+
     fn process(&mut self, stmt: &Statement) {
         // While a conditional is false, only the directives that can end it
         // are looked at.
