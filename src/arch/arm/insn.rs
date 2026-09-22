@@ -350,6 +350,32 @@ pub fn lookup(name: &str) -> Option<Mnem> {
     table().get(name).copied()
 }
 
+/// Whether a mnemonic takes a data type that means nothing to its encoding:
+/// the width of a VFP transfer is the width of the register it names, so
+/// `vldr.64 d0, [r0]`, `vldr.32 d0, [r0]` and `vldr d0, [r0]` are all the
+/// same instruction. `parse_neon_type` reads the type for every `v`
+/// mnemonic and these ones never consult it.
+fn ignores_type(base: &str) -> bool {
+    matches!(base, "vldr" | "vstr" | "vpush" | "vpop")
+        || base
+            .strip_prefix("vldm")
+            .or_else(|| base.strip_prefix("vstm"))
+            .is_some_and(|rest| matches!(rest, "" | "ia" | "db"))
+}
+
+/// Whether every dotted word of `types` is one GNU as's `parse_neon_type`
+/// reads: a size of 8, 16, 32 or 64, with an optional kind letter in front
+/// of it, or one of the shorthands `d`, `f` and `bf16`.
+fn neon_types(types: &str) -> bool {
+    types.split('.').all(|t| {
+        if matches!(t, "d" | "f" | "bf16") {
+            return true;
+        }
+        let size = t.strip_prefix(['i', 'f', 'p', 's', 'u']).unwrap_or(t);
+        matches!(size, "8" | "16" | "32" | "64")
+    })
+}
+
 /// Requested instruction width, from a Thumb `.n` / `.w` suffix.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Width {
@@ -398,10 +424,18 @@ pub fn resolve(text: &str) -> Option<Resolved> {
         set_flags,
         width,
     };
-    // The name to look up is the stem with the type suffix put back on.
+    // The name to look up is the stem with the type suffix put back on --
+    // unless the instruction is one of those whose type GNU as parses and
+    // then never looks at, where the register says the width instead.
     let named = |base: &str| match types {
         None => lookup(base),
-        Some(t) => lookup(&format!("{base}.{t}")),
+        Some(t) => lookup(&format!("{base}.{t}")).or_else(|| {
+            if ignores_type(base) && neon_types(t) {
+                lookup(base)
+            } else {
+                None
+            }
+        }),
     };
 
     // An exact match always wins, so `bl`, `mrs` and `mls` are never taken

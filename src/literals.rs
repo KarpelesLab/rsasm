@@ -69,6 +69,16 @@ struct Slot {
     md: u16,
 }
 
+/// Four bytes of a written pool: a place a use may name, and what goes
+/// there.
+struct Chunk {
+    /// The bytes to write, for a number.
+    bytes: Vec<u8>,
+    /// Or the value to relocate, and how many bytes wide it is.
+    value: Option<(u8, ExprRef)>,
+    span: Span,
+}
+
 /// A slot's expression, as much of it as GNU as compares or emits.
 enum SlotValue {
     /// `O_constant`: the number, and whether the source wrote it unsigned,
@@ -352,7 +362,7 @@ impl Assembler {
                         break;
                     }
                 } else if r.size == 8
-                    && pool_size % 8 == 0
+                    && pool_size.is_multiple_of(8)
                     && entry + 1 != slots.len()
                     && slots[entry].value.is_word(imm1, unsigned)
                     && slots[entry + 1].value.is_word(imm2, unsigned)
@@ -368,7 +378,7 @@ impl Assembler {
             }
             if entry == slots.len() {
                 let needed = if r.size == 8 {
-                    if pool_size % 8 == 0 { 2 } else { 3 }
+                    if pool_size.is_multiple_of(8) { 2 } else { 3 }
                 } else {
                     1
                 };
@@ -380,7 +390,7 @@ impl Assembler {
                     continue;
                 }
                 if r.size == 8 {
-                    if pool_size % 8 != 0 {
+                    if !pool_size.is_multiple_of(8) {
                         slots.push(Slot {
                             value: SlotValue::Word {
                                 value: 0,
@@ -439,30 +449,41 @@ impl Assembler {
         // Each four bytes of the pool gets a fragment of its own, so that a
         // use can name the one four times its slot index whatever the slots
         // before it wrote.
-        let mut chunks: Vec<(Option<(u8, ExprRef)>, Vec<u8>, Span)> = Vec::new();
+        let mut chunks: Vec<Chunk> = Vec::new();
         for slot in slots {
             let size = (slot.md & 0xff) as u8;
             match slot.value {
-                SlotValue::Word {
-                    value,
-                    unsigned: _,
-                    span,
-                } => {
+                SlotValue::Word { value, span, .. } => {
                     let bytes = endian.bytes(value as u64, usize::from(size));
                     for chunk in bytes.chunks(4) {
-                        chunks.push((None, chunk.to_vec(), span));
+                        chunks.push(Chunk {
+                            bytes: chunk.to_vec(),
+                            value: None,
+                            span,
+                        });
                     }
                 }
                 SlotValue::Other { expr, span, .. } => {
-                    chunks.push((Some((size, expr)), Vec::new(), span));
+                    chunks.push(Chunk {
+                        bytes: Vec::new(),
+                        value: Some((size, expr)),
+                        span,
+                    });
+                    // A relocated entry is four bytes wide in every pool
+                    // there is; any rest of one is a place a use may name,
+                    // holding no bytes of its own.
                     for _ in 1..size / 4 {
-                        chunks.push((None, Vec::new(), span));
+                        chunks.push(Chunk {
+                            bytes: Vec::new(),
+                            value: None,
+                            span,
+                        });
                     }
                 }
             }
         }
         let section = self.cur;
-        for (i, (value, bytes, at)) in chunks.into_iter().enumerate() {
+        for (i, chunk) in chunks.into_iter().enumerate() {
             self.cur_section().seal();
             let frag = self.cur_section().next_frag_index();
             for (_, label, span) in uses.iter().filter(|(slot, _, _)| *slot == i) {
@@ -472,9 +493,9 @@ impl Assembler {
                 sym.def_span = *span;
                 self.symbols.mark_defined(id);
             }
-            match value {
-                Some((size, expr)) => self.emit_value(size, expr, at),
-                None => self.cur_section().emit_bytes(&bytes, at),
+            match chunk.value {
+                Some((size, expr)) => self.emit_value(size, expr, chunk.span),
+                None => self.cur_section().emit_bytes(&chunk.bytes, chunk.span),
             }
         }
     }

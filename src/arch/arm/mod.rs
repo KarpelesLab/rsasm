@@ -20,6 +20,7 @@ pub mod reloc;
 #[doc(hidden)]
 pub mod table;
 pub mod thumb;
+pub(crate) mod vfp;
 
 use crate::arch::{
     ArchState, Architecture, AsmCtx, Endian, InsnRequest, Interwork, InterworkTarget, Request,

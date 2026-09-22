@@ -1310,7 +1310,7 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     encode::arity(cx, ins, &[2])?;
     let rt = encode::reg_of(cx, &ins.ops[0])?;
     if let OperandKind::Literal(e) = ins.ops[1].kind {
-        return literal_load(cx, ins, rt, &ins.ops[1], e);
+        return literal_load(cx, ins, t, rt, &ins.ops[1], e);
     }
     let OperandKind::Mem(mem) = ins.ops[1].kind else {
         cx.error(
@@ -1716,38 +1716,51 @@ fn scatter_literal32(w: u64, v: i64) -> u64 {
     (w & !0x0fff_0080) | up | ((v.unsigned_abs() & 0xfff) << 16)
 }
 
-/// `ldr rt, =expr` in T32.
+/// `ldr rt, =expr` in T32, and the byte and halfword loads that take an
+/// `=expr` as well.
 ///
 /// A number GNU as can move instead is moved, always with a 32-bit `mov.w`,
 /// `mvn.w` or `movw` (a 16-bit `movs` would change the flags); the stack
 /// pointer and the PC cannot take those, so they always load. Otherwise the
 /// load reaches the pool from the PC rounded down to a word, as a 16-bit
-/// instruction that reaches 1020 bytes forward if the register is a low one,
-/// and as a 32-bit one that reaches 4095 bytes either way; layout picks.
+/// instruction that reaches 1020 bytes forward if the register is a low one
+/// and the load is a word one, and as a 32-bit one that reaches 4095 bytes
+/// either way; layout picks. `do_t_ldst` widens every other literal load.
 fn literal_load(
     cx: &mut AsmCtx<'_>,
     ins: &Insn<'_>,
+    t: Transfer,
     rt: Reg,
     op: &crate::arch::arm::operand::Operand,
     e: ExprRef,
 ) -> Option<Vec<Variant>> {
-    encode::literal_only_for_ldr(cx, ins, op)?;
+    encode::literal_transfer(cx, ins, t, op)?;
+    // Only `ldr` may name the stack pointer or the PC.
+    if t.size != 4 || t.signed {
+        bad_reg(cx, ins.ops[0].span, rt)?;
+    }
     let constant = encode::literal_constant(cx, op, e)?;
-    if let Some(v) = constant
-        && rt != reg::SP
-        && rt != reg::PC
-    {
-        if let Some(imm12) = imm::thumb_expand(v) {
-            let (i, rest) = expand_parts(imm12);
-            return Some(wide(0xf04f | (i << 10), rest | ((rt as u16) << 8)));
+    let moved = constant
+        .filter(|_| rt != reg::SP && rt != reg::PC)
+        .and_then(|v| {
+            if let Some(imm12) = imm::thumb_expand(v) {
+                let (i, rest) = expand_parts(imm12);
+                return Some(wide(0xf04f | (i << 10), rest | ((rt as u16) << 8)));
+            }
+            if let Some(imm12) = imm::thumb_expand(!v) {
+                let (i, rest) = expand_parts(imm12);
+                return Some(wide(0xf06f | (i << 10), rest | ((rt as u16) << 8)));
+            }
+            (v <= 0xffff).then(|| move_wide_bits(rt, v, false))
+        });
+    if let Some(out) = moved {
+        // Every move is 32 bits wide, so a `.n` leaves GNU as -- which
+        // substitutes the move first and checks the width afterwards --
+        // nothing that fits.
+        if !want_wide(ins) {
+            return no_encoding(cx, ins);
         }
-        if let Some(imm12) = imm::thumb_expand(!v) {
-            let (i, rest) = expand_parts(imm12);
-            return Some(wide(0xf06f | (i << 10), rest | ((rt as u16) << 8)));
-        }
-        if v <= 0xffff {
-            return Some(move_wide_bits(rt, v, false));
-        }
+        return Some(out);
     }
     let value = match cx.constant(e) {
         Some(v) if constant.is_some() => crate::arch::Literal::Const(v),
@@ -1756,7 +1769,7 @@ fn literal_load(
     let entry = cx.literal(value, 4, op.span);
     let hint = "the literal pool is too far away; put an `.ltorg` nearer";
     let mut out = Vec::new();
-    if low(rt) && want_narrow(ins) {
+    if t.size == 4 && !t.signed && low(rt) && want_narrow(ins) {
         let kind = FixupKind::pcrel(2, 4)
             .with_pc_align(4)
             .with_field(12, 4)
@@ -1770,14 +1783,18 @@ fn literal_load(
             op.span,
         ));
     }
-    if want_wide(ins) {
+    if want_wide(ins)
+        && let Some((_, base8)) = wide_base(t)
+    {
         let kind = FixupKind::pcrel(4, 4)
             .with_pc_align(4)
             .with_limits(-4095, 4095)
             .with_range_hint(hint)
             .scatter(scatter_literal32);
         out.push(fixed(
-            wide_bytes(0xf85f, (rt as u16) << 12),
+            // The PC-relative form is the base that takes a signed offset,
+            // with the PC as its base register.
+            wide_bytes(base8 | u16::from(reg::PC), (rt as u16) << 12),
             entry,
             kind,
             op.span,
