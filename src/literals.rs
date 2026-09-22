@@ -382,15 +382,26 @@ impl Assembler {
                 } else {
                     1
                 };
-                if entry + needed > MAX_ENTRIES {
-                    self.diags.error(
-                        r.span,
-                        format!("literal pool overflow: a pool holds at most {MAX_ENTRIES} slots"),
-                    );
-                    // The load keeps the slot before it, so that the pool it
+                let refuse = if entry + needed > MAX_ENTRIES {
+                    Some(format!(
+                        "literal pool overflow: a pool holds at most {MAX_ENTRIES} slots"
+                    ))
+                } else if needed > 1 && !matches!(new, SlotValue::Word { .. }) {
+                    // `add_to_lit_pool`'s "invalid type for literal pool",
+                    // which the ARM backend reports for itself: a pair of
+                    // slots holds two numbers and nothing else.
+                    Some("an entry this wide must be a number".to_string())
+                } else {
+                    None
+                };
+                if let Some(why) = refuse {
+                    self.diags.error(r.span, why);
+                    // The load keeps the slot before it, so that a pool it
                     // cannot have a slot in does not also leave its label
                     // undefined and report that of every load after it.
-                    uses.push((entry - 1, r.label, r.span));
+                    if entry > 0 {
+                        uses.push((entry - 1, r.label, r.span));
+                    }
                     continue;
                 }
                 if r.size == 8 {

@@ -180,11 +180,11 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
         if !single {
             let mut lo = value as u32;
             let mut hi = (value as u64 >> 32) as u32;
-            let mut op = 0;
-            let found = cmode_for_move(lo, hi, &mut op, 64).or_else(|| {
+            let mut neon_op = 0;
+            let found = cmode_for_move(lo, hi, &mut neon_op, 64).or_else(|| {
                 invert_size(&mut lo, &mut hi, 64);
-                op ^= 1;
-                cmode_for_move(lo, hi, &mut op, 64)
+                neon_op ^= 1;
+                cmode_for_move(lo, hi, &mut neon_op, 64)
             });
             if let Some((cmode, immbits)) = found {
                 // The NEON move is unconditional whatever the `vldr` said,
@@ -195,7 +195,7 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
                 let word = base
                     | (vd & 0x0040_f000)
                     | (cmode << 8)
-                    | (op << 5)
+                    | (neon_op << 5)
                     | (1 << 4)
                     | (immbits & 0xf)
                     | (((immbits >> 4) & 7) << 16)
@@ -206,9 +206,9 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
         let quarter = if single {
             quarter_float(value as u32).then(|| qfloat_bits(value as u32))
         } else {
-            let v = value as u64;
-            (double_is_single(v) && quarter_float(double_to_single(v)))
-                .then(|| qfloat_bits(double_to_single(v)))
+            let wide = value as u64;
+            (double_is_single(wide) && quarter_float(double_to_single(wide)))
+                .then(|| qfloat_bits(double_to_single(wide)))
         };
         if let Some(imm) = quarter {
             let base = if single { 0x0eb0_0a00 } else { 0x0eb0_0b00 };
