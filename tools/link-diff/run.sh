@@ -44,17 +44,20 @@
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
 #   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
 #   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64 and i386 rows, where the linker turns each of them into
-#   local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`,
-#   `@TPOFF` and `@NTPOFF`, and the descriptor pair `@TLSDESC`/`@TLSCALL`.
-#   The other three still have none -- ARM's `(TLSGD)`, AArch64's
-#   `:tprel_g0:`, PowerPC's `@tprel` and `@dtprel` -- but no longer for want
-#   of `STT_TLS`, which a symbol in a thread-local section now has on every
+#   in the x86-64, i386 and PowerPC rows, where the linker turns each of them
+#   into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`,
+#   `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
+#   `@TLSDESC`/`@TLSCALL`; and PowerPC's `@got@tlsgd` and `@got@tlsld` with
+#   the `bl __tls_get_addr(sym@tlsgd)` marker, `@dtprel`, `@got@tprel` with
+#   the `@tls` marker (and, in 64-bit code, their prefixed `@pcrel` forms),
+#   and `@tprel` and its halves. The other two still have none -- ARM's
+#   `(TLSGD)` and AArch64's `:tprel_g0:` -- but no longer for want of
+#   `STT_TLS`, which a symbol in a thread-local section now has on every
 #   target. What each lacks is its own: the relocations, the operand syntax
 #   that selects them, and the marker relocations that cover no field but
 #   tell the linker which instructions to rewrite (ARM's `(tlscall)` and
-#   `.tlsdescseq`, AArch64's `.tlsdesccall`, PowerPC's `@tls` and
-#   `bl __tls_get_addr(sym@tlsgd)`); each backend says where it refuses them.
+#   `.tlsdescseq`, AArch64's `.tlsdesccall`); each backend says where it
+#   refuses them.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot

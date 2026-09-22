@@ -184,3 +184,66 @@ target: nop
         .type   dat, %object
 dat:    .quad   0x1122334455667788
         .size   dat, 8
+
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        # General dynamic: the GOT entry's address, then the call the
+        # linker turns into the local-exec addition once it finds the
+        # variable in the executable. The argument is the marker it goes by.
+        addis   3, 2, tv@got@tlsgd@ha
+        addi    3, 3, tv@got@tlsgd@l
+        bl      __tls_get_addr(tv@tlsgd)
+        nop
+        # Local dynamic: one call for the module, then an offset per variable.
+        addis   3, 2, tloc@got@tlsld@ha
+        addi    3, 3, tloc@got@tlsld@l
+        bl      __tls_get_addr(tloc@tlsld)
+        nop
+        addis   9, 3, tloc@dtprel@ha
+        addi    9, 9, tloc@dtprel@l
+        addi    10, 3, tv2@dtprel
+        # Initial exec, whose `@tls` operand is the thread pointer.
+        addis   9, 2, tv2@got@tprel@ha
+        ld      9, tv2@got@tprel@l(9)
+        add     9, 9, tv2@tls
+        ld      10, tv3@got@tprel(2)
+        lwzx    11, 10, tv3@tls
+        # The same through a prefixed load of the GOT entry.
+        pld     12, tb@got@tprel@pcrel(0), 1
+        add     12, 12, tb@tls@pcrel
+        # Local exec.
+        addis   9, 13, tv3@tprel@ha
+        addi    9, 9, tv3@tprel@l
+        addi    10, 13, tloc@tprel
+        ld      11, tb@tprel(13)
+        paddi   12, 13, tv@tprel, 0
+        lis     9, tv@tprel@highesta
+        ori     9, 9, tv@tprel@highera
+        blr
+        # The module and offset a dynamic loader would fill in, and an
+        # offset from the thread pointer. The data comes before `.tdata`, so
+        # that the thread-local sections stay adjacent in the image.
+        .data
+        .quad   tv@dtpmod
+        .quad   tv@dtprel
+        .quad   tv2@tprel
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .quad   0x1122334455667788
+tloc:   .quad   99
+--- b.s
+        .section .tdata,"awT",@progbits
+        .globl  tv2, tv3
+tv2:    .quad   2
+tv3:    .quad   3
+        .section .tbss,"awT",@nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  helper
+helper: addis   3, 13, tb@tprel@ha
+        addi    3, 3, tb@tprel@l
+        blr

@@ -25,7 +25,8 @@ pub mod reloc;
 pub mod vector;
 
 use crate::arch::{
-    ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, Request, Syntax,
+    ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnRequest, ModifierSymbols, Request,
+    Syntax,
 };
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::lexer::Punct;
@@ -129,6 +130,41 @@ impl Architecture for PowerPc {
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel, self.bits() == 64)
+    }
+
+    /// Only the three thread-local data relocations; every other modifier
+    /// in a data directive is refused. GNU as also puts a halfword
+    /// relocation two bytes into a `.long x@tprel@l`, and a marker on a
+    /// `.long x@tls`, and llvm-mc writes a plain address for both, so no
+    /// answer would agree with the two.
+    fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
+        reloc::tls_data(name, size, pcrel, self.bits() == 64)
+    }
+
+    /// An instruction's relocation is always the one its encoder chose, from
+    /// the whole chain of modifiers and the form of the field; the core,
+    /// which sees only the last modifier of a chain, would read the `@tprel`
+    /// of `paddi 3, 13, x@tprel, 0` as the eight-byte data relocation.
+    fn fixup_modifier_reloc(&self, _name: &str, _kind: &crate::section::FixupKind) -> Option<u32> {
+        None
+    }
+
+    /// Every thread-local modifier makes its target `STT_TLS`, in both
+    /// references, except the markers: GNU as leaves the symbol named in
+    /// `add 3, 3, x@tls` or `bl __tls_get_addr(x@tlsgd)` as it was, where
+    /// llvm-mc makes it thread-local too.
+    fn modifier_symbols(&self, name: &str) -> ModifierSymbols {
+        let mut parts = name.split('@');
+        let first = parts.next().unwrap_or_default();
+        let tls = match first {
+            "tprel" | "dtprel" | "dtpmod" => true,
+            "got" => matches!(parts.next(), Some("tprel" | "dtprel" | "tlsgd" | "tlsld")),
+            _ => false,
+        };
+        ModifierSymbols {
+            tls,
+            ..ModifierSymbols::default()
+        }
     }
 
     /// `@pcrel` only says the field is relative to the instruction, which a

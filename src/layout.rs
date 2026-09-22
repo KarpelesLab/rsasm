@@ -1962,14 +1962,11 @@ impl Assembler {
         // A modifier can imply a symbol of its own, which GNU as creates as it
         // reads the modifier, before the target's.
         let effects = self
-            .find_modifier(e)
+            .modifier_chain(e)
             .filter(|_| self.options.dialect != crate::lexer::Dialect::Nasm)
             // A COFF object has no GOT for a modifier to imply.
             .filter(|_| !self.options.format.is_coff())
-            .map(|m| {
-                let name = self.interner.get(m).to_string();
-                self.frag_arch(si, fi).0.modifier_symbols(&name)
-            });
+            .map(|name| self.frag_arch(si, fi).0.modifier_symbols(&name));
         if let Some(needs) = effects.and_then(|x| x.needs) {
             let name = self.interner.intern(needs);
             let id = self.symbols.intern(name, span);
@@ -2041,11 +2038,29 @@ impl Assembler {
             kind.reloc = r;
         }
         let kind = &kind;
+        // A thread-local access model names a variable the linker finds in
+        // the thread-local block. One the object does not define becomes
+        // thread-local by being named so; one it defines somewhere else is
+        // not one, and GNU as refuses the reference ("Accessing `y' as
+        // thread-local object") rather than hand the linker an ordinary
+        // address to lay out as an offset.
         if effects.is_some_and(|x| x.tls)
             && let Some(t) = v.plus
-            && self.symbols.get(t).ty == crate::symbol::SymType::NoType
         {
-            self.symbols.get_mut(t).ty = crate::symbol::SymType::Tls;
+            if self.symbol_section(t).is_some() && !self.is_thread_local(t) {
+                let name = self.display_name(t);
+                self.diags.error(
+                    span,
+                    format!(
+                        "`{name}` is not a thread-local variable: it is defined in a section \
+                         without the thread-local flag"
+                    ),
+                );
+                return Vec::new();
+            }
+            if self.symbols.get(t).ty == crate::symbol::SymType::NoType {
+                self.symbols.get_mut(t).ty = crate::symbol::SymType::Tls;
+            }
         }
         let target = match v.plus {
             Some(t) => Some(t),
@@ -2259,6 +2274,29 @@ impl Assembler {
             ExprKind::Modifier(n, _) => Some(*n),
             ExprKind::Unary(_, a) => self.find_modifier(*a),
             ExprKind::Binary(_, a, b) => self.find_modifier(*a).or_else(|| self.find_modifier(*b)),
+            _ => None,
+        }
+    }
+
+    /// The first `@`-modifier in an expression together with the ones it is
+    /// stacked on, joined in source order: `x@got@tprel` is `got@tprel`,
+    /// where [`Assembler::find_modifier`] sees only the `tprel` applied last.
+    /// A chain means one relocation as a whole on PowerPC, where the last
+    /// modifier on its own can mean another: `x@tprel` is a thread-local
+    /// offset and `x@tprel@l` its low half.
+    pub(crate) fn modifier_chain(&self, e: ExprRef) -> Option<String> {
+        match &self.exprs.get(e).kind {
+            ExprKind::Modifier(n, inner) => {
+                let name = self.interner.get(*n);
+                Some(match self.modifier_chain(*inner) {
+                    Some(first) => format!("{first}@{name}"),
+                    None => name.to_string(),
+                })
+            }
+            ExprKind::Unary(_, a) => self.modifier_chain(*a),
+            ExprKind::Binary(_, a, b) => {
+                self.modifier_chain(*a).or_else(|| self.modifier_chain(*b))
+            }
             _ => None,
         }
     }

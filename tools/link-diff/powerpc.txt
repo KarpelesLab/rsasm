@@ -152,3 +152,57 @@ weakfn: blr
         .type   gvar, %object
 gvar:   .long   0x11223344
         .size   gvar, 4
+
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        # General dynamic, r31 holding the GOT pointer: the GOT entry's
+        # address, then the call the linker turns into the local-exec
+        # addition once it finds the variable in the executable. The
+        # argument is the marker it goes by.
+        addi    3, 31, tv@got@tlsgd
+        bl      __tls_get_addr(tv@tlsgd)
+        addi    3, 31, tv2@got@tlsgd
+        bl      __tls_get_addr@plt(tv2@tlsgd)
+        # Local dynamic: one call for the module, then an offset per variable.
+        addi    3, 31, tloc@got@tlsld
+        bl      __tls_get_addr(tloc@tlsld)
+        addis   9, 3, tloc@dtprel@ha
+        addi    9, 9, tloc@dtprel@l
+        addi    10, 3, tv2@dtprel
+        # Initial exec, whose `@tls` operand is the thread pointer, r2.
+        lwz     9, tv2@got@tprel(31)
+        add     9, 9, tv2@tls
+        lwz     10, tv3@got@tprel(31)
+        stwx    11, 10, tv3@tls
+        # Local exec.
+        addis   9, 2, tv3@tprel@ha
+        addi    9, 9, tv3@tprel@l
+        addi    10, 2, tloc@tprel
+        lwz     11, tb@tprel(2)
+        blr
+        # llvm-mc writes a `.long x@dtpmod` or `.long x@tprel` as a plain
+        # address, so only the offset GNU as and llvm-mc agree on is here.
+        # The data comes before `.tdata`, so that the thread-local sections
+        # stay adjacent in the image.
+        .data
+        .long   tv@dtprel
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .long   0x11223344
+tloc:   .long   99
+--- b.s
+        .section .tdata,"awT",@progbits
+        .globl  tv2, tv3
+tv2:    .long   2
+tv3:    .long   3
+        .section .tbss,"awT",@nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  helper
+helper: addis   3, 2, tb@tprel@ha
+        addi    3, 3, tb@tprel@l
+        blr

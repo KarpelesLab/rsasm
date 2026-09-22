@@ -553,10 +553,9 @@ impl Assembler {
         // value is: AVR has `pm()` for a `.word` and none for a `.byte`.
         // A Mach-O object checks its modifiers against its own
         // relocations, once it builds them.
-        if let Some(m) = self.find_modifier(e)
+        if let Some(name) = self.modifier_chain(e)
             && !self.macho_object()
         {
-            let name = self.interner.get(m).to_string();
             // COFF's own modifiers (`@IMGREL`) are the format's, not the
             // backend's: they name what the field holds, not a relocation
             // number; see `crate::coff::modifier_class`.
@@ -577,6 +576,24 @@ impl Assembler {
             match self.arch.modifier_reloc(&name, size, false) {
                 Some(r) => {
                     reloc = r;
+                    // A thread-local model names a variable, whose offset
+                    // only the linker lays out; a number has none. llvm-mc
+                    // refuses one, and GNU as refuses it or, for PowerPC,
+                    // crashes.
+                    if self.options.dialect != crate::lexer::Dialect::Nasm
+                        && self.arch.modifier_symbols(&name).tls
+                        && self.eval_ref(e).is_ok_and(|v| v.is_absolute())
+                    {
+                        let espan = self.exprs.span(e);
+                        self.diags.error(
+                            espan,
+                            format!(
+                                "`@{name}` names a thread-local variable, so it needs a symbol \
+                                 rather than a number"
+                            ),
+                        );
+                        return;
+                    }
                     // One that takes part of the value writes the field
                     // itself; the value it takes that part of is what has
                     // to fit.

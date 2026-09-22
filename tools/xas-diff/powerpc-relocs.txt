@@ -25,3 +25,57 @@ f:      pnop
         .globl  f
 f:      pnop
         nop
+=== thread-local data words, which llvm-mc writes as plain addresses
+# GNU as writes R_PPC_DTPMOD32 and R_PPC_TPREL32 for these, and llvm-mc 22
+# R_PPC_ADDR32, dropping the modifier; `@dtprel` the two agree on.
+        .text
+        .p2align 2
+        nop
+        .data
+        .long   tv@dtpmod
+        .long   tv@tprel
+        .long   ext@dtpmod
+        .long   ext+4@tprel
+        .long   tv@dtprel
+        .section .tbss,"awT",@nobits
+tv:     .space  8
+=== thread-local offsets in DS- and DQ-form fields in 32-bit code
+# The plain halfword relocations, as for an address. llvm-mc writes the
+# numbers of R_PPC_TLSGD and R_PPC_TLSLD for `@tprel` and `@tprel@l`.
+        .text
+        .p2align 2
+        lxv     35, tv@tprel(3)
+        lxv     35, tv@tprel@l(3)
+        lxsd    2, tv@dtprel(3)
+        stxsd   2, tv@dtprel@l(3)
+        .section .tbss,"awT",@nobits
+tv:     .space  8
+=== the markers leave the symbol they name as it was
+# GNU as leaves a symbol that only `@tls` or a call's `(sym@tlsgd)` names
+# untyped; llvm-mc makes it thread-local. A local label outside a
+# thread-local section is named as itself, where llvm-mc names its section.
+        .text
+        .p2align 2
+        add     9, 9, ext@tls
+        bl      __tls_get_addr(tv@tlsgd)
+        bl      __tls_get_addr(ext2@tlsld)
+        bl      __tls_get_addr(ext3+4@tlsgd)
+lab:    add     9, 9, lab@tls
+        .section .tbss,"awT",@nobits
+tv:     .space  8
+=== refused: a thread-local model on a variable defined outside a thread-local section
+        .text
+        .p2align 2
+y:      addi    3, 3, y@tprel
+=== refused: a thread-local GOT entry for a symbol plus an offset, in 32-bit code
+        .text
+        .p2align 2
+        addi    3, 31, tv+4@got@tprel
+        .section .tbss,"awT",@nobits
+tv:     .space  8
+=== refused: an offset after a call's thread-local argument
+        .text
+        .p2align 2
+        bl      __tls_get_addr(tv@tlsgd+4)
+        .section .tbss,"awT",@nobits
+tv:     .space  8

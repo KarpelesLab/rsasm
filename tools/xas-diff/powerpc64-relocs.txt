@@ -24,3 +24,42 @@ f:      pnop
         .globl  f
 f:      pnop
         nop
+=== thread-local offsets in prefixed loads and stores, which llvm-mc 22 cannot write
+# GNU as writes R_PPC64_TPREL34 and R_PPC64_DTPREL34, as it does for
+# `paddi`; llvm-mc writes no relocation and bytes that change from run to
+# run.
+        .text
+        .globl  glob
+start:
+        pld     3, tv@tprel(13), 0
+        pstd    3, tv+8@tprel(13), 0
+        plwz    4, ext@dtprel(3), 0
+        plxv    35, tv@dtprel(3), 0
+        .section .tbss,"awT",@nobits
+tv:     .space  16
+=== the markers leave the symbol they name as it was
+# GNU as leaves a symbol that only `@tls` or a call's `(sym@tlsgd)` names
+# untyped; llvm-mc makes it thread-local.
+        .text
+        .p2align 2
+        add     9, 9, ext@tls
+        add     9, 9, ext4@tls@pcrel
+        bl      __tls_get_addr(tv@tlsgd)
+        nop
+        bl      __tls_get_addr(ext2@tlsld)
+        nop
+        bl      __tls_get_addr(ext3+4@tlsgd)
+        .section .tbss,"awT",@nobits
+tv:     .space  8
+=== refused: a thread-local model on a variable defined outside a thread-local section
+        .text
+        .p2align 2
+y:      addi    3, 3, y@tprel
+        .data
+        .quad   y@dtprel
+=== refused: an offset after a call's thread-local argument
+        .text
+        .p2align 2
+        bl      __tls_get_addr(tv@tlsgd+4)
+        .section .tbss,"awT",@nobits
+tv:     .space  8
