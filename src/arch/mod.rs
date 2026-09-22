@@ -1205,14 +1205,14 @@ pub trait Architecture {
         &[]
     }
 
-    /// How `.lcomm` lays out what it reserves in an ELF object. (A COFF
-    /// object follows llvm-mc, which packs `.bss`.) Every ELF target's GNU
-    /// as aligns an object to 8, 4 or 2 bytes
-    /// by its size, as [`LocalCommon::GNU`] does, except where the target
-    /// overrides that: AVR and MSP430 pack `.bss`, and PowerPC aligns every
-    /// object to 8 and leaves its symbol untyped. llvm-mc packs `.bss` on
-    /// every target, and GNU as is followed here, since what the linker then
-    /// places at an address is the object the reference assembler aligned.
+    /// How `.lcomm` lays out what it reserves in an ELF object. Every ELF
+    /// target's GNU as aligns an object to 8, 4 or 2 bytes by its size, as
+    /// [`LocalCommon::GNU`] does, except where the target overrides that:
+    /// AVR and MSP430 pack `.bss`, and PowerPC aligns every object to 8 and
+    /// leaves its symbol untyped. llvm-mc packs `.bss` on every target, and
+    /// GNU as is followed here, since the object the linker then places is
+    /// the one the assembler of a GNU toolchain aligned. A COFF object
+    /// follows llvm-mc, as it does in everything else.
     ///
     /// A `.comm` of a symbol `.local` named first is reserved the same way
     /// but aligned only as the directive asks, by both references; and a
