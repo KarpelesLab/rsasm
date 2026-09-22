@@ -122,11 +122,16 @@ NOT_IMPLEMENTED = re.compile(r"""^(
 #                      `st` transfer
 #   t<cc> %icc, ...    the V9 trap and compare, which name a condition-code
 #   fcmp<s|d> %fccN,   bank as their first operand
+#   %f32 - %f62        the upper half of V9's floating-point file, which is
+#                      addressable only as double and quad registers and
+#                      numbers them in a five-bit field by a bit swizzle;
+#                      src/arch/sparc/reg.rs stops at %f31
 #
 # Each is a feature the backend does not have, not a disagreement about one
 # it does; they are listed here so a run says nothing about them either way.
 UNIMPLEMENTED = re.compile(
-    r"^(fb|fmov(r|[sdq][a-z]+)|t[a-z]+ %[ix]cc|fcmp[a-z]* %fcc)|%f(sr|q)\b")
+    r"^(fb|fmov(r|[sdq][a-z]+)|t[a-z]+ %[ix]cc|fcmp[a-z]* %fcc)"
+    r"|%f(sr|q)\b|%f(3[2-9]|[45]\d|6[0-2])\b")
 
 
 def skip(case):

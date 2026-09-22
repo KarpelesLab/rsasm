@@ -1252,7 +1252,24 @@ def rsasm_narrows_a_negated_immediate(g, m, r, ctx):
             and len(g[1][0]) == 4 and len(r[1][0]) == 2)
 
 
+def rsasm_subtracts_from_the_program_counter(g, m, r, ctx):
+    """`sub r12, pc, #-1`.
+
+    -1 is 0xffffffff, which `ThumbExpandImm`'s repeated-byte form holds, so
+    the subtraction can be encoded as written and rsasm writes it -- which
+    is also what GNU as writes for `sub r0, r1, #-1`, with any base but the
+    program counter. Against `pc` both references turn it into an address
+    calculation instead, and then disagree about which: GNU as writes `addw`
+    (T4) and llvm-mc `add.w` (T3). All three compute the same value.
+    """
+    return (ctx["thumb"]
+            and re.match(r"^(add|sub)s?(\.[nw])?\s+[^,]+,\s*(r15|pc)\s*,\s*#-",
+                         ctx["text"]) is not None
+            and g[0] == "ok" and m[0] == "ok" and r[0] == "ok")
+
+
 DEVIATIONS = [
+    ("subtracts-from-the-program-counter", rsasm_subtracts_from_the_program_counter),
     ("a-negated-thumb-immediate-narrowed", rsasm_narrows_a_negated_immediate),
     ("a-condition-on-vaddl-or-vsubl",
      lambda g, m, r, ctx: gas_takes_a_condition_on_vaddl(g, m, ctx)),

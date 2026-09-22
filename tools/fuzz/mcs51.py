@@ -385,9 +385,14 @@ def rsasm(source, workdir):
 
 
 def boundary_jumps(listing):
-    """Whether AS's listing shows an explicit AJMP or ACALL starting in the
+    """Whether AS's listing shows a two-byte AJMP or ACALL starting in the
     last two bytes of a 2 KiB block, where AS and sdas test the block of the
-    instruction and rsasm, like the CPU, that of the address after it."""
+    instruction and rsasm, like the CPU, that of the address after it.
+
+    A generic `JMP` or `CALL` counts too, and only the listing says whether
+    AS shortened one: the source still reads `call L2` while the bytes are
+    an ACALL. Two bytes at such an address is the whole test -- the long
+    forms are three."""
     for line in listing.splitlines():
         head, sep, rest = line.partition(" : ")
         if not sep or "/" not in head:
@@ -396,8 +401,19 @@ def boundary_jumps(listing):
             addr = int(head.split("/")[-1].strip(), 16)
         except ValueError:
             continue
+        if (addr & 0x7FF) < 0x7FE:
+            continue
         words = rest.lower().split()
-        if (addr & 0x7FF) >= 0x7FE and ("ajmp" in words or "acall" in words):
+        if "ajmp" in words or "acall" in words:
+            return True
+        # The encoding is the hex byte pairs the source text follows.
+        emitted = 0
+        for w in words:
+            if len(w) == 2 and all(c in "0123456789abcdef" for c in w):
+                emitted += 1
+            else:
+                break
+        if emitted == 2 and ("jmp" in words or "call" in words):
             return True
     return False
 
