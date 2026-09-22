@@ -1,0 +1,155 @@
+# AVR programs for tools/link-diff, on the cores with `call`/`jmp`.
+#
+# AVR objects are written for a linker that deletes code: every branch is
+# relocated even when its target is in the same section, local labels reach
+# the symbol table so relocations can name them, `.align` and `.org` in code
+# are recorded in `.avr.prop`, and `EF_AVR_LINKRELAX_PREPARED` is set. None
+# of that does anything until a linker relaxes, which is why each program is
+# linked twice: once plain, once with `--relax`. Relaxation turns a `call`
+# the target can reach into an `rcall` and deletes the two bytes, which moves
+# every symbol after it -- so a missing record or a relocation against the
+# wrong symbol shows up as a different address, not just different bytes.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        call    helper
+        rcall   helper
+        jmp     helper
+        rjmp    helper
+        call    weakfn
+        ldi     r24, lo8(target)
+        ldi     r25, hi8(target)
+        ret
+--- b.s
+        .text
+        .globl  helper, target
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        call    _start
+        rjmp    _start
+        ret
+weakfn:
+        ret
+target: nop
+
+=== alignment in code between two objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        rcall   helper
+        .balign 4
+        nop
+        .balign 8
+        call    helper
+        ret
+--- b.s
+        .text
+        .globl  helper
+helper:
+        nop
+        .balign 4
+        ret
+
+=== low and high halves of another object's addresses
+--- a.s
+        .text
+        .globl  _start
+_start:
+        ldi     r24, lo8(target)
+        ldi     r25, hi8(target)
+        ldi     r22, lo8(bssvar)
+        ldi     r23, hi8(bssvar)
+        ldi     r20, lo8(gs(helper))
+        ldi     r21, hi8(gs(helper))
+        ldi     r18, pm_lo8(helper)
+        ldi     r19, pm_hi8(helper)
+        lds     r16, bssvar
+        sts     bssvar + 1, r16
+        ret
+--- b.s
+        .text
+        .globl  helper
+helper: ret
+        .data
+        .globl  target
+target: .byte   1, 2, 3, 4
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .word   target
+        .word   target + 16
+        .word   wsym
+        .word   com1
+        .word   bssvar
+        .word   after - dptr
+        .size   dptr, . - dptr
+after:  .word   0
+        .text
+        .globl  _start
+_start: ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 2
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    both
+        call    weakonly
+        ldi     r24, lo8(both)
+        ret
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   sleep
+        sleep
+        .weak   weakonly
+weakonly:
+        ret
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 2, 2
+        .comm   bigger, 8, 2
+        .text
+        .globl  _start
+_start:
+        lds     r24, shared
+        ldi     r30, lo8(bigger)
+        ldi     r31, hi8(bigger)
+        ret
+--- b.s
+        .comm   shared, 2, 2
+        .comm   bigger, 64, 2
+        .text
+        .globl  reader
+reader:
+        ldi     r24, lo8(bigger)
+        ret

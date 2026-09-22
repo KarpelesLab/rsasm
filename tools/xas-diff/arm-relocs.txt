@@ -64,6 +64,29 @@ f:      mov     r0, r1
         .syntax unified
         mov     r0, r0
         .byte   1, 2, 3
+=== a section's tail is padded for the instruction set its last fragment holds
+# `arm_init_frag` stamps the mode on the fragment the padding lands in, and an
+# instruction stamps its own mode on the fragment it is written into, so the
+# `.arm` after the section was left changes nothing here.
+        .syntax unified
+        .text
+        bx      lr
+        .code 16
+        bx      lr
+        .data
+        .arm
+=== a relaxable last instruction leaves the tail to the mode at the end of the file
+# A Thumb load or store with an immediate offset is a fragment of its own in
+# GNU as, so the padding after it lands in a fresh fragment, which takes the
+# mode in force when `subsegs_finish_section` makes it: ARM, whose no-op does
+# not fit the two bytes left, so they are zeros with a `$d` on them.
+        .syntax unified
+        .text
+        bx      lr
+        .code 16
+        str     r0, [r3, #4]
+        .data
+        .arm
 === an odd alignment remainder in code is data
         .syntax unified
         mov     r0, r0

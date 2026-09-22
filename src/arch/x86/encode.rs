@@ -275,6 +275,9 @@ pub fn encode(
     let roles = assign_roles(def, ops);
     let mut bytes: Vec<u8> = Vec::with_capacity(8);
     let mut fixups: Vec<Fixup> = Vec::new();
+    // Whether a REX prefix is part of the encoding, which only the two
+    // relaxable `@GOTPCREL` relocation numbers care about.
+    let mut has_rex = false;
 
     // ---- legacy prefixes --------------------------------------------------
     // In the order GNU as writes them, which is by kind rather than as
@@ -544,6 +547,7 @@ pub fn encode(
                     | ((ext_x as u8) << 1)
                     | (ext_b as u8);
                 bytes.push(rex);
+                has_rex = true;
             }
         }
         Enc::Vex => {
@@ -785,20 +789,36 @@ pub fn encode(
     if let Some((offset, e, dspan, rip_relative, width)) = disp_fixup {
         let trailing = (bytes.len() - offset - width as usize) as i8;
         let kind = if rip_relative {
+            let gotpcrel = modifier(cx, e).as_deref() == Some("gotpcrel");
             // A `movq` load through the GOT is one a linker may turn into a
             // `leaq` of the symbol itself, which Mach-O records in the
             // relocation's type; ELF's `R_X86_64_GOTPCREL` does not say.
-            let class = if def.opcode == [0x8b]
-                && def.opsize == 64
-                && def.enc == Enc::Legacy
-                && modifier(cx, e).as_deref() == Some("gotpcrel")
+            let class =
+                if def.opcode == [0x8b] && def.opsize == 64 && def.enc == Enc::Legacy && gotpcrel {
+                    RelocClass::GotLoad
+                } else {
+                    RelocClass::Plain
+                };
+            // ELF says it in a second number instead: the wider set of forms
+            // a linker may rewrite -- every one `R_386_GOT32X` covers --
+            // takes `R_X86_64_GOTPCRELX`, or `R_X86_64_REX_GOTPCRELX` when
+            // the instruction has a REX prefix the rewritten form keeps.
+            // Only `fixup_modifier_reloc` lets this through, so a field with
+            // no `@GOTPCREL` on it cannot pick it up.
+            let reloc = if abi == reloc::Abi::X86_64
+                && gotpcrel
+                && got_load_is_relaxable(def, mem.as_ref())
             {
-                RelocClass::GotLoad
+                if has_rex {
+                    reloc::Abi::X86_64_REX_GOTPCRELX
+                } else {
+                    reloc::Abi::X86_64_GOTPCRELX
+                }
             } else {
-                RelocClass::Plain
+                abi.pcrel(4).unwrap_or(0)
             };
             FixupKind::pcrel(4, trailing + 4)
-                .with_reloc(abi.pcrel(4).unwrap_or(0))
+                .with_reloc(reloc)
                 .with_class(class)
         } else if width != 4 {
             FixupKind::data(width).with_reloc(abi.abs(width).unwrap_or(0))
@@ -907,11 +927,13 @@ fn got_distance(offset: u32) -> FixupKind {
         .linker_only()
 }
 
-/// True for the `@GOT` loads GNU as marks `R_386_GOT32X`, which a linker may
-/// rewrite to use the symbol's address directly: a 32-bit `mov` load, the
-/// arithmetic operations and `test` reading the pointer, and an indirect
-/// `call`, `jmp` or `push` through it, all with a base register or no
-/// register at all. llvm-mc marks only the `mov`.
+/// True for the GOT loads GNU as marks `R_386_GOT32X`, or
+/// `R_X86_64_GOTPCRELX` on x86-64, which a linker may rewrite to use the
+/// symbol's address directly: a `mov` load, the arithmetic operations and
+/// `test` reading the pointer, and an indirect `call`, `jmp` or `push`
+/// through it, all with a base register or no register at all. A word-sized
+/// form is not one of them, since the operand-size prefix leaves no room for
+/// the rewrite. llvm-mc marks only the `mov` on i386.
 fn got_load_is_relaxable(def: &Def, mem: Option<&Mem>) -> bool {
     let Some(m) = mem else {
         return false;
@@ -922,7 +944,8 @@ fn got_load_is_relaxable(def: &Def, mem: Option<&Mem>) -> bool {
     match (def.opcode.as_slice(), def.modrm) {
         ([0xff], ModRm::Ext(2 | 4 | 6)) => true,
         ([op], ModRm::Reg) => {
-            def.opsize == 32 && (*op == 0x8b || *op == 0x85 || (*op & 0xc7 == 0x03 && *op < 0x40))
+            matches!(def.opsize, 32 | 64)
+                && (*op == 0x8b || *op == 0x85 || (*op & 0xc7 == 0x03 && *op < 0x40))
         }
         _ => false,
     }

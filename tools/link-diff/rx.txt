@@ -1,0 +1,138 @@
+# RX programs for tools/link-diff.
+#
+# Each program is linked with and without `--relax`: the RX linker shortens
+# branches and deletes the bytes, which moves everything after them, so a
+# relocation against the wrong symbol shows up as a different address rather
+# than only as different bytes.
+#
+# What is not here is a difference of two symbols in different sections.
+# GNU as writes that as a run of `R_RX_SYM`, `R_RX_OPsub` and a store -- the
+# RX relocations are a little stack machine -- which one fixup cannot
+# express, so rsasm refuses it rather than approximating it; `src/arch/rx/
+# reloc.rs` says so.
+#
+# The conditional branches across objects are written `.w`. Left to choose,
+# rsasm gives a condition whose target it cannot see the synthetic
+# `inverted .s` + `bra.a` pair, where GNU as keeps the 16-bit form and trusts
+# the linker to reach -- the deviation `src/arch/rx/branch.rs` documents. The
+# suffix pins both to one form, so what is compared here is the relocation
+# rather than that choice.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        bsr     helper
+        bra     helper
+        beq.w   helper
+        bne.w   weakfn
+        bsr     weakfn
+        mov.l   #target, r1
+        jsr     r1
+        rts
+--- b.s
+        .text
+        .globl  helper, target
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        bsr     _start
+        bra     _start
+        rts
+weakfn:
+        rts
+target: rts
+
+=== absolute references to another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        mov.l   #target, r1
+        mov.l   #bssvar, r2
+        mov.l   #rodata, r3
+        mov.l   #target + 8, r5
+        rts
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .long   0x11223344
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== data references and differences between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .long   target
+        .long   target + 16
+        .long   wsym
+        .long   com1
+        .long   bssvar
+        .long   after - dptr
+        .size   dptr, . - dptr
+after:  .long   0
+        .text
+        .globl  _start
+_start: rts
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        bsr     both
+        bsr     weakonly
+        mov.l   #both, r1
+        rts
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   brk
+        brk
+        .weak   weakonly
+weakonly:
+        rts
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .globl  _start
+_start:
+        mov.l   #shared, r1
+        mov.l   #bigger, r2
+        rts
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        mov.l   #bigger, r1
+        rts

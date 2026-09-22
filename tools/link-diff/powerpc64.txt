@@ -1,0 +1,150 @@
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, %function
+_start:
+        bl      helper
+        nop
+        b       helper
+        beq     helper
+        bne     weakfn
+        bl      weakfn
+        nop
+        blr
+--- b.s
+        .text
+        .globl  helper
+        .weak   weakfn
+        .type   helper, %function
+helper:
+        bl      _start
+        nop
+        b       _start
+        blr
+weakfn:
+        blr
+
+=== halves of another object's address
+--- a.s
+        .text
+        .globl  _start
+_start:
+        lis     3, target@ha
+        addi    3, 3, target@l
+        lis     4, bssvar@ha
+        lwz     4, bssvar@l(4)
+        lis     5, target@h
+        ori     5, 5, target@l
+        addis   6, 2, rodata@ha
+        blr
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .quad   0x1122334455667788
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== prefixed pc-relative references to another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        paddi   3, 0, target@pcrel, 1
+        pld     4, dat@pcrel(0), 1
+        pstd    5, dat@pcrel+8(0), 1
+        plwz    6, dat@pcrel+4(0), 1
+        blr
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .data
+        .globl  dat
+dat:    .quad   0
+        .quad   0
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, %object
+dptr:   .quad   target
+        .quad   target + 16
+        .long   target - .
+        .long   0
+        .quad   wsym
+        .quad   com1
+        .quad   bssvar
+        .long   after - dptr
+        .long   0
+        .size   dptr, . - dptr
+after:  .quad   0
+        .text
+        .globl  _start
+_start: blr
+--- b.s
+        .text
+        .globl  target
+        .type   target, %function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, %object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        bl      both
+        nop
+        bl      weakonly
+        nop
+        lis     3, both@ha
+        addi    3, 3, both@l
+        blr
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   trap
+        trap
+        .weak   weakonly
+weakonly:
+        blr
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 4, 4
+        .comm   bigger, 8, 8
+        .text
+        .globl  _start
+_start:
+        lis     3, shared@ha
+        lwz     3, shared@l(3)
+        lis     4, bigger@ha
+        addi    4, 4, bigger@l
+        blr
+--- b.s
+        .comm   shared, 4, 4
+        .comm   bigger, 64, 32
+        .text
+        .globl  reader
+reader:
+        lis     3, bigger@ha
+        addi    3, 3, bigger@l
+        blr

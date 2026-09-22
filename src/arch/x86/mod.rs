@@ -133,7 +133,7 @@ impl Architecture for X86 {
             "plt" => Some(abi.plt32()),
             // NASM spells the RIP-relative GOT load `wrt ..got`; `..gotpcrel`
             // is accepted too, as the GNU `@GOTPCREL` name.
-            "gotpcrel" => abi.gotpcrel(),
+            "gotpcrel" => abi.gotpcrel(size),
             "got" => abi.got(size, pcrel),
             "gotoff" => abi.gotoff(size),
             "gotpc" => abi.gotpc(size),
@@ -197,6 +197,11 @@ impl Architecture for X86 {
                 self.modifier_reloc(name, kind.size, kind.pcrel)
                     .unwrap_or(0),
             );
+        }
+        // The same on x86-64, where the encoder marks the `@GOTPCREL` loads
+        // with the relaxable number and whether they carry a REX prefix.
+        if name == "gotpcrel" && reloc::Abi::is_gotpcrelx(kind.reloc) {
+            return Some(kind.reloc);
         }
         self.modifier_reloc(name, kind.size, kind.pcrel)
     }
