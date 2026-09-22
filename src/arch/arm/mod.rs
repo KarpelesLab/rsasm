@@ -962,6 +962,7 @@ fn tls_descseq(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
     cx.requests.push(Request::Mark {
         expr,
         kind: FixupKind::data(0).with_reloc(reloc).linker_only(),
+        as_data: true,
         within: 4,
     });
 }

@@ -261,6 +261,28 @@ fn a_thread_local_common_block_is_an_elf_directive() {
     }
 }
 
+#[cfg(feature = "aarch64")]
+#[test]
+fn aarch64_thread_local_operators_are_elf_relocations() {
+    // llvm-mc refuses each of these for `aarch64-windows-msvc` ("relocation
+    // specifier ... unsupported on COFF targets") and for `arm64-apple-macos`
+    // ("unknown AArch64 fixup kind"), `.tlsdesccall` included.
+    for src in [
+        "add x0, x0, :tprel_lo12:v\n",
+        "movz x0, :tprel_g1:v\n",
+        "adrp x0, :gottprel:v\n",
+        "ldr x0, [x0, :gottprel_lo12:v]\n",
+        "adrp x0, :tlsdesc:v\n",
+        "add x0, x0, :dtprel_lo12:v\n",
+        ".tlsdesccall v\nblr x1\n",
+    ] {
+        for format in [Format::Coff, Format::MachO] {
+            let e = errors("aarch64", format, src);
+            assert!(e.contains("thread-local access models"), "{src}{e}");
+        }
+    }
+}
+
 #[test]
 fn a_field_coff_has_no_relocation_for_is_refused() {
     // A one-byte PC-relative field, which llvm-mc refuses too.

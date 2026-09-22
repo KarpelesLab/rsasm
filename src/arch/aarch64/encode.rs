@@ -168,8 +168,14 @@ fn scatter_movw_signed<const GROUP: u32>(w: u64, v: i64) -> u64 {
 /// The range is stated as the whole value rather than the group, since
 /// "nothing above group `n`" is exactly "fits in `16 * (n + 1)` bits", and
 /// the group is taken as the field is written.
+///
+/// A thread-local group is left to the linker whatever it refers to; see
+/// [`fixup_tls`].
 pub fn fixup_movw(g: super::operand::MovwGroup) -> FixupKind {
     use super::operand::MovwCheck;
+    if g.tls {
+        return fixup_tls(g.reloc);
+    }
     let bits = 16 * (g.group + 1);
     let plain: fn(u64, i64) -> u64 = match g.group {
         0 => scatter_movw::<0>,
@@ -251,6 +257,41 @@ pub fn fixup_got_lo12(scale: u32) -> FixupKind {
         .with_reloc(reloc::LD64_GOT_LO12_NC)
         .with_class(RelocClass::GotPageOff)
         .link(LinkValue::LinkerOnly("a GOT entry"))
+}
+
+// ---- thread-local access models ---------------------------------------------
+
+/// The field of a thread-local operator: `:tprel_lo12:`, `:tlsdesc:`,
+/// `:gottprel_g1:` and the rest, each with the relocation GNU as writes for
+/// the instruction it is on.
+///
+/// Nothing here computes one. The value is an offset into a thread's block,
+/// or the address of a GOT slot or descriptor holding one, which only the
+/// linker lays out; and the linker may rewrite the whole sequence into
+/// another model, so even a variable defined in this file is relocated.
+/// GNU as leaves the field as it was written, `movz` staying `movz`, which
+/// the scatter function does too, should anything ever write one.
+pub fn fixup_tls(reloc: u32) -> FixupKind {
+    FixupKind::data(4)
+        .with_field(64, 1)
+        .with_reloc(reloc)
+        .with_class(RelocClass::ThreadLocal)
+        .linker_only()
+        .scatter(keep_word)
+}
+
+fn keep_word(w: u64, _: i64) -> u64 {
+    w
+}
+
+/// A mark on an instruction of a descriptor sequence, `.tlsdesccall v` on
+/// the `blr` after it: a relocation covering no bytes, which tells the
+/// linker what the instruction is for when it rewrites the sequence.
+pub fn fixup_tls_mark(reloc: u32) -> FixupKind {
+    FixupKind::data(0)
+        .with_reloc(reloc)
+        .with_class(RelocClass::ThreadLocal)
+        .linker_only()
 }
 
 // ---- the logical (bitmask) immediate ---------------------------------------

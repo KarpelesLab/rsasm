@@ -208,8 +208,15 @@ impl Assembler {
                         .retain(|&(v, t, _)| (v, t) != (vendor, tag));
                     self.attr_overrides.push((vendor, tag, value));
                 }
-                Request::Mark { expr, kind, within } => {
-                    self.map_data();
+                Request::Mark {
+                    expr,
+                    kind,
+                    as_data,
+                    within,
+                } => {
+                    if as_data {
+                        self.map_data();
+                    }
                     let espan = self.exprs.span(expr);
                     let section = self.cur;
                     let s = self.cur_section();
@@ -218,8 +225,10 @@ impl Assembler {
                     // always the section's last.
                     let frag = s.frags.len() - 1;
                     let offset = s.frags[frag].size() as u32;
-                    self.mark_tests
-                        .push((section, frag as u32, offset, within, span));
+                    if within > 0 {
+                        self.mark_tests
+                            .push((section, frag as u32, offset, within, span));
+                    }
                 }
             }
         }

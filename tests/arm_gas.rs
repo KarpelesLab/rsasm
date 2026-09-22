@@ -779,7 +779,7 @@ fn the_thread_local_operands_gnu_as_refuses() {
     let e = errors_for("arm", " .word x(TLSGD)\n .data\nx: .word 0\n");
     assert!(e.contains("as a thread-local variable"), "{e}");
     let e = errors_for("arm", " .type x, %function\n .word x(TPOFF)\n");
-    assert!(e.contains("accessing function `x`"), "{e}");
+    assert!(e.contains("`x` is a function"), "{e}");
     let e = errors_for("arm", " nop\n .tlsdescseq x\n");
     assert!(e.contains("covers the 4 bytes after it"), "{e}");
     let e = errors_for("thumb", " nop\n .tlsdescseq x\n nop\n");

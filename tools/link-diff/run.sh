@@ -44,19 +44,23 @@
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
 #   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
 #   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64 and i386 rows, where the linker turns each of them into
-#   local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`,
-#   `@TPOFF` and `@NTPOFF`, and the descriptor pair `@TLSDESC`/`@TLSCALL`.
+#   in the x86-64, i386 and AArch64 rows, where the linker turns each of them
+#   into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`,
+#   `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
+#   `@TLSDESC`/`@TLSCALL`; and AArch64's `:tlsgd:`, `:tlsldm:` with the
+#   `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
+#   `:tlsdesc:` with the `.tlsdesccall`, `.tlsdescadd` and `.tlsdescldr`
+#   marks. `.xword %dtprel(sym)` is not linked: GNU ld refuses its
+#   relocation in an allocated section, and the image is made of those.
 #   They are in the ARM and Thumb rows too: `(TLSGD)`, `(TLSLDM)` and
 #   `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's `(TLSDESC)`
 #   with the `(tlscall)` branch and the `.tlsdescseq` marks, which GNU ld
-#   rewrites into initial-exec loads. The other two still have none --
-#   AArch64's `:tprel_g0:`, PowerPC's `@tprel` and `@dtprel` -- but no
-#   longer for want of `STT_TLS`, which a symbol in a thread-local section
-#   now has on every target. What each lacks is its own: the relocations,
-#   the operand syntax that selects them, and the marker relocations that
-#   cover no field but tell the linker which instructions to rewrite
-#   (AArch64's `.tlsdesccall`, PowerPC's `@tls` and
+#   rewrites into initial-exec loads. PowerPC still has none -- `@tprel`
+#   and `@dtprel` -- but not for want of `STT_TLS`, which a symbol in a
+#   thread-local section has on every target. What it lacks is its own: the
+#   relocations, the operand syntax that selects them, and the marker
+#   relocations that cover no field but tell the linker which instructions
+#   to rewrite (`@tls` and
 #   `bl __tls_get_addr(sym@tlsgd)`); each backend says where it refuses them.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it

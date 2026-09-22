@@ -194,6 +194,25 @@ pub enum Request {
     Literal(LiteralRequest),
     /// Writes out the section's literal pool here: `.ltorg`.
     FlushLiterals,
+    /// A relocation that covers no bytes, placed where the section stands,
+    /// so on whatever is emitted next: AArch64's `.tlsdesccall sym` marks the
+    /// `blr` after it for the linker that rewrites the sequence, and ARM's
+    /// `.tlsdescseq sym` the next instruction of a descriptor sequence. The
+    /// fixup's kind is zero bytes wide.
+    ///
+    /// ARM's GNU as treats its directive as data for the mapping symbols,
+    /// which the instruction after it then marks again as code: `as_data`
+    /// says so. It also gives the relocation a field of `within` bytes that
+    /// has to lie inside one of its fragments, so that many bytes must follow
+    /// before anything that starts another — an alignment, a `.space`, the
+    /// end of a relaxable instruction, or the end of the section. Zero asks
+    /// for nothing more than something after the mark.
+    Mark {
+        expr: ExprRef,
+        kind: crate::section::FixupKind,
+        as_data: bool,
+        within: u8,
+    },
     /// What an attribute directive — ARM's `.eabi_attribute`, RISC-V's
     /// `.attribute`, PowerPC's `.gnu_attribute` — said one tag of the
     /// object's build attributes is. It replaces whatever
@@ -204,20 +223,6 @@ pub enum Request {
         vendor: &'static str,
         tag: u32,
         value: AttrValue,
-    },
-    /// Places a relocation that covers no bytes here, marking whatever
-    /// follows: ARM's `.tlsdescseq sym`, which labels the next instruction
-    /// of a TLS descriptor sequence for the linker. `kind` is a zero-width
-    /// fixup. GNU as treats the directive as data for the mapping symbols,
-    /// which an instruction after it then marks again as code, and gives the
-    /// relocation a field of `within` bytes that has to lie inside one of
-    /// its fragments: that many bytes must follow before anything that
-    /// starts another, which is an alignment, a `.space`, the end of a
-    /// relaxable instruction, or the end of the section.
-    Mark {
-        expr: crate::expr::ExprRef,
-        kind: crate::section::FixupKind,
-        within: u8,
     },
 }
 
@@ -918,6 +923,16 @@ pub trait Architecture {
     /// has them. [`Architecture::modifier_reloc`] then says which relocation
     /// each picks, as it does for the `@` spelling.
     fn data_paren_modifiers(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Relocation modifiers this target's GNU as reads as a `%name(...)` call
+    /// around the whole value of the data directive `directive`: AArch64's
+    /// `.xword %dtprel(sym)`, which it reads in `.word`, `.long`, `.xword`
+    /// and `.dword` alone. Written only in lower case, and only as the whole
+    /// value. [`Architecture::modifier_reloc`] then says which relocation
+    /// each picks, and in which widths.
+    fn percent_modifiers(&self, _directive: &str) -> &'static [&'static str] {
         &[]
     }
 
