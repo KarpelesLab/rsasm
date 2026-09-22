@@ -36,9 +36,9 @@ A case is:
               there are any. Each is shown reduced: statements are dropped
               while the difference stays the same kind.
     known     they differ in a way this fuzzer is not about, each with its
-              reason: `KNOWN` and `KNOWN_GAS` list the ones told apart by
-              what the assembler that refused said, and `known_object` the
-              two that show in the object itself.
+              reason: `KNOWN` lists the ones told apart by what rsasm said
+              when it refused, and `known_object` the one that shows in the
+              object itself.
 
 `--mutations` (default 0.15) is the fraction of programs given something
 meant to be refused: a pool out of reach, a `=` on a store or an `ldrd`, an
@@ -574,9 +574,8 @@ def canon_parts(text):
 
 
 def known_object(gas, rsasm):
-    """The differences between two objects that this fuzzer is not about,
-    or None if there is anything else. There are two, and a program may
-    have both:
+    """The one difference between two objects that this fuzzer is not about,
+    or None if there is anything else.
 
     *Which symbol a relocation names.* GNU as's `arm_fix_adjustable`
     relocates a reference to a local label against the label's *section*,
@@ -585,21 +584,12 @@ def known_object(gas, rsasm):
     src/arch/arm/mod.rs, which tools/dwarf-diff compares against llvm-mc).
     A linker reads the two the same. A branch out of its own section is how
     to write one: the relocation's table, offset and type agree, both
-    targets name the same section, and the four bytes of the field differ.
-
-    *How a code section's last bytes are padded to its alignment.* GNU as
-    pads there with the no-ops of the instruction set in force when the
-    *file* ends -- `subsegs_finish_section` makes the frag then, and
-    `arm_handle_align` reads the mode recorded on it -- and writes zeros
-    and a `$d` where what is left is not a whole number of them. rsasm pads
-    with the no-ops of the last instruction in the section, which is the
-    same thing until an `.arm` or `.thumb` after that instruction changes
-    the mode. A pool's own padding is zeros either way."""
+    targets name the same section, and the four bytes of the field differ."""
     g_sec, g_rel, g_rest = canon_parts(gas)
     r_sec, r_rel, r_rest = canon_parts(rsasm)
-    if g_rel.keys() != r_rel.keys():
+    if g_rel.keys() != r_rel.keys() or g_rest != r_rest:
         return None
-    reasons = []
+    reason = None
     # Where the two may differ, as (first, last) byte offsets per section.
     spans = {}
     for key, target in g_rel.items():
@@ -615,30 +605,8 @@ def known_object(gas, rsasm):
             return None
         at = int(offset, 16)
         spans.setdefault("." + table.split(".", 2)[2], []).append((at, at + 3))
-        reasons = ["a relocation naming the label, as llvm-mc names it"]
-    # The padding shows as a `$d` GNU as alone writes, and sometimes as a
-    # mapping symbol rsasm alone writes at that same offset.
-    gas_only = [line for line in g_rest if line not in r_rest]
-    rsasm_only = [line for line in r_rest if line not in g_rest]
-    marks = []
-    for line in gas_only:
-        f = line.split()
-        if len(f) != 6 or f[0] != "symbol" or f[1] != "$d" or "+" not in f[5]:
-            return None
-        section, _, at = f[5].partition("+")
-        marks.append((section, int(at, 16)))
-        spans.setdefault(section, []).append((int(at, 16), len(g_sec.get(section, "")) // 2))
-    for line in rsasm_only:
-        f = line.split()
-        if len(f) != 6 or f[0] != "symbol" or f[1] not in ("$a", "$t", "$d"):
-            return None
-        section, _, at = f[5].partition("+")
-        if (section, int(at, 16)) not in marks:
-            return None
-    if marks:
-        reasons.append("a code section's last bytes padded in the other"
-                       " instruction set")
-    if not reasons:
+        reason = "a relocation naming the label, as llvm-mc names it"
+    if reason is None:
         return None
     for name, hexed in g_sec.items():
         other = r_sec.get(name)
@@ -651,7 +619,7 @@ def known_object(gas, rsasm):
                 continue
             if not any(lo <= i // 2 <= hi for lo, hi in spans.get(name, ())):
                 return None
-    return " and ".join(reasons)
+    return reason
 
 
 def classify(gas, rsasm):

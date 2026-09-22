@@ -238,6 +238,26 @@ fn data_before_code_is_marked_from_the_start() {
     );
 }
 
+/// The no-ops padding a section's tail are the instruction set recorded on
+/// the fragment they land in. An instruction stamps its own set on the
+/// fragment it is written into, so a `.arm` after the section was left
+/// changes nothing; but a relaxable Thumb load is a fragment of its own in
+/// GNU as, and the padding after it takes the set in force when the file
+/// ends, whose no-op may not fit — two bytes of ARM padding are zeros, with
+/// a `$d` over them.
+#[test]
+fn a_section_tail_is_padded_for_its_last_fragment() {
+    let kept = ".text\nbx lr\n.code 16\nbx lr\n.data\n.arm\n";
+    assert_eq!(hex(&text_for("arm", kept)), "1e ff 2f e1 70 47 00 bf");
+    assert_eq!(mapping("arm", kept)[..2], text(&[(0, "$a"), (4, "$t")])[..]);
+    let relaxed = ".text\nbx lr\n.code 16\nstr r0, [r3, #4]\n.data\n.arm\n";
+    assert_eq!(hex(&text_for("arm", relaxed)), "1e ff 2f e1 58 60 00 00");
+    assert_eq!(
+        mapping("arm", relaxed)[..3],
+        text(&[(0, "$a"), (4, "$t"), (6, "$d")])[..]
+    );
+}
+
 // ---- interworking ----------------------------------------------------------------
 
 /// The ELF symbol table of an object, as `(name, value, st_info)`, without
