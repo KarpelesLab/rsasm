@@ -29,6 +29,12 @@ GNU as runs with `-mno-relax`: it otherwise pairs every symbolic reference
 with an `R_RISCV_RELAX` marker, which is a hint to the linker rather than
 part of the encoding, and neither llvm-mc nor rsasm writes one.
 
+One case in eight is a small program rather than a single instruction: a
+forward branch to the label the harness defines after every case, over a
+gap drawn from the distances that sit on and just past the reach of each
+branch form. That is the only way the choice between a two-byte branch, a
+four-byte one and the opposite branch over a `jal` is reached at all.
+
 `--mutations` (default 0.25) is the fraction of cases made deliberately
 invalid: an immediate past the end of its field, a shift amount too large
 for the XLEN, a register from the wrong bank, an instruction on the XLEN it
