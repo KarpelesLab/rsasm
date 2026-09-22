@@ -200,10 +200,17 @@ impl Architecture for Arm {
         reloc::data(size, pcrel)
     }
 
-    /// llvm-mc names a local label in every relocation but these two (its
-    /// `ARMELFObjectWriter::needsRelocateWithSymbol`).
-    fn relocates_with_label(&self, reloc: u32) -> bool {
-        !matches!(reloc, reloc::ABS32 | reloc::PREL31)
+    /// GNU as's `arm_fix_adjustable`, which rsasm follows for whole ARM
+    /// objects, takes every relocation this backend writes through the
+    /// section symbol, with the label's offset folded into the field: only a
+    /// function symbol (see `keeps_reloc_symbol`), a `movw`/`movt` half and
+    /// the GOT, TLS and group relocations, none of which are written here,
+    /// keep the label. llvm-mc names the label in every relocation but
+    /// `R_ARM_ABS32` and `R_ARM_PREL31` (its
+    /// `ARMELFObjectWriter::needsRelocateWithSymbol`); a linker reads the
+    /// two the same, since what the label adds is in the field.
+    fn relocates_with_label(&self, _reloc: u32) -> bool {
+        false
     }
 
     /// llvm-mc's conventions, as for every ARM encoding, in either
@@ -246,21 +253,29 @@ impl Architecture for Arm {
 
     /// Alignment padding has to stay executable, and the two instruction sets
     /// have different no-ops, so the current mode picks.
+    ///
+    /// GNU as's `arm_handle_align`: a remainder too short for an instruction
+    /// is zeros, and comes first so that the no-ops after it are aligned;
+    /// then Thumb-2 padding is a 16-bit `nop` only where the rest is not a
+    /// multiple of four, and 32-bit `nop.w`s for what is left, so that the
+    /// processor fetches as few instructions as the gap allows.
     fn nop_fill(&self, state: &ArchState, len: u64) -> Vec<u8> {
         let len = len as usize;
-        let thumb_nop = thumb::NOP.to_le_bytes();
-        let arm_nop = encode::NOP.to_le_bytes();
-        let nop: &[u8] = if state.bits == THUMB_BITS {
-            &thumb_nop
-        } else {
-            &arm_nop
-        };
-        // A misaligned remainder cannot hold an instruction, so it is zeros,
-        // and comes first so that the no-ops after it are aligned: GNU as
-        // and llvm-mc both pad that way.
+        if state.bits == THUMB_BITS {
+            let mut out = vec![0; len % 2];
+            if (len - out.len()) % 4 != 0 {
+                out.extend_from_slice(&thumb::NOP.to_le_bytes());
+            }
+            while out.len() < len {
+                out.extend_from_slice(&thumb::WIDE_NOP.0.to_le_bytes());
+                out.extend_from_slice(&thumb::WIDE_NOP.1.to_le_bytes());
+            }
+            return out;
+        }
+        let nop = encode::NOP.to_le_bytes();
         let mut out = vec![0; len % nop.len()];
         while out.len() < len {
-            out.extend_from_slice(nop);
+            out.extend_from_slice(&nop);
         }
         out
     }

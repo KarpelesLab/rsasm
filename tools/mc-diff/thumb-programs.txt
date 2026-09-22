@@ -51,7 +51,12 @@ far:
         add     r0, r1, r2
 === alignment padding in thumb code
         movs    r0, r0
-        .balign 8
+        @ A two-byte gap is a 16-bit `nop` in both. A longer one is not: GNU
+        @ as, which rsasm follows for ARM, writes 32-bit `nop.w`s and only as
+        @ many 16-bit ones as the gap's low bits need (its `arm_handle_align`),
+        @ where llvm-mc writes 16-bit no-ops throughout. See
+        @ tools/xas-diff/thumb.txt.
+        .balign 4
         movs    r0, r0
         @ GNU as, and rsasm, pad the end of a code section to its alignment
         @ up to a word; llvm-mc does not. Ending on a word keeps that out of
