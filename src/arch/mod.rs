@@ -205,6 +205,12 @@ pub struct LiteralRequest {
     pub value: Literal,
     /// Entry width in bytes.
     pub size: u8,
+    /// Whether the number was written without a negation, which is GNU as's
+    /// `X_unsigned` and part of what makes two of its ARM pool entries the
+    /// same: `-1` and `0xffffffffffffffff` are one `i64` and two entries,
+    /// and so are `4` and `8-4`. An entry that is not a number, and a pool
+    /// whose backend groups its entries by width, has no use for it.
+    pub unsigned: bool,
     pub span: Span,
 }
 
@@ -419,6 +425,18 @@ impl AsmCtx<'_> {
     /// same number, or the same symbol plus the same addend. Until then the
     /// entry's address is a label with a name no source can spell.
     pub fn literal(&mut self, value: Literal, size: u8, span: Span) -> ExprRef {
+        self.literal_from(value, size, span, true)
+    }
+
+    /// The same, saying as well whether the number was written without a
+    /// negation; see [`LiteralRequest::unsigned`].
+    pub(crate) fn literal_from(
+        &mut self,
+        value: Literal,
+        size: u8,
+        span: Span,
+        unsigned: bool,
+    ) -> ExprRef {
         // The arena only grows, and grows below, so its length names each
         // entry once.
         let n = self.exprs.len();
@@ -427,6 +445,7 @@ impl AsmCtx<'_> {
             label,
             value,
             size,
+            unsigned,
             span,
         }));
         self.exprs.alloc(crate::expr::ExprKind::Sym(label), span)

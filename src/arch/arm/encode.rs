@@ -458,6 +458,31 @@ pub fn literal_constant(cx: &mut AsmCtx<'_>, op: &Operand, e: ExprRef) -> Option
     Some(Some(v as u32))
 }
 
+/// Whether a number was written without a negation, which GNU as keeps on
+/// the expression as `X_unsigned` and an ARM pool entry is shared by; see
+/// [`crate::arch::LiteralRequest::unsigned`].
+///
+/// `gas/expr.c` starts every integer off unsigned ("all integers are
+/// regarded as unsigned unless they are negated"), clears it for a unary
+/// minus, a `~` and a subtraction, keeps the left operand's across a shift,
+/// and otherwise keeps it only where both operands have it.
+pub fn literal_unsigned(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    use crate::expr::{BinOp, ExprKind, UnOp};
+    match cx.exprs.get(e).kind {
+        ExprKind::Unary(UnOp::Neg | UnOp::Not, _) => false,
+        ExprKind::Unary(_, inner) => literal_unsigned(cx, inner),
+        ExprKind::Binary(BinOp::Sub, ..) => false,
+        ExprKind::Binary(BinOp::Shl | BinOp::Shr | BinOp::Sar | BinOp::Shr32, left, _) => {
+            literal_unsigned(cx, left)
+        }
+        ExprKind::Binary(_, left, right) => {
+            literal_unsigned(cx, left) && literal_unsigned(cx, right)
+        }
+        ExprKind::Modifier(_, inner) => literal_unsigned(cx, inner),
+        _ => true,
+    }
+}
+
 /// Whether a transfer takes an `=expr` at all, as GNU as's table has it: the
 /// word, byte and halfword loads reach `move_or_literal_pool`, which refuses
 /// a store ("invalid pseudo operation"); the unprivileged and doubleword
@@ -538,7 +563,7 @@ fn literal_load(
         Some(v) if constant.is_some() => Literal::Const(v),
         _ => Literal::Expr(e),
     };
-    let entry = cx.literal(value, 4, op.span);
+    let entry = cx.literal_from(value, 4, op.span, literal_unsigned(cx, e));
     let hint = "the literal pool is too far away; put an `.ltorg` nearer";
     // The PC reads two instructions ahead, and the load reaches from there.
     let mode3 = t.size == 2 || t.signed;

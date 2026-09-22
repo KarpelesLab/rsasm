@@ -234,7 +234,7 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
         }
     };
     let size = if single { 4 } else { 8 };
-    let entry = cx.literal(value, size, op.span);
+    let entry = cx.literal_from(value, size, op.span, super::encode::literal_unsigned(cx, e));
     let hint = "the literal pool is too far away; put an `.ltorg` nearer";
     let kind = if thumb {
         FixupKind::pcrel(4, 4)

@@ -1766,7 +1766,7 @@ fn literal_load(
         Some(v) if constant.is_some() => crate::arch::Literal::Const(v),
         _ => crate::arch::Literal::Expr(e),
     };
-    let entry = cx.literal(value, 4, op.span);
+    let entry = cx.literal_from(value, 4, op.span, encode::literal_unsigned(cx, e));
     let hint = "the literal pool is too far away; put an `.ltorg` nearer";
     let mut out = Vec::new();
     if t.size == 4 && !t.signed && low(rt) && want_narrow(ins) {

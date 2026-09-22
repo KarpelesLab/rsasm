@@ -503,12 +503,9 @@ impl Assembler {
     /// One literal as GNU as's ARM pool would hold it.
     fn slot_value(&mut self, r: &LiteralRequest) -> SlotValue {
         match r.value {
-            // `X_unsigned` is 1 for every integer the source did not negate
-            // (see the comment on it in `gas/expr.c`), so the sign of the
-            // value stands for it.
             Literal::Const(value) => SlotValue::Word {
                 value,
-                unsigned: value >= 0,
+                unsigned: r.unsigned,
                 span: r.span,
             },
             Literal::Expr(expr) => SlotValue::Other {
