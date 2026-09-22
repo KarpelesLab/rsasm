@@ -44,21 +44,23 @@
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
 #   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
 #   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64, i386 and AArch64 rows, where the linker turns each of them
-#   into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`,
-#   `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
-#   `@TLSDESC`/`@TLSCALL`; and AArch64's `:tlsgd:`, `:tlsldm:` with the
+#   in the x86-64, i386, AArch64 and PowerPC rows, where the linker turns
+#   each of them into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`,
+#   `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
+#   `@TLSDESC`/`@TLSCALL`; AArch64's `:tlsgd:`, `:tlsldm:` with the
 #   `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
 #   `:tlsdesc:` with the `.tlsdesccall`, `.tlsdescadd` and `.tlsdescldr`
-#   marks. `.xword %dtprel(sym)` is not linked: GNU ld refuses its
-#   relocation in an allocated section, and the image is made of those.
-#   ARM and PowerPC still have none -- ARM's `(TLSGD)`, PowerPC's `@tprel`
-#   and `@dtprel` -- but not for want of `STT_TLS`, which a symbol in a
-#   thread-local section has on every target. What each lacks is its own:
-#   the relocations, the operand syntax that selects them, and the marker
-#   relocations that cover no field but tell the linker which instructions
-#   to rewrite (ARM's `(tlscall)` and `.tlsdescseq`, PowerPC's `@tls` and
-#   `bl __tls_get_addr(sym@tlsgd)`); each backend says where it refuses them.
+#   marks; and PowerPC's `@got@tlsgd` and `@got@tlsld` with the
+#   `bl __tls_get_addr(sym@tlsgd)` marker, `@dtprel`, `@got@tprel` with the
+#   `@tls` marker (and, in 64-bit code, their prefixed `@pcrel` forms), and
+#   `@tprel` and its halves. AArch64's `.xword %dtprel(sym)` is not linked:
+#   GNU ld refuses its relocation in an allocated section, and the image is
+#   made of those. ARM still has none -- `(TLSGD)` and its relatives -- but
+#   not for want of `STT_TLS`, which a symbol in a thread-local section has
+#   on every target. What it lacks is its own: the relocations, the operand
+#   syntax that selects them, and the marker relocations that cover no field
+#   but tell the linker which instructions to rewrite (`(tlscall)` and
+#   `.tlsdescseq`); the backend says where it refuses them.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot

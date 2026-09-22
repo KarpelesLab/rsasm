@@ -221,3 +221,113 @@ start:
 glob:   nop
         .data
 dat:    .quad   0
+
+=== thread-local offsets, and their halves
+        .text
+start:
+        addis   3, 13, tv@tprel@ha
+        addi    3, 3, tv@tprel@l
+        addi    4, 13, tv@tprel
+        addi    5, 5, ext@tprel@h
+        lis     6, tv@tprel@highest
+        ori     6, 6, tv@tprel@higher
+        oris    6, 6, tv@tprel@high
+        lis     7, tv@tprel@highesta
+        addis   7, 7, tv@tprel@highera
+        addis   7, 7, tv@tprel@higha
+        addis   3, 3, tv@dtprel@ha
+        addi    3, 3, tv@dtprel@l
+        addi    4, 3, ext@dtprel
+        addi    5, 5, tv@dtprel@h
+        lis     6, tv@dtprel@highest
+        ori     6, 6, tv@dtprel@higher
+        oris    6, 6, tv@dtprel@high
+        lis     7, tv@dtprel@highesta
+        addis   7, 7, tv@dtprel@highera
+        addis   7, 7, tv@dtprel@higha
+        addi    3, 3, tv+8@tprel
+        addi    3, 3, tv@dtprel+4
+        ld      3, tv@tprel(13)
+        ld      3, tv@tprel@l(3)
+        std     3, tv@dtprel(3)
+        ld      3, ext@dtprel@l(3)
+        lxv     35, tv@tprel@l(3)
+        lxsd    2, tv@dtprel(3)
+        paddi   3, 13, tv@tprel, 0
+        paddi   3, 3, ext@dtprel, 0
+        paddi   3, 13, tv+8@tprel, 0
+        pli     4, tv@tprel
+        .data
+        .quad   tv@dtpmod
+        .quad   tv@tprel
+        .quad   ext@dtprel
+        .quad   ext+8@tprel
+        .section .tbss,"awT",@nobits
+tv:     .space  16
+
+=== the GOT entries of the dynamic and initial-exec models
+        .text
+start:
+        addis   3, 2, tv@got@tlsgd@ha
+        addi    3, 3, tv@got@tlsgd@l
+        addi    3, 2, ext@got@tlsgd
+        addi    3, 3, tv@got@tlsgd@h
+        addis   3, 2, tv@got@tlsld@ha
+        addi    3, 3, tv@got@tlsld@l
+        addi    3, 2, tv@got@tlsld
+        addi    3, 3, tv@got@tlsld@h
+        addis   9, 2, ext@got@tprel@ha
+        ld      9, ext@got@tprel@l(9)
+        ld      9, tv@got@tprel(2)
+        addi    9, 9, tv@got@tprel
+        addi    9, 9, tv@got@tprel@h
+        addis   9, 2, tv@got@dtprel@ha
+        ld      9, tv@got@dtprel@l(9)
+        ld      9, tv@got@dtprel(2)
+        addi    9, 9, tv@got@dtprel@l
+        addi    9, 9, tv@got@dtprel@h
+        lxv     35, tv@got@tprel(3)
+        paddi   3, 0, tv@got@tlsgd@pcrel, 1
+        paddi   3, 0, ext@got@tlsld@pcrel, 1
+        pld     9, tv@got@tprel@pcrel(0), 1
+        pld     9, tv@got@tlsgd@pcrel(0), 1
+        .section .tbss,"awT",@nobits
+tv:     .space  16
+
+=== thread-local markers: the thread pointer, and the argument of a call
+        .text
+start:
+        addis   3, 2, tv@got@tlsgd@ha
+        addi    3, 3, tv@got@tlsgd@l
+        bl      __tls_get_addr(tv@tlsgd)
+        nop
+        addi    3, 2, ext@got@tlsgd
+        bl      __tls_get_addr(ext@tlsgd)
+        nop
+        addi    3, 2, tv@got@tlsld
+        bl      __tls_get_addr(tv@tlsld)
+        bl      __tls_get_addr+8(tv+4@tlsgd)
+        ld      9, ext@got@tprel(2)
+        add     9, 9, ext@tls
+        add     9, 9, tv@tls
+        lbzx    9, 9, tv@tls
+        lhzx    9, 9, tv@tls
+        lhax    9, 9, tv@tls
+        lwzx    9, 9, tv@tls
+        lwax    9, 9, tv@tls
+        ldx     9, 9, tv@tls
+        stbx    9, 9, tv@tls
+        sthx    9, 9, tv@tls
+        stwx    9, 9, tv@tls
+        stdx    9, 9, tv@tls
+        lfsx    1, 9, tv@tls
+        lfdx    1, 9, tv@tls
+        stfsx   1, 9, tv@tls
+        stfdx   1, 9, tv@tls
+        pld     9, tv@got@tprel@pcrel(0), 1
+        add     9, 9, tv@tls@pcrel
+        ldx     9, 9, tv@tls@pcrel
+        stfdx   1, 9, tv@tls@pcrel
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .quad   1

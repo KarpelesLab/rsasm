@@ -674,3 +674,24 @@ fn tls_models_outside_their_instruction_forms_are_refused() {
         assert!(e.to_ascii_lowercase().contains("`@"), "{arch}: {src}{e}");
     }
 }
+
+#[test]
+fn tls_models_need_a_thread_local_variable() {
+    // `x86_64-elf-as` refuses the first two with "Accessing `y' as
+    // thread-local object", and both references refuse the third: a label
+    // outside a thread-local section has no offset in the thread-local
+    // block, and a number has none either.
+    let e = errors_for("x86-64", "y: movq y@TPOFF, %rax\n");
+    assert!(e.contains("defined outside a thread-local section"), "{e}");
+    let e = errors_for("x86-64", ".data\nz: .quad z@DTPOFF\n");
+    assert!(e.contains("defined outside a thread-local section"), "{e}");
+    let e = errors_for("x86-64", ".long 5@TPOFF\n");
+    assert!(e.contains("needs a symbol"), "{e}");
+    // An undefined one becomes thread-local by being named so.
+    let asm = assemble_for("x86-64", "movq ext@TPOFF, %rax\n");
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+}

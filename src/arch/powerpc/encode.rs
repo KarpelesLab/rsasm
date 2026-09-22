@@ -11,8 +11,8 @@ use super::operand::{Mem, Operand, OperandKind, Value};
 use super::reg::{RegClass, describe};
 use super::reloc;
 use crate::arch::{AsmCtx, Endian};
-use crate::expr::{ExprKind, ExprRef};
-use crate::section::{Fixup, FixupKind, LinkValue, Variant};
+use crate::expr::{BinOp, ExprKind, ExprRef};
+use crate::section::{Fixup, FixupKind, LinkValue, RelocSymbol, Variant};
 use crate::source::Span;
 
 /// The shift that puts a field whose manual bit range ends at `last` — counted
@@ -69,6 +69,11 @@ pub struct Encoder<'c, 'a> {
     word: u64,
     fixups: Vec<Fixup>,
     failed: bool,
+    /// The table entry's name, and whether a `.` or `o` suffix was taken off
+    /// it: the thread-local markers go only on the instructions a linker
+    /// knows how to rewrite, which it recognises by their exact encoding.
+    mnemonic: &'static str,
+    suffixed: bool,
 }
 
 impl<'c, 'a> Encoder<'c, 'a> {
@@ -79,12 +84,16 @@ impl<'c, 'a> Encoder<'c, 'a> {
             word: 0,
             fixups: Vec::new(),
             failed: false,
+            mnemonic: "",
+            suffixed: false,
         }
     }
 
     /// Encodes one instruction, or reports why it cannot be encoded.
     pub fn encode(mut self, r: &Resolved, ops: &[Operand], span: Span) -> Option<Variant> {
         self.word = r.def.word;
+        self.mnemonic = r.def.name;
+        self.suffixed = r.rc || r.oe;
         if r.rc {
             self.word |= if r.def.flags & VRC != 0 {
                 VRC_BIT
@@ -179,7 +188,10 @@ impl<'c, 'a> Encoder<'c, 'a> {
                 self.put(RA, v);
             }
             F::Rb => {
-                let v = self.gpr(op);
+                let v = match self.tls_operand(op) {
+                    Some(e) => self.tls_register(op, e),
+                    None => self.gpr(op),
+                };
                 self.put(RB, v);
             }
             F::RtRb => {
@@ -473,6 +485,20 @@ impl<'c, 'a> Encoder<'c, 'a> {
             self.cx.error(
                 span,
                 "a PC-relative reference needs the R operand, the last, to be 1",
+            );
+            self.failed = true;
+        } else if r
+            && self
+                .fixups
+                .iter()
+                .any(|f| matches!(f.kind.reloc, reloc::TPREL34 | reloc::DTPREL34))
+        {
+            // The mirror image, which llvm-mc refuses and GNU as does not: a
+            // thread-local offset is added to a register, never to the
+            // instruction's address.
+            self.cx.error(
+                span,
+                "a thread-local offset is not relative to the instruction, so the R operand, the last, must be 0",
             );
             self.failed = true;
         }
@@ -831,10 +857,21 @@ impl<'c, 'a> Encoder<'c, 'a> {
             self.failed = true;
             return;
         }
+        // The thread-local forms are those both references write. llvm-mc
+        // has no `@got@dtprel@pcrel`, which GNU as writes as
+        // R_PPC64_GOT_DTPREL_PCREL34, and both put something other than a
+        // 34-bit relocation in the field for the halves (`@tprel@l`): GNU as
+        // a halfword relocation on the suffix's low half, llvm-mc bytes that
+        // change from run to run.
         let (reloc, pcrel) = match self.modifier(e).as_deref() {
             None => (reloc::D34, false),
             Some("pcrel") => (reloc::PCREL34, true),
             Some("got@pcrel") => (reloc::GOT_PCREL34, true),
+            Some("tprel") => (reloc::TPREL34, false),
+            Some("dtprel") => (reloc::DTPREL34, false),
+            Some("got@tlsgd@pcrel") => (reloc::GOT_TLSGD_PCREL34, true),
+            Some("got@tlsld@pcrel") => (reloc::GOT_TLSLD_PCREL34, true),
+            Some("got@tprel@pcrel") => (reloc::GOT_TPREL_PCREL34, true),
             Some(other) => {
                 self.cx.error(
                     span,
@@ -860,9 +897,15 @@ impl<'c, 'a> Encoder<'c, 'a> {
             } else {
                 d34_scatter_le
             });
-        if reloc == reloc::GOT_PCREL34 {
-            kind = kind.link(LinkValue::LinkerOnly("a GOT entry"));
-        }
+        kind = match reloc {
+            reloc::GOT_PCREL34 => kind.link(LinkValue::LinkerOnly(GOT)),
+            reloc::TPREL34 => kind.link(LinkValue::LinkerOnly(TP)).linker_only(),
+            reloc::DTPREL34 => kind.link(LinkValue::LinkerOnly(DTP)).linker_only(),
+            reloc::GOT_TLSGD_PCREL34 | reloc::GOT_TLSLD_PCREL34 | reloc::GOT_TPREL_PCREL34 => {
+                kind.link(LinkValue::LinkerOnly(TLS_GOT)).linker_only()
+            }
+            _ => kind,
+        };
         self.fixups.push(Fixup {
             offset: 0,
             expr: e,
@@ -910,6 +953,15 @@ impl<'c, 'a> Encoder<'c, 'a> {
         }
         match half.link {
             Linked::Part(fold) => Folded::Truncated(fold(v)),
+            Linked::Tls(what) => {
+                self.reject(
+                    op,
+                    format!(
+                        "relocation modifier `@{name}` names {what}, which only the linker knows, so it needs a symbol rather than a number"
+                    ),
+                );
+                Folded::Invalid
+            }
             Linked::Whole | Linked::Table(_) => {
                 self.reject(
                     op,
@@ -943,6 +995,10 @@ impl<'c, 'a> Encoder<'c, 'a> {
             return;
         };
         let reloc = match (self.cx.state.bits == 64, split) {
+            // Only for the modifiers a 64-bit object has a DS form of, though:
+            // llvm-mc refuses the others in 32-bit code too, and GNU as warns
+            // that `@ha` and `@h` are unsupported on the instruction.
+            (false, _) if disp != Disp::D && half.ppc64_split == 0 => 0,
             (false, _) => half.ppc32,
             (true, false) => half.ppc64,
             (true, true) => half.ppc64_split,
@@ -963,6 +1019,24 @@ impl<'c, 'a> Encoder<'c, 'a> {
             self.failed = true;
             return;
         }
+        // GNU as for PowerPC32 reads `x+4@got@tprel` as a GOT entry for
+        // `x+4`, which its thread-local GOT relocations cannot express, and
+        // refuses it; `x@got@tprel+4`, an entry for `x` and an offset from
+        // it, it takes. A 64-bit object takes both.
+        if self.cx.state.bits < 64
+            && matches!(half.link, Linked::Tls(TLS_GOT))
+            && self.modified_number(e).is_some_and(|v| v != 0)
+        {
+            let name = name.unwrap_or_default();
+            self.cx.error(
+                span,
+                format!(
+                    "`sym+offset@{name}` is not supported in a 32-bit object; write `sym@{name}+offset`"
+                ),
+            );
+            self.failed = true;
+            return;
+        }
         let mut kind = FixupKind::data(2).with_reloc(reloc);
         // What the linker does with a modifier that names a half of the
         // address itself, for a flat image or a value that resolves while
@@ -972,6 +1046,7 @@ impl<'c, 'a> Encoder<'c, 'a> {
             Linked::Whole => {}
             Linked::Part(fold) => kind = kind.link(LinkValue::Split(fold)),
             Linked::Table(needs) => kind = kind.link(LinkValue::LinkerOnly(needs)),
+            Linked::Tls(what) => kind = kind.link(LinkValue::LinkerOnly(what)).linker_only(),
         }
         // A DS- or DQ-form halfword cannot be overwritten whole: its low two
         // or four bits belong to the opcode. Both take the same relocation,
@@ -996,11 +1071,25 @@ impl<'c, 'a> Encoder<'c, 'a> {
     /// `@local` tells the linker to keep it direct; both are relocations of
     /// their own, and both exist only in PowerPC32's table. Everything else
     /// the references spell on a branch is refused, for the reasons
-    /// [`Encoder::branch_reloc`] gives.
+    /// [`Encoder::branch_reloc`] gives. A call to `__tls_get_addr` may also
+    /// name the thread-local variable it resolves, in parentheses after the
+    /// target; see [`Encoder::tls_call`].
     fn branch(&mut self, op: &Operand, bits: u8, pcrel: bool) {
-        let Some(Value::Expr(e)) = Self::plain(op) else {
-            self.expected(op, "a branch target");
-            return;
+        let e = match op.kind {
+            OperandKind::Value(Value::Expr(e)) => e,
+            // `bl __tls_get_addr(x@tlsgd)` reads as a memory operand.
+            OperandKind::Mem(Mem {
+                disp: Some(target),
+                base,
+                base_span,
+            }) => match self.tls_call(op, target, base, base_span) {
+                Some(e) => e,
+                None => return,
+            },
+            _ => {
+                self.expected(op, "a branch target");
+                return;
+            }
         };
         let (scatter, rel, abs): (fn(u64, i64) -> u64, u32, u32) = if bits == 26 {
             (i_form, reloc::REL24, reloc::ADDR24)
@@ -1087,6 +1176,187 @@ impl<'c, 'a> Encoder<'c, 'a> {
             return None;
         }
         Some(reloc)
+    }
+
+    // ---- thread-local markers ---------------------------------------------
+
+    /// The expression of an operand written as `sym@tls` or `sym@tls@pcrel`.
+    fn tls_operand(&self, op: &Operand) -> Option<ExprRef> {
+        let Some(Value::Expr(e)) = Self::plain(op) else {
+            return None;
+        };
+        matches!(self.modifier(e).as_deref(), Some("tls" | "tls@pcrel")).then_some(e)
+    }
+
+    /// `sym@tls` as the last register of an `add` or an indexed load or
+    /// store: the thread pointer, marked with R_PPC_TLS or R_PPC64_TLS so
+    /// that a linker which turns the access into another model knows which
+    /// instruction to rewrite. The register is r13 in a 64-bit object and r2
+    /// in a 32-bit one, and the relocation covers no bytes: it sits on the
+    /// instruction's first byte, or on the second for `@tls@pcrel`, which is
+    /// how the POWER10 sequences tell the linker the GOT entry was loaded
+    /// PC-relative.
+    ///
+    /// The instructions are the ones llvm-mc accepts the operand on; GNU as
+    /// takes it on the recording and update forms too (`add.`, `lwzux`),
+    /// which no linker rewrites.
+    fn tls_register(&mut self, op: &Operand, e: ExprRef) -> Option<u32> {
+        const MARKED: &[&str] = &[
+            "add", "lbzx", "lhzx", "lhax", "lwzx", "lwax", "ldx", "stbx", "sthx", "stwx", "stdx",
+            "lfsx", "lfdx", "stfsx", "stfdx",
+        ];
+        let wide = self.cx.state.bits == 64;
+        let pcrel = self.modifier(e).as_deref() == Some("tls@pcrel");
+        if !MARKED.contains(&self.mnemonic) || self.suffixed {
+            self.reject(
+                op,
+                "`@tls` marks only `add` and the indexed loads and stores a linker rewrites, with no `.` or `o` suffix",
+            );
+            return None;
+        }
+        if pcrel && !wide {
+            self.reject(op, wider_object("tls@pcrel"));
+            return None;
+        }
+        // A bare symbol: llvm-mc refuses `x+4@tls`, which only names the
+        // variable the instruction reaches anyway.
+        let bare = self
+            .applied_modifier(e)
+            .is_some_and(|(_, inner)| matches!(self.cx.exprs.get(inner).kind, ExprKind::Sym(_)));
+        if self.cx.constant(e).is_some() || !bare {
+            self.reject(
+                op,
+                "`@tls` marks the use of a thread-local variable, so it needs a symbol with no offset",
+            );
+            return None;
+        }
+        self.tls_marker(e, reloc::TLS, u32::from(pcrel), op.span);
+        Some(if wide { 13 } else { 2 })
+    }
+
+    /// `bl __tls_get_addr(sym@tlsgd)`, and the same with `@tlsld`: the call
+    /// the general- and local-dynamic models make, whose argument names the
+    /// variable the linker is to resolve. The argument becomes a relocation
+    /// of its own, R_PPC_TLSGD or R_PPC64_TLSGD, covering no bytes, and comes
+    /// first; the call's own relocation follows it at the same offset, which
+    /// is the order both references write. Answers with the call's target.
+    ///
+    /// Both references take the argument only on a `bl`, llvm-mc only to
+    /// `__tls_get_addr` itself (GNU as takes any name it starts with), and
+    /// GNU as only with the modifier on the whole argument: `x+4@tlsgd`, not
+    /// `x@tlsgd+4`.
+    fn tls_call(
+        &mut self,
+        op: &Operand,
+        target: ExprRef,
+        base: Value,
+        base_span: Span,
+    ) -> Option<ExprRef> {
+        let Value::Expr(arg) = base else {
+            self.expected(op, "a branch target");
+            return None;
+        };
+        let wide = self.cx.state.bits == 64;
+        let reloc = match (self.modifier(arg).as_deref(), wide) {
+            (Some("tlsgd"), false) => reloc::TLSGD_32,
+            (Some("tlsld"), false) => reloc::TLSLD_32,
+            (Some("tlsgd"), true) => reloc::TLSGD_64,
+            (Some("tlsld"), true) => reloc::TLSLD_64,
+            _ => {
+                self.cx.error(
+                    base_span,
+                    "a call's argument in parentheses must be `sym@tlsgd` or `sym@tlsld`",
+                );
+                self.failed = true;
+                return None;
+            }
+        };
+        if self.mnemonic != "bl" || self.suffixed {
+            self.reject(
+                op,
+                "a `(sym@tlsgd)` or `(sym@tlsld)` argument goes only on a `bl`",
+            );
+            return None;
+        }
+        if !self.calls_tls_get_addr(target) {
+            self.reject(
+                op,
+                "a `(sym@tlsgd)` or `(sym@tlsld)` argument marks only a call to `__tls_get_addr`",
+            );
+            return None;
+        }
+        if self.cx.constant(arg).is_some() {
+            self.cx.error(
+                base_span,
+                "the argument names a thread-local variable, so it needs a symbol rather than a number",
+            );
+            self.failed = true;
+            return None;
+        }
+        if self.applied_modifier(arg).is_none() && self.modifier_on_symbol(arg) {
+            self.cx.error(
+                base_span,
+                "the modifier must apply to the whole argument: write `sym+n@tlsgd`, not `sym@tlsgd+n`",
+            );
+            self.failed = true;
+            return None;
+        }
+        self.tls_marker(arg, reloc, 0, base_span);
+        Some(target)
+    }
+
+    /// A relocation that marks the instruction at `offset` rather than fill a
+    /// field in it. It names the symbol even where that is a local label
+    /// outside a thread-local section, as GNU as does, since the linker looks
+    /// the variable up by it.
+    fn tls_marker(&mut self, e: ExprRef, reloc: u32, offset: u32, span: Span) {
+        self.fixups.push(Fixup {
+            offset,
+            expr: e,
+            kind: FixupKind::data(0)
+                .with_reloc(reloc)
+                .with_reloc_symbol(RelocSymbol::Symbol)
+                .linker_only(),
+            span,
+        });
+    }
+
+    /// Whether a call's target is `__tls_get_addr`, give or take a `@plt`
+    /// and a constant offset.
+    fn calls_tls_get_addr(&self, e: ExprRef) -> bool {
+        match &self.cx.exprs.get(e).kind {
+            ExprKind::Sym(n) => self.cx.name(*n) == "__tls_get_addr",
+            ExprKind::Modifier(_, inner) => self.calls_tls_get_addr(*inner),
+            ExprKind::Binary(BinOp::Add | BinOp::Sub, a, b) => {
+                self.calls_tls_get_addr(*a) && self.cx.constant(*b).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a modifier inside `e` applies to something that is not a
+    /// number, as the `x@tlsgd` of `x@tlsgd+4` does; in `x+4@tlsgd` it
+    /// applies to the 4, and the sum is what the relocation names.
+    fn modifier_on_symbol(&self, e: ExprRef) -> bool {
+        match &self.cx.exprs.get(e).kind {
+            ExprKind::Modifier(_, inner) => self.cx.constant(*inner).is_none(),
+            ExprKind::Unary(_, a) => self.modifier_on_symbol(*a),
+            ExprKind::Binary(_, a, b) => self.modifier_on_symbol(*a) || self.modifier_on_symbol(*b),
+            _ => false,
+        }
+    }
+
+    /// The number a modifier inside `e` applies to, as the `@got@tprel` of
+    /// `x+4@got@tprel` applies to the 4.
+    fn modified_number(&self, e: ExprRef) -> Option<i64> {
+        match &self.cx.exprs.get(e).kind {
+            ExprKind::Modifier(_, inner) => self.cx.constant(*inner),
+            ExprKind::Unary(_, a) => self.modified_number(*a),
+            ExprKind::Binary(_, a, b) => self
+                .modified_number(*a)
+                .or_else(|| self.modified_number(*b)),
+            _ => None,
+        }
     }
 
     /// The modifier chain applied to the whole of `e`, joined the way
@@ -1230,8 +1500,11 @@ struct Half {
     ppc64: u32,
     /// The `R_PPC64_*` relocation for a DS- or DQ-form field, whose low bits
     /// belong to the opcode. Zero for every modifier both references refuse
-    /// there, which is all of them but `@l`, `@got`, `@got@l`, `@toc` and
-    /// `@toc@l`.
+    /// there, which is all of them but the whole value and its `@l` half:
+    /// `@l`, `@got`, `@got@l`, `@toc`, `@toc@l`, and the same two of
+    /// `@tprel`, `@dtprel`, `@got@tprel` and `@got@dtprel`. The GOT entries of
+    /// the two dynamic models are only ever built with an `addi`, and neither
+    /// reference has a DS form of them.
     ppc64_split: u32,
     /// What the field holds once the address is known.
     link: Linked,
@@ -1249,6 +1522,12 @@ enum Linked {
     /// The offset of an entry only the linker can build; the string says
     /// which, for the diagnostic.
     Table(&'static str),
+    /// Something about a thread-local variable, which only the linker knows
+    /// once it has laid out the thread-local block, and which it may compute
+    /// differently again when it rewrites the access into another model; the
+    /// string says what, for the diagnostic. It is always left to the linker,
+    /// however near the variable is.
+    Tls(&'static str),
 }
 
 /// The table of modifiers a 16-bit field takes, or `None` for a spelling
@@ -1258,15 +1537,17 @@ enum Linked {
 /// what `powerpc64-linux-gnu-as` and llvm-mc both write for
 /// `addi 3, 3, foo@<name>` and, for `ppc64_split`, for `ld 3, foo@<name>(2)`.
 ///
+/// The thread-local rows are the halves of the two offsets — `@tprel` from
+/// the thread pointer, `@dtprel` within the module's block — and of the GOT
+/// entries the initial-exec (`@got@tprel`), general-dynamic (`@got@tlsgd`)
+/// and local-dynamic (`@got@tlsld`, `@got@dtprel`) models load. Both
+/// references agree on every one in both word sizes. The rest of those
+/// models, the `@tls` operand and the `(sym@tlsgd)` argument of a call, mark
+/// an instruction rather than fill a field; see [`Encoder::tls_register`] and
+/// [`Encoder::tls_call`].
+///
 /// What the references read here and this table leaves out:
 ///
-/// * `@tprel`, `@dtprel` and the `@got@tls*` forms, which both references
-///   agree on. The symbol type they need is there — a symbol defined in
-///   `.tdata` or `.tbss` is `STT_TLS` — and what is missing is the
-///   relocations themselves, read out of reference objects for both word
-///   sizes, and for the dynamic models the `@tls` and `(sym@tlsgd)` markers
-///   on the instructions a linker rewrites, which this backend does not
-///   parse.
 /// * `@plt@l`, `@plt@h` and `@plt@ha`, the halves of a PLT entry's address,
 ///   and the `@sectoff` and `@sdarel` families. Only GNU as reads them, and
 ///   the PowerPC harnesses run against llvm-mc, so nothing rsasm wrote for
@@ -1295,6 +1576,12 @@ fn halfword_modifier(name: Option<&str>) -> Option<Half> {
         ppc64_split,
         link: Linked::Table(needs),
     };
+    let tls = |ppc32, ppc64, ppc64_split, what| Half {
+        ppc32,
+        ppc64,
+        ppc64_split,
+        link: Linked::Tls(what),
+    };
     use reloc::*;
     let Some(name) = name else {
         return Some(Half {
@@ -1322,6 +1609,42 @@ fn halfword_modifier(name: Option<&str>) -> Option<Half> {
         "toc@l" => linked(0, TOC16_LO, TOC16_LO_DS, TOC),
         "toc@h" => linked(0, TOC16_HI, 0, TOC),
         "toc@ha" => linked(0, TOC16_HA, 0, TOC),
+        "tprel" => tls(TPREL16, TPREL16, TPREL16_DS, TP),
+        "tprel@l" => tls(TPREL16_LO, TPREL16_LO, TPREL16_LO_DS, TP),
+        "tprel@h" => tls(TPREL16_HI, TPREL16_HI, 0, TP),
+        "tprel@ha" => tls(TPREL16_HA, TPREL16_HA, 0, TP),
+        "tprel@high" => tls(0, TPREL16_HIGH, 0, TP),
+        "tprel@higha" => tls(0, TPREL16_HIGHA, 0, TP),
+        "tprel@higher" => tls(0, TPREL16_HIGHER, 0, TP),
+        "tprel@highera" => tls(0, TPREL16_HIGHERA, 0, TP),
+        "tprel@highest" => tls(0, TPREL16_HIGHEST, 0, TP),
+        "tprel@highesta" => tls(0, TPREL16_HIGHESTA, 0, TP),
+        "dtprel" => tls(DTPREL16, DTPREL16, DTPREL16_DS, DTP),
+        "dtprel@l" => tls(DTPREL16_LO, DTPREL16_LO, DTPREL16_LO_DS, DTP),
+        "dtprel@h" => tls(DTPREL16_HI, DTPREL16_HI, 0, DTP),
+        "dtprel@ha" => tls(DTPREL16_HA, DTPREL16_HA, 0, DTP),
+        "dtprel@high" => tls(0, DTPREL16_HIGH, 0, DTP),
+        "dtprel@higha" => tls(0, DTPREL16_HIGHA, 0, DTP),
+        "dtprel@higher" => tls(0, DTPREL16_HIGHER, 0, DTP),
+        "dtprel@highera" => tls(0, DTPREL16_HIGHERA, 0, DTP),
+        "dtprel@highest" => tls(0, DTPREL16_HIGHEST, 0, DTP),
+        "dtprel@highesta" => tls(0, DTPREL16_HIGHESTA, 0, DTP),
+        "got@tprel" => tls(GOT_TPREL16, GOT_TPREL16, GOT_TPREL16, TLS_GOT),
+        "got@tprel@l" => tls(GOT_TPREL16_LO, GOT_TPREL16_LO, GOT_TPREL16_LO, TLS_GOT),
+        "got@tprel@h" => tls(GOT_TPREL16_HI, GOT_TPREL16_HI, 0, TLS_GOT),
+        "got@tprel@ha" => tls(GOT_TPREL16_HA, GOT_TPREL16_HA, 0, TLS_GOT),
+        "got@dtprel" => tls(GOT_DTPREL16, GOT_DTPREL16, GOT_DTPREL16, TLS_GOT),
+        "got@dtprel@l" => tls(GOT_DTPREL16_LO, GOT_DTPREL16_LO, GOT_DTPREL16_LO, TLS_GOT),
+        "got@dtprel@h" => tls(GOT_DTPREL16_HI, GOT_DTPREL16_HI, 0, TLS_GOT),
+        "got@dtprel@ha" => tls(GOT_DTPREL16_HA, GOT_DTPREL16_HA, 0, TLS_GOT),
+        "got@tlsgd" => tls(GOT_TLSGD16, GOT_TLSGD16, 0, TLS_GOT),
+        "got@tlsgd@l" => tls(GOT_TLSGD16_LO, GOT_TLSGD16_LO, 0, TLS_GOT),
+        "got@tlsgd@h" => tls(GOT_TLSGD16_HI, GOT_TLSGD16_HI, 0, TLS_GOT),
+        "got@tlsgd@ha" => tls(GOT_TLSGD16_HA, GOT_TLSGD16_HA, 0, TLS_GOT),
+        "got@tlsld" => tls(GOT_TLSLD16, GOT_TLSLD16, 0, TLS_GOT),
+        "got@tlsld@l" => tls(GOT_TLSLD16_LO, GOT_TLSLD16_LO, 0, TLS_GOT),
+        "got@tlsld@h" => tls(GOT_TLSLD16_HI, GOT_TLSLD16_HI, 0, TLS_GOT),
+        "got@tlsld@ha" => tls(GOT_TLSLD16_HA, GOT_TLSLD16_HA, 0, TLS_GOT),
         _ => return None,
     })
 }
@@ -1330,6 +1653,11 @@ fn halfword_modifier(name: Option<&str>) -> Option<Half> {
 /// than a part of the address itself.
 const GOT: &str = "a GOT entry";
 const TOC: &str = "a TOC entry";
+
+/// What the thread-local modifiers name, for the diagnostics.
+const TP: &str = "a thread-local variable's offset from the thread pointer";
+const DTP: &str = "a thread-local variable's offset in its module's block";
+const TLS_GOT: &str = "a GOT entry for a thread-local variable";
 
 /// The diagnostic for a modifier PowerPC32's relocation table has no number
 /// for, which is every half above bit 31 and everything about the TOC.

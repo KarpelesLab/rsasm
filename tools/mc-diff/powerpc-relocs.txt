@@ -147,3 +147,67 @@ start:
 loc:    nop
 glob:   nop
 weak1:  nop
+
+=== thread-local offsets and the GOT entries of the dynamic models
+        .text
+start:
+        addis   3, 2, tv@tprel@ha
+        addi    3, 3, tv@tprel@l
+        addi    4, 2, tv@tprel
+        lwz     5, tv@tprel@h(2)
+        stw     5, ext@tprel@l(2)
+        addis   3, 3, tv@dtprel@ha
+        addi    3, 3, tv@dtprel@l
+        addi    4, 3, ext@dtprel
+        lwz     5, tv@dtprel@h(3)
+        lwz     9, ext@got@tprel(31)
+        addi    9, 9, ext@got@tprel@l
+        addis   9, 31, ext@got@tprel@ha
+        addi    9, 9, ext@got@tprel@h
+        lwz     9, tv@got@dtprel(31)
+        addi    9, 9, tv@got@dtprel@l
+        addis   9, 31, tv@got@dtprel@ha
+        addi    9, 9, tv@got@dtprel@h
+        addi    3, 31, tv@got@tlsgd
+        addi    3, 3, tv@got@tlsgd@l
+        addis   3, 31, ext@got@tlsgd@ha
+        addi    3, 3, tv@got@tlsgd@h
+        addi    3, 31, tv@got@tlsld
+        addi    3, 3, tv@got@tlsld@l
+        addis   3, 31, tv@got@tlsld@ha
+        addi    3, 3, tv@got@tlsld@h
+        addi    3, 3, tv+8@tprel
+        addi    3, 3, tv@dtprel+4
+        .data
+        .long   tv@dtprel
+        .long   ext+4@dtprel
+        .section .tbss,"awT",@nobits
+tv:     .space  16
+
+=== thread-local markers: the thread pointer, and the argument of a call
+        .text
+start:
+        addi    3, 31, tv@got@tlsgd
+        bl      __tls_get_addr(tv@tlsgd)
+        addi    3, 31, ext@got@tlsgd
+        bl      __tls_get_addr@plt(ext@tlsgd)
+        addi    3, 31, tv@got@tlsld
+        bl      __tls_get_addr(tv@tlsld)
+        bl      __tls_get_addr+8(tv+4@tlsld)
+        lwz     9, ext@got@tprel(31)
+        add     9, 9, ext@tls
+        add     9, 9, tv@tls
+        lbzx    9, 9, tv@tls
+        lhzx    9, 9, tv@tls
+        lhax    9, 9, tv@tls
+        lwzx    9, 9, tv@tls
+        stbx    9, 9, tv@tls
+        sthx    9, 9, tv@tls
+        stwx    9, 9, tv@tls
+        lfsx    1, 9, tv@tls
+        lfdx    1, 9, tv@tls
+        stfsx   1, 9, tv@tls
+        stfdx   1, 9, tv@tls
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .long   1

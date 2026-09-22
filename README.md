@@ -60,7 +60,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21811 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3144 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 537 |
-| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9499 |
+| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9521 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 796 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 306 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
@@ -123,7 +123,18 @@ form by form and in random whole programs as well.
   move-wide forms), TLS descriptors (`:tlsdesc:`, `:tlsdesc_lo12:`,
   `:tlsdesc_off_g1:`), the `.tlsdesccall`, `.tlsdescadd` and `.tlsdescldr`
   marks, and `.xword %dtprel(sym)`, each on the instructions GNU as takes it
-  on. None has an ILP32 form here, since the backend writes LP64 objects only
+  on; none has an ILP32 form here, since the backend writes LP64 objects
+  only. PowerPC assembles them for both word sizes: `@tprel` and `@dtprel`
+  with every half the object has (`@l`, `@ha`, `@higher`…), their DS forms
+  and, on POWER10, the 34-bit field; the GOT entries `@got@tprel`,
+  `@got@dtprel`, `@got@tlsgd` and `@got@tlsld` and their halves, with the
+  prefixed `@got@…@pcrel` forms; `@dtpmod`, `@tprel` and `@dtprel` in a
+  pointer-sized data word; and the markers that cover no field, `add rD, rA,
+  sym@tls` (and `@tls@pcrel`) on the instructions that take it and the
+  `(sym@tlsgd)` or `(sym@tlsld)` argument of `bl __tls_get_addr`, which comes
+  out as a relocation ahead of the call's own. On every target a
+  thread-local model on a symbol defined outside a thread-local section is
+  refused, as GNU as refuses it
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -273,12 +284,13 @@ form by form and in random whole programs as well.
   point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
   branches, and the privileged, hypervisor, cache-hint and synchronisation
   instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
-  like); the thread-local relocation modifiers (`@tprel`, `@dtprel`,
-  `@got@tlsgd` and the rest) and the `@tls` and `(sym@tlsgd)` markers on the
-  instructions a linker rewrites; the spellings only
+  like); the spellings only
   GNU as reads, so that nothing could check them (`@plt@ha`, `@sectoff`,
-  `@sdarel`); and `@notoc`, which is a different relocation to each of the
-  two references
+  `@sdarel`, `@got@dtprel@pcrel`, a halfword thread-local modifier on a
+  prefixed instruction, and the thread-local modifiers in an eight-byte word
+  in 32-bit code); and `@notoc`, which is a different relocation to each of
+  the two references, and with it the POWER10 call
+  `bl __tls_get_addr@notoc(sym@tlsgd)`
 - MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
   warnings and insertion, the silicon errata options, assembly-time
   relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
@@ -290,10 +302,9 @@ form by form and in random whole programs as well.
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
-- thread-local storage on the targets other than x86 and AArch64: the symbols
-  and sections are right everywhere, but only x86-64, i386, AArch64 and
-  SuperH read the access-model operands. ARM's `sym(TLSGD)` and PowerPC's
-  `@tprel`, `@dtprel` and `@got@tls*`, each with its relatives, are refused
+- thread-local storage on ARM: the symbols and sections are right
+  everywhere, but only x86-64, i386, AArch64, PowerPC and SuperH read the
+  access-model operands. ARM's `sym(TLSGD)` and its relatives are refused
   with the reason; Mach-O's `@TLVP` and PE's thread-local sections are their
   formats' own idea of the same thing, and are not there either, so an
   AArch64 thread-local operator in either format is refused as llvm-mc
@@ -950,7 +961,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,654 of 8,654 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,891 of 38,891 match across twenty-one target variants. For RISC-V
+  supports. 38,899 of 38,899 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -966,7 +977,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,510 of 25,510 match across fifty-seven
+  from checksum-pinned sources. 25,524 of 25,524 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -987,16 +998,17 @@ is what hid them from rsasm for as long as it did.
   `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
-  the x86 and AArch64 thread-local access models, which the linker turns into
-  local exec, weak definitions a second object overrides, `.comm` symbols
-  merged between objects with different sizes, `.bss`, and references into
-  another object's sections. The targets whose linker relaxes — SuperH, RX,
-  RL78, MSP430, V850/RH850, AVR and RISC-V — are linked a second time with
-  `--relax`, which is what their difference records, `R_MSP430_SYM_DIFF`
-  pairs and `.avr.prop` exist for. Two more rows link [PE/COFF](#pecoff)
-  objects into an image with GNU ld for mingw, where what a link has to get
-  right is `@IMGREL`, `.secrel32` and `.secidx` and the addend a COFF
-  relocation keeps in its field. 239 of 239 match across twenty-nine variants.
+  the x86, AArch64 and PowerPC thread-local access models, which the linker
+  turns into local exec, weak definitions a second object overrides, `.comm`
+  symbols merged between objects with different sizes, `.bss`, and
+  references into another object's sections. The targets whose linker
+  relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked
+  a second time with `--relax`, which is what their difference records,
+  `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
+  [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
+  a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
+  addend a COFF relocation keeps in its field. 242 of 242 match across
+  twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 444 of 444

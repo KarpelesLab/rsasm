@@ -482,6 +482,98 @@ fn modifiers_choose_the_relocation_the_reference_writes() {
     assert_eq!(relocs, vec![(0, 18), (4, 23), (10, 17)]);
 }
 
+/// The kind and offset of every relocation in `src`, assembled for `arch`
+/// after a thread-local variable `x`.
+fn tls_relocs(arch: &str, src: &str) -> Vec<(u64, u32)> {
+    let src = format!("\t.section .tbss,\"awT\",@nobits\nx:\t.space 8\n\t.text\n{src}");
+    let asm = assemble_for(arch, &src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    asm.relocs.iter().map(|r| (r.offset, r.kind)).collect()
+}
+
+#[test]
+fn thread_local_models_choose_the_relocations_the_references_write() {
+    // TPREL16_HA, GOT_TPREL16_LO_DS, GOT_TLSGD16, DTPREL16_HIGHESTA, and
+    // TPREL16_DS: the numbers GNU as and llvm-mc both write.
+    let src = "\
+        addis 3, 13, x@tprel@ha\n\
+        ld 3, x@got@tprel@l(3)\n\
+        addi 3, 2, x@got@tlsgd\n\
+        lis 3, x@dtprel@highesta\n\
+        ld 3, x@tprel(13)\n";
+    assert_eq!(
+        tls_relocs("powerpc64", src),
+        vec![(2, 72), (6, 88), (10, 79), (14, 106), (18, 95)]
+    );
+    // PowerPC32 has no DS forms, and numbers the GOT entry of initial exec
+    // as PowerPC64 numbers its DS form.
+    assert_eq!(
+        tls_relocs("powerpc", "addi 3, 3, x@tprel\nlwz 9, x@got@tprel(31)\n"),
+        vec![(2, 69), (6, 87)]
+    );
+
+    // The argument of the call is a relocation of its own, covering no
+    // bytes, ahead of the call's R_PPC64_REL24 at the same offset; PowerPC32
+    // numbers it differently.
+    assert_eq!(
+        tls_relocs("powerpc64", "bl __tls_get_addr(x@tlsgd)\n"),
+        vec![(0, 107), (0, 10)]
+    );
+    assert_eq!(
+        tls_relocs("powerpc", "bl __tls_get_addr@plt(x@tlsld)\n"),
+        vec![(0, 96), (0, 18)]
+    );
+
+    // `@tls` is the thread pointer, r13 or r2, marked on the instruction's
+    // first byte, or its second for `@tls@pcrel`, in either byte order.
+    each("powerpc64", &[("add 3, 3, x@tls", "7c636a14")]);
+    each("powerpc", &[("add 3, 3, x@tls", "7c631214")]);
+    assert_eq!(
+        tls_relocs("powerpc64le", "add 3, 3, x@tls\nlwzx 3, 3, x@tls@pcrel\n"),
+        vec![(0, 67), (5, 67)]
+    );
+
+    // The 34-bit forms, and the three data words.
+    assert_eq!(
+        tls_relocs(
+            "powerpc64",
+            "paddi 3, 13, x@tprel, 0\npld 9, x@got@tprel@pcrel(0), 1\n"
+        ),
+        vec![(0, 146), (8, 150)]
+    );
+    assert_eq!(
+        tls_relocs("powerpc64", ".quad x@dtpmod, x@tprel, x@dtprel\n"),
+        vec![(0, 68), (8, 73), (16, 78)]
+    );
+}
+
+#[test]
+fn thread_local_forms_a_reference_refuses_are_refused() {
+    let tls = "\t.section .tbss,\"awT\",@nobits\nx:\t.space 8\n\t.text\n";
+    let errors = |arch: &str, src: &str| errors_for(arch, &format!("{tls}{src}"));
+    // A label outside a thread-local section is not a thread-local variable.
+    assert!(
+        errors("powerpc64", "y: addi 3, 3, y@tprel\n").contains("outside a thread-local section")
+    );
+    // Neither reference has a DS form of the dynamic models' GOT entries.
+    assert!(errors("powerpc64", "ld 3, x@got@tlsgd(2)\n").contains("DS-form"));
+    // Only the forms a linker rewrites take a marker.
+    assert!(errors("powerpc64", "add. 3, 3, x@tls\n").contains("marks only"));
+    assert!(errors("powerpc64", "b __tls_get_addr(x@tlsgd)\n").contains("only on a `bl`"));
+    assert!(errors("powerpc64", "bl foo(x@tlsgd)\n").contains("__tls_get_addr"));
+    // A number has no thread-local offset.
+    assert!(errors("powerpc64", "addi 3, 3, 4@tprel\n").contains("needs a symbol"));
+    assert!(errors("powerpc64", ".quad 4@dtpmod\n").contains("needs a symbol"));
+    // A thread-local offset is not PC-relative.
+    assert!(errors("powerpc64", "paddi 3, 0, x@tprel, 1\n").contains("must be 0"));
+    // GNU as for PowerPC32 has no GOT entry for a symbol plus an offset.
+    assert!(errors("powerpc", "addi 3, 31, x+4@got@tprel\n").contains("32-bit object"));
+}
+
 #[test]
 fn modifiers_neither_reference_agrees_on_are_refused() {
     // PowerPC64 has no relocation for a call through the PLT: GNU as does
