@@ -432,14 +432,18 @@ impl Assembler {
         span: Span,
     ) -> bool {
         let Some(ty) = coff::reloc::map(machine, r.desc.class, r.kind) else {
-            self.diags.error(
-                span,
+            let msg = if r.desc.class == crate::reloc::RelocClass::ThreadLocal {
+                "a COFF object has no relocation for ELF's thread-local access models; \
+                 Windows reaches a thread-local variable through the image's TLS index"
+                    .to_string()
+            } else {
                 format!(
                     "a COFF object has no relocation for this {}-byte {}reference",
                     kind.size,
                     if kind.pcrel { "PC-relative " } else { "" }
-                ),
-            );
+                )
+            };
+            self.diags.error(span, msg);
             return false;
         };
         // COFF has no null symbol: index 0 is the first section's. So a

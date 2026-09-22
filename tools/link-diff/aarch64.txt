@@ -206,3 +206,70 @@ rodata: .quad   0x1122334455667788
 bssvar: .space  16
         .globl  small
         .set    small, -0x1234
+
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        # General dynamic: the linker matches the `bl` to `__tls_get_addr`
+        # and the `nop` after it, and turns all four into local exec.
+        adrp    x0, :tlsgd:tv
+        add     x0, x0, :tlsgd_lo12:tv
+        bl      __tls_get_addr
+        nop
+        # Local dynamic: one call for the module, then an offset per variable.
+        adrp    x0, :tlsldm:tloc
+        add     x0, x0, :tlsldm_lo12_nc:tloc
+        bl      __tls_get_addr
+        nop
+        add     x1, x0, :dtprel_hi12:tloc, lsl #12
+        add     x1, x1, :dtprel_lo12_nc:tloc
+        movz    x2, :dtprel_g1:tv2
+        movk    x2, :dtprel_g0_nc:tv2
+        ldr     x3, [x0, :dtprel_lo12:tloc]
+        # Initial exec, then local exec.
+        mrs     x4, tpidr_el0
+        adrp    x5, :gottprel:tv2
+        ldr     x5, [x5, :gottprel_lo12:tv2]
+        add     x5, x5, x4
+        movz    x6, :tprel_g2:tv3
+        movk    x6, :tprel_g1_nc:tv3
+        movk    x6, :tprel_g0_nc:tv3
+        add     x7, x4, :tprel_hi12:tloc
+        add     x7, x7, :tprel_lo12_nc:tloc
+        add     x8, x4, :tprel_lo12:tb
+        ldr     w9, [x4, :tprel_lo12:tb+4]
+        ldrb    w9, [x4, :tprel_lo12_nc:tv]
+        # A TLS descriptor, and the marks on the instructions the linker
+        # rewrites.
+        adrp    x0, :tlsdesc:tv3
+        .tlsdescldr tv3
+        ldr     x1, [x0, :tlsdesc_lo12:tv3]
+        .tlsdescadd tv3
+        add     x0, x0, :tlsdesc_lo12:tv3
+        .tlsdesccall tv3
+        blr     x1
+        add     x0, x0, x4
+        ret
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .quad   0x1122334455667788
+tloc:   .quad   99
+--- b.s
+        .section .tdata,"awT",%progbits
+        .globl  tv2, tv3
+tv2:    .quad   2
+tv3:    .quad   3
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  helper
+helper: mrs     x0, tpidr_el0
+        movz    x1, :tprel_g1:tb
+        movk    x1, :tprel_g0_nc:tb
+        add     x2, x0, :tprel_lo12:tv
+        adrp    x3, :gottprel:tv
+        ldr     x3, [x3, :gottprel_lo12:tv]
+        ret

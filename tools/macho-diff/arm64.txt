@@ -79,6 +79,15 @@ ldr w0, [x0, _ext@GOTPAGEOFF]
 adrp x0, (_ext+8)@GOTPAGE
 _f: adrp x0, _f@GOTPAGE;ldr x0, [x0, _f@GOTPAGEOFF]
 add x0, x0, _ext@GOTPAGEOFF
+# ---- ELF's thread-local operators, which have no Mach-O relocation ----
+add x0, x0, :tprel_lo12:_v
+movz x0, :tprel_g1:_v
+movk x0, :dtprel_g0_nc:_v
+adrp x0, :gottprel:_v
+ldr x0, [x0, :gottprel_lo12:_v]
+adrp x0, :tlsdesc:_v
+ldr x1, [x0, :tlsdesc_lo12:_v]
+.tlsdesccall _v;blr x1
 # ---- data ----
 .quad _ext
 .long _ext

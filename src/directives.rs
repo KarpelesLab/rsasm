@@ -109,31 +109,33 @@ impl Assembler {
             // ---- data -----------------------------------------------------
             // The `.Nbyte` spellings are never aligned, even on a target whose
             // other data directives are; see `Architecture::aligns_data`.
-            ".byte" => self.dir_data(&mut cur, 1, span, false),
+            ".byte" => self.dir_data(&mut cur, 1, span, false, &text),
             // `.value` is x86's spelling, which GCC writes in debug sections.
-            ".short" | ".hword" | ".half" | ".value" => self.dir_data(&mut cur, 2, span, true),
-            ".2byte" => self.dir_data(&mut cur, 2, span, false),
+            ".short" | ".hword" | ".half" | ".value" => {
+                self.dir_data(&mut cur, 2, span, true, &text)
+            }
+            ".2byte" => self.dir_data(&mut cur, 2, span, false, &text),
             // `.word` is the one data directive whose width depends on the
             // target, so it asks the backend rather than assuming x86.
             ".word" => {
                 let w = self.arch.word_bytes();
-                self.dir_data(&mut cur, w, span, true)
+                self.dir_data(&mut cur, w, span, true, &text)
             }
             // `.3byte` is the RL78 and RX ports' 24-bit address; like
             // `.dword` below, it means nothing else anywhere.
-            ".3byte" => self.dir_data(&mut cur, 3, span, false),
-            ".int" | ".long" => self.dir_data(&mut cur, 4, span, true),
-            ".4byte" => self.dir_data(&mut cur, 4, span, false),
+            ".3byte" => self.dir_data(&mut cur, 3, span, false, &text),
+            ".int" | ".long" => self.dir_data(&mut cur, 4, span, true, &text),
+            ".4byte" => self.dir_data(&mut cur, 4, span, false, &text),
             // `.dword` (MIPS, RISC-V) and `.xword` (AArch64, SPARC V9) both
             // mean eight bytes; accepting them everywhere is harmless, since
             // neither has a different meaning on any other target.
-            ".quad" => self.dir_data(&mut cur, 8, span, true),
-            ".8byte" | ".dword" | ".xword" => self.dir_data(&mut cur, 8, span, false),
+            ".quad" => self.dir_data(&mut cur, 8, span, true, &text),
+            ".8byte" | ".dword" | ".xword" => self.dir_data(&mut cur, 8, span, false, &text),
             // SuperH's GNU as names its unaligned `.word`, `.long` and
             // `.quad` these; they mean nothing to a target that aligns no data.
-            ".uaword" if self.arch.aligns_data() => self.dir_data(&mut cur, 2, span, false),
-            ".ualong" if self.arch.aligns_data() => self.dir_data(&mut cur, 4, span, false),
-            ".uaquad" if self.arch.aligns_data() => self.dir_data(&mut cur, 8, span, false),
+            ".uaword" if self.arch.aligns_data() => self.dir_data(&mut cur, 2, span, false, &text),
+            ".ualong" if self.arch.aligns_data() => self.dir_data(&mut cur, 4, span, false, &text),
+            ".uaquad" if self.arch.aligns_data() => self.dir_data(&mut cur, 8, span, false, &text),
             ".ascii" => self.dir_ascii(&mut cur, false, span),
             ".asciz" | ".string" | ".asciiz" => self.dir_ascii(&mut cur, true, span),
             ".sleb128" => self.dir_leb(&mut cur, true, span),
@@ -429,7 +431,14 @@ impl Assembler {
 
     /// A data directive of `size`-byte values. `aligned` marks the ones that
     /// start on their own boundary where the target asks for that.
-    fn dir_data(&mut self, cur: &mut Cursor<'_>, size: u8, span: Span, aligned: bool) -> bool {
+    fn dir_data(
+        &mut self,
+        cur: &mut Cursor<'_>,
+        size: u8,
+        span: Span,
+        aligned: bool,
+        directive: &str,
+    ) -> bool {
         if cur.at_end() {
             return true;
         }
@@ -439,7 +448,7 @@ impl Assembler {
         }
         loop {
             let mark = self.exprs.len();
-            let Some(e) = self.parse_data_expr(cur) else {
+            let Some(e) = self.parse_data_expr(cur, directive) else {
                 return true;
             };
             if self.dwarf.line.pending {
@@ -472,8 +481,28 @@ impl Assembler {
     ///
     /// [`Architecture::expr_modifiers`]: crate::arch::Architecture::expr_modifiers
     /// [`Architecture::data_paren_modifiers`]: crate::arch::Architecture::data_paren_modifiers
-    fn parse_data_expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
+    ///
+    /// AArch64's `%dtprel(sym)` is read here too, in the directives its
+    /// GNU as reads it in; see [`Architecture::percent_modifiers`].
+    ///
+    /// [`Architecture::percent_modifiers`]: crate::arch::Architecture::percent_modifiers
+    fn parse_data_expr(&mut self, cur: &mut Cursor<'_>, directive: &str) -> Option<ExprRef> {
         let tok = cur.peek();
+        if tok.is_punct(Punct::Percent)
+            && cur.nth(2).is_punct(Punct::LParen)
+            && let Some(name) = cur.nth(1).ident().and_then(|n| {
+                let text = self.interner.get(n);
+                self.arch
+                    .percent_modifiers(directive)
+                    .iter()
+                    .find(|m| text == **m)
+                    .copied()
+            })
+        {
+            cur.advance();
+            cur.advance();
+            return self.modifier_call(cur, name, tok.span);
+        }
         let name = tok.ident().and_then(|n| {
             let text = self.interner.get(n);
             self.arch
@@ -486,6 +515,12 @@ impl Assembler {
             return self.parse_expr_with_suffixes(cur, self.arch.data_paren_modifiers());
         };
         cur.advance();
+        self.modifier_call(cur, name, tok.span)
+    }
+
+    /// The `(expr)` of a modifier written as a call, `pm(main)` or
+    /// `%dtprel(sym)`, from its `(` on; `start` is where the call began.
+    fn modifier_call(&mut self, cur: &mut Cursor<'_>, name: &str, start: Span) -> Option<ExprRef> {
         let open = cur.advance();
         let inner = self.parse_expr(cur)?;
         let Some(close) = cur.eat_punct(Punct::RParen) else {
@@ -497,7 +532,7 @@ impl Assembler {
         };
         let name = self.interner.intern(name);
         let kind = crate::expr::ExprKind::Modifier(name, inner);
-        Some(self.exprs.alloc(kind, tok.span.to(close.span)))
+        Some(self.exprs.alloc(kind, start.to(close.span)))
     }
 
     /// Pads to a `size`-byte boundary ahead of data that must start on one,
@@ -592,6 +627,12 @@ impl Assembler {
                     // `x@got` everywhere else.
                     let written = if self.arch.expr_modifiers().contains(&name.as_str()) {
                         format!("`{name}()`")
+                    } else if self
+                        .arch
+                        .percent_modifiers(".xword")
+                        .contains(&name.as_str())
+                    {
+                        format!("`%{name}()`")
                     } else if self.arch.data_paren_modifiers().contains(&name.as_str()) {
                         format!("`({name})`")
                     } else {

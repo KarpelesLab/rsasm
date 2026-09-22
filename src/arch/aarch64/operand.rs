@@ -171,6 +171,8 @@ pub enum RelocOp {
     GotLo12,
     /// One 16-bit group of the address, for the move-wide instructions.
     Movw(MovwGroup),
+    /// A piece of a thread-local access model other than a move-wide group.
+    Tls(&'static TlsOp),
 }
 
 impl RelocOp {
@@ -180,8 +182,145 @@ impl RelocOp {
             RelocOp::Got => ":got:",
             RelocOp::GotLo12 => ":got_lo12:",
             RelocOp::Movw(g) => g.op,
+            RelocOp::Tls(t) => t.op,
         }
     }
+}
+
+/// Which relocation a thread-local operator gives a load or store.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum TlsLdst {
+    /// None: GNU as refuses the operator on a load or store.
+    None,
+    /// One per access size, 8 to 64 bits, whose field is scaled by that size
+    /// as `:lo12:`'s is. There is no relocation for a 128-bit access, and
+    /// GNU as refuses one.
+    Scaled([u32; 4]),
+    /// The same relocation whatever the access, as GNU as writes for the
+    /// operators that name a 64-bit GOT slot or descriptor field: an
+    /// `ldr w0` or `ldrb` gets it as well as an `ldr x0`.
+    Any(u32),
+}
+
+/// One thread-local operator that is not a move-wide group: the relocation
+/// it selects in each instruction that takes it, or 0 where GNU as refuses
+/// it there.
+///
+/// A thread-local operator names an access model, not just a field. `adrp
+/// x0, :tlsdesc:v` is the first instruction of a sequence the linker may
+/// rewrite into another model once it knows where `v` is, so each relocation
+/// is specific to the instruction it sits on, and none is ever resolved by
+/// the assembler, even against a variable in this file.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct TlsOp {
+    /// The operator as it is written, colons and all.
+    pub op: &'static str,
+    pub adrp: u32,
+    pub adr: u32,
+    /// A PC-relative literal load, `ldr x0, :gottprel:v`.
+    pub literal: u32,
+    /// The immediate of an `add`.
+    pub add: u32,
+    /// `add` always shifts its immediate by twelve, whether or not `lsl #12`
+    /// is written, as GNU as does for `:tprel_hi12:` alone: its local-dynamic
+    /// twin `:dtprel_hi12:` takes the shift only as written.
+    pub hi12: bool,
+    pub ldst: TlsLdst,
+}
+
+const fn tls(op: &'static str) -> TlsOp {
+    TlsOp {
+        op,
+        adrp: 0,
+        adr: 0,
+        literal: 0,
+        add: 0,
+        hi12: false,
+        ldst: TlsLdst::None,
+    }
+}
+
+/// Every thread-local operator GNU as accepts outside a move-wide
+/// instruction, with the relocations it wrote for each in a reference
+/// object. GNU as knows `:tlsldm:` but not `:tlsld:`, `:tlsldm_lo12_nc:` but
+/// not `:tlsld_lo12:`, and `:tprel:` as `:tprel_lo12:` on an `add` alone.
+static TLS_OPS: &[TlsOp] = &[
+    TlsOp {
+        adrp: reloc::TLSGD_ADR_PAGE21,
+        adr: reloc::TLSGD_ADR_PREL21,
+        ..tls(":tlsgd:")
+    },
+    TlsOp {
+        add: reloc::TLSGD_ADD_LO12_NC,
+        ..tls(":tlsgd_lo12:")
+    },
+    TlsOp {
+        adrp: reloc::TLSLD_ADR_PAGE21,
+        adr: reloc::TLSLD_ADR_PREL21,
+        ..tls(":tlsldm:")
+    },
+    TlsOp {
+        add: reloc::TLSLD_ADD_LO12_NC,
+        ..tls(":tlsldm_lo12_nc:")
+    },
+    TlsOp {
+        add: reloc::TLSLD_ADD_DTPREL_HI12,
+        ..tls(":dtprel_hi12:")
+    },
+    TlsOp {
+        add: reloc::TLSLD_ADD_DTPREL_LO12,
+        ldst: TlsLdst::Scaled(reloc::TLSLD_LDST_DTPREL_LO12),
+        ..tls(":dtprel_lo12:")
+    },
+    TlsOp {
+        add: reloc::TLSLD_ADD_DTPREL_LO12_NC,
+        ldst: TlsLdst::Scaled(reloc::TLSLD_LDST_DTPREL_LO12_NC),
+        ..tls(":dtprel_lo12_nc:")
+    },
+    TlsOp {
+        adrp: reloc::TLSIE_ADR_GOTTPREL_PAGE21,
+        literal: reloc::TLSIE_LD_GOTTPREL_PREL19,
+        ..tls(":gottprel:")
+    },
+    TlsOp {
+        ldst: TlsLdst::Any(reloc::TLSIE_LD64_GOTTPREL_LO12_NC),
+        ..tls(":gottprel_lo12:")
+    },
+    TlsOp {
+        add: reloc::TLSLE_ADD_TPREL_HI12,
+        hi12: true,
+        ..tls(":tprel_hi12:")
+    },
+    TlsOp {
+        add: reloc::TLSLE_ADD_TPREL_LO12,
+        ldst: TlsLdst::Scaled(reloc::TLSLE_LDST_TPREL_LO12),
+        ..tls(":tprel_lo12:")
+    },
+    TlsOp {
+        add: reloc::TLSLE_ADD_TPREL_LO12_NC,
+        ldst: TlsLdst::Scaled(reloc::TLSLE_LDST_TPREL_LO12_NC),
+        ..tls(":tprel_lo12_nc:")
+    },
+    TlsOp {
+        add: reloc::TLSLE_ADD_TPREL_LO12,
+        ..tls(":tprel:")
+    },
+    TlsOp {
+        adrp: reloc::TLSDESC_ADR_PAGE21,
+        adr: reloc::TLSDESC_ADR_PREL21,
+        literal: reloc::TLSDESC_LD_PREL19,
+        ..tls(":tlsdesc:")
+    },
+    TlsOp {
+        add: reloc::TLSDESC_ADD_LO12,
+        ldst: TlsLdst::Any(reloc::TLSDESC_LD64_LO12),
+        ..tls(":tlsdesc_lo12:")
+    },
+];
+
+/// The thread-local operator `name` spells, written without its colons.
+fn tls_op(name: &str) -> Option<&'static TlsOp> {
+    TLS_OPS.iter().find(|t| t.op.trim_matches(':') == name)
 }
 
 /// What a move-wide operator's field has to hold for the value to survive.
@@ -223,6 +362,10 @@ pub struct MovwGroup {
     /// `:prel_g3:` along with them — since `movk` only deposits bits into a
     /// register it leaves otherwise alone.
     pub movk: bool,
+    /// The group is of a thread-local offset rather than an address: the
+    /// linker's to compute, and never resolved here; see
+    /// [`encode::fixup_movw`](super::encode::fixup_movw).
+    pub tls: bool,
 }
 
 /// Every move-wide operator GNU as accepts. The relocation numbers are the
@@ -235,6 +378,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Unsigned,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g0_nc:",
@@ -243,6 +387,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g1:",
@@ -251,6 +396,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Unsigned,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g1_nc:",
@@ -259,6 +405,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g2:",
@@ -267,6 +414,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Unsigned,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g2_nc:",
@@ -275,6 +423,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g3:",
@@ -283,6 +432,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: false,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g0_s:",
@@ -291,6 +441,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Signed,
         prel: false,
         movk: false,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g1_s:",
@@ -299,6 +450,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Signed,
         prel: false,
         movk: false,
+        tls: false,
     },
     MovwGroup {
         op: ":abs_g2_s:",
@@ -307,6 +459,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Signed,
         prel: false,
         movk: false,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g0:",
@@ -315,6 +468,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Signed,
         prel: true,
         movk: false,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g0_nc:",
@@ -323,6 +477,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: true,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g1:",
@@ -331,6 +486,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Signed,
         prel: true,
         movk: false,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g1_nc:",
@@ -339,6 +495,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: true,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g2:",
@@ -347,6 +504,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::Signed,
         prel: true,
         movk: false,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g2_nc:",
@@ -355,6 +513,7 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: true,
         movk: true,
+        tls: false,
     },
     MovwGroup {
         op: ":prel_g3:",
@@ -363,6 +522,155 @@ const MOVW_GROUPS: &[MovwGroup] = &[
         check: MovwCheck::None,
         prel: true,
         movk: false,
+        tls: false,
+    }, // The thread-local groups. GNU as refuses `movk` for the local-exec
+    // offsets that are not `_nc` and for `:tlsgd_g1:`, the ones
+    // `process_movw_reloc_info` lists with the signed address groups, and
+    // takes it for the others, `:dtprel_g2:` and `:dtprel_g1:` included,
+    // though the psABI checks those as signed too.
+    MovwGroup {
+        op: ":tprel_g2:",
+        group: 2,
+        reloc: reloc::TLSLE_MOVW_TPREL_G2,
+        check: MovwCheck::None,
+        prel: false,
+        movk: false,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tprel_g1:",
+        group: 1,
+        reloc: reloc::TLSLE_MOVW_TPREL_G1,
+        check: MovwCheck::None,
+        prel: false,
+        movk: false,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tprel_g1_nc:",
+        group: 1,
+        reloc: reloc::TLSLE_MOVW_TPREL_G1_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tprel_g0:",
+        group: 0,
+        reloc: reloc::TLSLE_MOVW_TPREL_G0,
+        check: MovwCheck::None,
+        prel: false,
+        movk: false,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tprel_g0_nc:",
+        group: 0,
+        reloc: reloc::TLSLE_MOVW_TPREL_G0_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":dtprel_g2:",
+        group: 2,
+        reloc: reloc::TLSLD_MOVW_DTPREL_G2,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":dtprel_g1:",
+        group: 1,
+        reloc: reloc::TLSLD_MOVW_DTPREL_G1,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":dtprel_g1_nc:",
+        group: 1,
+        reloc: reloc::TLSLD_MOVW_DTPREL_G1_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":dtprel_g0:",
+        group: 0,
+        reloc: reloc::TLSLD_MOVW_DTPREL_G0,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":dtprel_g0_nc:",
+        group: 0,
+        reloc: reloc::TLSLD_MOVW_DTPREL_G0_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":gottprel_g1:",
+        group: 1,
+        reloc: reloc::TLSIE_MOVW_GOTTPREL_G1,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":gottprel_g0_nc:",
+        group: 0,
+        reloc: reloc::TLSIE_MOVW_GOTTPREL_G0_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tlsgd_g1:",
+        group: 1,
+        reloc: reloc::TLSGD_MOVW_G1,
+        check: MovwCheck::None,
+        prel: false,
+        movk: false,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tlsgd_g0_nc:",
+        group: 0,
+        reloc: reloc::TLSGD_MOVW_G0_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tlsdesc_off_g1:",
+        group: 1,
+        reloc: reloc::TLSDESC_OFF_G1,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
+    },
+    MovwGroup {
+        op: ":tlsdesc_off_g0_nc:",
+        group: 0,
+        reloc: reloc::TLSDESC_OFF_G0_NC,
+        check: MovwCheck::None,
+        prel: false,
+        movk: true,
+        tls: true,
     },
 ];
 
@@ -628,9 +936,10 @@ fn immediate(cx: &mut AsmCtx<'_>, toks: &[Token]) -> Option<(Option<RelocOp>, Ex
             Some("lo12") => Some(RelocOp::Lo12),
             Some("got") => Some(RelocOp::Got),
             Some("got_lo12") => Some(RelocOp::GotLo12),
-            Some(other) => match movw_group(other) {
-                Some(g) => Some(RelocOp::Movw(g)),
-                None => {
+            Some(other) => match (movw_group(other), tls_op(other)) {
+                (Some(g), _) => Some(RelocOp::Movw(g)),
+                (None, Some(t)) => Some(RelocOp::Tls(t)),
+                (None, None) => {
                     cx.error(
                         colon.span.to(name.span),
                         format!("unsupported relocation operator `:{other}:`"),

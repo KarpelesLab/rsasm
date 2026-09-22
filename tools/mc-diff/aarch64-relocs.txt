@@ -175,3 +175,60 @@ glob:   nop
 weak1:  nop
         .data
 dat:    .quad   0
+
+=== thread-local access models
+# Only the linker computes any of these, and it may rewrite a whole sequence
+# into another model, so each is relocated whatever it refers to: by name,
+# even for a variable in this file, and an undefined target becomes
+# `STT_TLS`.
+#
+# Left out, and in tools/xas-diff's corpus against GNU as, whom rsasm
+# follows: `:tlsgd:`, `:tlsldm:`, their `_lo12` and move-wide forms and
+# `:tlsdesc_off_g1:`, which llvm-mc 22 does not know; `movz` with a signed
+# group, which llvm-mc makes `movn` and GNU as leaves alone (so the signed
+# groups are written with `movn` here); `:dtprel_hi12:`, whose `add` llvm-mc
+# shifts by twelve and GNU as only where `lsl #12` follows; an `add` operator
+# followed by `lsl #0` or `lsl #12`, which llvm-mc refuses; `movk` with
+# `:tprel_g1:` or `:tprel_g0:`, which GNU as refuses; `:tlsdesc:` on `adr` or
+# a literal load, which llvm-mc refuses or relocates as a plain literal;
+# `:gottprel_lo12:` and `:tlsdesc_lo12:` on a load narrower than 64 bits,
+# which llvm-mc refuses; and a 128-bit access under `:tprel_lo12:` or
+# `:dtprel_lo12:`, which llvm-mc relocates and GNU as refuses.
+        .section .tbss,"awT",@nobits
+        .p2align 3
+tb:     .space  8
+        .globl  tg
+tg:     .space  8
+        .text
+        .globl  f
+f:
+        movn    x0, :tprel_g2:v
+        movk    x0, :tprel_g1_nc:v
+        movk    x0, :tprel_g0_nc:v
+        movn    x1, :tprel_g1:v
+        movn    w2, :tprel_g0:v
+        movz    x3, :tprel_g1_nc:tb
+        mrs     x4, tpidr_el0
+        add     x4, x4, :tprel_hi12:v
+        add     x4, x4, :tprel_lo12_nc:v
+        add     x5, x5, :tprel_lo12:tg+4
+        ldrb    w6, [x4, :tprel_lo12:v]
+        ldrh    w6, [x4, :tprel_lo12_nc:v]
+        ldr     w6, [x4, :tprel_lo12:v]
+        ldr     x6, [x4, :tprel_lo12_nc:v]
+        str     d6, [x4, :tprel_lo12:v]
+        movn    x7, :dtprel_g2:v
+        movk    x7, :dtprel_g1:v
+        movk    x7, :dtprel_g0_nc:v
+        add     x8, x8, :dtprel_lo12_nc:v
+        ldr     x8, [x8, :dtprel_lo12:v]
+        adrp    x9, :gottprel:v
+        ldr     x9, [x9, :gottprel_lo12:v]
+        ldr     x10, :gottprel:tg
+        movn    x11, :gottprel_g1:v
+        movk    x11, :gottprel_g0_nc:v
+        adrp    x0, :tlsdesc:v
+        ldr     x1, [x0, :tlsdesc_lo12:v]
+        add     x0, x0, :tlsdesc_lo12:v
+        .tlsdesccall v
+        blr     x1

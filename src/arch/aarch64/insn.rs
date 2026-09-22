@@ -8,7 +8,7 @@
 //! clearer than a table that would need an escape hatch for each of them.
 
 use super::encode::{const_in_range, field, logical_imm, word, word_fixup};
-use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp};
+use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp, TlsLdst};
 use super::reg::{self, Reg, RegClass};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
@@ -665,24 +665,64 @@ fn encode_addsub(
             | field(rd.num as u32, 0, 5));
     }
 
-    // `add x0, x0, :lo12:sym`: the second half of an `adrp` pair. Only a plain
-    // add makes sense — the linker writes the bits as an unsigned offset.
+    // `add x0, x0, :lo12:sym`: the second half of an `adrp` pair, or a piece
+    // of a thread-local access. Only a plain add makes sense — the linker
+    // writes the bits as an unsigned offset.
     if let OperandKind::Reloc(rop, e) = src.kind {
-        if rop != RelocOp::Lo12 || op != 0 || s != 0 {
+        let (kind, hi12) = match rop {
+            RelocOp::Lo12 => (encode::fixup_lo12_add(), false),
+            RelocOp::Tls(t) if t.add != 0 => (encode::fixup_tls(t.add), t.hi12),
+            _ => {
+                cx.error(
+                    src.span,
+                    format!("`{}` is not valid on `{}`", rop.name(), i.mnemonic),
+                );
+                return None;
+            }
+        };
+        if op != 0 || s != 0 {
             cx.error(
                 src.span,
                 format!("`{}` needs a plain `add`, not `{}`", rop.name(), i.mnemonic),
             );
             return None;
         }
-        if i.ops.len() > at + 1 {
-            cx.error(i.ops[at + 1].span, "a `:lo12:` immediate cannot be shifted");
+        // GNU as takes `lsl #0` or `lsl #12` after the operator and sets the
+        // shift as written, which llvm-mc refuses. After `:tprel_hi12:` it
+        // takes any `lsl` it can encode at all, and shifts by twelve anyway.
+        let shift12 = match i.op(at + 1) {
+            None => false,
+            Some(next) => {
+                let OperandKind::Shift(ShiftOp::Lsl, amount) = next.kind else {
+                    cx.error(next.span, "expected `lsl #0` or `lsl #12`");
+                    return None;
+                };
+                let max = if hi12 { 63 } else { 12 };
+                match const_in_range(cx, amount, 0, max, "an add/sub immediate shift")? {
+                    _ if hi12 => true,
+                    0 => false,
+                    12 => true,
+                    n => {
+                        cx.error(
+                            next.span,
+                            format!("an add/sub immediate can only be shifted by 0 or 12, not {n}"),
+                        );
+                        return None;
+                    }
+                }
+            }
+        };
+        if i.ops.len() > at + 2 {
+            cx.error(i.ops[at + 2].span, "too many operands");
             return None;
         }
         return one_fixup(
-            sf | ADDSUB_IMM | field(rn.num as u32, 5, 5) | field(rd.num as u32, 0, 5),
+            sf | ADDSUB_IMM
+                | field(u32::from(shift12 || hi12), 22, 1)
+                | field(rn.num as u32, 5, 5)
+                | field(rd.num as u32, 0, 5),
             e,
-            encode::fixup_lo12_add(),
+            kind,
             src.span,
         );
     }
@@ -1573,19 +1613,17 @@ fn branch_cond(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, cond: u8) -> Option<Vec<Va
 fn cbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[2]).then_some(())?;
     let rt = i.gpr(cx, 0)?;
-    let e = i.expr(cx, 1)?;
     let base = if i.mnemonic == "cbz" {
         0x3400_0000
     } else {
         0x3500_0000
     };
-    pcrel(
-        cx,
-        field(rt.sf(), 31, 1) | base | field(rt.num as u32, 0, 5),
-        e,
-        encode::fixup_b19(),
-        i.ops[1].span,
-    )
+    let w = field(rt.sf(), 31, 1) | base | field(rt.num as u32, 0, 5);
+    if let Some((e, kind)) = tls_literal(cx, &i.ops[1], encode::fixup_b19())? {
+        return pcrel(cx, w, e, kind, i.ops[1].span);
+    }
+    let e = i.expr(cx, 1)?;
+    pcrel(cx, w, e, encode::fixup_b19(), i.ops[1].span)
 }
 
 fn tbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
@@ -1593,20 +1631,52 @@ fn tbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     let rt = i.gpr(cx, 0)?;
     let max = if rt.class == RegClass::X { 63 } else { 31 };
     let bit = i.imm(cx, 1, 0, max, "the bit number")? as u32;
-    let e = i.expr(cx, 2)?;
     let base = if i.mnemonic == "tbz" {
         0x3600_0000
     } else {
         0x3700_0000
     };
     // The bit number is split: its top bit doubles as the register-width bit.
-    pcrel(
-        cx,
-        field(bit >> 5, 31, 1) | base | field(bit & 31, 19, 5) | field(rt.num as u32, 0, 5),
-        e,
-        encode::fixup_b14(),
-        i.ops[2].span,
-    )
+    let w = field(bit >> 5, 31, 1) | base | field(bit & 31, 19, 5) | field(rt.num as u32, 0, 5);
+    if let Some((e, kind)) = tls_literal(cx, &i.ops[2], encode::fixup_b14())? {
+        return pcrel(cx, w, e, kind, i.ops[2].span);
+    }
+    let e = i.expr(cx, 2)?;
+    pcrel(cx, w, e, encode::fixup_b14(), i.ops[2].span)
+}
+
+/// `ldr x0, :gottprel:v` and `ldr x0, :tlsdesc:v`: a thread-local operator
+/// in a PC-relative literal field, with the load's relocation. `None` when
+/// the operand is something else.
+///
+/// A plain number under the operator is an offset from the instruction, as
+/// it would be without one, and gets the instruction's own field, `plain`:
+/// GNU as folds it before it looks at the operator.
+///
+/// GNU as reads the target of `cbz`, `cbnz`, `tbz` and `tbnz` with the parser
+/// it reads a literal load's with, so those take the two operators as well
+/// and get the load's relocation, although what a linker writes for it
+/// covers `tbz`'s bit number; llvm-mc ignores the operator on all four and
+/// writes their plain branch relocation. rsasm follows GNU as.
+fn tls_literal(
+    cx: &mut AsmCtx<'_>,
+    op: &Operand<'_>,
+    plain: crate::section::FixupKind,
+) -> Option<Option<(ExprRef, crate::section::FixupKind)>> {
+    let OperandKind::Reloc(RelocOp::Tls(t), e) = op.kind else {
+        return Some(None);
+    };
+    if t.literal == 0 {
+        cx.error(
+            op.span,
+            format!("`{}` is not valid on a literal load", t.op),
+        );
+        return None;
+    }
+    if !names_symbol(cx, e) {
+        return Some(Some((e, plain)));
+    }
+    Some(Some((e, encode::fixup_tls(t.literal))))
 }
 
 fn branch_reg(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
@@ -1642,6 +1712,24 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     let target = i.op(1)?;
     let (e, kind) = match (i.mnemonic, &target.kind) {
         ("adrp", OperandKind::Reloc(RelocOp::Got, e)) => (*e, encode::fixup_got_page()),
+        (_, OperandKind::Reloc(RelocOp::Tls(t), e)) => {
+            let reloc = if i.mnemonic == "adrp" { t.adrp } else { t.adr };
+            if reloc == 0 {
+                cx.error(
+                    target.span,
+                    format!("`{}` is not valid on `{}`", t.op, i.mnemonic),
+                );
+                return None;
+            }
+            // As in a literal load, GNU as takes a plain number under the
+            // operator as the offset `adr` would without one; see
+            // `tls_literal`. On `adrp` it refuses one.
+            if i.mnemonic == "adr" && !names_symbol(cx, *e) {
+                (*e, encode::fixup_adr())
+            } else {
+                (*e, encode::fixup_tls(reloc))
+            }
+        }
         ("adrp", _) => {
             let e = target.expr(cx)?;
             // A bare number is a count of pages from here, to GNU as and
@@ -1660,7 +1748,7 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     } else {
         0x1000_0000
     };
-    if i.mnemonic == "adr" {
+    if i.mnemonic == "adr" && !kind.always_reloc {
         return pcrel(cx, base | field(rd.num as u32, 0, 5), e, kind, target.span);
     }
     one_fixup(base | field(rd.num as u32, 0, 5), e, kind, target.span)
@@ -1844,6 +1932,26 @@ fn ldst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             }
             let kind = match rop {
                 RelocOp::Lo12 => encode::fixup_lo12_ldst(form.scale),
+                RelocOp::Tls(t) => match t.ldst {
+                    TlsLdst::Scaled(r) if form.scale < 4 => {
+                        encode::fixup_tls(r[form.scale as usize])
+                    }
+                    TlsLdst::Any(r) => encode::fixup_tls(r),
+                    TlsLdst::Scaled(_) => {
+                        cx.error(
+                            mem.span,
+                            format!("`{}` has no relocation for a 16-byte access", t.op),
+                        );
+                        return None;
+                    }
+                    TlsLdst::None => {
+                        cx.error(
+                            mem.span,
+                            format!("`{}` is not valid for a load or store", t.op),
+                        );
+                        return None;
+                    }
+                },
                 RelocOp::GotLo12 if form.scale == 3 && !form.v => encode::fixup_got_lo12(3),
                 // Darwin loads a 32-bit slot too.
                 RelocOp::GotLo12
@@ -1913,14 +2021,13 @@ fn ldst_literal(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             return None;
         }
     };
+    let w =
+        field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt.num as u32, 0, 5);
+    if let Some((e, kind)) = tls_literal(cx, &i.ops[1], encode::fixup_ld_lit())? {
+        return pcrel(cx, w, e, kind, i.ops[1].span);
+    }
     let e = i.expr(cx, 1)?;
-    pcrel(
-        cx,
-        field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt.num as u32, 0, 5),
-        e,
-        encode::fixup_ld_lit(),
-        i.ops[1].span,
-    )
+    pcrel(cx, w, e, encode::fixup_ld_lit(), i.ops[1].span)
 }
 
 /// `ldr <rt>, =value`: the value goes in the section's literal pool and the

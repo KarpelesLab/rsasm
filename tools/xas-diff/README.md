@@ -158,7 +158,7 @@ widen one that GNU as keeps at 16 bits).
 
 llvm-mc checks the AArch64 encodings in `tools/mc-diff`, including the SIMD
 and SVE table and the 3,037 system-instruction lines the two references
-agree on. Two things are GNU as's alone, and are here.
+agree on. Three things are GNU as's alone, and are here.
 
 **Literal pools.** `ldr x0, =0x123456789` puts the value in a pool and loads
 it from there, and where the pool goes is decided across a whole section, so
@@ -178,6 +178,15 @@ run, so regenerate rather than edit. The CPU string in `run.sh` names every
 extension GNU as has a name for, since it refuses a system register for the
 CPU rather than reporting an unknown name; the generator builds the same
 string from GNU as's own list.
+
+**Thread-local operators.** `aarch64-relocs.txt` has every access model's
+operators in the instructions GNU as takes them on, and the ones it refuses.
+llvm-mc does not know `:tlsgd:`, `:tlsldm:`, `:tlsdesc_off_g1:`,
+`.tlsdescadd`, `.tlsdescldr` or `%dtprel`, and where both know an operator
+they often part ways: llvm-mc writes `movn` for `movz` with a signed group,
+shifts `:dtprel_hi12:`, and refuses `lsl #12` after an operator and
+`:gottprel_lo12:` on a load narrower than 64 bits, all of which GNU as
+does the other way. The forms the two agree on are in `tools/mc-diff` too.
 
 Where the two references differ and GNU as is followed: `msr ctr_el0, x0`,
 writing a read-only register, is a warning in both GNU as and rsasm, and an

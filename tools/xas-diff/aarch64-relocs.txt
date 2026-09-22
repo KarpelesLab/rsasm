@@ -110,3 +110,316 @@ f:
 	.text
 f:
 	add	x0, x1, =4
+
+# ---- thread-local storage ----
+#
+# Every access model's operators, in each instruction GNU as takes them on.
+# None is ever resolved here: the linker lays out the thread-local block and
+# may rewrite a whole sequence into another model, so even a variable defined
+# in this file is relocated, by name, and an undefined one becomes `STT_TLS`.
+# llvm-mc 22 knows neither `:tlsgd:`, `:tlsldm:` and their `_lo12`, `_g1`
+# and `_g0_nc` forms, nor `:tlsdesc_off_g1:`, `.tlsdescadd`, `.tlsdescldr`
+# or `%dtprel`, so those are here and not in tools/mc-diff; the rows where
+# the two references write something different say so.
+
+=== local exec: the thread pointer offset, sixteen and twelve bits at a time
+# `movz` stays `movz` for a signed group, where llvm-mc writes `movn`: the
+# linker chooses between the two once it knows the sign. `:tprel_hi12:`
+# shifts its `add` by twelve whether or not `lsl #12` is written, and after
+# any `lsl` GNU as can encode; `:tprel:` is `:tprel_lo12:` on an `add`.
+	.text
+	.globl	f
+f:
+	movz	x0, :tprel_g2:v
+	movk	x0, :tprel_g1_nc:v
+	movk	x0, :tprel_g0_nc:v
+	movz	x1, :tprel_g1:v
+	movn	x2, :tprel_g0:v+8
+	movz	w3, :tprel_g1:v
+	movk	w3, :tprel_g0_nc:v
+	mrs	x4, tpidr_el0
+	add	x4, x4, :tprel_hi12:v
+	add	x4, x4, :tprel_lo12_nc:v
+	add	x5, x4, :tprel_hi12:v, lsl #12
+	add	x5, x4, :tprel_hi12:v, lsl #0
+	add	x5, x4, :tprel_hi12:v, lsl #3
+	add	x5, x4, :tprel_lo12:v, lsl #12
+	add	w6, w6, :tprel_lo12:v
+	add	x7, x7, :tprel:v
+	add	sp, x4, :tprel_lo12:v
+	ret
+
+=== local exec: loads and stores, one relocation per access size
+	.text
+f:
+	ldrb	w0, [x1, :tprel_lo12:v]
+	ldrsb	x0, [x1, :tprel_lo12_nc:v]
+	ldrh	w0, [x1, :tprel_lo12:v]
+	strh	w0, [x1, :tprel_lo12_nc:v]
+	ldr	w0, [x1, :tprel_lo12:v]
+	ldrsw	x0, [x1, :tprel_lo12_nc:v]
+	ldr	x0, [x1, #:tprel_lo12:v+16]
+	str	x0, [x1, :tprel_lo12_nc:v]
+	ldr	b0, [x1, :tprel_lo12:v]
+	ldr	h0, [x1, :tprel_lo12:v]
+	ldr	s0, [x1, :tprel_lo12:v]
+	ldr	d0, [x1, :tprel_lo12_nc:v]
+	prfm	pldl1keep, [x1, :tprel_lo12:v]
+
+=== local dynamic: the module's block, and the offset within it
+# `:dtprel_hi12:` takes the shift only as written, unlike `:tprel_hi12:`;
+# llvm-mc shifts it either way. `movk` takes every `:dtprel_gN:`, which it
+# does not take `:tprel_g1:` or `:tprel_g0:`.
+	.text
+f:
+	adrp	x0, :tlsldm:v
+	add	x0, x0, :tlsldm_lo12_nc:v
+	adr	x1, :tlsldm:v
+	bl	__tls_get_addr
+	movz	x1, :dtprel_g2:v
+	movk	x1, :dtprel_g1:v
+	movk	x1, :dtprel_g0:v
+	movz	x2, :dtprel_g1_nc:v
+	movk	x2, :dtprel_g0_nc:v
+	add	x0, x0, :dtprel_hi12:v
+	add	x0, x0, :dtprel_hi12:v, lsl #12
+	add	x0, x0, :dtprel_lo12_nc:v
+	add	x3, x3, :dtprel_lo12:v
+	ldrb	w4, [x0, :dtprel_lo12:v]
+	ldrh	w4, [x0, :dtprel_lo12_nc:v]
+	ldr	w4, [x0, :dtprel_lo12:v]
+	ldr	x4, [x0, :dtprel_lo12_nc:v]
+
+=== general dynamic, and the move-wide forms of the GOT-based models
+# `:tlsgd_g1:` is refused on `movk`, `:tlsdesc_off_g1:` and
+# `:gottprel_g1:` are not.
+	.text
+f:
+	adrp	x0, :tlsgd:v
+	add	x0, x0, :tlsgd_lo12:v
+	adr	x1, :tlsgd:v+4
+	movz	x2, :tlsgd_g1:v
+	movk	x2, :tlsgd_g0_nc:v
+	movz	x3, :gottprel_g1:v
+	movk	x3, :gottprel_g0_nc:v
+	movk	x4, :tlsdesc_off_g1:v
+	movk	x4, :tlsdesc_off_g0_nc:v
+	movz	w5, :tlsdesc_off_g1:v
+
+=== initial exec: the offset from a GOT slot
+# `:gottprel_lo12:` gets the 64-bit slot's relocation on any load, a byte or
+# 128-bit one included, as `:tlsdesc_lo12:` does; llvm-mc refuses those.
+	.text
+f:
+	adrp	x0, :gottprel:v
+	ldr	x0, [x0, :gottprel_lo12:v]
+	ldr	w1, [x0, :gottprel_lo12:v]
+	ldrb	w1, [x0, :gottprel_lo12:v]
+	ldr	q1, [x0, :gottprel_lo12:v]
+	ldr	x2, :gottprel:v
+	ldr	d2, :gottprel:v
+	mrs	x3, tpidr_el0
+	add	x0, x0, x3
+
+=== TLS descriptors, and the marks on the sequence's instructions
+# `.tlsdesccall`, `.tlsdescadd` and `.tlsdescldr` put a relocation covering
+# no bytes on whatever comes next, and name what they are given, with an
+# addend, without making it thread-local. A number is taken and nothing
+# written for it.
+	.text
+f:
+	adrp	x0, :tlsdesc:v
+	.tlsdescldr	v
+	ldr	x1, [x0, :tlsdesc_lo12:v]
+	.tlsdescadd	v
+	add	x0, x0, :tlsdesc_lo12:v
+	.tlsdesccall	v
+	blr	x1
+	adr	x0, :tlsdesc:w
+	ldr	x1, :tlsdesc:w
+	ldr	w1, [x0, :tlsdesc_lo12:w]
+	.tlsdesccall	u+4
+	.tlsdesccall	u
+lab:	blr	x1
+	.tlsdesccall	2
+	nop
+	.tlsdesccall	loc
+	nop
+loc:	.tlsdescadd	loc
+	.word	0
+
+=== variables defined here, by binding
+	.section	.tbss,"awT",@nobits
+	.p2align	3
+tb:	.space	8
+	.globl	tg
+tg:	.space	8
+	.section	.tdata,"awT",@progbits
+td:	.quad	1
+	.tls_common	tc, 8, 8
+	.text
+f:
+	add	x0, x0, :tprel_lo12:tb
+	add	x0, x0, :tprel_lo12:tg+4
+	movz	x1, :tprel_g1:td
+	adrp	x2, :gottprel:tg
+	ldr	x2, [x2, :gottprel_lo12:tg]
+	adrp	x3, :tlsdesc:tc
+	.data
+	.xword	%dtprel(tb)
+
+=== the type a thread-local access gives an undefined symbol
+# An `object` becomes `STT_TLS` as a plain undefined symbol does.
+	.type	o, %object
+	.text
+	add	x0, x0, :tprel_lo12:o
+	add	x0, x0, :tprel_lo12:later
+	.type	later, %object
+
+=== %dtprel, in the two eight-byte directives GNU as reads it in
+	.data
+	.xword	%dtprel(v)
+	.dword	%dtprel(v+8)
+	.xword	1, %dtprel (w), 2
+
+=== a number under an operator on a PC-relative field is an offset
+# GNU as folds it before it looks at the operator, and writes what the
+# instruction without one would.
+	.text
+f:
+	nop
+	adr	x0, :tlsgd:8
+	ldr	x1, :gottprel:-4
+	cbz	x2, :tlsdesc:8
+
+=== the literal forms of `:tlsdesc:` and `:gottprel:` on compare-and-branch
+# GNU as reads a `cbz`, `cbnz`, `tbz` or `tbnz` target with the parser it
+# reads a literal load's with, and writes the load's relocation; llvm-mc
+# ignores the operator and writes the branch's own.
+	.text
+f:
+	cbz	x0, :tlsdesc:v
+	cbnz	w1, :gottprel:v
+	tbz	x2, #1, :tlsdesc:v
+	tbnz	w3, #5, :gottprel:v
+
+=== refused: movk with a signed local-exec group
+	.text
+	movk	x0, :tprel_g1:v
+
+=== refused: movk with :tlsgd_g1:
+	.text
+	movk	x0, :tlsgd_g1:v
+
+=== refused: a 64-bit group in a 32-bit register
+	.text
+	movz	w0, :dtprel_g2:v
+
+=== refused: a shift after a move-wide operator
+	.text
+	movz	x0, :tprel_g1:v, lsl #16
+
+=== refused: a 128-bit access has no local-exec relocation
+	.text
+	ldr	q0, [x0, :tprel_lo12:v]
+
+=== refused: a 128-bit access has no local-dynamic relocation
+	.text
+	str	q0, [x0, :dtprel_lo12_nc:v]
+
+=== refused: an add shift other than 0 or 12
+	.text
+	add	x0, x0, :tprel_lo12:v, lsl #3
+
+=== refused: a flag-setting add
+	.text
+	adds	x0, x0, :tprel_lo12:v
+
+=== refused: a subtract
+	.text
+	sub	x0, x0, :tlsdesc_lo12:v
+
+=== refused: :gottprel: on adr
+	.text
+	adr	x0, :gottprel:v
+
+=== refused: :tlsgd: on a literal load
+	.text
+	ldr	x0, :tlsgd:v
+
+=== refused: a low-12 operator on adrp
+	.text
+	adrp	x0, :tprel_lo12:v
+
+=== refused: :tlsgd_lo12: on a load
+	.text
+	ldr	x0, [x0, :tlsgd_lo12:v]
+
+=== refused: :gottprel_lo12: on add
+	.text
+	add	x0, x0, :gottprel_lo12:v
+
+=== refused: an unscaled load has no field for an operator
+	.text
+	ldur	x0, [x0, :tprel_lo12:v]
+
+=== refused: an operator cannot be written back
+	.text
+	ldr	x0, [x0, :tprel_lo12:v]!
+
+=== refused: :tlsld: is not GNU as's spelling
+	.text
+	adrp	x0, :tlsld:v
+
+=== refused: nor is :dtprel:
+	.text
+	add	x0, x0, :dtprel:v
+
+=== refused: a thread-local access to a label in .text
+	.text
+loc:	nop
+	add	x0, x0, :tprel_lo12:loc
+
+=== refused: a thread-local access to a global in .data
+	.data
+	.globl	g
+g:	.quad	0
+	.text
+	adrp	x0, :tlsdesc:g
+
+=== refused: a thread-local access to a function
+	.type	fn, %function
+	.text
+	adrp	x0, :gottprel:fn
+
+=== refused: a thread-local access to a .set constant
+	.set	k, 0x10
+	.text
+	movz	x0, :tprel_g1:k
+
+=== refused: adrp of a thread-local number
+	.text
+	adrp	x0, :tlsgd:8
+
+=== refused: %dtprel in a four-byte directive
+	.data
+	.word	%dtprel(v)
+
+=== refused: %dtprel where GNU as reads no operator
+	.data
+	.quad	%dtprel(v)
+
+=== refused: %dtprel with an addend outside it
+	.data
+	.xword	%dtprel(v) + 4
+
+=== refused: %dtprel of a label in .text
+	.text
+loc:	nop
+	.data
+	.xword	%dtprel(loc)
+
+=== refused: a mark with nothing after it
+	.text
+	nop
+	.tlsdesccall	v

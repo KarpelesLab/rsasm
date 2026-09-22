@@ -49,6 +49,13 @@ pub enum RelocClass {
     /// bits of an address takes: AArch64's `movz`/`movk`/`movn` groups.
     /// Mach-O has no relocation for one.
     AddressGroup,
+    /// Part of an ELF thread-local access sequence, whose value only the
+    /// linker can work out and which it may rewrite into another model:
+    /// AArch64's `:tprel_lo12:`, `:tlsdesc:` and the rest. Neither Mach-O nor
+    /// COFF has a relocation for one. A field of no width is a mark on an
+    /// instruction of such a sequence (`.tlsdesccall`) rather than an access
+    /// of its own.
+    ThreadLocal,
     /// The target itself, in a 32-bit field the CPU sign-extends to 64 bits:
     /// an x86-64 displacement, or a 64-bit operation's immediate. ELF calls it
     /// `R_X86_64_32S`; Mach-O has no relocation for it.

@@ -979,7 +979,7 @@ const MALFORMED: &[&str] = &[
     "add x0, x1, #",
     "add x0, x1, :",
     "add x0, x1, :lo12:",
-    "add x0, x1, :lo12:sym, lsl 12",
+    "add x0, x1, :lo12:sym, lsl 3",
     "x0",
     "w31",
     "b.",
