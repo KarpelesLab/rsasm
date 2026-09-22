@@ -127,6 +127,43 @@ impl Architecture for V850 {
         }
     }
 
+    /// `.note.renesas`, which GNU as writes into every V850 object: six
+    /// notes naming what a linker may put this object together with.
+    ///
+    /// Each is a note with the name `REL` and a one-word descriptor, in the
+    /// order `bfd/elf32-v850.c` numbers them: the data alignment (1, four
+    /// bytes, which is `v850-elf-as`'s default), the size of a `double` (2,
+    /// eight bytes), the floating-point unit, and then the SIMD, cache and
+    /// MMU settings, which GNU as leaves at zero because it has no option
+    /// that sets them. The unit is FPU-3 on RH850 (`-mv850e3v5`) and none on
+    /// the plain V850, which has no floating point at all.
+    ///
+    /// The section is `SHT_LOUSER + 0x2000_0000`, mergeable with a 20-byte
+    /// entry size, so that a link keeps one copy of each note.
+    fn elf_attributes(&self, state: &ArchState) -> Vec<crate::arch::AttrSection> {
+        let fpu = if state.features & FEATURE_RH850 != 0 {
+            2
+        } else {
+            0
+        };
+        let mut bytes = Vec::with_capacity(120);
+        for (kind, desc) in [(1u32, 1u32), (2, 2), (3, fpu), (4, 0), (5, 0), (6, 0)] {
+            bytes.extend_from_slice(&4u32.to_le_bytes()); // n_namesz
+            bytes.extend_from_slice(&4u32.to_le_bytes()); // n_descsz
+            bytes.extend_from_slice(&kind.to_le_bytes()); // n_type
+            bytes.extend_from_slice(b"REL\0");
+            bytes.extend_from_slice(&desc.to_le_bytes());
+        }
+        vec![crate::arch::AttrSection {
+            name: ".note.renesas",
+            sh_type: 0xa000_0000,
+            sh_flags: 0x10, // SHF_MERGE
+            align: 4,
+            entsize: 20,
+            body: crate::arch::AttrBody::Bytes(bytes),
+        }]
+    }
+
     fn align_is_log2(&self) -> bool {
         true
     }

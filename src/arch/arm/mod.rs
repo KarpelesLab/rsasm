@@ -35,6 +35,9 @@
 //!   is known it is an ordinary number, and rsasm puts it in the pool. The
 //!   case is in `tools/mc-diff/arm-programs.txt`.
 
+#[doc(hidden)]
+pub mod attr_data;
+pub(crate) mod attrs;
 pub mod encode;
 pub(crate) mod generic;
 pub mod imm;
@@ -53,7 +56,7 @@ use crate::arch::{
 };
 use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
-use crate::lexer::TokKind;
+use crate::lexer::{Punct, TokKind};
 use crate::section::{FixupKind, LinkValue, Variant};
 use crate::source::Span;
 use crate::symbol::SymType;
@@ -182,52 +185,39 @@ impl Architecture for Arm {
         40
     }
 
+    /// `.ARM.attributes`, which GNU as adds to every object and both
+    /// `objdump` and GNU ld read to decide what the program may contain.
+    /// Without it a disassembler assumes a default CPU, so an `e12fff1e`
+    /// prints as `msr SP_hyp, lr, lsl pc` rather than `bx lr`, and the
+    /// linker assumes the oldest architecture: it routes every ARM/Thumb
+    /// call through an interworking veneer instead of turning it into `blx`,
+    /// and replaces a branch to an undefined weak symbol with `mov r0, r0`
+    /// rather than the ARMv6T2 `nop`. Both showed up as different linked
+    /// bytes in `tools/link-diff`.
+    ///
+    /// What goes in it is the CPU and floating-point unit selected, which
+    /// starts as this backend's own — `-march=armv7ve -mfpu=neon-vfpv4`,
+    /// what `tools/xas-diff` assembles the reference with — and follows
+    /// `.arch`, `.cpu`, `.fpu`, `.arch_extension`, `.object_arch` and
+    /// `.eabi_attribute` from there. See [`attrs`].
+    fn elf_attributes(&self, state: &ArchState) -> Vec<crate::arch::AttrSection> {
+        attrs::section(state)
+    }
+
+    /// `.arch` and `.cpu` name one of GNU as's ARM CPUs here rather than
+    /// another backend, and change what the build attributes say.
+    fn selects_cpu(&self, state: &mut ArchState, name: &str, cpu: bool) -> bool {
+        if cpu {
+            attrs::set_cpu(state, name)
+        } else {
+            attrs::set_arch(state, name)
+        }
+    }
+
     /// `EF_ARM_EABI_VER5`, as llvm-mc writes for `arm-linux-gnueabi`; GNU ld
     /// refuses to mix EABI versions, and version 0 is not an EABI object.
     fn elf_flags(&self, _state: &ArchState) -> u32 {
         0x0500_0000
-    }
-
-    /// `.ARM.attributes`, which GNU as adds to every object and GNU ld reads
-    /// to decide what the program may contain. Without it the linker assumes
-    /// the oldest architecture: it routes every ARM/Thumb call through an
-    /// interworking veneer instead of turning it into `blx`, and replaces a
-    /// branch to an undefined weak symbol with `mov r0, r0` rather than the
-    /// ARMv6T2 `nop`. Both showed up as different linked bytes in
-    /// `tools/link-diff`.
-    ///
-    /// The contents are one architecture's, because the backend is one
-    /// architecture: the whole of ARMv7-A/R with the virtualization and
-    /// divide extensions, VFPv4 and NEON, which is what `tools/xas-diff`
-    /// assembles the reference with (`-march=armv7ve -mfpu=neon-vfpv4`).
-    /// These are that run's bytes. GNU as varies them with `-march` and
-    /// `-mfpu`, and with the extensions a file actually uses; rsasm has no
-    /// such options, so it writes the one set.
-    fn elf_attributes(&self, _state: &ArchState) -> Option<(&'static str, Vec<u8>)> {
-        // Format 'A', then one vendor section — its length, "aeabi\0" — and
-        // inside it a file-scope (1) subsection with its own length and the
-        // tags, each a number and a value, the string ones NUL-terminated.
-        #[rustfmt::skip]
-        const TAGS: &[u8] = &[
-            5, b'7', b'V', b'E', 0, // Tag_CPU_name "7VE"
-            6, 10,                  // Tag_CPU_arch v7
-            7, b'A',                // Tag_CPU_arch_profile Application
-            8, 1,                   // Tag_ARM_ISA_use yes
-            9, 2,                   // Tag_THUMB_ISA_use Thumb-2
-            10, 5,                  // Tag_FP_arch VFPv4
-            12, 2,                  // Tag_Advanced_SIMD_arch NEON with FMA
-            42, 1,                  // Tag_MPextension_use allowed
-            44, 2,                  // Tag_DIV_use v7-A with division
-            68, 3,                  // Tag_Virtualization_use TrustZone and virt
-        ];
-        let mut sub = vec![1u8];
-        sub.extend_from_slice(&(5 + TAGS.len() as u32).to_le_bytes());
-        sub.extend_from_slice(TAGS);
-        let mut out = vec![b'A'];
-        out.extend_from_slice(&(4 + 6 + sub.len() as u32).to_le_bytes());
-        out.extend_from_slice(b"aeabi\0");
-        out.extend_from_slice(&sub);
-        Some((".ARM.attributes", out))
     }
 
     fn align_is_log2(&self) -> bool {
@@ -598,13 +588,119 @@ impl Architecture for Arm {
                 true
             }
             // Unified syntax is the only syntax this backend implements.
-            ".syntax" | ".fpu" | ".eabi_attribute" | ".arch_extension" => {
+            ".syntax" => {
                 cur.set_pos(cur.all().len());
+                true
+            }
+            ".fpu" | ".arch_extension" | ".object_arch" => {
+                let span = cur.peek().span;
+                let Some(arg) = word(cx, cur) else {
+                    cx.error(span, format!("`{name}` expects a name"));
+                    return true;
+                };
+                let ok = match name {
+                    ".fpu" => attrs::set_fpu(cx.state, &arg),
+                    ".arch_extension" => attrs::set_extension(cx.state, &arg),
+                    _ => attrs::set_object_arch(cx.state, &arg),
+                };
+                if !ok {
+                    cx.error(span, format!("`{name}` does not know `{arg}`"));
+                }
+                true
+            }
+            ".eabi_attribute" => {
+                eabi_attribute(cx, cur);
                 true
             }
             _ => false,
         }
     }
+}
+
+/// The rest of a word, as GNU as reads a CPU or unit name: `neon-vfpv4` and
+/// `armv8.1-m.main` are several tokens each, and the name runs to the next
+/// space. Lowercased, since GNU as matches these names case-insensitively.
+fn word(cx: &AsmCtx<'_>, cur: &mut Cursor<'_>) -> Option<String> {
+    if cur.peek().is_eol() {
+        return None;
+    }
+    let first = cur.peek();
+    let mut last = cur.advance();
+    // A comma ends it: `.eabi_attribute Tag_ABI_align8_needed, 1` writes one
+    // with nothing in between, and no name of GNU as's holds a comma.
+    while !cur.peek().is_eol()
+        && !cur.peek().preceded_by_space
+        && !cur.peek().is_punct(Punct::Comma)
+    {
+        last = cur.advance();
+    }
+    Some(
+        cx.sources
+            .span_text(first.span.to(last.span))
+            .to_ascii_lowercase(),
+    )
+}
+
+/// `.eabi_attribute <tag>, <value>`: the tag is a number or one of the names
+/// GNU as knows, and the value a number or a string. What it says replaces
+/// whatever the CPU and its unit gave that tag; see [`attrs`].
+fn eabi_attribute(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
+    let span = cur.peek().span;
+    let tag = match cur.peek().kind {
+        TokKind::Int(n) if n <= u64::from(u32::MAX) => {
+            cur.advance();
+            n as u32
+        }
+        _ => {
+            let Some(name) = word(cx, cur) else {
+                cx.error(span, "`.eabi_attribute` expects a tag");
+                return;
+            };
+            match attr_data::TAG_NAMES.iter().find(|&&(n, _)| n == name) {
+                Some(&(_, tag)) => tag,
+                None => {
+                    cx.error(span, format!("`.eabi_attribute` does not know `{name}`"));
+                    return;
+                }
+            }
+        }
+    };
+    if !cur.peek().is_punct(Punct::Comma) {
+        let span = cur.peek().span;
+        cx.error(span, "`.eabi_attribute` expects a comma and a value");
+        return;
+    }
+    cur.advance();
+    let span = cur.peek().span;
+    // The EABI's string tags: the two CPU names, `Tag_compatibility`,
+    // `Tag_also_compatible_with` and `Tag_conformance`. GNU as refuses the
+    // other spelling for either kind.
+    let wants_string = matches!(tag, 4 | 5 | 32 | 65 | 67);
+    let value = match cur.peek().kind {
+        TokKind::Int(n) if !wants_string => {
+            cur.advance();
+            crate::arch::AttrValue::Int(n)
+        }
+        TokKind::Str(i) if wants_string => {
+            cur.advance();
+            crate::arch::AttrValue::Str(String::from_utf8_lossy(cx.pool.get(i)).into_owned())
+        }
+        _ if wants_string => {
+            cx.error(span, format!("`.eabi_attribute` tag {tag} takes a string"));
+            cur.set_pos(cur.all().len());
+            return;
+        }
+        _ => {
+            cx.error(span, format!("`.eabi_attribute` tag {tag} takes a number"));
+            cur.set_pos(cur.all().len());
+            return;
+        }
+    };
+    cx.requests.push(Request::Attribute {
+        vendor: "aeabi",
+        tag,
+        value,
+    });
 }
 
 /// Switches between ARM and Thumb, as GNU as's `.arm` and `.thumb` do: the

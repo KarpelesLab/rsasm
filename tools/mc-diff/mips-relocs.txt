@@ -144,3 +144,22 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+
+=== .module says what the file needs of a floating-point unit
+        .module fp=64
+        .set    noreorder
+        .globl  f
+f:      add.s   $f0, $f1, $f2
+
+=== .module softfloat leaves no unit
+        .module softfloat
+        .set    noreorder
+        .globl  f
+f:      nop
+
+=== .module nooddspreg gives up the odd registers
+        .module fp=64
+        .module nooddspreg
+        .set    noreorder
+        .globl  f
+f:      nop

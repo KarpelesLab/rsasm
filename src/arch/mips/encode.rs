@@ -271,7 +271,19 @@ impl Args<'_> {
         }
     }
 
+    /// An integer register operand, recorded in the object's `.reginfo`;
+    /// see [`super::abi`]. Use [`Args::gpr_unused`] where the encoding does
+    /// not keep it.
     pub fn gpr(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
+        let r = self.gpr_unused(cx, i)?;
+        super::abi::mark(cx.state, r);
+        Some(r)
+    }
+
+    /// An integer register operand the caller may not encode: `bge $4, $zero`
+    /// is `bgez $4`, which has no field for the second register, so the
+    /// register masks must not count it.
+    pub fn gpr_unused(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
         let o = self.at(cx, i)?;
         match o.gpr() {
             Some(r) => Some(r),
@@ -290,10 +302,14 @@ impl Args<'_> {
         }
     }
 
+    /// A floating-point register operand, recorded in `ri_cprmask[1]`.
     pub fn fpr(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
         let o = self.at(cx, i)?;
         match o.fpr() {
-            Some(r) => Some(r),
+            Some(r) => {
+                super::abi::mark(cx.state, r);
+                Some(r)
+            }
             None => {
                 cx.error(
                     o.span,
@@ -309,6 +325,8 @@ impl Args<'_> {
         }
     }
 
+    /// A condition-flag operand, which no register mask counts; see
+    /// [`super::abi::mark`].
     pub fn fcc(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
         let o = self.at(cx, i)?;
         match o.fcc() {
@@ -358,10 +376,14 @@ impl Args<'_> {
         }
     }
 
+    /// An `offset(base)` operand; the base register goes into `.reginfo`.
     pub fn mem(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<super::operand::Mem> {
         let o = self.at(cx, i)?;
         match o.mem() {
-            Some(m) => Some(m),
+            Some(m) => {
+                super::abi::mark(cx.state, m.base);
+                Some(m)
+            }
             // `lw $a0, 8` with no base register is the commonest slip here,
             // and `describe` alone would not say what is missing.
             None => {
@@ -551,6 +573,11 @@ pub fn encode(
         }
         Form::Nullary => {
             a.arity(cx, 0)?;
+            // `nop` is `sll $zero, $zero, 0`, so it names a register where
+            // `ssnop` and `eret` are opcodes of their own and name none.
+            if base == 0 {
+                super::abi::mark_zero(cx.state);
+            }
             w.push(base);
         }
         Form::Break => {

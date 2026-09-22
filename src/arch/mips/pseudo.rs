@@ -77,6 +77,8 @@ pub fn expand(
         "move" | "not" | "neg" | "negu" => {
             a.arity(cx, 2)?;
             let (d, s) = (a.gpr(cx, 0)?, a.gpr(cx, 1)?);
+            // Each leaves `$zero` in the field it does not use.
+            super::abi::mark_zero(cx.state);
             w.push(match name {
                 "move" => rd(d.num) | rs(s.num) | OR,
                 "not" => rd(d.num) | rs(s.num) | NOR,
@@ -133,6 +135,8 @@ pub fn expand(
             a.arity(cx, 1)?;
             let target = a.imm(cx, 0)?;
             let word = if name == "b" { BEQ } else { BGEZAL };
+            // `beq $zero, $zero` and `bgezal $zero` both name it.
+            super::abi::mark_zero(cx.state);
             w.push_fixup(word, target.expr, branch_fixup(), target.span);
         }
 
@@ -141,14 +145,16 @@ pub fn expand(
             let s = a.gpr(cx, 0)?;
             let target = a.imm(cx, 1)?;
             let word = if name == "beqz" { BEQ } else { BNE };
+            // The register compared against is `$zero`.
+            super::abi::mark_zero(cx.state);
             w.push_fixup(word | rs(s.num), target.expr, branch_fixup(), target.span);
         }
 
         "bge" | "bgt" | "ble" | "blt" | "bgeu" | "bgtu" | "bleu" | "bltu" => {
             a.arity(cx, 3)?;
-            let (x, y) = (a.gpr(cx, 0)?, a.gpr(cx, 1)?);
+            let (x, y) = (a.gpr_unused(cx, 0)?, a.gpr_unused(cx, 1)?);
             let target = a.imm(cx, 2)?;
-            ordered_branch(&mut w, name, x, y, target);
+            ordered_branch(cx, &mut w, name, x, y, target);
         }
 
         _ => return None,
@@ -182,8 +188,11 @@ fn load_constant(cx: &mut AsmCtx<'_>, w: &mut Words, dest: Reg, v: Imm, narrow: 
     let lo = n32 & 0xffff;
     let hi = (n32 >> 16) & 0xffff;
     if (-0x8000..=0x7fff).contains(&n32) {
+        // The one-instruction forms add to, or or into, `$zero`.
+        super::abi::mark_zero(cx.state);
         w.push(narrow | rt(dest.num) | imm(n32));
     } else if (0..=0xffff).contains(&n32) {
+        super::abi::mark_zero(cx.state);
         w.push(ORI | rt(dest.num) | imm(n32));
     } else if lo == 0 {
         w.push(LUI | rt(dest.num) | imm(hi));
@@ -200,9 +209,13 @@ fn load_constant(cx: &mut AsmCtx<'_>, w: &mut Words, dest: Reg, v: Imm, narrow: 
 /// orderings, since `bltz`/`bgez`/`bgtz`/`blez` already test a register's
 /// sign. The unsigned orderings have no such shortcut — an unsigned value is
 /// never less than zero — so they always go through `sltu`.
-fn ordered_branch(w: &mut Words, name: &str, x: Reg, y: Reg, target: Imm) {
+fn ordered_branch(cx: &mut AsmCtx<'_>, w: &mut Words, name: &str, x: Reg, y: Reg, target: Imm) {
     let unsigned = name.ends_with('u');
+    super::abi::mark(cx.state, x);
     if !unsigned && y == reg::ZERO {
+        // `bgez` and its relatives have no field for the second register, so
+        // the `$zero` the source wrote is not in the object's masks.
+
         let word = match name {
             "bge" => BGEZ,
             "blt" => BLTZ,
@@ -221,6 +234,10 @@ fn ordered_branch(w: &mut Words, name: &str, x: Reg, y: Reg, target: Imm) {
         "bgt" => (y, x, true),
         _ => (y, x, false),
     };
+    super::abi::mark(cx.state, y);
+    super::abi::mark(cx.state, reg::AT);
+    // The branch compares the flag against `$zero`.
+    super::abi::mark_zero(cx.state);
     w.push(rd(reg::AT.num) | rs(lhs.num) | rt(rhs.num) | set);
     let branch = if branch_if_set { BNE } else { BEQ };
     w.push_fixup(

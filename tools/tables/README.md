@@ -13,6 +13,14 @@ and checked against it.
   which registers an operand may hold, and the element sizes a NEON type
   has -- comes from the operand kinds of gas's own `insns[]` in
   `gas/config/tc-arm.c`, or is written out in the script with the reason.
+- `arm-attrs.py` measures what `.arch`, `.cpu`, `.fpu`, `.arch_extension`,
+  `.object_arch` and `.eabi_attribute` put in `.ARM.attributes`, by
+  assembling the directive with `arm-none-eabi-as` under the command line
+  `tools/xas-diff` uses, and writes `src/arch/arm/attr_data.rs`. The names
+  come from binutils' own tables in `gas/config/tc-arm.c`. A CPU with one
+  unit, and a CPU with one extension, are reproduced exactly, and the script
+  assembles all 6,800 of the first and 1,600 of the second to prove it
+  before it writes anything.
 - `powerpc.py` reads binutils' `opcodes/ppc-opc.c` and writes
   `src/arch/powerpc/vector.rs` and the generated blocks of the PowerPC
   corpora; see its own `--help`.
@@ -38,6 +46,8 @@ $ tools/tables/aarch64.py fit --only '^fmov$' --dump forms.txt
 $ tools/tables/aarch64-probe.py 'sshr v0.8b, v1.8b, #3'   # one line, measured
 $ tools/tables/aarch64-sys.py table             # a few seconds
 $ tools/tables/aarch64-sys.py check
+$ tools/tables/arm-attrs.py table               # about five minutes
+$ tools/tables/arm-attrs.py check --quick       # a sample of the units
 ```
 
 ## How a form is found

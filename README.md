@@ -58,7 +58,7 @@ assembler, not against rsasm's own idea of the manual. See
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3052 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 530 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9488 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 732 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 736 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 190 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
@@ -143,7 +143,10 @@ but 18 forms where both manuals show MAME to be wrong.
   and narrowing forms, scalars and lanes, `vmov`'s modified immediate with
   the `cmode` GNU as picks for it, `vldm`/`vstm`/`vpush`/`vpop`, and the
   `vld1`-`vld4` and `vst1`-`vst4` structure transfers with their lists,
-  alignments and lane indices
+  alignments and lane indices; and the `.ARM.attributes` GNU as writes into
+  every ARM object, without which `objdump` disassembles it against a default
+  CPU -- with `.arch`, `.cpu`, `.fpu`, `.arch_extension`, `.object_arch` and
+  `.eabi_attribute` to change it
 - AArch64 the same way: literal pools (`ldr x0, =0x123456789`, `ldr w0, =sym`,
   `.ltorg`, `.pool`) with `$x`/`$d` mapping symbols, and the system
   instructions with every operand name GNU as knows — `dc`, `ic`, `at`,
@@ -161,6 +164,14 @@ but 18 forms where both manuals show MAME to be wrong.
   objects prepared for linker relaxation, with every branch relocated, local
   labels in the relocations, `EF_AVR_LINKRELAX_PREPARED` in `e_flags`, and
   `.align` and `.org` in code recorded in `.avr.prop`
+- the sections a reference writes into every object of its own accord, which
+  say what a linker and a loader may do with it: ARM's `.ARM.attributes`,
+  RISC-V's `.riscv.attributes` (the ISA string, and `.attribute` to change
+  it), MIPS's `.reginfo` or `.MIPS.options` with the register masks and its
+  `.MIPS.abiflags` (which `.module` changes), V850's `.note.renesas`,
+  MSP430's `.MSP430.attributes`, and the `.gnu.attributes` that
+  `.gnu_attribute` asks for, which on PowerPC is where the floating-point ABI
+  is recorded
 - MSP430 objects as GNU as writes them for a linker that relaxes code: every
   reference from code relocated, differences of code labels as
   `R_MSP430_SYM_DIFF` pairs (in the line table too), the `.MSP430.attributes`
@@ -237,7 +248,23 @@ but 18 forms where both manuals show MAME to be wrong.
 - RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
   as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
   `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
-  `%tls_*` and `%got_pcrel_hi` modifiers
+  `%tls_*` and `%got_pcrel_hi` modifiers; `.attribute arch` writes the ISA
+  string as the source gave it, where GNU as reads it and writes back what it
+  makes of it, so a string that leaves an implied extension out is not
+  expanded, and neither it nor `.option arch` changes which instructions are
+  accepted
+- MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
+  writes and llvm-mc, the reference here, does not; and the `.module` options
+  that would change which instructions are accepted (the ISA names, the
+  application-specific extensions), where the ones that only describe the
+  floating-point unit are there
+- ARM: `.arch`, `.cpu`, `.fpu` and `.arch_extension` say what the object was
+  built for without changing which instructions this backend accepts, so
+  `.arch armv4t` does not refuse an ARMv7 instruction as GNU as would. A
+  second `.arch_extension`, or one beside an `.fpu`, takes each tag's largest
+  value rather than merging feature bits as GNU as does; one on its own is
+  exactly what GNU as writes, and `tools/tables/arm-attrs.py` checks every
+  such pair
 - 6502: the 65C02 and later instruction sets; in ca65 source, cheap local
   (`@loop`) and unnamed (`:`, `:-`) labels, `.proc`/`.scope`, `.struct`, and
   the `ZEROPAGE` segment's zero-page addressing for labels defined in it
@@ -274,7 +301,7 @@ separately:
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
-backend. Three such choices are worth knowing about:
+backend. Four such choices are worth knowing about:
 
 - **Which references are left to the linker.** A PC-relative reference to a
   global or weak symbol is relocated even when the symbol is in the same
@@ -297,6 +324,15 @@ backend. Three such choices are worth knowing about:
   compressed instructions, 4 for m68k `.text`, `.data` and `.bss`, and 1
   otherwise, including on x86, where GNU as is followed and llvm-mc's `.text`
   is 4.
+- **The build attributes.** The section a reference writes of its own accord
+  is the one that reference's, and where they differ so does rsasm: ARM's
+  `.ARM.attributes` is GNU as's, which llvm-mc does not write at all unless
+  the source asks for one, and MIPS's `.reginfo` and `.MIPS.abiflags` are
+  llvm-mc's: GNU as writes the same `.MIPS.abiflags`, a `.reginfo` without
+  `SHF_ALLOC`, and beside them a `.pdr` and a `.gnu.attributes` that rsasm
+  writes neither of. RISC-V's `.riscv.attributes` is the same in both.
+  `tools/mc-diff` leaves `.ARM.attributes` out of its comparison for that
+  reason, and `tools/xas-diff` compares it.
 - **m68k floating-point immediates.** Both references write a single or
   double precision `#1.5` the same way. An extended-precision one GNU as 2.47
   writes without the 16 zero bits of the 68881 format — its own `.extend`
@@ -848,7 +884,16 @@ Three differences remain, and the corpora leave them out:
 ## Verification
 
 Ten differential harnesses assemble the same source with rsasm and with an
-independent assembler, and compare the bytes:
+independent assembler, and compare the bytes.
+
+Where a harness compares whole objects, it compares every section a
+reference writes of its own accord along with the ones the source asked for:
+the build attributes (`.ARM.attributes`, `.riscv.attributes`,
+`.MSP430.attributes`, `.gnu.attributes`), MIPS's `.reginfo`,
+`.MIPS.options` and `.MIPS.abiflags`, V850's `.note.renesas`, AVR's
+`.avr.prop` — and the header's `e_flags`. Those sections say what a linker
+and a loader may do with the object, and leaving them out of the comparison
+is what hid them from rsasm for as long as it did.
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.

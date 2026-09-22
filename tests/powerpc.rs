@@ -1108,3 +1108,29 @@ fn malformed_vector_input_never_panics() {
         }
     }
 }
+
+/// `.gnu_attribute` is where a PowerPC object records the floating-point and
+/// vector ABIs a linker refuses to mix. Neither reference writes the section
+/// of its own accord, so the directive is what brings it into being.
+///
+/// Both strings are `powerpc64-linux-gnu-objcopy --dump-section
+/// .gnu.attributes` of the reference's object; the lengths follow the
+/// object's byte order.
+#[test]
+fn gnu_attribute_records_the_abi() {
+    let src = "\t.gnu_attribute 4, 1\n\t.gnu_attribute 8, 2\n\tnop\n";
+    for (arch, want) in [
+        (
+            "powerpc",
+            "41 00 00 00 11 67 6e 75 00 01 00 00 00 09 04 01 08 02",
+        ),
+        (
+            "powerpc64le",
+            "41 11 00 00 00 67 6e 75 00 01 09 00 00 00 04 01 08 02",
+        ),
+    ] {
+        let asm = assemble_for(arch, src);
+        assert!(!asm.diags().has_errors(), "{arch}");
+        assert_eq!(hex(&section(&asm, ".gnu.attributes")), want, "{arch}");
+    }
+}

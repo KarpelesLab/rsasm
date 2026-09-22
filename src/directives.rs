@@ -224,7 +224,7 @@ impl Assembler {
 
             // ---- files and configuration ----------------------------------
             ".include" => self.dir_include(&mut cur, span),
-            ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
+            ".arch" | ".cpu" => self.dir_arch(&mut cur, span, text == ".cpu"),
             // ---- debugging information ------------------------------------
             // A COFF object records the source file name as a symbol of its
             // own; the numbered form is DWARF's either way.
@@ -261,6 +261,13 @@ impl Assembler {
                 true
             }
             _ if text.starts_with(".cfi_") => self.dir_cfi(&text, &mut cur, span),
+            // ---- build attributes -----------------------------------------
+            // Every ELF target has this one: the vendor-neutral attributes,
+            // which on PowerPC record the floating-point and vector ABIs a
+            // linker refuses to mix. A target's own directive
+            // (`.eabi_attribute`, `.attribute`) is the backend's.
+            ".gnu_attribute" => self.dir_gnu_attribute(&mut cur, span),
+
             // Recognised and ignored: they carry no information this assembler
             // acts on yet, and rejecting them would break real-world input.
             ".ident" | ".version" | ".line" => {
@@ -1355,7 +1362,62 @@ impl Assembler {
         true
     }
 
-    fn dir_arch(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+    /// `.gnu_attribute <tag>, <value>`: one of the object's vendor-neutral
+    /// build attributes, which on PowerPC is where the floating-point and
+    /// vector ABIs a linker refuses to mix are recorded. Every ELF target
+    /// has the directive and none writes these tags of its own accord.
+    ///
+    /// They land beside the processor's where the target has a
+    /// build-attributes section of its own, as they do in GNU as for ARM and
+    /// RISC-V, and in a `.gnu.attributes` where it has none, as on MIPS and
+    /// PowerPC; see `Assembler::attribute_sections`. GNU as for MSP430 drops
+    /// them instead, which looks like an oversight rather than a rule, so
+    /// rsasm writes them there too.
+    ///
+    /// The tag is a number, and the value a number or a string.
+    fn dir_gnu_attribute(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        let tok = cur.peek();
+        let TokKind::Int(tag) = tok.kind else {
+            self.diags
+                .error(tok.span, "`.gnu_attribute` expects a tag number");
+            cur.set_pos(cur.all().len());
+            return true;
+        };
+        if tag > u64::from(u32::MAX) {
+            self.diags
+                .error(tok.span, "`.gnu_attribute` tag is too large");
+            cur.set_pos(cur.all().len());
+            return true;
+        }
+        cur.advance();
+        if !cur.peek().is_punct(Punct::Comma) {
+            self.diags
+                .error(span, "`.gnu_attribute` expects a comma and a value");
+            cur.set_pos(cur.all().len());
+            return true;
+        }
+        cur.advance();
+        let tok = cur.peek();
+        let value = match tok.kind {
+            TokKind::Int(n) => crate::arch::AttrValue::Int(n),
+            TokKind::Str(i) => {
+                crate::arch::AttrValue::Str(String::from_utf8_lossy(self.pool.get(i)).into_owned())
+            }
+            _ => {
+                self.diags
+                    .error(tok.span, "`.gnu_attribute` expects a number or a string");
+                cur.set_pos(cur.all().len());
+                return true;
+            }
+        };
+        cur.advance();
+        self.attr_overrides
+            .retain(|&(v, t, _)| (v, t) != ("gnu", tag as u32));
+        self.attr_overrides.push(("gnu", tag as u32, value));
+        true
+    }
+
+    fn dir_arch(&mut self, cur: &mut Cursor<'_>, span: Span, cpu: bool) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
             TokKind::Str(i) => {
@@ -1390,6 +1452,17 @@ impl Assembler {
                 return true;
             }
         };
+        // On ARM the directive names a CPU of the backend's own, which only
+        // changes what the build attributes say; see
+        // `Architecture::selects_cpu`.
+        let mut state = self.arch_state.clone();
+        if self
+            .arch
+            .selects_cpu(&mut state, &name.to_ascii_lowercase(), cpu)
+        {
+            self.arch_state = state;
+            return true;
+        }
         match crate::arch::lookup(&name) {
             Some(a) => self.switch_arch(a),
             None => {

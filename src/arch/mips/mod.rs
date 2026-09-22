@@ -13,6 +13,7 @@
 //! as `li` and `la` are still expanded, since almost no real source avoids
 //! them.
 
+pub(crate) mod abi;
 pub mod encode;
 pub mod insn;
 pub mod operand;
@@ -28,6 +29,18 @@ use encode::Args;
 use operand::{Operand, OperandParser};
 
 pub const NAMES: &[&str] = &["mips", "mipsel", "mips64", "mips64el"];
+
+/// `ArchState::features` bit: the source has said `.set noreorder`, which
+/// the header records as `EF_MIPS_NOREORDER`.
+const FEATURE_NOREORDER: u64 = 1;
+/// `ArchState::features` bit: `.module fp=64`, a 64-bit floating-point file
+/// on a 32-bit target.
+pub(crate) const FEATURE_FP64: u64 = 2;
+/// `ArchState::features` bit: `.module softfloat`, no floating-point unit.
+pub(crate) const FEATURE_SOFTFLOAT: u64 = 4;
+/// `ArchState::features` bit: `.module nooddspreg`, which gives up the odd
+/// single-precision registers.
+pub(crate) const FEATURE_NO_ODD_SPREG: u64 = 8;
 
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     let (canonical, endian, bits) = match name {
@@ -87,14 +100,22 @@ impl Architecture for Mips {
         8 // EM_MIPS
     }
 
+    /// `.reginfo` (or, on n64, `.MIPS.options`) and `.MIPS.abiflags`, which
+    /// llvm-mc writes into every MIPS object; see [`abi`].
+    fn elf_attributes(&self, state: &ArchState) -> Vec<crate::arch::AttrSection> {
+        abi::sections(self.bits, self.endian, state)
+    }
+
     /// What llvm-mc writes for the default CPUs: MIPS32 with the o32 ABI and
-    /// `EF_MIPS_CPIC`, or MIPS64 (n64 has no ABI bits) with `EF_MIPS_CPIC`.
-    fn elf_flags(&self, _state: &ArchState) -> u32 {
-        if self.bits == 64 {
+    /// `EF_MIPS_CPIC`, or MIPS64 (n64 has no ABI bits) with `EF_MIPS_CPIC`,
+    /// plus `EF_MIPS_NOREORDER` once the source has said `.set noreorder`.
+    fn elf_flags(&self, state: &ArchState) -> u32 {
+        let base = if self.bits == 64 {
             0x6000_0004
         } else {
             0x5000_1004
-        }
+        };
+        base | u32::from(state.features & FEATURE_NOREORDER != 0)
     }
 
     fn align_is_log2(&self) -> bool {
@@ -186,7 +207,9 @@ impl Architecture for Mips {
     ///
     /// rsasm assembles exactly what is written: it never moves an instruction
     /// into a delay slot and never inserts a `nop` after a branch. That is
-    /// `.set noreorder`, so that option is accepted and changes nothing.
+    /// `.set noreorder`, so that option is accepted; all it changes is the
+    /// header's `EF_MIPS_NOREORDER`, which both references set once a file
+    /// has said it.
     ///
     /// `.set reorder` is refused rather than ignored, because the difference
     /// is not cosmetic. Under `reorder` the assembler fills the delay slot,
@@ -195,6 +218,10 @@ impl Architecture for Mips {
     /// delay slot and runs on both paths. Accepting `reorder` while behaving
     /// as `noreorder` would assemble a different program without a word.
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
+        if name == ".module" {
+            self.module(cx, cur);
+            return true;
+        }
         if name != ".set" {
             return false;
         }
@@ -217,10 +244,18 @@ impl Architecture for Mips {
             // Options whose effect rsasm already has, or that only make an
             // assembler stricter about what it accepts and never change an
             // encoding, so accepting them silently is safe.
-            "noreorder" | "noat" | "at" | "nomacro" | "macro" | "push" | "pop" | "nomips16"
-            | "nomicromips" | "mips1" | "mips2" | "mips3" | "mips4" | "mips5" | "mips32"
-            | "mips32r2" | "mips32r6" | "mips64" | "mips64r2" | "mips64r6" | "hardfloat"
-            | "softfloat" | "nodsp" => {
+            // The object records that the file said it, and keeps the
+            // record even if a `.set reorder` followed, as both references
+            // do; rsasm refuses that one anyway.
+            "noreorder" => {
+                cur.advance();
+                cx.state.features |= FEATURE_NOREORDER;
+                true
+            }
+            "noat" | "at" | "nomacro" | "macro" | "push" | "pop" | "nomips16" | "nomicromips"
+            | "mips1" | "mips2" | "mips3" | "mips4" | "mips5" | "mips32" | "mips32r2"
+            | "mips32r6" | "mips64" | "mips64r2" | "mips64r6" | "hardfloat" | "softfloat"
+            | "nodsp" | "oddspreg" | "nooddspreg" => {
                 cur.advance();
                 true
             }
@@ -262,5 +297,67 @@ impl Architecture for Mips {
         // Every MIPS instruction is one word wide, so there is never more than
         // one candidate for the layout pass to choose between.
         encode::encode(cx, &def, &args, self.endian, self.bits == 64).map(|v| vec![v])
+    }
+}
+
+impl Mips {
+    /// `.module <option>`, which says what the *file* needs of a processor
+    /// rather than what one instruction does, and so lands in
+    /// `.MIPS.abiflags`; see [`abi`].
+    ///
+    /// The options both references take to the same effect are here:
+    /// `fp=32` and `fp=64` for the width of the floating-point file,
+    /// `softfloat` and `hardfloat`, and `oddspreg` and `nooddspreg` for the
+    /// odd single-precision registers. The rest — the ISA names, the
+    /// application-specific extensions — would change which instructions are
+    /// accepted, which this backend does not vary, and are refused rather
+    /// than ignored.
+    fn module(&self, cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
+        let tok = cur.peek();
+        let Some(n) = tok.ident() else {
+            cx.error(tok.span, "`.module` needs an option");
+            cur.set_pos(cur.all().len());
+            return;
+        };
+        let mut word = cx.name(n).to_ascii_lowercase();
+        cur.advance();
+        // `fp=32` lexes as `fp`, `=`, `32`.
+        if word == "fp" && cur.peek().is_punct(crate::lexer::Punct::Eq) {
+            cur.advance();
+            if let crate::lexer::TokKind::Int(v) = cur.peek().kind {
+                cur.advance();
+                word = format!("fp={v}");
+            }
+        }
+        let wide = self.bits == 64;
+        match word.as_str() {
+            // A 64-bit target's floating-point file is 64 bits already, and
+            // neither reference lets it be anything else.
+            "fp=64" if wide => {}
+            "fp=32" if wide => cx.error(
+                tok.span,
+                "`.module fp=32` is not allowed on a 64-bit MIPS target",
+            ),
+            "fp=32" => cx.state.features &= !FEATURE_FP64,
+            "fp=64" => cx.state.features |= FEATURE_FP64,
+            "softfloat" => cx.state.features |= FEATURE_SOFTFLOAT,
+            "hardfloat" => cx.state.features &= !FEATURE_SOFTFLOAT,
+            "oddspreg" if wide => {}
+            "nooddspreg" if wide => cx.error(
+                tok.span,
+                "`.module nooddspreg` is not allowed on a 64-bit MIPS target",
+            ),
+            "oddspreg" => cx.state.features &= !FEATURE_NO_ODD_SPREG,
+            "nooddspreg" => cx.state.features |= FEATURE_NO_ODD_SPREG,
+            _ => cx.error(
+                tok.span,
+                format!(
+                    "`.module {word}` is not an option rsasm understands: it takes \
+                     `fp=32`, `fp=64`, `softfloat`, `hardfloat`, `oddspreg` and \
+                     `nooddspreg`, which are what `.MIPS.abiflags` records"
+                ),
+            ),
+        }
+        cur.set_pos(cur.all().len());
     }
 }
