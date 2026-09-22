@@ -78,8 +78,9 @@ and neither is rsasm's, so it is still an independent source, and it reaches
 every operand value a form allows rather than the ones someone thought to
 write down.
 
-Two things have to be put right for a disassembled line to mean the same
-thing again:
+Three things have to be put right for a disassembled line to mean the same
+thing again, and each target says which of them its lines need in its own
+script:
 
 * **Where it sits.** A branch prints the address it lands on, so a case
   carries the `.skip` that puts it back at the offset it was read from. A
@@ -90,7 +91,17 @@ thing again:
   *displacement* where its own disassembler prints an *address*, so those
   lines do not read back as themselves; SPARC's `call` and branches become
   `.`-relative, which also keeps llvm-mc away from a fixup it crashes on.
-  Each target says what its lines need in its own script.
+  MIPS needs the same for a branch, and for a different reason: rsasm and
+  GNU as read a bare number there as an address and llvm-mc as the
+  displacement itself, and GNU as cannot resolve an address against a
+  section it is still assembling, so it leaves a `R_MIPS_PC16` against
+  `*ABS*` that overflows. `. + d` means one thing to all three.
+* **How a register is spelled.** MIPS objdump prints a general-purpose
+  register by its ABI name and without the `$` sigil -- `swl v1,-27583(t7)`
+  -- which no MIPS assembler reads back, so it is asked for numbers
+  (`-M gpr-names=numeric`). Without that, and without the branch targets
+  above, 95% of the MIPS cases were refused by all three tools for their
+  spelling and compared nothing.
 
 What a backend does not implement is skipped by name, with the reason in the
 script, so that a missing extension cannot read as thousands of identical
@@ -607,7 +618,18 @@ Running them found, in SPARC: `mov<cc> %fccN` encoded with the integer
 condition codes instead of the floating-point ones, `movre`/`movrne`, the
 missing `swap`, `ldstub`, `taddcctv`, `tsubcctv`, `clrb`/`clrh`/`clrx` and
 `b`, an address whose base register is the hardwired zero (`[ 0x66 ]`,
-`jmpl -2347, %l2`), and the two-operand trap written as one address. MIPS,
+`jmpl -2347, %l2`), and the two-operand trap written as one address.
+
+In MIPS, once the register spelling and the branch targets above made the
+cases comparable: the immediate traps (`tgei`, `tgeiu`, `tlti`, `tltiu`,
+`teqi`, `tnei`), every branch-likely form (`beql`, `bnel`, `blezl`,
+`bgtzl`, `bltzl`, `bgezl`, `bltzall`, `bgezall`, `bc1fl`, `bc1tl`, and the
+`beqzl` and `bnezl` macros), `dneg` and `dnegu`, and a linking REGIMM
+branch written on `$ra`, which GNU as refuses and rsasm now refuses too.
+Two conventions are left, both recorded in `mips.py`: llvm-mc rounds a
+double in an odd floating-point register down to the even half of the pair
+where GNU as encodes the number written, and it assembles that `bltzal $ra`.
+
 SuperH, RX, V850 and the Z80 found nothing, and the RL78's two are GNU as's:
 it wraps the field of the `br $!` it expands a long branch into, and it
 writes six bytes where a three-byte conditional branch still reaches.

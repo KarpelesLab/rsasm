@@ -139,6 +139,9 @@ fn register_aliases_are_real_instructions() {
     // Negation subtracts from zero, so the operand lands in `rt`.
     enc("neg $4, $5", "00 05 20 22");
     enc("negu $4, $5", "00 05 20 23");
+    // The doubleword negations are `dsub` and `dsubu` the same way.
+    enc64("dneg $4, $5", "00 05 20 2e");
+    enc64("dnegu $4, $5", "00 05 20 2f");
 }
 
 #[test]
@@ -178,6 +181,15 @@ fn system_instructions() {
     // A trap's optional code sits in bits 15..6.
     enc("teq $4, $5, 7", "00 85 01 f4");
     enc("tne $4, $5, 1023", "00 85 ff f6");
+    // The same six conditions against an immediate are REGIMM, selected by
+    // the field a branch uses for its second register.
+    enc("tgei $4, 0", "04 88 00 00");
+    enc("tgei $4, -1", "04 88 ff ff");
+    enc("tgeiu $4, 32767", "04 89 7f ff");
+    enc("tlti $5, -32768", "04 aa 80 00");
+    enc("tltiu $5, -1", "04 ab ff ff");
+    enc("teqi $6, 1234", "04 cc 04 d2");
+    enc("tnei $7, -1234", "04 ee fb 2e");
     enc("mfc0 $4, $12", "40 04 60 00");
     enc("mtc0 $4, $12", "40 84 60 00");
     enc("mfc0 $4, $12, 1", "40 04 60 01");
@@ -227,6 +239,18 @@ fn branches_are_measured_from_the_delay_slot() {
     enc("foo: bgezal $a0, foo", "04 91 ff ff");
     enc("foo: bc1f foo", "45 00 ff ff");
     enc("foo: bc1t foo", "45 01 ff ff");
+    // The MIPS II "likely" twins, which annul the delay slot when the branch
+    // is not taken.
+    enc("foo: beql $1, $2, foo", "50 22 ff ff");
+    enc("foo: bnel $a0, $a1, foo", "54 85 ff ff");
+    enc("foo: blezl $a0, foo", "58 80 ff ff");
+    enc("foo: bgtzl $a0, foo", "5c 80 ff ff");
+    enc("foo: bltzl $a0, foo", "04 82 ff ff");
+    enc("foo: bgezl $a0, foo", "04 83 ff ff");
+    enc("foo: bltzall $a0, foo", "04 92 ff ff");
+    enc("foo: bgezall $a0, foo", "04 93 ff ff");
+    enc("foo: bc1fl foo", "45 02 ff ff");
+    enc("foo: bc1tl foo", "45 03 ff ff");
     enc(
         "foo: addiu $4, $4, 1\naddiu $5, $5, -1\nbeq $4, $5, foo",
         "24 84 00 01 24 a5 ff ff 10 85 ff fd",
@@ -245,6 +269,8 @@ fn branch_pseudo_instructions() {
     enc("foo: bal foo", "04 11 ff ff");
     enc("foo: beqz $v0, foo", "10 40 ff ff");
     enc("foo: bnez $v0, foo", "14 40 ff ff");
+    enc("foo: beqzl $v0, foo", "50 40 ff ff");
+    enc("foo: bnezl $v0, foo", "54 40 ff ff");
     // The ordered branches compute the predicate into $at first.
     enc("foo: bge $a0, $a1, foo", "00 85 08 2a 10 20 ff fe");
     enc("foo: bgt $a0, $a1, foo", "00 a4 08 2a 14 20 ff fe");
@@ -466,6 +492,27 @@ fn a_misaligned_branch_target_is_an_error() {
     assert!(e.contains("not a multiple of 4"), "{e}");
 }
 
+/// GNU as refuses a linking REGIMM branch written on `$ra`: the branch
+/// overwrites the register it tested, so an exception that restarts the
+/// instruction finds the link in place of the value. llvm-mc assembles it;
+/// rsasm follows GNU as. The non-linking forms take `$ra` as any other
+/// register, and so does `bal`, which is `bgezal $zero`.
+#[test]
+fn a_linking_branch_may_not_test_the_register_it_links_through() {
+    for src in [
+        "foo: bltzal $ra, foo",
+        "foo: bgezal $ra, foo",
+        "foo: bltzall $ra, foo",
+        "foo: bgezall $31, foo",
+    ] {
+        let e = errors_for("mips", src);
+        assert!(e.contains("may not be $ra"), "{src}: {e}");
+    }
+    enc("foo: bltz $ra, foo", "07 e0 ff ff");
+    enc("foo: bgez $ra, foo", "07 e1 ff ff");
+    enc("foo: bal foo", "04 11 ff ff");
+}
+
 #[test]
 fn bad_operands_are_diagnosed() {
     assert!(errors_for("mips", "add $1, $2").contains("operand"));
@@ -676,6 +723,66 @@ fn objects_carry_the_register_masks_and_abi_flags() {
             "\tnop\n",
             ".MIPS.abiflags",
             "00 00 40 01 02 02 00 01 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+    ] {
+        let asm = assemble_for(arch, src);
+        assert!(!asm.diags().has_errors(), "{arch}: {src}");
+        assert_eq!(
+            hex(&section(&asm, name)),
+            want.split_whitespace().collect::<Vec<_>>().join(" "),
+            "{arch} {name}: {src}"
+        );
+    }
+}
+
+/// Where the floating-point registers are 32 bits wide, a double lives in an
+/// even register and the odd one above it, and the masks count both halves of
+/// every operand that holds one. A 64-bit target, or `.module fp=64`, puts a
+/// double in a single register and counts one.
+///
+/// Every expected string is `llvm-objcopy --dump-section` of llvm-mc's object
+/// for the matching triple. GNU as agrees on all of these but the mixed
+/// conversion, where it pairs the single-precision operand too; see
+/// `src/arch/mips/abi.rs`.
+#[test]
+fn a_double_on_a_32_bit_floating_point_file_names_a_register_pair() {
+    for (arch, src, name, want) in [
+        (
+            "mips",
+            "\tadd.d $f4, $f6, $f8\n",
+            ".reginfo",
+            "00 00 00 00 00 00 00 00 00 00 03 f0 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mipsel",
+            "\tadd.d $f4, $f6, $f8\n",
+            ".reginfo",
+            "00 00 00 00 00 00 00 00 f0 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\tcvt.d.s $f4, $f6\n",
+            ".reginfo",
+            "00 00 00 00 00 00 00 00 00 00 00 70 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\tldc1 $f4, 0($sp)\n\tlwc1 $f6, 0($sp)\n",
+            ".reginfo",
+            "20 00 00 00 00 00 00 00 00 00 00 70 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\t.module fp=64\n\tadd.d $f4, $f6, $f8\n",
+            ".reginfo",
+            "00 00 00 00 00 00 00 00 00 00 01 50 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips64",
+            "\tadd.d $f4, $f6, $f8\n",
+            ".MIPS.options",
+            "01 28 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 50 \
+             00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
         ),
     ] {
         let asm = assemble_for(arch, src);

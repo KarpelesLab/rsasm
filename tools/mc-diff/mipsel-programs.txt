@@ -144,6 +144,66 @@ foo:
 bc1t foo
 .p2align 6
 
+=== beql backward
+foo:
+beql $1, $2, foo
+.p2align 6
+
+=== bnel
+foo:
+bnel $a0, $a1, foo
+.p2align 6
+
+=== blezl
+foo:
+blezl $a0, foo
+.p2align 6
+
+=== bgtzl
+foo:
+bgtzl $a0, foo
+.p2align 6
+
+=== bltzl
+foo:
+bltzl $a0, foo
+.p2align 6
+
+=== bgezl
+foo:
+bgezl $a0, foo
+.p2align 6
+
+=== bltzall
+foo:
+bltzall $a0, foo
+.p2align 6
+
+=== bgezall
+foo:
+bgezall $a0, foo
+.p2align 6
+
+=== beqzl
+foo:
+beqzl $v0, foo
+.p2align 6
+
+=== bnezl
+foo:
+bnezl $v0, foo
+.p2align 6
+
+=== bc1fl
+foo:
+bc1fl foo
+.p2align 6
+
+=== bc1tl
+foo:
+bc1tl foo
+.p2align 6
+
 === a backwards loop
 loop:
 lw $t0, 0($a0)

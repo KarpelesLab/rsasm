@@ -21,6 +21,8 @@ const OR: u32 = 0x25;
 const NOR: u32 = 0x27;
 const SUB: u32 = 0x22;
 const SUBU: u32 = 0x23;
+const DSUB: u32 = 0x2e;
+const DSUBU: u32 = 0x2f;
 const SLT: u32 = 0x2a;
 const SLTU: u32 = 0x2b;
 
@@ -30,6 +32,8 @@ const ORI: u32 = 0x0d << 26;
 const LUI: u32 = 0x0f << 26;
 const BEQ: u32 = 0x04 << 26;
 const BNE: u32 = 0x05 << 26;
+const BEQL: u32 = 0x14 << 26;
+const BNEL: u32 = 0x15 << 26;
 const BLEZ: u32 = 0x06 << 26;
 const BGTZ: u32 = 0x07 << 26;
 const REGIMM: u32 = 0x01 << 26;
@@ -46,12 +50,16 @@ pub fn is_pseudo(name: &str) -> bool {
             | "not"
             | "neg"
             | "negu"
+            | "dneg"
+            | "dnegu"
             | "li"
             | "la"
             | "b"
             | "bal"
             | "beqz"
             | "bnez"
+            | "beqzl"
+            | "bnezl"
             | "bge"
             | "bgt"
             | "ble"
@@ -72,10 +80,19 @@ pub fn expand(
 ) -> Option<Variant> {
     let mut w = Words::new(endian);
     match name {
-        // Three register-to-register aliases, each an arithmetic instruction
-        // with `$zero` in one slot.
-        "move" | "not" | "neg" | "negu" => {
+        // Register-to-register aliases, each an arithmetic instruction with
+        // `$zero` in one slot.
+        "move" | "not" | "neg" | "negu" | "dneg" | "dnegu" => {
             a.arity(cx, 2)?;
+            // The doubleword negations expand to `dsub` and `dsubu`, which
+            // only a 64-bit implementation has.
+            if !is64 && name.starts_with('d') {
+                cx.error(
+                    a.span,
+                    format!("`{name}` is a 64-bit instruction; this target is 32-bit MIPS"),
+                );
+                return None;
+            }
             let (d, s) = (a.gpr(cx, 0)?, a.gpr(cx, 1)?);
             // Each leaves `$zero` in the field it does not use.
             super::abi::mark_zero(cx.state);
@@ -84,7 +101,9 @@ pub fn expand(
                 "not" => rd(d.num) | rs(s.num) | NOR,
                 // Negation subtracts *from* zero, so the source is `rt`.
                 "neg" => rd(d.num) | rt(s.num) | SUB,
-                _ => rd(d.num) | rt(s.num) | SUBU,
+                "negu" => rd(d.num) | rt(s.num) | SUBU,
+                "dneg" => rd(d.num) | rt(s.num) | DSUB,
+                _ => rd(d.num) | rt(s.num) | DSUBU,
             });
         }
 
@@ -140,11 +159,18 @@ pub fn expand(
             w.push_fixup(word, target.expr, branch_fixup(), target.span);
         }
 
-        "beqz" | "bnez" => {
+        // Each compares a register against `$zero`; the `l` spellings pick
+        // the branch that annuls its delay slot.
+        "beqz" | "bnez" | "beqzl" | "bnezl" => {
             a.arity(cx, 2)?;
             let s = a.gpr(cx, 0)?;
             let target = a.imm(cx, 1)?;
-            let word = if name == "beqz" { BEQ } else { BNE };
+            let word = match name {
+                "beqz" => BEQ,
+                "bnez" => BNE,
+                "beqzl" => BEQL,
+                _ => BNEL,
+            };
             // The register compared against is `$zero`.
             super::abi::mark_zero(cx.state);
             w.push_fixup(word | rs(s.num), target.expr, branch_fixup(), target.span);

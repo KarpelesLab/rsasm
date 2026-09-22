@@ -150,3 +150,52 @@ f:      nop
         .set    noreorder
         .globl  f
 f:      nop
+
+=== a double-precision operand names a register pair
+        .set    noreorder
+        .globl  f
+f:      add.d   $f4, $f6, $f8
+        div.d   $f10, $f12, $f14
+        mov.d   $f16, $f18
+        neg.d   $f20, $f22
+        sqrt.d  $f24, $f26
+        c.eq.d  $f28, $f30
+        c.ult.d $f0, $f2
+        ldc1    $f4, 8($sp)
+        sdc1    $f6, 16($a0)
+
+=== single precision and the integer formats name one register each
+        .set    noreorder
+        .globl  f
+f:      add.s   $f4, $f6, $f8
+        mov.s   $f10, $f11
+        abs.s   $f12, $f13
+        c.eq.s  $f14, $f15
+        lwc1    $f16, 8($sp)
+        swc1    $f17, 16($a0)
+        mtc1    $4, $f18
+        mfc1    $5, $f19
+        round.w.s $f20, $f21
+
+=== a mixed-format conversion pairs only the operands that hold a double
+        .set    noreorder
+        .globl  f
+f:      cvt.d.s $f4, $f6
+        cvt.s.d $f8, $f10
+        cvt.d.w $f12, $f14
+        cvt.w.d $f16, $f18
+        trunc.w.d $f20, $f22
+        floor.w.d $f24, $f26
+        ceil.w.d $f28, $f30
+
+=== .module fp=64 puts a double in one register
+        .module fp=64
+        .set    noreorder
+        .globl  f
+f:      add.d   $f4, $f5, $f6
+        mov.d   $f7, $f8
+        c.eq.d  $f9, $f10
+        ldc1    $f11, 8($sp)
+        sdc1    $f12, 16($a0)
+        cvt.d.s $f13, $f14
+        trunc.w.d $f15, $f16
