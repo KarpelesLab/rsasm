@@ -1,0 +1,126 @@
+# MSP430 programs for tools/link-diff.
+#
+# GNU as for MSP430 writes objects for a linker that relaxes: every reference
+# from code is relocated, and a difference of two code labels becomes an
+# `R_MSP430_SYM_DIFF` pair. Each program is linked with `--no-relax` and
+# again with the relaxation those records are for.
+
+=== calls and branches between objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        call    #helper
+        br      #helper
+        jmp     local
+local:
+        call    #weakfn
+        mov     #helper, r12
+        mov.w   &target, r13
+        ret
+--- b.s
+        .text
+        .globl  helper, target
+        .weak   weakfn
+        .type   helper, @function
+helper:
+        call    #_start
+        br      #_start
+        ret
+weakfn:
+        ret
+target: .word   0
+
+=== absolute references to another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        mov     #target, r12
+        mov     #bssvar, r13
+        mov     #rodata, r14
+        mov     #target + 8, r15
+        mov.w   &bssvar, r11
+        ret
+--- b.s
+        .text
+        .globl  target
+target: nop
+        nop
+        .section .rodata
+        .globl  rodata
+rodata: .word   0x1122
+        .bss
+        .globl  bssvar
+bssvar: .space  16
+
+=== data references between objects
+--- a.s
+        .data
+        .globl  dptr
+        .type   dptr, @object
+dptr:   .word   target
+        .word   target + 16
+        .word   wsym
+        .word   com1
+        .word   bssvar
+        .word   after - dptr
+        .size   dptr, . - dptr
+after:  .word   0
+        .text
+        .globl  _start
+_start: ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        .weak   wsym
+wsym:   nop
+        .comm   com1, 8, 2
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+
+=== a weak definition overridden by a strong one in another object
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    #both
+        call    #weakonly
+        mov     #both, r12
+        ret
+        .weak   both
+both:   nop
+        nop
+--- b.s
+        .text
+        .globl  both
+both:   mov     #1, r4
+        mov     #1, r5
+        .weak   weakonly
+weakonly:
+        ret
+
+=== common symbols merged between objects
+--- a.s
+        .comm   shared, 2, 2
+        .comm   bigger, 8, 2
+        .text
+        .globl  _start
+_start:
+        mov     #shared, r12
+        mov     #bigger, r13
+        ret
+--- b.s
+        .comm   shared, 2, 2
+        .comm   bigger, 64, 2
+        .text
+        .globl  reader
+reader:
+        mov     #bigger, r12
+        ret

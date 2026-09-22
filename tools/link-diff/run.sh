@@ -72,7 +72,7 @@ sparcv9|sparc|sparcv9|mc:sparcv9||sparc64-elf-ld||0x100000|
 m68k|m68k|m68k|m68k-elf-as||m68k-elf-ld||0x10000|
 sh|sh|sh|sh-elf-as||sh-elf-ld||0x10000|--relax
 shl|sh|shl|sh-elf-as|-little|sh-elf-ld|-EL|0x10000|-EL --relax
-rx|rx|rx|rx-elf-as||rx-elf-ld||0x10000|--relax
+rx|rx|rx|rx-elf-as|-muse-conventional-section-names|rx-elf-ld||0x10000|--relax
 rl78|rl78|rl78|rl78-elf-as||rl78-elf-ld||0x2000|--relax
 msp430|msp430|msp430|msp430-elf-as|-mcpu=430 -mP|msp430-elf-ld|--no-relax|0x1000|--relax
 msp430x|msp430,msp430x|msp430x|msp430-elf-as|-mcpu=430x -mP|msp430-elf-ld|--no-relax|0x4000|--relax
