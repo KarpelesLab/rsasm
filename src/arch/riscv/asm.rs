@@ -21,6 +21,10 @@ pub struct Asm<'c, 'a> {
     /// A shorter candidate for a single relaxable branch or jump. Layout picks
     /// this one unless the displacement turns out not to fit.
     alt: Option<Buf>,
+    /// A longer candidate, for a conditional branch whose target is out of
+    /// reach of every real branch: the opposite branch over a `jal`. Layout
+    /// falls back to this one last.
+    long: Option<Buf>,
 }
 
 impl<'c, 'a> Asm<'c, 'a> {
@@ -32,6 +36,7 @@ impl<'c, 'a> Asm<'c, 'a> {
             span,
             out: Buf::default(),
             alt: None,
+            long: None,
         }
     }
 
@@ -71,10 +76,17 @@ impl<'c, 'a> Asm<'c, 'a> {
     }
 
     pub fn finish(self) -> Vec<Variant> {
-        match self.alt {
-            Some(short) => vec![short.finish(), self.out.finish()],
-            None => vec![self.out.finish()],
+        // Shortest first: layout takes the first candidate whose fixups all
+        // fit, and grows the choice when one does not.
+        let mut out = Vec::new();
+        if let Some(short) = self.alt {
+            out.push(short.finish());
         }
+        out.push(self.out.finish());
+        if let Some(long) = self.long {
+            out.push(long.finish());
+        }
+        out
     }
 
     // ---- immediates -------------------------------------------------------
@@ -178,6 +190,7 @@ impl<'c, 'a> Asm<'c, 'a> {
         // bytes rather than +-4 KiB, so both forms go to layout, which keeps
         // the short one only if the target turns out to be close enough.
         let funct3 = (base >> 12) & 7;
+        let mut short_inverse = None;
         if self.rvc && funct3 <= 1 {
             let (test, other) = if rs2 == reg::ZERO {
                 (rs1, rs2)
@@ -191,8 +204,30 @@ impl<'c, 'a> Asm<'c, 'a> {
                     encode::kind_cb(),
                     target.span,
                 ));
+                // `c.beqz` and `c.bnez` are each other's opposite, so a
+                // branch that has a two-byte form has a two-byte opposite.
+                short_inverse = Some(compress::c_branch(funct3 != 0, test));
             }
         }
+        // Past +-4 KiB no conditional branch reaches at all, and the way
+        // out is the opposite branch over an unconditional jump, which
+        // reaches +-1 MiB. GNU as and llvm-mc both write this pair, and
+        // take the two-byte form of the opposite branch where it exists --
+        // which moves the jump, and so the distance the branch skips, from
+        // eight bytes to six.
+        let inverse = word ^ (1 << 12);
+        let jal = Insn::full(encode::rd(0x0000_006f, reg::ZERO.bits())).with_fix(
+            target.expr,
+            encode::kind_jal(),
+            target.span,
+        );
+        let mut long = Buf::default();
+        match short_inverse {
+            Some(w) => long.push(Insn::short(encode::cb_imm(u64::from(w), 6) as u16)),
+            None => long.push(Insn::full(encode::b_imm(u64::from(inverse), 8) as u32)),
+        }
+        long.push(jal);
+        self.long = Some(long);
         self.emit_fixed(Insn::full(word).with_fix(target.expr, encode::kind_branch(), target.span));
         Some(())
     }

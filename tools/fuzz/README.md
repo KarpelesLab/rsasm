@@ -90,6 +90,32 @@ What a backend does not implement is skipped by name, with the reason in the
 script, so that a missing extension cannot read as thousands of identical
 findings. Those lists are the honest record of what each backend leaves out.
 
+## What is not fuzzed, and why
+
+Everything here needs a second opinion. Two things in the crate cannot have
+one, so neither is fuzzed:
+
+* **The NEC 78K0.** There is no freely available CA78K0 assembler to compare
+  against. Its table came out of NEC's instruction manual, was checked
+  against the byte counts in a second NEC manual and cross-checked against
+  MAME's disassembler; there is nothing to generate random programs for.
+* **The Renesas CC-RL, CC-RH and CC-RX dialects.** No Renesas assembler can
+  be run here either. What `tools/xas-diff` does instead is pair vendor
+  source with the GNU-syntax program it means and require rsasm's bytes for
+  the first to equal GNU as's for the second -- but the pairing is the thing
+  under test, so a fuzzer would have to generate both halves, and generating
+  the second half from the first is exactly the reading of the manual the
+  test is meant to check. A fuzzer for these would need the manuals'
+  expression grammar and number notation written out again, independently,
+  as an oracle; the instruction encodings themselves are already covered by
+  `rx.py`, `rl78.py` and `v850.py` through the GNU syntax.
+
+The Motorola and 8-bit dialects do have one, because a second assembler
+reads them: `m68k.py --syntax mot` and `--syntax vasm` fuzz Motorola syntax
+against GNU as `--mri` and vasm, `mcs51.py` writes each program in both AS's
+and sdas8051's spelling and compares all four ways, and `nasm.py` fuzzes
+NASM source against NASM itself.
+
 ## x86
 
 `x86.py` generates random x86 instructions in 16-, 32- and 64-bit mode, in

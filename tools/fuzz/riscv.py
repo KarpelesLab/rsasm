@@ -236,9 +236,51 @@ def render(rng, fmt, xlen, mutate):
     return "".join(out).strip()
 
 
+# Distances that sit on and just past the reach of each branch form: the
+# 16-bit `c.beqz` (+-256 bytes), `c.j` (+-2 KiB) and the 32-bit conditional
+# branch (+-4 KiB). What is emitted for each of them is the assembler's
+# choice, and where it changes is where the choice is interesting.
+REACHES = [0, 4, 200, 254, 256, 258, 2040, 2048, 2050, 4090, 4096, 4098]
+# Past `jal`'s +-1 MiB there is nothing left to expand into. The gap is a
+# megabyte of real zeroes in the object, so it comes up rarely.
+OUT_OF_REACH = 0x100002
+
+
+def program(rng, target, mutate):
+    """A few statements with a forward branch over them.
+
+    An instruction on its own never exercises the part of the assembler that
+    chooses between a two-byte branch, a four-byte one and a pair -- that
+    only happens once there is something in between and a label at the end.
+    The label is the one `gasfuzz` defines after every case, so the branch is
+    always forward and its distance is whatever the filler adds up to.
+    """
+    branch = rng.choice(["beq a0, a1, L", "bne a0, zero, L", "beqz a0, L",
+                         "bnez s1, L", "blt t0, t1, L", "bgeu a2, a3, L",
+                         "j L", "jal L", "jal t0, L"])
+    lines = [branch]
+    gap = rng.choice(REACHES)
+    if (mutate and rng.random() < 0.15) or rng.random() < 0.01:
+        # Past what even `jal` reaches, so the branch cannot be encoded at
+        # all: llvm-mc and rsasm refuse it, GNU as truncates the
+        # displacement and lands somewhere else.
+        gap = OUT_OF_REACH
+    if rng.random() < 0.4:
+        lines.append(f".p2align {rng.randrange(1, 5)}")
+    if gap:
+        lines.append(f".skip {gap}")
+    if rng.random() < 0.5:
+        lines.append(rng.choice(["nop", "addi a0, a0, 1", "c.nop" if False else "ebreak"]))
+    return branch.split()[0], "\n".join(lines)
+
+
 def make(rng, target, mutate, forms):
     """One `(mnemonic, source)` case."""
     xlen = XLEN[target.key]
+    # A share of the cases are small programs rather than one instruction,
+    # which is the only way the branch-width choice is reached.
+    if rng.random() < 0.12:
+        return program(rng, target, mutate)
     for _ in range(40):
         name, need, _cls, fmt = rng.choice(forms)
         if need and need != xlen and not (mutate and rng.random() < 0.3):
