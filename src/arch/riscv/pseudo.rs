@@ -262,11 +262,7 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
         }
         P::RegSwap(base) => {
             ops.arity(a.cx, name, &[3])?;
-            let (rd, rs2, rs1) = (
-                ops.xreg(a.cx, 0)?,
-                ops.xreg(a.cx, 1)?,
-                ops.xreg(a.cx, 2)?,
-            );
+            let (rd, rs2, rs1) = (ops.xreg(a.cx, 0)?, ops.xreg(a.cx, 1)?, ops.xreg(a.cx, 2)?);
             a.r_type(base, rd, rs1, rs2);
         }
         P::Extend(bits, arith) => {

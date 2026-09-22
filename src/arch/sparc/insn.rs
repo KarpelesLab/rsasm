@@ -63,7 +63,10 @@ pub enum Form {
     /// floating-point condition names instead. The two tables share names
     /// with different values -- `e` is 1 against `%icc` and 9 against a
     /// `%fcc` -- so both codes travel with the form and the operand picks.
-    MovCc { icc: Option<u8>, fcc: Option<u8> },
+    MovCc {
+        icc: Option<u8>,
+        fcc: Option<u8>,
+    },
     /// V9 `movr<cond> rs1, reg_or_imm, rd`.
     MovReg(u8),
     /// `t<cc> software_trap_number`.
@@ -294,7 +297,12 @@ fn control(name: &str) -> Option<Def> {
         "rett" => return Some(v8(Return)),
         // `b` on its own is `ba`: the branch whose condition is "always",
         // which is how GNU's disassembler prints it.
-        "b" => return Some(v8(Branch { cond: 8, predicted: false })),
+        "b" => {
+            return Some(v8(Branch {
+                cond: 8,
+                predicted: false,
+            }));
+        }
         "return" => return Some(v9(Return)),
         _ => {}
     }
