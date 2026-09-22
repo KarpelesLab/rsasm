@@ -653,7 +653,10 @@ fn a_branch_past_its_reach_becomes_a_pair() {
             "\nsource: {src}\n  want: {want}...\n   got: {got}"
         );
     };
-    pair("beq a0, a1, far\n.space 5000\nfar: ret", "63 14 b5 00 6f 10 c0 38");
+    pair(
+        "beq a0, a1, far\n.space 5000\nfar: ret",
+        "63 14 b5 00 6f 10 c0 38",
+    );
     // With the C extension the opposite branch has a two-byte form, which
     // moves the jump and so the distance the branch skips.
     pair("beqz a0, far\n.space 5000\nfar: ret", "19 e1 6f 10 c0 38");
