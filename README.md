@@ -903,12 +903,12 @@ relocation for something ELF can express — `adr` or a conditional branch to
 another atom, a 32-bit absolute address on x86-64, a page reference without
 `@PAGE` — the reference is refused, as llvm-mc refuses it.
 
-`tools/macho-diff/run.sh` compares 1,633 cases against llvm-mc 22: single
+`tools/macho-diff/run.sh` compares 1,645 cases against llvm-mc 22: single
 statements and whole programs in Clang's style of its own, and the
 `tools/mc-diff` corpora for both machines, every instruction of which has to
 come out the same in a Mach-O object. Every header and load command, section,
 symbol and relocation matches, and each of the 1,588 objects both assemblers
-write is identical byte for byte; the other 45 cases are refused by both.
+write is identical byte for byte; the other 57 cases are refused by both.
 Three differences remain, and the corpora leave them out:
 
 - x86-64 instructions are encoded as GNU as encodes them, in either format, so
