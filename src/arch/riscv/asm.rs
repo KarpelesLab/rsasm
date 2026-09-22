@@ -21,6 +21,9 @@ pub struct Asm<'c, 'a> {
     /// A shorter candidate for a single relaxable branch or jump. Layout picks
     /// this one unless the displacement turns out not to fit.
     alt: Option<Buf>,
+    /// A longer candidate, for a conditional branch whose target neither the
+    /// branch's own reach nor the assembler can be sure of.
+    long: Option<Buf>,
 }
 
 impl<'c, 'a> Asm<'c, 'a> {
@@ -32,6 +35,7 @@ impl<'c, 'a> Asm<'c, 'a> {
             span,
             out: Buf::default(),
             alt: None,
+            long: None,
         }
     }
 
@@ -70,11 +74,28 @@ impl<'c, 'a> Asm<'c, 'a> {
         self.alt = Some(buf);
     }
 
+    /// The candidate a branch takes when its own reach is not enough, or when
+    /// the target is a symbol this object cannot see: the branch with its
+    /// condition inverted, over a `jal x0` that carries the relocation.
+    fn set_long(&mut self, word: u32, target: &Imm) {
+        let mut buf = Buf::default();
+        // The B-type immediate for a displacement of 8, which jumps over the
+        // four-byte `j`: `imm[4:1]` is `0100` and every other bit is zero.
+        buf.push(Insn::full((word ^ 0x0000_1000) | 0x0000_0400));
+        buf.push(Insn::full(0x0000_006f).with_fix(target.expr, encode::kind_jal(), target.span));
+        self.long = Some(buf);
+    }
+
     pub fn finish(self) -> Vec<Variant> {
-        match self.alt {
-            Some(short) => vec![short.finish(), self.out.finish()],
-            None => vec![self.out.finish()],
+        let mut out = Vec::with_capacity(3);
+        if let Some(short) = self.alt {
+            out.push(short.finish());
         }
+        out.push(self.out.finish());
+        if let Some(long) = self.long {
+            out.push(long.finish());
+        }
+        out
     }
 
     // ---- immediates -------------------------------------------------------
@@ -194,6 +215,12 @@ impl<'c, 'a> Asm<'c, 'a> {
             }
         }
         self.emit_fixed(Insn::full(word).with_fix(target.expr, encode::kind_branch(), target.span));
+        // A conditional branch reaches +-4 KiB, which is not far enough for a
+        // target in another object: both references write the branch inverted
+        // over a `j`, whose +-1 MiB the linker can also relax further. Layout
+        // takes it only when the plain branch does not reach, which for a
+        // symbol this object cannot see is always.
+        self.set_long(word, target);
         Some(())
     }
 

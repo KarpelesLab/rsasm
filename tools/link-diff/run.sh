@@ -212,10 +212,13 @@ compare() { # key arch as asflags ldflags variants name stems...
 
   # The program is linked once per set of linker flags: plain, then each
   # extra variant (`--relax`, where the target's linker relaxes).
-  local all=$ldflags
-  while :; do
+  local sets=("$ldflags") all old=$IFS
+  IFS=';'
+  for v in $variants; do [ -n "$v" ] && sets+=("$v"); done
+  IFS=$old
+  for all in "${sets[@]}"; do
     local label=$name
-    [ "$vn" -gt 0 ] && label="$name [${all#"$ldflags"}]"
+    [ "$vn" -gt 0 ] && label="$name [$all]"
     m=$(link "$d/ref$vn" "$all" "$bits" "${refs[@]}")
     r=$(link "$d/rs$vn" "$all" "$bits" "${rss[@]}")
     if [ -z "$m" ] && [ -z "$r" ] &&
@@ -238,9 +241,6 @@ compare() { # key arch as asflags ldflags variants name stems...
       fi
     fi
     vn=$((vn + 1))
-    v=$(printf '%s' "$variants" | cut -d';' -f"$vn")
-    [ -n "$v" ] || break
-    all=$v
   done
 }
 
