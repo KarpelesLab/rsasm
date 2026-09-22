@@ -32,9 +32,6 @@ const SHT_REL: u32 = 9;
 const SHT_NOBITS: u32 = 8;
 const SHT_NOTE: u32 = 7;
 const SHT_MIPS_DWARF: u32 = 0x7000_001e;
-/// `SHT_LOPROC + 3`, the build attributes section of
-/// [`Architecture::elf_attributes`](crate::arch::Architecture::elf_attributes).
-const SHT_ATTRIBUTES: u32 = 0x7000_0003;
 const EM_MIPS: u16 = 8;
 
 const SHF_WRITE: u64 = 0x1;
@@ -283,9 +280,15 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // its standard macros make it the initial section; a data-only NASM
     // program still has an (empty) `.text` in its object.
     let nasm_text = asm.options.dialect == crate::lexer::Dialect::Nasm;
-    let attributes = {
+    // The sections the target writes of its own accord keep the type and
+    // flags their psABI gives them, which the section model has no room for:
+    // see `Architecture::elf_attributes`.
+    let attributes: HashMap<&'static str, (u32, u64)> = {
         let (arch, state) = asm.target_state();
-        arch.elf_attributes(state).map(|(name, _)| name)
+        arch.elf_attributes(state)
+            .iter()
+            .map(|a| (a.name, (a.sh_type, a.sh_flags)))
+            .collect()
     };
     // A section with nothing in it but a label is written too, as both
     // references write it: the label needs a section to be in, and a
@@ -320,10 +323,15 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 {
                     SHT_MIPS_DWARF
                 }
-                SectionKind::Progbits if Some(name.as_str()) == attributes => SHT_ATTRIBUTES,
+                SectionKind::Progbits if attributes.contains_key(name.as_str()) => {
+                    attributes[name.as_str()].0
+                }
                 SectionKind::Progbits => SHT_PROGBITS,
             },
-            flags: elf_flags(&s.flags),
+            flags: match attributes.get(name.as_str()) {
+                Some(&(_, sh_flags)) => sh_flags,
+                None => elf_flags(&s.flags),
+            },
             addr: 0,
             offset: 0,
             size: s.size,

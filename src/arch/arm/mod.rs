@@ -10,6 +10,9 @@
 //! The state's `bits` field carries the choice — 32 for ARM, 16 for Thumb —
 //! because that is what `.code 16` and `.code 32` already mean in ARM sources.
 
+#[doc(hidden)]
+pub mod attr_data;
+pub(crate) mod attrs;
 pub mod encode;
 pub(crate) mod generic;
 pub mod imm;
@@ -28,7 +31,7 @@ use crate::arch::{
 };
 use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
-use crate::lexer::TokKind;
+use crate::lexer::{Punct, TokKind};
 use crate::section::{FixupKind, LinkValue, Variant};
 use crate::source::Span;
 use crate::symbol::SymType;
@@ -151,6 +154,22 @@ impl Architecture for Arm {
 
     fn elf_machine(&self) -> u16 {
         40
+    }
+
+    /// `.ARM.attributes`, which GNU as writes into every ARM object and
+    /// `objdump` reads to know what to disassemble against; see [`attrs`].
+    fn elf_attributes(&self, state: &ArchState) -> Vec<crate::arch::AttrSection> {
+        attrs::section(state)
+    }
+
+    /// `.arch` and `.cpu` name one of GNU as's ARM CPUs here rather than
+    /// another backend, and change what the build attributes say.
+    fn selects_cpu(&self, state: &mut ArchState, name: &str, cpu: bool) -> bool {
+        if cpu {
+            attrs::set_cpu(state, name)
+        } else {
+            attrs::set_arch(state, name)
+        }
     }
 
     /// `EF_ARM_EABI_VER5`, as llvm-mc writes for `arm-linux-gnueabi`; GNU ld
@@ -517,13 +536,109 @@ impl Architecture for Arm {
                 true
             }
             // Unified syntax is the only syntax this backend implements.
-            ".syntax" | ".fpu" | ".eabi_attribute" | ".arch_extension" => {
+            ".syntax" => {
                 cur.set_pos(cur.all().len());
+                true
+            }
+            ".fpu" | ".arch_extension" | ".object_arch" => {
+                let span = cur.peek().span;
+                let Some(arg) = word(cx, cur) else {
+                    cx.error(span, format!("`{name}` expects a name"));
+                    return true;
+                };
+                let ok = match name {
+                    ".fpu" => attrs::set_fpu(cx.state, &arg),
+                    ".arch_extension" => attrs::set_extension(cx.state, &arg),
+                    _ => attrs::set_object_arch(cx.state, &arg),
+                };
+                if !ok {
+                    cx.error(span, format!("`{name}` does not know `{arg}`"));
+                }
+                true
+            }
+            ".eabi_attribute" => {
+                eabi_attribute(cx, cur);
                 true
             }
             _ => false,
         }
     }
+}
+
+/// The rest of a word, as GNU as reads a CPU or unit name: `neon-vfpv4` and
+/// `armv8.1-m.main` are several tokens each, and the name runs to the next
+/// space. Lowercased, since GNU as matches these names case-insensitively.
+fn word(cx: &AsmCtx<'_>, cur: &mut Cursor<'_>) -> Option<String> {
+    if cur.peek().is_eol() {
+        return None;
+    }
+    let first = cur.peek();
+    let mut last = cur.advance();
+    // A comma ends it: `.eabi_attribute Tag_ABI_align8_needed, 1` writes one
+    // with nothing in between, and no name of GNU as's holds a comma.
+    while !cur.peek().is_eol()
+        && !cur.peek().preceded_by_space
+        && !cur.peek().is_punct(Punct::Comma)
+    {
+        last = cur.advance();
+    }
+    Some(
+        cx.sources
+            .span_text(first.span.to(last.span))
+            .to_ascii_lowercase(),
+    )
+}
+
+/// `.eabi_attribute <tag>, <value>`: the tag is a number or one of the names
+/// GNU as knows, and the value a number or a string. What it says replaces
+/// whatever the CPU and its unit gave that tag; see [`attrs`].
+fn eabi_attribute(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
+    let span = cur.peek().span;
+    let tag = match cur.peek().kind {
+        TokKind::Int(n) if n <= u64::from(u32::MAX) => {
+            cur.advance();
+            n as u32
+        }
+        _ => {
+            let Some(name) = word(cx, cur) else {
+                cx.error(span, "`.eabi_attribute` expects a tag");
+                return;
+            };
+            match attr_data::TAG_NAMES.iter().find(|&&(n, _)| n == name) {
+                Some(&(_, tag)) => tag,
+                None => {
+                    cx.error(span, format!("`.eabi_attribute` does not know `{name}`"));
+                    return;
+                }
+            }
+        }
+    };
+    if !cur.peek().is_punct(Punct::Comma) {
+        let span = cur.peek().span;
+        cx.error(span, "`.eabi_attribute` expects a comma and a value");
+        return;
+    }
+    cur.advance();
+    let span = cur.peek().span;
+    let value = match cur.peek().kind {
+        TokKind::Int(n) => {
+            cur.advance();
+            crate::arch::AttrValue::Int(n)
+        }
+        TokKind::Str(i) => {
+            cur.advance();
+            crate::arch::AttrValue::Str(String::from_utf8_lossy(cx.pool.get(i)).into_owned())
+        }
+        _ => {
+            cx.error(span, "`.eabi_attribute` expects a number or a string");
+            return;
+        }
+    };
+    cx.requests.push(Request::Attribute {
+        vendor: "aeabi",
+        tag,
+        value,
+    });
 }
 
 /// Switches between ARM and Thumb, as GNU as's `.arm` and `.thumb` do: the

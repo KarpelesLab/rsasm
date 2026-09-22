@@ -24,6 +24,11 @@ root=$(cd "$here/../.." && pwd)
 # The header is put before every case, with `\n` between lines: that is how
 # 16-bit mode and Intel syntax are asked for, since llvm-mc 22 cannot write an
 # object for an `i8086` triple.
+#
+# `-riscv-add-build-attributes` is llvm-mc's switch for writing
+# `.riscv.attributes` from the ISA it was given, which it does not do of its
+# own accord and every RISC-V assembler does: without it the objects differ
+# by that section alone.
 ARCHES="
 x86-64|x86-64|x86_64|
 i386|i386|i386|
@@ -36,8 +41,8 @@ i386-simd|i386|i386|
 aarch64|aarch64|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
 arm|arm|armv7|-mattr=+neon,+vfp4,+fp16
 thumb|thumb|thumbv7|-mattr=+neon,+vfp4,+fp16
-riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c
-riscv64|riscv64|riscv64|-mattr=+m,+a,+f,+d,+c
+riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes
+riscv64|riscv64|riscv64|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes
 powerpc|powerpc|powerpc|
 powerpc64|powerpc64|powerpc64|
 powerpc64le|powerpc64le|powerpc64le|
@@ -103,8 +108,16 @@ compare() { # arch, rsasm_arch, triple, flags, header, name, source
 # What two objects have to agree on, as canon.sh prints it: every allocated
 # section's header fields and bytes, the global, weak and undefined symbols,
 # and each relocation, with a symbol read the way a linker would read it.
-canon() { # object
-  "$here/canon.sh" "$1"
+#
+# llvm-mc writes `.ARM.attributes` only where the source asks for one, and
+# rsasm writes what GNU as writes into every ARM object, so the section is
+# left out here; `tools/xas-diff` compares it against GNU as, which is the
+# reference for ARM objects.
+canon() { # arch, object
+  case "$1" in
+    arm | thumb) "$here/canon.sh" --ignore .ARM.attributes "$2" ;;
+    *) "$here/canon.sh" "$2" ;;
+  esac
 }
 
 compare_object() { # arch, rsasm_arch, triple, flags, header, name, source
@@ -113,12 +126,12 @@ compare_object() { # arch, rsasm_arch, triple, flags, header, name, source
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
   if llvm-mc -triple="$triple" $flags -filetype=obj -o "$d/m.o" "$d/in.s" 2> "$d/err"; then
-    m=$(canon "$d/m.o")
+    m=$(canon "$arch" "$d/m.o")
   else
     m="MC-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
   fi
   if "$rsasm" -a "$rs" -o "$d/r.o" "$d/in.s" 2> "$d/err"; then
-    r=$(canon "$d/r.o")
+    r=$(canon "$arch" "$d/r.o")
   else
     r="RSASM-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
   fi

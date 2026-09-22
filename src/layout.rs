@@ -206,10 +206,10 @@ impl Assembler {
         }
     }
 
-    /// Rounds each section's end up to its alignment, on targets whose GNU as
-    /// does. Done once, before layout, as a trailing alignment fragment.
-    /// Adds the build attributes section the target's GNU as writes into
-    /// every object; see [`Architecture::elf_attributes`].
+    /// Adds the sections the target's reference assembler writes into every
+    /// object of its own accord, with what the attribute directives asked
+    /// for merged into the build attributes; see
+    /// [`Architecture::elf_attributes`].
     ///
     /// [`Architecture::elf_attributes`]: crate::arch::Architecture::elf_attributes
     fn add_attributes_section(&mut self) {
@@ -217,15 +217,38 @@ impl Assembler {
             return;
         }
         let (arch, state) = self.target_state();
-        let Some((name, bytes)) = arch.elf_attributes(state) else {
-            return;
-        };
-        let name = self.interner.intern(name);
-        let id =
-            self.get_or_create_section(name, SectionKind::Progbits, SectionFlags::default(), 1);
-        let s = self.section_mut(id);
-        s.mark_arch(0);
-        s.emit_bytes(&bytes, Span::default());
+        let sections = arch.elf_attributes(state);
+        for sec in sections {
+            let bytes = match &sec.body {
+                crate::arch::AttrBody::Bytes(b) => b.clone(),
+                crate::arch::AttrBody::Tags { vendor, tags } => {
+                    let mut tags = tags.clone();
+                    for (v, tag, value) in &self.attr_overrides {
+                        if v != vendor {
+                            continue;
+                        }
+                        match tags.binary_search_by_key(tag, |&(t, _)| t) {
+                            Ok(i) => tags[i].1 = value.clone(),
+                            Err(i) => tags.insert(i, (*tag, value.clone())),
+                        }
+                    }
+                    crate::arch::encode_attributes(vendor, &tags)
+                }
+            };
+            let name = self.interner.intern(sec.name);
+            let flags = SectionFlags {
+                alloc: sec.sh_flags & 0x2 != 0,
+                write: sec.sh_flags & 0x1 != 0,
+                exec: sec.sh_flags & 0x4 != 0,
+                merge: sec.sh_flags & 0x10 != 0,
+                ..SectionFlags::default()
+            };
+            let id = self.get_or_create_section(name, SectionKind::Progbits, flags, sec.align);
+            let s = self.section_mut(id);
+            s.entsize = sec.entsize;
+            s.mark_arch(0);
+            s.emit_bytes(&bytes, Span::default());
+        }
     }
 
     /// Refers to the undefined symbols the target asks for on behalf of each

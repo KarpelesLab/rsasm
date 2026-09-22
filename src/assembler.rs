@@ -324,6 +324,12 @@ pub struct Assembler {
     /// The alignment fragments put ahead of data that must already be
     /// aligned, which are errors if they pad; see `Assembler::align_data`.
     pub(crate) align_tests: Vec<(SectionId, u32)>,
+    /// What the attribute directives -- ARM's `.eabi_attribute`, RISC-V's
+    /// `.attribute`, PowerPC's `.gnu_attribute` -- said, as
+    /// (vendor, tag, value), in the order the source wrote them. Merged into
+    /// what the backend gives when the object is laid out; see
+    /// `Assembler::add_attributes_section`.
+    pub(crate) attr_overrides: Vec<(&'static str, u32, crate::arch::AttrValue)>,
     /// CC-RH data values written without `#` that were not constants when
     /// read, to be refused at the end if they are labels; see
     /// `Assembler::cc_data`.
@@ -414,6 +420,7 @@ impl Assembler {
             end_of_source: false,
             relax_shift: None,
             align_tests: Vec::new(),
+            attr_overrides: Vec::new(),
             cc_bare_labels: Vec::new(),
             cc_local_counter: 0,
             ccrx_defines: Vec::new(),

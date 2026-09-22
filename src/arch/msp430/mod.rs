@@ -198,21 +198,16 @@ impl Architecture for Msp430 {
         if self.isa.is_430x() { 45 } else { 11 }
     }
 
-    fn elf_attributes(&self, _state: &ArchState) -> Option<(&'static str, Vec<u8>)> {
+    fn elf_attributes(&self, _state: &ArchState) -> Vec<crate::arch::AttrSection> {
         // What `msp430_md_finish` adds with `bfd_elf_add_proc_attr_int`:
         // `OFBA_MSPABI_Tag_ISA`, and the small code and data models.
+        use crate::arch::AttrValue::Int;
         let isa = if self.isa.is_430x() { 2 } else { 1 };
-        let tags = [4, isa, 6, 1, 8, 1];
-        let mut sub = vec![1u8];
-        sub.extend_from_slice(&(5 + tags.len() as u32).to_le_bytes());
-        sub.extend_from_slice(&tags);
-        let mut vendor = Vec::new();
-        vendor.extend_from_slice(&(4 + 7 + sub.len() as u32).to_le_bytes());
-        vendor.extend_from_slice(b"mspabi\0");
-        vendor.extend_from_slice(&sub);
-        let mut out = vec![b'A'];
-        out.extend_from_slice(&vendor);
-        Some((".MSP430.attributes", out))
+        vec![crate::arch::AttrSection::attributes(
+            ".MSP430.attributes",
+            "mspabi",
+            vec![(4, Int(isa)), (6, Int(1)), (8, Int(1))],
+        )]
     }
 
     fn section_symbols(&self, name: &str) -> &'static [&'static str] {

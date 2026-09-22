@@ -224,7 +224,7 @@ impl Assembler {
 
             // ---- files and configuration ----------------------------------
             ".include" => self.dir_include(&mut cur, span),
-            ".arch" | ".cpu" => self.dir_arch(&mut cur, span),
+            ".arch" | ".cpu" => self.dir_arch(&mut cur, span, text == ".cpu"),
             // ---- debugging information ------------------------------------
             // A COFF object records the source file name as a symbol of its
             // own; the numbered form is DWARF's either way.
@@ -1352,7 +1352,7 @@ impl Assembler {
         true
     }
 
-    fn dir_arch(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+    fn dir_arch(&mut self, cur: &mut Cursor<'_>, span: Span, cpu: bool) -> bool {
         let tok = cur.peek();
         let name = match tok.kind {
             TokKind::Str(i) => {
@@ -1387,6 +1387,17 @@ impl Assembler {
                 return true;
             }
         };
+        // On ARM the directive names a CPU of the backend's own, which only
+        // changes what the build attributes say; see
+        // `Architecture::selects_cpu`.
+        let mut state = self.arch_state.clone();
+        if self
+            .arch
+            .selects_cpu(&mut state, &name.to_ascii_lowercase(), cpu)
+        {
+            self.arch_state = state;
+            return true;
+        }
         match crate::arch::lookup(&name) {
             Some(a) => self.switch_arch(a),
             None => {

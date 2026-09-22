@@ -194,6 +194,131 @@ pub enum Request {
     Literal(LiteralRequest),
     /// Writes out the section's literal pool here: `.ltorg`.
     FlushLiterals,
+    /// What an attribute directive — ARM's `.eabi_attribute`, RISC-V's
+    /// `.attribute`, PowerPC's `.gnu_attribute` — said one tag of the
+    /// object's build attributes is. It replaces whatever
+    /// [`Architecture::elf_attributes`] gave that tag of the section whose
+    /// [`AttrBody::Tags`] names this vendor, and is added in tag order if
+    /// the backend left it out.
+    Attribute {
+        vendor: &'static str,
+        tag: u32,
+        value: AttrValue,
+    },
+}
+
+/// One value in an ELF build-attributes section.
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum AttrValue {
+    /// Written as a ULEB128.
+    Int(u64),
+    /// Written as a NUL-terminated string.
+    Str(String),
+}
+
+/// What one of [`Architecture::elf_attributes`]'s sections holds.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum AttrBody {
+    /// Bytes, written as they are: MIPS's `.reginfo` and V850's
+    /// `.note.renesas` are structures, not attributes.
+    Bytes(Vec<u8>),
+    /// An ELF build-attributes section: the vendor whose tags these are, and
+    /// the `File` subsection's tags in increasing tag order. The core
+    /// encodes it, so that an attribute directive can change a tag first.
+    Tags {
+        vendor: &'static str,
+        tags: Vec<(u32, AttrValue)>,
+    },
+}
+
+/// A section the target's reference assembler writes into every object of
+/// its own accord; see [`Architecture::elf_attributes`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct AttrSection {
+    pub name: &'static str,
+    /// `sh_type`, which is the target's own: `SHT_LOPROC + 3` for the
+    /// processor attributes, `SHT_GNU_ATTRIBUTES` for `.gnu.attributes`, and
+    /// `SHT_MIPS_REGINFO` and its relatives for MIPS.
+    pub sh_type: u32,
+    /// `sh_flags`, raw: `.reginfo` is allocated, and `.MIPS.options` also
+    /// carries `SHF_MIPS_NOSTRIP`, which the section model has no name for.
+    pub sh_flags: u64,
+    pub align: u64,
+    pub entsize: u64,
+    pub body: AttrBody,
+}
+
+/// `SHT_LOPROC + 3`: the processor build attributes, which is what ARM,
+/// RISC-V and MSP430 call their own section.
+pub const SHT_ATTRIBUTES: u32 = 0x7000_0003;
+/// `SHT_GNU_ATTRIBUTES`, the vendor-neutral `.gnu.attributes`.
+pub const SHT_GNU_ATTRIBUTES: u32 = 0x6fff_fff5;
+
+impl AttrSection {
+    /// A build-attributes section with the processor attributes type, no
+    /// flags and no alignment, which is how every such section is written.
+    pub fn attributes(
+        name: &'static str,
+        vendor: &'static str,
+        tags: Vec<(u32, AttrValue)>,
+    ) -> AttrSection {
+        AttrSection {
+            name,
+            sh_type: if name == ".gnu.attributes" {
+                SHT_GNU_ATTRIBUTES
+            } else {
+                SHT_ATTRIBUTES
+            },
+            sh_flags: 0,
+            align: 1,
+            entsize: 0,
+            body: AttrBody::Tags { vendor, tags },
+        }
+    }
+}
+
+/// An ELF build-attributes section: `'A'`, then one vendor section holding a
+/// `File` subsection of `tag, value` pairs.
+///
+/// Both lengths count themselves, and the order is the order of `tags`; GNU
+/// as and llvm-mc write them by increasing tag number.
+pub(crate) fn encode_attributes(vendor: &str, tags: &[(u32, AttrValue)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (tag, value) in tags {
+        write_uleb(&mut body, u64::from(*tag));
+        match value {
+            AttrValue::Int(v) => write_uleb(&mut body, *v),
+            AttrValue::Str(s) => {
+                body.extend_from_slice(s.as_bytes());
+                body.push(0);
+            }
+        }
+    }
+    // The `File` subsection: its tag, its length, and the pairs.
+    let mut sub = vec![1u8];
+    sub.extend_from_slice(&(5 + body.len() as u32).to_le_bytes());
+    sub.extend_from_slice(&body);
+    let mut out = vec![b'A'];
+    out.extend_from_slice(&(4 + vendor.len() as u32 + 1 + sub.len() as u32).to_le_bytes());
+    out.extend_from_slice(vendor.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&sub);
+    out
+}
+
+fn write_uleb(out: &mut Vec<u8>, mut v: u64) {
+    loop {
+        let byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
 }
 
 /// One use of a literal pool entry.
@@ -955,13 +1080,20 @@ pub trait Architecture {
         0
     }
 
-    /// The build attributes section GNU as adds to every object of its own
-    /// accord, as its name and contents, given the state at the end of the
-    /// source: MSP430's `.MSP430.attributes`, which records the instruction
-    /// set and memory model. It is written with the processor-specific
-    /// attributes type, `SHT_LOPROC + 3`, and no flags.
-    fn elf_attributes(&self, _state: &ArchState) -> Option<(&'static str, Vec<u8>)> {
-        None
+    /// The sections the target's reference assembler writes into every
+    /// object of its own accord, given the state at the end of the source:
+    /// what the object needs of a linker and a loader rather than what the
+    /// source put in it. MSP430's `.MSP430.attributes` records the
+    /// instruction set and the memory model, ARM's `.ARM.attributes` the CPU
+    /// and its floating-point unit, RISC-V's `.riscv.attributes` the ISA
+    /// string, MIPS's `.reginfo` which registers the code touches, and
+    /// V850's `.note.renesas` the ABI its objects may be linked with.
+    ///
+    /// An [`AttrBody::Tags`] section is encoded by the core, which also
+    /// applies what `.eabi_attribute`, `.attribute` and `.gnu_attribute`
+    /// asked for; see [`Request::Attribute`].
+    fn elf_attributes(&self, _state: &ArchState) -> Vec<AttrSection> {
+        Vec::new()
     }
 
     /// Undefined symbols an object refers to because it has a section of
@@ -1202,6 +1334,18 @@ pub trait Architecture {
     /// Handles an architecture-specific directive such as `.code64`. Returns
     /// false if the name is not one of this backend's directives.
     fn directive(&self, _cx: &mut AsmCtx<'_>, _name: &str, _cur: &mut Cursor<'_>) -> bool {
+        false
+    }
+
+    /// Whether `.arch` — or `.cpu`, when `cpu` is set — naming this selects a
+    /// CPU of this backend's own rather than switching to another backend,
+    /// and records it in `state`. ARM's `.arch armv6` and `.cpu cortex-a8`
+    /// name one of GNU as's ARM CPUs, which changes what the object's build
+    /// attributes say; everywhere else `.arch` names a target and this stays
+    /// false. Asked before the name is looked up as a target, so a backend
+    /// must claim only the names its reference assembler gives the
+    /// directive.
+    fn selects_cpu(&self, _state: &mut ArchState, _name: &str, _cpu: bool) -> bool {
         false
     }
 
