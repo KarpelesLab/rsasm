@@ -115,6 +115,145 @@ far:    bx      lr
         adr     r0, far
         .space  4096
 far:    bx      lr
+=== a load that names its label
+# Only `ldr` itself has a 16-bit form, and only for a low register; every
+# other width, and every high register, is 32 bits wide. A label behind the
+# instruction is out of the 16-bit form's unsigned range.
+        .syntax unified
+back:   .word   0x12345678
+        ldr     r0, back
+        ldrb    r1, back
+        ldrh    r2, back
+        ldrsb   r3, back
+        ldrsh   r4, back
+        ldrd    r6, r7, back
+        ldrd    r8, back
+        ldr     r8, back
+        ldr     pc, back
+        ldr     r0, back + 4
+        ldr     r0, .
+        pld     back
+        pli     back
+        pldw    back
+        .p2align 2, 0
+        ldr     r0, fwd
+        ldr.w   r1, fwd
+        ldrh    r2, fwd
+        ldrd    r4, r5, fwd
+        .p2align 2, 0
+fwd:    bx      lr
+=== an unprivileged load that names a label is the ordinary load
+# `do_t_ldstt` hands the address to `encode_thumb32_addr_mode`, whose
+# PC-relative case has no `t` spelling, so the relocation writes the plain
+# literal load over the unprivileged one.
+        .syntax unified
+back:   .word   0
+        ldrt    r0, back
+        ldrbt   r1, back
+        ldrht   r2, back
+        ldrsbt  r3, back
+        ldrsht  r4, back
+        bx      lr
+=== a 16-bit load reaches 1020 bytes
+        .syntax unified
+        .p2align 2
+        ldr     r0, fwd
+        .space  1022
+fwd:    .word   0
+=== a load past 1020 bytes is 32 bits
+        .syntax unified
+        .p2align 2
+        ldr     r0, fwd
+        .space  1024
+fwd:    .word   0
+=== a load of a label not on a word boundary is 32 bits
+        .syntax unified
+        .p2align 2
+        ldr     r0, odd
+        .byte   1
+odd:    .word   0
+=== a load of a Thumb function is 32 bits, without the interworking bit
+# `relax_adr` sizes this load and an `adr` alike, and widens both for a
+# Thumb function; only the `adr` then sets the low bit of the address.
+        .syntax unified
+        .thumb_func
+f:      bx      lr
+        .p2align 2, 0
+        ldr     r0, f
+        ldr     r1, g
+        adr     r2, g
+        .p2align 2, 0
+        .type   g, %function
+g:      bx      lr
+=== a 32-bit load reaches 4095 bytes
+        .syntax unified
+        ldrh    r0, fwd
+        .space  4095
+fwd:    bx      lr
+=== refused: a load past 4095 bytes
+        .syntax unified
+        ldrh    r0, fwd
+        .space  4096
+fwd:    bx      lr
+=== a doubleword load reaches 1020 bytes in steps of four
+        .syntax unified
+        ldrd    r0, r1, fwd
+        .space  1020
+fwd:    bx      lr
+=== refused: a doubleword load past 1020 bytes
+        .syntax unified
+        ldrd    r0, r1, fwd
+        .space  1024
+fwd:    bx      lr
+=== refused: a doubleword load of a label not on a word boundary
+        .syntax unified
+back:   .word   0
+        ldrd    r0, r1, back + 1
+=== refused: a store that names a label
+        .syntax unified
+back:   .word   0
+        str     r0, back
+=== refused: a halfword store that names a label
+        .syntax unified
+back:   .word   0
+        strh    r0, back
+=== refused: a load that names a label in another section
+        .syntax unified
+        ldr     r0, other
+        .data
+other:  .word   0
+=== refused: a load that names a weak symbol
+        .syntax unified
+        .weak   w
+w:      .word   0
+        ldr     r0, w
+=== refused: a 16-bit load that names a weak symbol
+        .syntax unified
+        .weak   w
+        ldr.n   r0, w
+        .p2align 2, 0
+w:      .word   0
+=== refused: a load that names a number rather than a label
+        .syntax unified
+        ldr     r0, 0x100
+=== refused: a 16-bit load of a label it cannot reach
+        .syntax unified
+back:   .word   0
+        ldr.n   r0, back
+=== refused: a 16-bit load into a high register
+        .syntax unified
+        ldr.n   r8, fwd
+        .p2align 2, 0
+fwd:    bx      lr
+=== refused: a 16-bit byte load that names a label
+        .syntax unified
+        ldrb.n  r0, fwd
+        .p2align 2, 0
+fwd:    bx      lr
+=== refused: a load of the program counter from an unaligned label
+        .syntax unified
+back:   .word   0
+        ldr     pc, back + 1
 === a Thumb function calling ARM and Thumb code
         .syntax unified
         .global main

@@ -6,7 +6,8 @@ Each case is a *file*, not a statement: literal loads of numbers and symbols
 are eight bytes wide), `.ltorg` and `.pool` at every point one can stand,
 data between and after the code, labels on it, `.arm`/`.thumb`/`.code 16`
 switches, `.thumb_func`, section and subsection switches, `.macro` and
-`.rept` bodies that load and flush, `adr`, `adrl`, `it` blocks and branches
+`.rept` bodies that load and flush, `adr`, `adrl`, the PC-relative loads
+that name a label instead of a pool entry, `it` blocks and branches
 that relax. It is assembled by `arm-none-eabi-as` with the flags
 `tools/xas-diff/run.sh` uses for its `arm` and `thumb` keys, and by rsasm,
 and the two objects are compared whole with `tools/mc-diff/canon.sh --full`:
@@ -110,7 +111,7 @@ KNOWN_GAS = [("misaligned branch destination",
 
 # Parts of the language a run can leave out, for bisecting a finding.
 FEATURES = ["vldr", "subsec", "macro", "sections", "state", "data", "adr",
-            "halfword", "big"]
+            "halfword", "big", "pcrel"]
 
 
 # ============================================================================
@@ -354,6 +355,26 @@ class Program:
         self.used.append(v)
         return f"vldr{suffix} s{rng.randrange(32)}, ={v}"
 
+    def pcrel_load(self, target):
+        """`ldr rt, label`, the load a bare address writes.
+
+        Mostly the word load, whose 16-bit Thumb form layout has to pick:
+        one reaches a word-aligned label up to 1020 bytes ahead, and the
+        labels this places are often neither. The byte and halfword loads
+        have only the wide form, and reach 255 bytes either way in ARM
+        state, so they are here to be refused as often as not."""
+        rng = self.rng
+        addend = rng.choice(["", "", "", "", " + 4", " - 4", " + 2"])
+        r = rng.random()
+        if r < 0.6:
+            return f"ldr {self.reg()}, {target}{addend}"
+        if r < 0.75:
+            return f"ldrb {self.reg()}, {target}{addend}"
+        if r < 0.9:
+            return f"{rng.choice(HALF_LOADS)} {self.reg()}, {target}{addend}"
+        n = rng.randrange(5) * 2
+        return f"ldrd r{n}, r{n + 1}, {target}{addend}"
+
     def here_label(self):
         """A label already placed in the section the next statement goes in,
         for an `adr`, or None.
@@ -400,6 +421,10 @@ class Program:
                 # addend and so changes nothing when it is already odd.
                 addend = rng.choice(["", "", "", " + 1", " + 2", " - 1"])
                 return f"{kind} {self.reg()}, {target}{addend}"
+        if r < 0.56 and "pcrel" not in self.skip:
+            target = self.here_label()
+            if target:
+                return self.pcrel_load(target)
         if r < 0.6:
             return rng.choice([
                 f"b {self.code_label()}", f"bl {self.code_label()}",

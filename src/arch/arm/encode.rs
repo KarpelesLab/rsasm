@@ -602,6 +602,118 @@ fn literal_load(
     }])
 }
 
+/// L and the `SH` pair of a mode 3 transfer: which width it moves, whether
+/// it sign-extends, and — for the doubleword pair, which is a store with
+/// both signed codes — which half of the encoding it lands in.
+fn extra_bits(t: Transfer) -> (u32, u32) {
+    match (t.load, t.size, t.signed) {
+        (false, 2, _) => (0, 0b01),
+        (true, 2, false) => (1, 0b01),
+        (true, 1, true) => (1, 0b10),
+        (true, 2, true) => (1, 0b11),
+        (true, 8, _) => (0, 0b10),
+        _ => (0, 0b11),
+    }
+}
+
+/// A bare address has to name a label. GNU as makes such an operand
+/// PC-relative whatever was written, so a plain number leaves a fixup with
+/// no symbol to subtract the PC from; nothing resolves it, and the field has
+/// no relocation, so the line stops at "internal_relocation (type:
+/// OFFSET_IMM) not fixed up". `.set x, 4` counts as a number too.
+pub fn pcrel_label(cx: &mut AsmCtx<'_>, span: Span, e: ExprRef) -> Option<()> {
+    if let Some(v) = cx.constant(e) {
+        cx.error(
+            span,
+            format!("a PC-relative address names a label, and {v} is a number"),
+        );
+        return None;
+    }
+    Some(())
+}
+
+/// `check_ldr_r15_aligned`: loading the PC from an address the PC itself is
+/// the base of is a branch, and one to an address that is not a multiple of
+/// four is unpredictable. GNU as reads the written offset, so this catches
+/// `ldr pc, label + 1` as well as `ldr pc, [pc, #1]`.
+pub fn pc_load_aligned(
+    cx: &mut AsmCtx<'_>,
+    span: Span,
+    rt: Reg,
+    base: Reg,
+    off: i64,
+) -> Option<()> {
+    if rt == reg::PC && base == reg::PC && off % 4 != 0 {
+        cx.error(span, "a load of `pc` from the PC must be 4-byte aligned");
+        return None;
+    }
+    Some(())
+}
+
+/// `ldr rt, label` in A32: the bare address GNU as's `parse_address_main`
+/// turns into `[pc, #label - (here + 8)]`, which is the pool load's encoding
+/// with the offset naming the label itself.
+///
+/// The U bit differs from the pool form's, though: `encode_arm_addr_mode_2`
+/// prefers a positive offset for a bare address, so a label the biased PC
+/// already sits on writes `[pc, #0]` where a pool entry there writes
+/// `[pc, #-0]`.
+fn pcrel_transfer(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    t: Transfer,
+    rt: u32,
+    op: &Operand,
+    e: ExprRef,
+) -> Option<Vec<Variant>> {
+    // `do_ldstt` and `do_ldsttv4` turn a pre-indexed address into a
+    // post-indexed one, and a bare label is not the zero offset that allows.
+    if t.translate {
+        cx.error(
+            op.span,
+            format!("`{}` requires a post-indexed address", ins.text),
+        );
+        return None;
+    }
+    pcrel_label(cx, op.span, e)?;
+    pc_load_aligned(cx, op.span, rt as Reg, reg::PC, addend(cx, e).unwrap_or(0))?;
+    // The PC reads two instructions ahead, and the load reaches from there.
+    const UP: u32 = 0x0080_0000;
+    let (kind, base) = if t.size == 2 || t.signed || t.size == 8 {
+        let (l, sh) = extra_bits(t);
+        (
+            FixupKind::pcrel(4, 8)
+                .with_limits(-255, 255)
+                .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                .scatter(scatter_literal8),
+            // P and the immediate form of mode 3, L, the PC as the base, and
+            // the two bits that say which width and sign.
+            0x0140_0000 | UP | (l << 20) | 0x000f_0000 | 0x90 | (sh << 5),
+        )
+    } else {
+        (
+            FixupKind::pcrel(4, 8)
+                .with_limits(-4095, 4095)
+                .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                .scatter(scatter_literal),
+            0x0500_0000
+                | UP
+                | (u32::from(t.size == 1) << 22)
+                | (u32::from(t.load) << 20)
+                | 0x000f_0000,
+        )
+    };
+    Some(vec![Variant {
+        bytes: word(ins.cond, base | (rt << 12)).to_le_bytes().to_vec(),
+        fixups: vec![Fixup {
+            offset: 0,
+            expr: e,
+            kind,
+            span: op.span,
+        }],
+    }])
+}
+
 /// P and W for a transfer made with user-mode privileges, which is
 /// post-indexed however it was written; `[rn]` with no offset is the way to
 /// spell one that does not move the base.
@@ -626,12 +738,15 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     if let OperandKind::Literal(e) = ins.ops[1].kind {
         return literal_load(cx, ins, t, rt, &ins.ops[1], e);
     }
-    let mem = *memory_operand(cx, &ins.ops[1])?;
     // Only a word transfer reaches the PC, and of the unprivileged ones
     // only the store: GNU as gives `strt` the register kind that allows it.
     if t.size != 4 || (t.translate && t.load) {
         no_pc(cx, ins.ops[0].span, rt as Reg)?;
     }
+    if let OperandKind::Imm(e) = ins.ops[1].kind {
+        return pcrel_transfer(cx, ins, t, rt, &ins.ops[1], e);
+    }
+    let mem = *memory_operand(cx, &ins.ops[1])?;
     let (p, w) = if t.translate {
         translate_bits(cx, &mem)?
     } else {
@@ -654,6 +769,7 @@ fn load_store(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 );
                 return None;
             }
+            pc_load_aligned(cx, mem.span, rt as Reg, mem.base, v)?;
             (0, u32::from(v >= 0), mag as u32)
         }
         MemOffset::Reg {
@@ -728,21 +844,16 @@ fn load_store_extra(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>>
     if let OperandKind::Literal(e) = ins.ops[mem_at].kind {
         return literal_load(cx, ins, t, rt, &ins.ops[mem_at], e);
     }
+    if let OperandKind::Imm(e) = ins.ops[mem_at].kind {
+        return pcrel_transfer(cx, ins, t, rt, &ins.ops[mem_at], e);
+    }
     let mem = *memory_operand(cx, &ins.ops[mem_at])?;
     let (p, w) = if t.translate {
         translate_bits(cx, &mem)?
     } else {
         index_bits(mem.index)
     };
-    let (l, sh) = match (t.load, t.size, t.signed) {
-        (false, 2, _) => (0, 0b01),
-        (true, 2, false) => (1, 0b01),
-        (true, 1, true) => (1, 0b10),
-        (true, 2, true) => (1, 0b11),
-        // The doubleword pair is a store with the two signed codes.
-        (true, 8, _) => (0, 0b10),
-        _ => (0, 0b11),
-    };
+    let (l, sh) = extra_bits(t);
     let (i, u, field) = match mem.offset {
         MemOffset::None => (1, 1, 0),
         MemOffset::Unindexed(_) => {
@@ -801,11 +912,6 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     no_cond(cx, ins)?;
     arity(cx, ins, &[1])?;
-    let mem = *memory_operand(cx, &ins.ops[0])?;
-    if mem.index != Index::Offset {
-        cx.error(mem.span, "a preload does not write its base register back");
-        return None;
-    }
     // The base has P set and W clear already; only U and the register bit
     // are left to the address.
     let base: u32 = match ins.mnem {
@@ -813,6 +919,28 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Mnem::Pldw => 0xf510_f000,
         _ => 0xf450_f000,
     };
+    if let OperandKind::Imm(e) = ins.ops[0].kind {
+        pcrel_label(cx, ins.ops[0].span, e)?;
+        return Some(vec![Variant {
+            bytes: (base | 0x0080_0000 | ((reg::PC as u32) << 16))
+                .to_le_bytes()
+                .to_vec(),
+            fixups: vec![Fixup {
+                offset: 0,
+                expr: e,
+                kind: FixupKind::pcrel(4, 8)
+                    .with_limits(-4095, 4095)
+                    .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                    .scatter(scatter_literal),
+                span: ins.ops[0].span,
+            }],
+        }]);
+    }
+    let mem = *memory_operand(cx, &ins.ops[0])?;
+    if mem.index != Index::Offset {
+        cx.error(mem.span, "a preload does not write its base register back");
+        return None;
+    }
     let (i, u, field) = match mem.offset {
         MemOffset::None => (0, 1, 0),
         MemOffset::Imm(v) => {
@@ -1148,12 +1276,18 @@ pub fn to_bl(w: u64) -> u64 {
     (w & 0x00ff_ffff) | 0xeb00_0000
 }
 
-/// Whether the addend of `e` — GNU as's `X_add_number`, the expression with
-/// every symbol in it taken to be zero — is odd, which is what decides
-/// whether a later `X_add_number |= 1` changes anything. A symbol the source
-/// has not reached yet counts as zero too, so that `adr r0, l1 + 1` reads the
-/// same whichever side of the `adr` `l1` is defined on.
+/// Whether the addend of `e` is odd, which is what decides whether a later
+/// `X_add_number |= 1` changes anything.
 pub fn odd_addend(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    addend(cx, e).is_some_and(|v| v & 1 != 0)
+}
+
+/// The addend of `e` — GNU as's `X_add_number`, the expression with every
+/// symbol in it taken to be zero — which a few checks read before the layout
+/// is known. A symbol the source has not reached yet counts as zero too, so
+/// that `adr r0, l1 + 1` reads the same whichever side of the `adr` `l1` is
+/// defined on.
+pub fn addend(cx: &AsmCtx<'_>, e: ExprRef) -> Option<i64> {
     use crate::expr::{EvalCtx, EvalError, ExprArena, Value};
     use crate::intern::Name;
     use crate::lexer::LocalDir;
@@ -1202,7 +1336,7 @@ pub fn odd_addend(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
         symbols: cx.symbols,
         depth: 0,
     };
-    crate::expr::eval(exprs, e, &mut env).is_ok_and(|v| v.addend & 1 != 0)
+    crate::expr::eval(exprs, e, &mut env).ok().map(|v| v.addend)
 }
 
 /// Thumb `adr` of a Thumb function sets the address's low bit, as GNU as

@@ -1306,6 +1306,7 @@ impl Assembler {
             ty: sym.ty,
             same_section: self.symbol_section(p) == Some(section),
             global: sym.binding != Binding::Local || !defined,
+            weak: sym.binding == Binding::Weak,
             preemptible: sym.binding == Binding::Weak
                 || (sym.binding == Binding::Global && sym.visibility == Visibility::Default)
                 || !defined,

@@ -65,3 +65,16 @@ l0:     nop
         .space  1000
 l1:     nop
         .ltorg
+=== a load that names its label
+back:   .word   0x12345678
+        ldr     r0, back
+        ldrb    r1, back
+        ldrh    r2, back
+        ldrsb   r3, back
+        ldrsh   r4, back
+        ldrd    r6, r7, back
+        str     r0, back
+        strh    r2, back
+        ldr     r0, fwd
+        pld     back
+fwd:    bx      lr

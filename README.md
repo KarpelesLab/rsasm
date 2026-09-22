@@ -134,6 +134,11 @@ form by form and in random whole programs as well.
   halfword loads take an entry as well, and `vldr d0, =x` takes two slots and
   aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
   `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
+  the PC-relative loads that name a label rather than a pool entry
+  (`ldr r0, label`, the byte, halfword, doubleword and preload forms, and in
+  ARM state the stores as well), which in Thumb pick between a 16-bit form
+  reaching a word-aligned label 1020 bytes ahead and a 32-bit one reaching
+  4095 bytes either way,
   `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, the position-independent operands
   (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
