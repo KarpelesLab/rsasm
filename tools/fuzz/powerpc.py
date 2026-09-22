@@ -671,6 +671,8 @@ def report(results, args, nforms):
         if len(rows) > args.limit:
             p.append(f"    ... {len(rows) - args.limit} more (raise --limit)")
     print("\n".join(p))
+    # The last line is the one tools/fuzz/run.sh reads.
+    print(f"--- powerpc: {len(results)} case(s) compared, {totals['rsasm']} finding(s)")
     return 1 if totals["rsasm"] else 0
 
 

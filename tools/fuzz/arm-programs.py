@@ -755,6 +755,8 @@ def fuzz(args):
             print(f"  gas:   {g['text'][:200]}\n  rsasm: {r['text'][:200]}")
     if len(findings) > args.limit:
         print(f"... {len(findings) - args.limit} more findings")
+    # The last line is the one tools/fuzz/run.sh reads.
+    print(f"--- arm-programs: {len(results)} case(s) compared, {len(findings)} finding(s)")
     return 1 if findings else 0
 
 

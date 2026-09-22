@@ -1689,6 +1689,9 @@ def report(results, args):
                 if cls in LISTED:
                     f.write(f"{cls}\t{detail or ''}\t{mode}\t{syntax}\t{' ; '.join(lines)}\t"
                             f"gas={g}\tmc={m}\trsasm={r}\n")
+    # The last line is the one tools/fuzz/run.sh reads: how many cases were
+    # actually compared, so a run that generated none cannot pass quietly.
+    print(f"--- x86: {len(results)} case(s) compared, {totals['rsasm']} finding(s)")
     # A non-zero exit when rsasm disagrees with both references, for scripts.
     return 1 if totals["rsasm"] else 0
 

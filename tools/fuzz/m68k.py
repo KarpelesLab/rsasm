@@ -1061,6 +1061,8 @@ def fuzz(a):
         print("    %s" % case.text)
         print("  ref:   %s" % fmt(r))
         print("  rsasm: %s" % fmt(m))
+    # The last line is the one tools/fuzz/run.sh reads.
+    print("--- m68k: %d case(s) compared, %d finding(s)" % (sum(tally.values()), tally["rsasm"]))
     return 1 if tally["rsasm"] else 0
 
 

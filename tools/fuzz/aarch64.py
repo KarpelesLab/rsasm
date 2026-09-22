@@ -374,6 +374,8 @@ def report(results, tags, limit, out_path):
                 cls = classify(mc, gas, rs)
                 if cls != "agree":
                     fh.write("\t".join([cls, tag, line, fmt(mc), fmt(gas), fmt(rs)]) + "\n")
+    # The last line is the one tools/fuzz/run.sh reads.
+    print("--- aarch64: %d case(s) compared, %d finding(s)" % (len(results), counts["rsasm"]))
     return counts["rsasm"]
 
 

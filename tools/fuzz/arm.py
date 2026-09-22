@@ -1235,7 +1235,25 @@ def gas_takes_a_condition_on_vaddl(g, m, ctx):
                     ctx["text"]) is not None
 
 
+def rsasm_narrows_a_negated_immediate(g, m, r, ctx):
+    """`subs r7, #-2` in Thumb. The immediate is negated and the opposite
+    operation written instead; the question is only which size the result
+    gets. GNU as always writes the 32-bit form, because the negation in
+    `do_t_add_sub` (gas/config/tc-arm.c) happens on the T3 path alone.
+    llvm-mc writes the 16-bit form wherever it takes the spelling at all --
+    `adds r7, #-2` and `subs r7, r7, #-2` both come out narrow -- and rsasm
+    narrows everywhere, including the two-operand `subs` llvm-mc happens to
+    refuse. That is the same choice `thumb-negative-immediate` records for
+    every spelling the two references both read, so it is listed here rather
+    than counted as a finding."""
+    return (ctx["thumb"] and "#-" in ctx["text"]
+            and re.match(r"^(add|sub)s?\b", ctx["text"]) is not None
+            and g[0] == "ok" and r[0] == "ok" and m[0] == "err"
+            and len(g[1][0]) == 4 and len(r[1][0]) == 2)
+
+
 DEVIATIONS = [
+    ("a-negated-thumb-immediate-narrowed", rsasm_narrows_a_negated_immediate),
     ("a-condition-on-vaddl-or-vsubl",
      lambda g, m, r, ctx: gas_takes_a_condition_on_vaddl(g, m, ctx)),
     ("p9-is-a-plain-coprocessor-transfer",
@@ -1363,6 +1381,8 @@ def report(results, args, nforms):
         if len(rows) > args.limit:
             p.append(f"    ... {len(rows) - args.limit} more (raise --limit)")
     print("\n".join(p))
+    # The last line is the one tools/fuzz/run.sh reads.
+    print(f"--- arm: {len(results)} case(s) compared, {totals['rsasm']} finding(s)")
     return 1 if totals["rsasm"] else 0
 
 

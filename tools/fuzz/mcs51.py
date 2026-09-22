@@ -529,6 +529,8 @@ def fuzz(args):
         print("  sdas:         " + fmt(r["sd"]))
         print("  rsasm (AS):   " + fmt(r["rs_as"]))
         print("  rsasm (sdas): " + fmt(r["rs_sd"]))
+    # The last line is the one tools/fuzz/run.sh reads.
+    print("--- mcs51: %d case(s) compared, %d finding(s)" % (sum(counts.values()), counts["rsasm"]))
     return 1 if counts["rsasm"] else 0
 
 
