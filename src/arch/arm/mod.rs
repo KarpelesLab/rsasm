@@ -672,17 +672,27 @@ fn eabi_attribute(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
     }
     cur.advance();
     let span = cur.peek().span;
+    // The EABI's string tags: the two CPU names, `Tag_compatibility`,
+    // `Tag_also_compatible_with` and `Tag_conformance`. GNU as refuses the
+    // other spelling for either kind.
+    let wants_string = matches!(tag, 4 | 5 | 32 | 65 | 67);
     let value = match cur.peek().kind {
-        TokKind::Int(n) => {
+        TokKind::Int(n) if !wants_string => {
             cur.advance();
             crate::arch::AttrValue::Int(n)
         }
-        TokKind::Str(i) => {
+        TokKind::Str(i) if wants_string => {
             cur.advance();
             crate::arch::AttrValue::Str(String::from_utf8_lossy(cx.pool.get(i)).into_owned())
         }
+        _ if wants_string => {
+            cx.error(span, format!("`.eabi_attribute` tag {tag} takes a string"));
+            cur.set_pos(cur.all().len());
+            return;
+        }
         _ => {
-            cx.error(span, "`.eabi_attribute` expects a number or a string");
+            cx.error(span, format!("`.eabi_attribute` tag {tag} takes a number"));
+            cur.set_pos(cur.all().len());
             return;
         }
     };
