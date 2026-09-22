@@ -137,10 +137,6 @@ FORMATS = {
 # it. Where "NASM warns" is written, NASM assembles the line and prints a
 # warning, and rsasm stops.
 #
-#   1  `[esi*1]` and `[esi*2]`, with no base, are `[esi]` and `[esi+esi]` to
-#      NASM; rsasm writes an index-only SIB and a zero displacement, four
-#      bytes longer. `[esi*3]`, `*5` and `*9`, which have no encoding of
-#      their own, both fold.
 #   2  `jmp short l`, `jmp near l`, `jz short l`: rsasm reads the keyword as
 #      an unexpected token.
 #   3  `push dword 0x20` in 16-bit code (and `push word` in 32-bit) is
@@ -691,12 +687,11 @@ class Gen:
         scale = rng.choice([1, 2, 4, 8])
         disp = rng.choice(["", "", "+%d" % rng.randint(1, 0x7F), "-%d" % rng.randint(1, 0x7F),
                            "+0x%x" % rng.randint(0x80, 0x7FFFF)])
-        # With no base register, a scale of 3, 5 or 9 has to become
-        # `reg + reg*2/4/8`; 4 and 8 are encoded as they are written. A scale
-        # of 1 or 2 with no base is left out: NASM folds those too (`[esi*1]`
-        # is `[esi]` and `[esi*2]` is `[esi+esi]`) and rsasm writes the
-        # index-only SIB with a displacement of zero: NOT GENERATED 1.
-        alone = rng.choice([3, 4, 5, 8, 9])
+        # With no base register, a scale of 1 becomes the base, 2 becomes
+        # `reg + reg*1` and 3, 5 or 9 become `reg + reg*2/4/8`; only 4 and 8
+        # are encoded as they are written, since an index alone costs a
+        # four-byte displacement.
+        alone = rng.choice([1, 2, 3, 4, 5, 8, 9])
         noseg = override("")
         indexseg = override("", index)
         forms = ["[%s%s%s]" % (seg, base, disp),

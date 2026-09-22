@@ -815,6 +815,27 @@ impl OperandParser<'_, '_> {
         }
         m.disp = disp;
         m.span = start.to(close.span);
+        // NASM turns an index with nothing else into a base: `[esi*1]` is
+        // `[esi]`, and `[esi*2]` is `[esi+esi*1]`. Both are what an
+        // index-only address means, and both are four bytes shorter, since
+        // an index with no base needs a displacement it does not otherwise
+        // have. GNU as writes the long form for either, so the dialect
+        // decides. This is after the whole operand has been read, because
+        // `[esi*2+eax]` does have a base and must keep the scale it was
+        // written with.
+        if self.cx.dialect == crate::lexer::Dialect::Nasm
+            && m.base.is_none()
+            && let Some(r) = m.index
+            && !r.is_vector()
+            && matches!(m.scale, 1 | 2)
+        {
+            m.base = Some(r);
+            if m.scale == 1 {
+                m.index = None;
+            } else {
+                m.scale = 1;
+            }
+        }
         // 16-bit addressing pairs `bx` or `bp` with `si` or `di`, and ModRM
         // encodes the pair rather than an order, so `[si+bx]` is `[bx+si]`.
         if let (Some(b), Some(i)) = (m.base, m.index)
@@ -931,6 +952,18 @@ impl OperandParser<'_, '_> {
                         return None;
                     }
                     if !r.valid_index() {
+                        // `[esp*1]` is the one scale that needs no index at
+                        // all, and NASM reads it as the base it means. The
+                        // fold at the end of `intel_memory` cannot do this
+                        // one, because by then the operand has been refused.
+                        if s == 1
+                            && m.base.is_none()
+                            && self.cx.dialect == crate::lexer::Dialect::Nasm
+                        {
+                            m.base = Some(r);
+                            note_addr_size(m, r);
+                            return Some(None);
+                        }
                         self.cx.error(
                             tok.span,
                             format!("`{}` cannot be used as an index register", reg::name_of(r)),
