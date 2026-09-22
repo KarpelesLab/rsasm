@@ -33,33 +33,35 @@ root=$(cd "$here/../.." && pwd)
 
 # name | cases | extra arguments
 #
-# The counts are chosen so the whole set runs in a few minutes on a
-# four-core runner, and are scaled by --scale. Instruction fuzzers compare a
+# The counts are chosen so the whole set runs in a couple of minutes on a
+# four-core runner -- 745,000 cases in 1m48s, measured with `taskset -c 0-3`
+# -- and are scaled by --scale, so the nightly run at ten times that is
+# under twenty minutes. Instruction fuzzers compare a
 # case in a section of its own and batch 200 of them per assembler run, so
 # they are cheap; the whole-program ones (arm-programs, avr, mcs51, mos6502,
 # i8080, nasm) run one assembler per program and are an order of magnitude
 # dearer per case.
 FUZZERS="
-x86|30000|
-aarch64|20000|
-arm|20000|
-arm-programs|600|
-riscv|20000|
-powerpc|20000|
-mips|20000|
-sparc|12000|
-m68k|20000|
-sh|12000|
-rx|10000|
-rl78|10000|
-v850|10000|
-msp430|20000|
-avr|800|
-z80|12000|
-mos6502|8000|
-i8080|6000|
-mcs51|1500|
-nasm|600|
+x86|80000|
+aarch64|60000|
+arm|60000|
+arm-programs|1200|
+riscv|60000|
+powerpc|60000|
+mips|60000|
+sparc|40000|
+m68k|60000|
+sh|40000|
+rx|30000|
+rl78|30000|
+v850|30000|
+msp430|60000|
+avr|1600|
+z80|40000|
+mos6502|16000|
+i8080|12000|
+mcs51|3000|
+nasm|1200|
 "
 
 seed=1
