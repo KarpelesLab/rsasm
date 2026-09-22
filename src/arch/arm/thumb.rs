@@ -24,6 +24,10 @@ use crate::source::Span;
 
 pub const NOP: u16 = 0xbf00;
 
+/// The 32-bit `nop.w`, as its two halfwords; GNU as pads a Thumb-2
+/// alignment with these.
+pub const WIDE_NOP: (u16, u16) = (0xf3af, 0x8000);
+
 fn low(r: Reg) -> bool {
     r < 8
 }

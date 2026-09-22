@@ -4,7 +4,6 @@ pub const ABS32: u32 = 2;
 pub const REL32: u32 = 3;
 pub const ABS16: u32 = 5;
 pub const ABS8: u32 = 8;
-pub const PREL31: u32 = 42;
 pub const THM_CALL: u32 = 10;
 pub const CALL: u32 = 28;
 pub const JUMP24: u32 = 29;

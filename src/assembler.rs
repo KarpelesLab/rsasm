@@ -552,11 +552,16 @@ impl Assembler {
     }
 
     /// Switches to `id`, remembering where `.previous` should return to.
+    ///
+    /// Where the section is the one already current, the switch is still
+    /// recorded: GNU as's `obj_elf_section_change_hook` runs before every
+    /// section directive, so `.pushsection .foo` twice leaves `.previous`
+    /// pointing at `.foo`, not at what came before the first one.
     pub(crate) fn set_section(&mut self, id: SectionId) {
         if id != self.cur {
-            self.previous = Some(self.cur);
             self.dwarf_section_switch();
         }
+        self.previous = Some(self.cur);
         self.cur = id;
     }
 

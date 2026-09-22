@@ -1725,7 +1725,19 @@ impl Assembler {
                                     continue;
                                 }
                                 let (arch, _) = self.frag_arch(si, fi);
-                                if arch.addend_in_field(r.kind, rela) && r.addend != 0 {
+                                // An addend of zero still has to be written
+                                // where the field is not a plain integer: a
+                                // Thumb `b.w` encodes a displacement of zero
+                                // with its `J1` and `J2` bits set, and the
+                                // bits an instruction template left there
+                                // would be read back as some other distance.
+                                if arch.addend_in_field(r.kind, rela)
+                                    && (r.addend != 0
+                                        || !matches!(
+                                            kind.encoding,
+                                            crate::section::FieldEncoding::Whole
+                                        ))
+                                {
                                     // A byte or word field has no room for a
                                     // larger addend, which GNU as refuses
                                     // rather than truncate. It reads a 32-bit

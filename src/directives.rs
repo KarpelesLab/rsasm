@@ -93,9 +93,11 @@ impl Assembler {
                         }
                         self.cur = id
                     }
+                    // GNU as warns and carries on, which keeps a file that
+                    // pops one section too many assembling.
                     None => self
                         .diags
-                        .error(span, "`.popsection` without a matching `.pushsection`"),
+                        .warning(span, "`.popsection` without a matching `.pushsection`"),
                 }
                 true
             }
