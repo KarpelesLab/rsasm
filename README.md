@@ -959,10 +959,11 @@ GNU objdump's disassembly of random bytes, which reaches every operand value
 a form allows and shares nothing with either assembler's parser — and go to
 whichever references that target has. The 6502 and the 8080 are fuzzed with
 whole programs against ca65 and the Macro Assembler AS, as the 8051 already
-was, and `nasm` source against NASM itself. `tools/fuzz/run.sh` runs the set with
-one seed and bounded counts, which is what CI runs on every pull request;
-the nightly run uses the date as its seed and ten times the cases. A fuzzer
-that compared nothing fails the job as loudly as one that found a
+was, and `nasm` source against NASM itself. `tools/fuzz/run.sh` runs all
+twenty with one seed and bounded counts — 745,000 cases in under two
+minutes on a four-core runner — which is what CI runs on every pull
+request; the nightly run uses the date as its seed and ten times the cases.
+A fuzzer that compared nothing fails the job as loudly as one that found a
 difference. See `tools/fuzz/README.md`.
 
 AArch64's SIMD, floating-point and SVE table is derived from llvm-mc rather
