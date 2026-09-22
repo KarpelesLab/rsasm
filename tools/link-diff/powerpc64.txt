@@ -148,3 +148,39 @@ reader:
         lis     3, bigger@ha
         addi    3, 3, bigger@l
         blr
+
+=== the halves of a 64-bit address, and the TOC and GOT
+--- a.s
+        .text
+        .globl  _start
+_start:
+        lis     3, target+0x1234567800000000@highest
+        ori     3, 3, target+0x1234567800000000@higher
+        sldi    3, 3, 32
+        oris    3, 3, target@high
+        ori     3, 3, target@l
+        lis     4, dat+0x9abcdef000000000@highesta
+        addis   4, 4, dat+0x9abcdef000000000@highera
+        sldi    4, 4, 32
+        addis   4, 4, dat@higha
+        addi    4, 4, dat@l
+        addis   5, 2, tocref@toc@ha
+        addi    5, 5, tocref@toc@l
+        ld      6, tocref@toc(2)
+        ld      7, target@got(2)
+        lis     8, target@got@ha
+        ld      8, target@got@l(8)
+        blr
+        .section .toc,"aw"
+tocref: .quad   dat
+--- b.s
+        .text
+        .globl  target
+        .type   target, %function
+target: nop
+        nop
+        .data
+        .globl  dat
+        .type   dat, %object
+dat:    .quad   0x1122334455667788
+        .size   dat, 8

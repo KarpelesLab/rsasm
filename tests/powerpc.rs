@@ -434,6 +434,74 @@ fn symbolic_operands_become_relocations() {
 }
 
 #[test]
+fn modifiers_choose_the_relocation_the_reference_writes() {
+    // The halves of a 64-bit address, and the two tables a PowerPC64 program
+    // reaches its data through. A DS-form displacement takes a relocation of
+    // its own, since its low two bits are opcode.
+    let src = "\
+        lis 3, ext@highest\n\
+        ori 3, 3, ext@highera\n\
+        oris 3, 3, ext@high\n\
+        addis 3, 3, ext@higha\n\
+        ori 3, 3, ext@higher\n\
+        addi 3, 3, ext@highesta\n\
+        addis 4, 2, ext@toc@ha\n\
+        addi 4, 4, ext@toc@l\n\
+        ld 5, ext@toc(2)\n\
+        ld 6, ext@toc@l(2)\n\
+        lis 7, ext@got@ha\n\
+        ld 7, ext@got@l(7)\n\
+        ld 8, ext@got(2)\n\
+        addi 9, 9, ext@got@h\n";
+    let asm = assemble_for("powerpc64", src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    // ADDR16_HIGHEST, HIGHERA, HIGH, HIGHA, HIGHER, HIGHESTA, then
+    // TOC16_HA, TOC16_LO, TOC16_DS, TOC16_LO_DS, GOT16_HA, GOT16_LO_DS,
+    // GOT16_DS and GOT16_HI.
+    assert_eq!(
+        kinds,
+        vec![41, 40, 110, 111, 39, 42, 50, 48, 63, 64, 17, 59, 58, 16]
+    );
+
+    // A call the linker routes through the PLT, and one it is told to keep
+    // direct: both are PowerPC32's, and both cover the whole instruction
+    // word rather than a halfword of it.
+    let asm = assemble_for("powerpc", "bl ext@plt\nb ext@local\nlis 3, ext@got@ha\n");
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let relocs: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
+    // R_PPC_PLTREL24, R_PPC_LOCAL24PC, R_PPC_GOT16_HA.
+    assert_eq!(relocs, vec![(0, 18), (4, 23), (10, 17)]);
+}
+
+#[test]
+fn modifiers_neither_reference_agrees_on_are_refused() {
+    // PowerPC64 has no relocation for a call through the PLT: GNU as does
+    // not read the spelling and llvm-mc writes PowerPC32's number, which
+    // GNU ld refuses as an unsupported relocation type.
+    assert!(errors_for("powerpc64", "bl foo@plt\n").contains("only in PowerPC32"));
+    // On a 14-bit branch GNU as writes the 24-bit relocation and llvm-mc
+    // drops the modifier.
+    assert!(errors_for("powerpc", "bne cr0, foo@plt\n").contains("24-bit PC-relative"));
+    // A halfword modifier on an instruction with no halfword field.
+    assert!(errors_for("powerpc", "bl foo@ha\n").contains("branch target"));
+    // The halves above bit 31 have no DS-form relocation in either
+    // reference, since a DS field cannot hold a whole halfword.
+    assert!(errors_for("powerpc64", "ld 3, foo@higher(2)\n").contains("DS-form"));
+    assert!(errors_for("powerpc64", "ld 3, foo@toc@ha(2)\n").contains("DS-form"));
+    // The TOC is PowerPC64's.
+    assert!(errors_for("powerpc", "addi 3, 2, foo@toc\n").contains("64-bit object"));
+}
+
+#[test]
 fn relocation_modifiers_on_constants_are_applied() {
     each(
         "powerpc64",
@@ -446,11 +514,25 @@ fn relocation_modifiers_on_constants_are_applied() {
             ("ori 3, 3, 0x12348000@l", "60638000"),
             ("lwz 3, 0x12348000@l(4)", "80648000"),
             ("ld 3, 0x12348004@l(4)", "e8648004"),
+            // The halves above bit 31, and `@high`/`@higha`, which take the
+            // same halfword as `@h`/`@ha` but are not range-checked.
+            ("lis 3, 0x1234567890abcdef@high", "3c6090ab"),
+            ("lis 3, 0x1234567890abcdef@higha", "3c6090ac"),
+            ("lis 3, 0x1234567890abcdef@higher", "3c605678"),
+            ("lis 3, 0x1234ffff8000@highera", "3c601235"),
+            ("lis 3, 0x1234567890abcdef@highest", "3c601234"),
+            ("lis 3, 0xffff8000ffff8000@highesta", "3c60ffff"),
+            ("ori 3, 3, 0x1234567890abcdef@highesta", "60631234"),
         ],
     );
     assert!(errors_for("powerpc64", "li 3, 1 + 2@l\n").contains("whole operand"));
-    assert!(errors_for("powerpc64", "li 3, 2@got\n").contains("not supported"));
-    assert!(errors_for("powerpc64", "bl foo@plt\n").contains("not supported"));
+    // A GOT or TOC entry is the linker's to build, so a number cannot stand
+    // where the symbol naming it should be.
+    assert!(errors_for("powerpc64", "li 3, 2@got\n").contains("needs a symbol"));
+    assert!(errors_for("powerpc64", "li 3, 2@toc@ha\n").contains("needs a symbol"));
+    // The halves above bit 31 have no `R_PPC_*` number, and GNU as does not
+    // read the spelling in 32-bit code either.
+    assert!(errors_for("powerpc", "lis 3, 0x1234@higher\n").contains("64-bit object"));
 }
 
 #[test]

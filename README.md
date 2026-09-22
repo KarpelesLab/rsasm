@@ -229,8 +229,12 @@ but 18 forms where both manuals show MAME to be wrong.
   point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
   branches, and the privileged, hypervisor, cache-hint and synchronisation
   instructions POWER8–10 added (`stop`, `slbieg`, `hashst`, `mfdscr` and the
-  like); relocation modifiers other than `@l`, `@h`, `@ha`, `@pcrel` and
-  `@got@pcrel` (`@toc@ha`, `@got`, `@higher`)
+  like); the thread-local relocation modifiers (`@tprel`, `@dtprel`,
+  `@got@tlsgd` and the rest), because a symbol defined in `.tdata` or `.tbss`
+  does not come out `STT_TLS`, which the linker needs; the spellings only
+  GNU as reads, so that nothing could check them (`@plt@ha`, `@sectoff`,
+  `@sdarel`); and `@notoc`, which is a different relocation to each of the
+  two references
 - MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
   warnings and insertion, the silicon errata options, assembly-time
   relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
