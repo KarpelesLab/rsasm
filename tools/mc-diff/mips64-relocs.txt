@@ -150,3 +150,17 @@ hid:    .long   0
         .set    noreorder
         .globl  f
 f:      nop
+
+=== a 64-bit floating-point file puts a double in one register
+        .set    noreorder
+        .globl  f
+f:      add.d   $f4, $f5, $f6
+        mov.d   $f7, $f8
+        c.eq.d  $f9, $f10
+        ldc1    $f11, 8($sp)
+        sdc1    $f12, 16($a0)
+        cvt.d.s $f13, $f14
+        cvt.l.d $f15, $f16
+        cvt.d.l $f17, $f18
+        dmtc1   $4, $f19
+        dmfc1   $5, $f20

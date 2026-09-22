@@ -144,3 +144,24 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+
+=== a double-precision operand names a register pair
+        .set    noreorder
+        .globl  f
+f:      add.d   $f4, $f6, $f8
+        mov.d   $f16, $f18
+        c.eq.d  $f28, $f30
+        movf.d  $f20, $f22, $fcc6
+        ldc1    $f4, 8($sp)
+        sdc1    $f6, 16($a0)
+        cvt.d.s $f10, $f12
+        cvt.s.d $f14, $f16
+
+=== .module fp=64 puts a double in one register
+        .module fp=64
+        .set    noreorder
+        .globl  f
+f:      add.d   $f4, $f5, $f6
+        c.eq.d  $f9, $f10
+        ldc1    $f11, 8($sp)
+        cvt.d.s $f13, $f14

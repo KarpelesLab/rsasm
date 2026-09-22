@@ -19,7 +19,17 @@ A case is only the same instruction when it is assembled where it was
 disassembled, so each one carries the `.skip` that puts it back at its own
 offset. A branch's target needs more than that: the disassembler prints an
 address, and the three assemblers do not read a bare number there the same
-way, so `assemblable_target` below puts the case's own label in its place.
+way, so `assemblable_target` below writes it as an offset from the branch,
+which every one of them reads alike and which keeps the displacement the
+case was disassembled with.
+
+MIPS objdump also prints a general-purpose register by its ABI name and
+without the `$` sigil -- `swl v1,-27583(t7)` -- which none of the three
+assemblers reads back, so the disassembly is asked for numbers instead.
+Between them those two put nearly everything in reach: with neither, 95% of
+the generated cases were refused by all three assemblers over their spelling
+and compared nothing, with only the targets put right 91% were, and with
+both 99.7% of them are compared.
 
 GNU as runs with `.set noreorder`, `.set nomacro` and `.set noat` at the top
 of the file: by default it moves instructions into branch delay slots and
@@ -29,8 +39,9 @@ keeps it from reordering anything else.
 The instructions the backend does not implement are skipped by name, in
 `NOT_IMPLEMENTED` below, which is the MIPS32r2-and-later set the README's
 "MIPS 32/64" does not claim: the bit-field and count-leading instructions,
-the prefetches, the paired-single and MIPS-3D arithmetic, and the rest of
-the privileged set.
+the rotates, the prefetches and the rest of the privileged set, together
+with coprocessors 2 and 3 and the DSP, MDMX, MIPS-3D and paired-single
+extensions.
 
 The exit status is 1 when rsasm differs from both references on any case.
 
@@ -65,78 +76,106 @@ def word(rng):
     return (rng.choice(OPCODES) << 26) | rng.getrandbits(26)
 
 
-# Two targets the disassembler prints in a form no assembler reads back.
-#
-# A conditional branch's target is printed as the address it lands on, and
-# the three assemblers do not agree on what a bare *number* written there
-# means: rsasm reads it as the address it is, llvm-mc as the displacement
-# itself, and GNU as leaves it to the linker as a relocation against the
-# absolute section, which overflows the 16-bit field once the address is far
-# from the branch (see src/arch/mips/encode.rs). A label is the one spelling
-# all three agree on, so the target becomes the case's own, which
-# `build_source` defines just after it. The flag, the `tf` and `nd` bits and
-# the register fields are what the case was for anyway.
-BRANCH = re.compile(r"""^(
-    b | bal | b(eq|ne)l? | b(lez|gtz|ltz|gez)l? | b(ltz|gez)all?
-  | bc[0-3](any[24])?[ft]l?
-)\s""", re.X)
+# MIPS objdump prints a general-purpose register by its ABI name and without
+# the `$` sigil -- `swl v1,-27583(t7)` -- which no MIPS assembler reads back,
+# so the disassembly has to be asked for numbers instead. Floating-point
+# registers are already printed as `$f0` and the flags as `$fcc0`.
+NUMERIC = "-Mgpr-names=numeric"
+
+# Every mnemonic the MIPS disassembler prints with a PC-relative target
+# begins with `b`, and `break` is the only one that begins with `b` and does
+# not. `j` and `jal` are left alone: their target is an index into the
+# current 256 MB region, which all three assemblers read as the address it
+# is printed as.
+BRANCH = re.compile(r"b(?!reak$)\w*")
+NUMBER = re.compile(r"-?(0x[0-9a-f]+|[0-9]+)")
 # `jalx` prints its target with the ISA-mode bit set -- `jalx 0x1235` for the
 # word whose 26-bit field holds 0x1234 -- because the call lands in MIPS16 or
 # microMIPS code. Every assembler refuses a target that is not a multiple of
 # four, so the bit comes off, which gives back the same word again.
-JALX = re.compile(r"^jalx\s+(-?(?:0x)?[0-9a-f]+)$")
-ADDRESS = re.compile(r"-?(?:0x)?[0-9a-f]+$")
+JALX = re.compile(r"jalx\s+(-?(?:0x)?[0-9a-f]+)")
 
 
-def assemblable_target(text, _off):
-    m = JALX.match(text)
+def assemblable_target(text, off):
+    """Writes the two targets the disassembler prints in a form no assembler
+    reads back.
+
+    A branch's target is printed as the address it lands on, and the three
+    assemblers do not agree on what a bare number written there means: rsasm
+    and GNU as read an address, llvm-mc reads the displacement itself, and
+    GNU as cannot resolve an absolute address against a section it is still
+    assembling, so it leaves a `R_MIPS_PC16` against `*ABS*` that overflows
+    once the address is far from the branch (see src/arch/mips/encode.rs).
+    `. + d` means the same thing to all three, and with `d` measured from
+    where the instruction was disassembled it is the same instruction again,
+    down to the bits in the displacement field.
+
+    `jalx` is the other: its target keeps the ISA-mode bit, and taking the
+    bit off gives back the word it was printed from.
+    """
+    m = JALX.fullmatch(text)
     if m:
         return f"jalx {int(m.group(1), 0) & ~1:#x}"
-    return ADDRESS.sub("L", text) if BRANCH.match(text) else text
+    mnemonic, _, operands = text.partition(" ")
+    if not BRANCH.fullmatch(mnemonic) or not operands:
+        return text
+    ops = operands.rsplit(",", 1)
+    last = ops[-1].strip()
+    if not NUMBER.fullmatch(last):
+        return text
+    value = int(last, 16) if "0x" in last else int(last, 10)
+    ops[-1] = f".{value - off:+d}"
+    return mnemonic + " " + ",".join(ops)
 
 
 TARGETS = {
     "mips": Target("mips", "mips", gas="mips64-elf-as",
                    gas_flags=["-mips32", "-EB", "-O0", "-mno-pdr"],
                    mc="mips", objdump="mips64-elf-objdump",
-                   objdump_flags=["-m", "mips:isa32", "-EB"], head=HEAD,
+                   objdump_flags=["-m", "mips:isa32", "-EB", NUMERIC], head=HEAD,
                    addr_bits=32, word_maker=word, rewrite=assemblable_target),
     "mipsel": Target("mipsel", "mipsel", gas="mips64-elf-as",
                      gas_flags=["-mips32", "-EL", "-O0", "-mno-pdr"],
                      mc="mipsel", objdump="mips64-elf-objdump",
-                     objdump_flags=["-m", "mips:isa32", "-EL"], head=HEAD,
+                     objdump_flags=["-m", "mips:isa32", "-EL", NUMERIC], head=HEAD,
                      addr_bits=32, word_maker=word, little=True,
                      rewrite=assemblable_target),
     "mips64": Target("mips64", "mips64", gas="mips64-elf-as",
                      gas_flags=["-mips64", "-EB", "-O0", "-mno-pdr"],
                      mc="mips64", objdump="mips64-elf-objdump",
-                     objdump_flags=["-m", "mips:isa64", "-EB"], head=HEAD,
+                     objdump_flags=["-m", "mips:isa64", "-EB", NUMERIC], head=HEAD,
                      addr_bits=64, word_maker=word, rewrite=assemblable_target),
     "mips64el": Target("mips64el", "mips64el", gas="mips64-elf-as",
                        gas_flags=["-mips64", "-EL", "-O0", "-mno-pdr"],
                        mc="mips64el", objdump="mips64-elf-objdump",
-                       objdump_flags=["-m", "mips:isa64", "-EL"], head=HEAD,
+                       objdump_flags=["-m", "mips:isa64", "-EL", NUMERIC], head=HEAD,
                        addr_bits=64, word_maker=word, little=True,
                        rewrite=assemblable_target),
 }
 
 # What README.md's "MIPS 32/64" does not claim: everything MIPS32r2 and later
-# added, the coprocessor-2 and privileged sets, and the DSP and MSA
-# extensions. Skipping them by name keeps a whole extension from reading as
-# thousands of identical findings; adding one to the backend is what takes it
-# off this list.
+# added, the second and third coprocessors, the privileged set, and the DSP,
+# MDMX, MIPS-3D and paired-single extensions. Skipping them by name keeps a
+# whole extension from reading as thousands of identical findings; adding one
+# to the backend is what takes it off this list.
+#
+# The coprocessor-2 loads and stores belong with the rest of coprocessor 2:
+# their register operand is a coprocessor-2 register, which
+# src/arch/mips/reg.rs has no class for, and the backend has neither `mfc2`
+# nor `cfc2` nor `bc2t` either.
 NOT_IMPLEMENTED = re.compile(r"""^(
     c[lt]o | dc[lt]o | dc[lt]z | clz | ins | dins[mu]? | ext | dext[mu]? | wsbh | dsbh | dshd
-  | seb | seh | rotr?v? | drotr(32|v)?
+  | seb | seh | d?ro[lr](32|v)? | d?rot[lr](32|v)?
   | movn\.[sdq] | movz\.[sdq] | pref | prefx | cache | synci | rdhwr | rdpgpr | wrpgpr
-  | deret | wait | tlb.* | mfc2 | mtc2 | cfc[0-9] | ctc[0-9] | dmfc[02] | dmtc[02]
-  | bc[023]\w* | bc1any\w* | c[0-9] | cop[0-9] | lwxc1 | ldxc1 | swxc1 | sdxc1 | luxc1 | suxc1
+  | deret | wait | tlb.* | m[ft]c[23] | dm[ft]c[023] | cfc[0-9] | ctc[0-9]
+  | [ls][wd]c[023] | bc[023]\w* | bc1any\w* | c[0-9] | cop[0-9]
+  | lwxc1 | ldxc1 | swxc1 | sdxc1 | luxc1 | suxc1
   | madd\.[sdq] | msub\.[sdq] | nmadd\.[sdq] | nmsub\.[sdq] | recip\.[sdq] | rsqrt\.[sdq]
   | alnv\.ps | cvt\.ps\.s | cvt\.s\.p[lu] | p[lu][lu]\.ps | mulr\.ps | cabs\..*
   | ei | di | jalr\.hb | jr\.hb | sdbbp | ll[dwe] | sc[dwe] | lld | scd
-  | b | bal | li | la | dla | move | not | neg[u]? | beqz | bnez | seq | sne
-  | s[lg][te]u? | ulw | ulh | usw | ush | uld | usd | rem | remu | ddiv[u]? | dmul.*
-  | .*\.ps | v?mul[ou]? | msa.* | add(v|s)_.* | \w+\.qb | \w+\.ph | \w+\.w\.phl?
+  | dla | seq | sne | s(le|gt|ge)u? | ulw | ulh | usw | ush | uld | usd
+  | rem | remu | ddiv[u]? | mul(o|ou|u) | dmul(o|ou|u)? | vmul[ou]?
+  | .*\.ps | msa.* | add(v|s)_.* | \w+\.qb | \w+\.ph | \w+\.w\.phl?
 )$""", re.X)
 
 
@@ -145,15 +184,6 @@ def skip(case):
 
 
 # ---- what the references disagree about -------------------------------------
-
-def gas_relocates_a_local_label(text, res, target):
-    """GNU as writes a relocation for a branch whose target is a number,
-    where llvm-mc encodes the displacement. Same bytes, more relocations."""
-    g, m = res.get("gas"), res.get("mc")
-    if not g or not m or g[0] != "ok" or m[0] != "ok":
-        return False
-    return g[1][0] == m[1][0] and len(g[1][1]) != len(m[1][1])
-
 
 def mc_refuses_a_spelling(text, res, target):
     """llvm-mc has no pattern for a form GNU as and its disassembler both
@@ -168,8 +198,44 @@ def gas_refuses_a_spelling(text, res, target):
     return bool(g and m and g[0] == "err" and m[0] == "ok")
 
 
+# An operand that holds a double: a `.d` mnemonic, the `.d` side of a
+# conversion, or the register of `ldc1` / `sdc1`.
+DOUBLE = re.compile(r".*\.d|cvt\.d\.\w+|[ls]dc1")
+FPR = re.compile(r"\$f(\d+)\b")
+
+
+def mc_rounds_an_odd_double_register(text, res, target):
+    """A double written in an odd floating-point register, which both
+    references warn about and then read differently: GNU as encodes the
+    number written, llvm-mc rounds it down to the even half of the pair.
+    rsasm follows GNU as. Only a 32-bit floating-point file has pairs; see
+    src/arch/mips/abi.rs."""
+    if target.addr_bits != 32:
+        return False
+    mnemonic = text.split("\n")[-1].split()[0]
+    return bool(DOUBLE.fullmatch(mnemonic)
+                and any(int(n) % 2 for n in FPR.findall(text)))
+
+
+# A REGIMM branch that links, testing the register it is about to write.
+LINKING_BRANCH_ON_RA = re.compile(r"b(ltz|gez)all?\s+\$(31|ra)\b")
+
+
+def gas_refuses_a_link_through_the_register_it_tests(text, res, target):
+    """`bltzal $ra` and its three relatives: the branch overwrites `$ra`
+    before anything reads the value it tested, which the architecture leaves
+    unpredictable. GNU as refuses the form and llvm-mc assembles it; rsasm
+    follows GNU as, in src/arch/mips/encode.rs."""
+    g, m = res.get("gas"), res.get("mc")
+    if not (g and m and g[0] == "err" and m[0] == "ok"):
+        return False
+    return bool(LINKING_BRANCH_ON_RA.match(text.split("\n")[-1]))
+
+
 RULES = gasfuzz.Rules(splits=[
-    ("gas-relocates-a-numeric-target", gas_relocates_a_local_label, "mc"),
+    ("mc-rounds-an-odd-double-register", mc_rounds_an_odd_double_register, "gas"),
+    ("gas-refuses-a-link-through-the-register-it-tests",
+     gas_refuses_a_link_through_the_register_it_tests, "gas"),
     ("mc-refuses-a-spelling", mc_refuses_a_spelling, "gas"),
     ("gas-refuses-a-spelling", gas_refuses_a_spelling, "mc"),
 ])
