@@ -228,18 +228,20 @@ impl Assembler {
         for sec in self.attribute_sections() {
             let bytes = match &sec.body {
                 crate::arch::AttrBody::Bytes(b) => b.clone(),
-                crate::arch::AttrBody::Tags { vendor, tags } => {
-                    let mut tags = tags.clone();
-                    for (v, tag, value) in &self.attr_overrides {
-                        if v != vendor {
-                            continue;
-                        }
-                        match tags.binary_search_by_key(tag, |&(t, _)| t) {
-                            Ok(i) => tags[i].1 = value.clone(),
-                            Err(i) => tags.insert(i, (*tag, value.clone())),
+                crate::arch::AttrBody::Tags(vendors) => {
+                    let mut vendors = vendors.clone();
+                    for v in &mut vendors {
+                        for (vendor, tag, value) in &self.attr_overrides {
+                            if *vendor != v.name {
+                                continue;
+                            }
+                            match v.tags.binary_search_by_key(tag, |&(t, _)| t) {
+                                Ok(i) => v.tags[i].1 = value.clone(),
+                                Err(i) => v.tags.insert(i, (*tag, value.clone())),
+                            }
                         }
                     }
-                    crate::arch::encode_attributes(vendor, &tags, endian)
+                    crate::arch::encode_attributes(&vendors, endian)
                 }
             };
             let name = self.interner.intern(sec.name);

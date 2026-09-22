@@ -1362,10 +1362,19 @@ impl Assembler {
         true
     }
 
-    /// `.gnu_attribute <tag>, <value>`: one tag of the object's
-    /// `.gnu.attributes`, which every ELF target has and no target of
-    /// rsasm's writes of its own accord. GNU as for PowerPC is what this
-    /// follows: the tag is a number, and the value a number or a string.
+    /// `.gnu_attribute <tag>, <value>`: one of the object's vendor-neutral
+    /// build attributes, which on PowerPC is where the floating-point and
+    /// vector ABIs a linker refuses to mix are recorded. Every ELF target
+    /// has the directive and none writes these tags of its own accord.
+    ///
+    /// They land beside the processor's where the target has a
+    /// build-attributes section of its own, as they do in GNU as for ARM and
+    /// RISC-V, and in a `.gnu.attributes` where it has none, as on MIPS and
+    /// PowerPC; see `Assembler::attribute_sections`. GNU as for MSP430 drops
+    /// them instead, which looks like an oversight rather than a rule, so
+    /// rsasm writes them there too.
+    ///
+    /// The tag is a number, and the value a number or a string.
     fn dir_gnu_attribute(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
         let tok = cur.peek();
         let TokKind::Int(tag) = tok.kind else {

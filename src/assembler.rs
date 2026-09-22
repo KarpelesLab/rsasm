@@ -1562,17 +1562,33 @@ impl Assembler {
     pub fn attribute_sections(&self) -> Vec<crate::arch::AttrSection> {
         let (arch, state) = self.target_state();
         let mut sections = arch.elf_attributes(state);
+        if !self.attr_overrides.iter().any(|&(v, _, _)| v == "gnu") {
+            return sections;
+        }
         // `.gnu_attribute` is every ELF target's, and none of them writes the
-        // vendor-neutral section of its own accord, so the directive is what
-        // brings it into being.
-        let has_gnu = |s: &crate::arch::AttrSection| matches!(&s.body, crate::arch::AttrBody::Tags { vendor, .. } if *vendor == "gnu");
-        if self.attr_overrides.iter().any(|&(v, _, _)| v == "gnu") && !sections.iter().any(has_gnu)
-        {
-            sections.push(crate::arch::AttrSection::attributes(
+        // vendor-neutral tags of its own accord, so the directive is what
+        // brings them into being. GNU as puts them beside the processor's
+        // where the target has a build-attributes section — ARM's and
+        // RISC-V's hold an `aeabi` or `riscv` vendor section and then a
+        // `gnu` one — and in a `.gnu.attributes` of its own where it has
+        // none, as on MIPS and PowerPC.
+        let vendors = sections.iter_mut().find_map(|s| match &mut s.body {
+            crate::arch::AttrBody::Tags(vendors) => Some(vendors),
+            crate::arch::AttrBody::Bytes(_) => None,
+        });
+        match vendors {
+            Some(vendors) if !vendors.iter().any(|v| v.name == "gnu") => {
+                vendors.push(crate::arch::AttrVendor {
+                    name: "gnu",
+                    tags: Vec::new(),
+                });
+            }
+            Some(_) => {}
+            None => sections.push(crate::arch::AttrSection::attributes(
                 ".gnu.attributes",
                 "gnu",
                 Vec::new(),
-            ));
+            )),
         }
         sections
     }

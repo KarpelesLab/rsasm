@@ -872,6 +872,13 @@ fn objects_carry_the_isa_string() {
             with_tag.clone(),
         ),
         ("riscv64", "\t.attribute 6, 1\n\tnop\n", with_tag),
+        // `.gnu_attribute` adds a second vendor section to the same
+        // section, which is where GNU as puts it on a target that has one.
+        (
+            "riscv64",
+            "\t.gnu_attribute 4, 1\n\tnop\n",
+            format!("{rv64} 0f 00 00 00 67 6e 75 00 01 07 00 00 00 04 01"),
+        ),
     ] {
         let asm = assemble_for(arch, src);
         assert!(!asm.diags().has_errors(), "{arch}: {src}");

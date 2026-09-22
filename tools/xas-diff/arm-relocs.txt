@@ -731,3 +731,7 @@ f:      mov     r0, r1
         .eabi_attribute 6, 7
         .eabi_attribute 6, 9
 f:      mov     r0, r1
+=== .gnu_attribute goes beside the processor's tags
+        .syntax unified
+        .gnu_attribute 4, 1
+f:      mov     r0, r1

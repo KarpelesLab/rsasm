@@ -224,13 +224,22 @@ pub enum AttrBody {
     /// Bytes, written as they are: MIPS's `.reginfo` and V850's
     /// `.note.renesas` are structures, not attributes.
     Bytes(Vec<u8>),
-    /// An ELF build-attributes section: the vendor whose tags these are, and
-    /// the `File` subsection's tags in increasing tag order. The core
-    /// encodes it, so that an attribute directive can change a tag first.
-    Tags {
-        vendor: &'static str,
-        tags: Vec<(u32, AttrValue)>,
-    },
+    /// An ELF build-attributes section: one vendor section per vendor whose
+    /// tags the object carries. The core encodes it, so that an attribute
+    /// directive can change a tag first, or add a vendor: GNU as puts what
+    /// `.gnu_attribute` says in `.ARM.attributes` and `.riscv.attributes`
+    /// next to the processor's, where a target with no such section of its
+    /// own gets a `.gnu.attributes` instead.
+    Tags(Vec<AttrVendor>),
+}
+
+/// One vendor's tags in a build-attributes section.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct AttrVendor {
+    pub name: &'static str,
+    /// The `File` subsection's tags, in increasing tag order.
+    pub tags: Vec<(u32, AttrValue)>,
 }
 
 /// A section the target's reference assembler writes into every object of
@@ -275,47 +284,45 @@ impl AttrSection {
             sh_flags: 0,
             align: 1,
             entsize: 0,
-            body: AttrBody::Tags { vendor, tags },
+            body: AttrBody::Tags(vec![AttrVendor { name: vendor, tags }]),
         }
     }
 }
 
-/// An ELF build-attributes section: `'A'`, then one vendor section holding a
-/// `File` subsection of `tag, value` pairs.
+/// An ELF build-attributes section: `'A'`, then a vendor section each,
+/// holding a `File` subsection of `tag, value` pairs.
 ///
 /// Both lengths count themselves and are written in the object's byte order,
 /// so a big-endian PowerPC object's are not a little-endian ARM one's. The
 /// order is the order of `tags`; GNU as and llvm-mc write them by increasing
 /// tag number.
-pub(crate) fn encode_attributes(
-    vendor: &str,
-    tags: &[(u32, AttrValue)],
-    endian: Endian,
-) -> Vec<u8> {
+pub(crate) fn encode_attributes(vendors: &[AttrVendor], endian: Endian) -> Vec<u8> {
     let word = |v: u32| match endian {
         Endian::Little => v.to_le_bytes(),
         Endian::Big => v.to_be_bytes(),
     };
-    let mut body = Vec::new();
-    for (tag, value) in tags {
-        write_uleb(&mut body, u64::from(*tag));
-        match value {
-            AttrValue::Int(v) => write_uleb(&mut body, *v),
-            AttrValue::Str(s) => {
-                body.extend_from_slice(s.as_bytes());
-                body.push(0);
+    let mut out = vec![b'A'];
+    for vendor in vendors {
+        let mut body = Vec::new();
+        for (tag, value) in &vendor.tags {
+            write_uleb(&mut body, u64::from(*tag));
+            match value {
+                AttrValue::Int(v) => write_uleb(&mut body, *v),
+                AttrValue::Str(s) => {
+                    body.extend_from_slice(s.as_bytes());
+                    body.push(0);
+                }
             }
         }
+        // The `File` subsection: its tag, its length, and the pairs.
+        let mut sub = vec![1u8];
+        sub.extend_from_slice(&word(5 + body.len() as u32));
+        sub.extend_from_slice(&body);
+        out.extend_from_slice(&word(4 + vendor.name.len() as u32 + 1 + sub.len() as u32));
+        out.extend_from_slice(vendor.name.as_bytes());
+        out.push(0);
+        out.extend_from_slice(&sub);
     }
-    // The `File` subsection: its tag, its length, and the pairs.
-    let mut sub = vec![1u8];
-    sub.extend_from_slice(&word(5 + body.len() as u32));
-    sub.extend_from_slice(&body);
-    let mut out = vec![b'A'];
-    out.extend_from_slice(&word(4 + vendor.len() as u32 + 1 + sub.len() as u32));
-    out.extend_from_slice(vendor.as_bytes());
-    out.push(0);
-    out.extend_from_slice(&sub);
     out
 }
 
