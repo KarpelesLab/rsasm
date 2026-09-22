@@ -30,6 +30,41 @@ fwd:
         retl
         nop
 
+=== every floating-point condition branch, backwards
+# `FBfcc` numbers its conditions its own way: `fbne` is 1 where the integer
+# `bne` is 9, and eight of these names have no integer counterpart at all.
+back:
+        nop
+        fba     back
+        fbn     back
+        fbu     back
+        fbg     back
+        fbug    back
+        fbl     back
+        fbul    back
+        fblg    back
+        fbne    back
+        fbe     back
+        fbue    back
+        fbge    back
+        fbuge   back
+        fble    back
+        fbule   back
+        fbo     back
+        nop
+
+=== floating-point branch aliases and the annul bit
+        fb      fwd
+        fb,a    fwd
+        fbz     fwd
+        fbnz    fwd
+        fbe,a   fwd
+        fbo,a   fwd
+        nop
+fwd:
+        retl
+        nop
+
 === branch condition aliases
 back:
         beq     back

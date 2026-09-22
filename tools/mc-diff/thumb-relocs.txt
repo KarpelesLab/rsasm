@@ -136,3 +136,22 @@ hid:    .long   0
         .byte   6
         .section custom,"a"
         .byte   7
+=== the GOT suffixes and the halves of an address
+        @ `.word sym(PLT)` is not here: llvm-mc refuses it, where GNU as,
+        @ which rsasm follows, emits the plain absolute reference
+        @ (tools/xas-diff/thumb-relocs.txt).
+        .text
+        .p2align 2
+        @ GNU as, and rsasm, pad the end of a code section to its alignment
+        @ up to a word; llvm-mc does not. One more halfword ends this one on
+        @ a word, so that the two agree.
+        nop
+f:      movw    r0, #:lower16:sym
+        movt    r0, #:upper16:sym
+        movw    r1, #:lower16:(sym - f)
+        movt    r1, #:upper16:(sym - f)
+        bl      sym(PLT)
+        b.w     sym(PLT)
+        bx      lr
+        .word   sym(GOT), sym(GOTOFF), sym(GOT_PREL)
+        .word   _GLOBAL_OFFSET_TABLE_ - (f + 4)

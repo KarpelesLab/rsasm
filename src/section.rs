@@ -197,6 +197,14 @@ pub struct FixupKind {
     /// Narrower bounds than the field's width allows, where a reference
     /// assembler picks a form by a range that is not a power of two.
     pub limits: Option<(i64, i64)>,
+    /// Bounds on the addend a relocation may leave behind in the field, where
+    /// the field is narrower than the value it stands for and so cannot hold
+    /// every addend the expression might carry. ARM's `:lower16:` and
+    /// `:upper16:` fields hold sixteen bits of a 32-bit address, and GNU as
+    /// refuses a larger addend rather than truncate it. `None`, the default,
+    /// lets the field take whatever the expression gives it, which is right
+    /// wherever the field is as wide as the value.
+    pub addend_limits: Option<(i64, i64)>,
     /// Which symbol the relocation names, when there is one.
     pub reloc_symbol: RelocSymbol,
     /// Never fill the field in here, even where the value is known: only the
@@ -298,6 +306,7 @@ impl FixupKind {
             encoding: FieldEncoding::Whole,
             bias_reloc_addend: true,
             limits: None,
+            addend_limits: None,
             reloc_symbol: RelocSymbol::Section,
             always_reloc: false,
             object_reloc: false,
@@ -369,6 +378,13 @@ impl FixupKind {
     /// Accepts only values from `lo` to `hi`, within what the field holds.
     pub fn with_limits(mut self, lo: i64, hi: i64) -> FixupKind {
         self.limits = Some((lo, hi));
+        self
+    }
+
+    /// Accepts only relocation addends from `lo` to `hi`; see
+    /// [`FixupKind::addend_limits`].
+    pub fn with_addend_limits(mut self, lo: i64, hi: i64) -> FixupKind {
+        self.addend_limits = Some((lo, hi));
         self
     }
 

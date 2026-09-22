@@ -78,8 +78,9 @@ and neither is rsasm's, so it is still an independent source, and it reaches
 every operand value a form allows rather than the ones someone thought to
 write down.
 
-Two things have to be put right for a disassembled line to mean the same
-thing again:
+Three things have to be put right for a disassembled line to mean the same
+thing again, and each target says which of them its lines need in its own
+script:
 
 * **Where it sits.** A branch prints the address it lands on, so a case
   carries the `.skip` that puts it back at the offset it was read from. A
@@ -90,7 +91,20 @@ thing again:
   *displacement* where its own disassembler prints an *address*, so those
   lines do not read back as themselves; SPARC's `call` and branches become
   `.`-relative, which also keeps llvm-mc away from a fixup it crashes on.
-  Each target says what its lines need in its own script.
+  MIPS needs the same for a branch, and for a different reason: rsasm and
+  GNU as read a bare number there as an address and llvm-mc as the
+  displacement itself, and GNU as cannot resolve an address against a
+  section it is still assembling, so it leaves a `R_MIPS_PC16` against
+  `*ABS*` that overflows. `. + d` means one thing to all three, and keeps
+  the displacement the case was disassembled with. MIPS's `jalx` needs it
+  too: its target is printed with the ISA-mode bit set, and the bit comes
+  off.
+* **How a register is spelled.** MIPS objdump prints a general-purpose
+  register by its ABI name and without the `$` sigil -- `swl v1,-27583(t7)`
+  -- which no MIPS assembler reads back, so it is asked for numbers
+  (`-M gpr-names=numeric`). 95% of the MIPS cases were refused by all three
+  tools over their spelling before either fix, 91% with only the targets put
+  right, and 0.3% are now.
 
 What a backend does not implement is skipped by name, with the reason in the
 script, so that a missing extension cannot read as thousands of identical
@@ -307,10 +321,8 @@ out-of-range immediates llvm-mc truncates (`ext v0.8b, v1.8b, v2.8b, #8`),
 as GNU as does. `--source gnu` takes the cases from GNU objdump's
 disassembly instead, which is how the spellings GNU as source is written in
 get tried. Lines for what the backend leaves out are dropped rather than
-counted: SME's ZA array and lookup tables, predicates as counters, the
-multi-vector operands of SME2 (two register lists in one instruction), and
-`pmov p0.b, z0[0]`, whose index can only be zero and which the derived
-table spells without one.
+counted: SME's ZA array and lookup tables, predicates as counters, and the
+multi-vector operands of SME2 (two register lists in one instruction).
 
 | Variable | Default |
 |---|---|
@@ -607,7 +619,24 @@ Running them found, in SPARC: `mov<cc> %fccN` encoded with the integer
 condition codes instead of the floating-point ones, `movre`/`movrne`, the
 missing `swap`, `ldstub`, `taddcctv`, `tsubcctv`, `clrb`/`clrh`/`clrx` and
 `b`, an address whose base register is the hardwired zero (`[ 0x66 ]`,
-`jmpl -2347, %l2`), and the two-operand trap written as one address. MIPS,
+`jmpl -2347, %l2`), and the two-operand trap written as one address.
+
+In MIPS, as each of the three fixes above put more of the disassembly in
+reach: `jalx`, the eight condition flags `$fcc0`-`$fcc7` that `c.cond.fmt`
+and the COP1 branches can name, and the conditional moves `movf`, `movt`,
+`movf.fmt` and `movt.fmt` that go with them; then the immediate traps
+(`tgei`, `tgeiu`, `tlti`, `tltiu`, `teqi`, `tnei`), every branch-likely
+form (`beql`, `bnel`, `blezl`, `bgtzl`, `bltzl`, `bgezl`, `bltzall`,
+`bgezall`, `bc1fl`, `bc1tl`, and the `beqzl` and `bnezl` macros), `dneg`
+and `dnegu`, and a linking REGIMM branch written on `$ra`, which GNU as
+refuses and rsasm now refuses too. The skip list gave up a dozen names it
+had no business carrying along the way -- `b`, `bal`, `li`, `la`, `move`,
+`mul`, `slt`, `sltu`, `dmult`, `dmultu` and the rest that the backend does
+assemble. Two conventions are left, both recorded in `mips.py`: llvm-mc
+rounds a double in an odd floating-point register down to the even half of
+the pair where GNU as encodes the number written, and it assembles that
+`bltzal $ra`.
+
 SuperH, RX, V850 and the Z80 found nothing, and the RL78's two are GNU as's:
 it wraps the field of the `br $!` it expands a long branch into, and it
 writes six bytes where a three-byte conditional branch still reaches.

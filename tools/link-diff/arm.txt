@@ -141,3 +141,68 @@ reader:
         ldr     r0, =bigger
         bx      lr
         .ltorg
+
+=== the GOT and the position-independent idiom
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, %function
+_start:
+        adr     r3, .LGOT
+        ldr     r3, [r3]
+.LPIC0: add     r3, pc, r3
+        adr     r0, .Lgot
+        ldr     r0, [r0]
+        ldr     r0, [r3, r0]
+        adr     r1, .Loff
+        ldr     r1, [r1]
+        add     r1, r3, r1
+        adr     r2, .Lprel
+        ldr     r2, [r2]
+        bl      helper(PLT)
+        b       helper(PLT)
+        bx      lr
+.LGOT:  .word   _GLOBAL_OFFSET_TABLE_ - (.LPIC0 + 8)
+.Lgot:  .word   shared(GOT)
+.Loff:  .word   shared(GOTOFF)
+.Lprel: .word   shared(GOT_PREL)
+        .word   helper(PLT)
+--- b.s
+        .text
+        .globl  helper
+        .type   helper, %function
+helper: bx      lr
+        .data
+        .globl  shared
+shared: .word   42
+
+=== the halves of an address, absolute and against a label
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, %function
+_start:
+        movw    r4, #:lower16:(_GLOBAL_OFFSET_TABLE_ - (.LPIC1 + 8))
+        movt    r4, #:upper16:(_GLOBAL_OFFSET_TABLE_ - (.LPIC1 + 8))
+.LPIC1: add     r4, r4, pc
+        movw    r5, #:lower16:shared
+        movt    r5, #:upper16:shared
+        movw    r6, #:lower16:(shared - .LPIC2)
+        movt    r6, #:upper16:(shared - .LPIC2)
+.LPIC2: add     r6, r6, pc
+        movw    r7, #:lower16:shared + 8
+        movt    r7, #:upper16:shared + 8
+        movw    r8, #:lower16:helper
+        movt    r8, #:upper16:helper
+        bx      lr
+        .word   shared(GOT)
+--- b.s
+        .text
+        .globl  helper
+        .type   helper, %function
+helper: bx      lr
+        .data
+        .globl  shared
+shared: .word   42
+        .word   43
+        .word   44

@@ -10,6 +10,27 @@
 //! The state's `bits` field carries the choice — 32 for ARM, 16 for Thumb —
 //! because that is what `.code 16` and `.code 32` already mean in ARM sources.
 //!
+//! # Position-independent operands
+//!
+//! ARM writes the relocation a reference needs as a suffix in parentheses,
+//! `sym(GOT)`, where the rest of the GNU syntax writes `sym@GOT`, and builds
+//! a 32-bit address out of a `movw`/`movt` pair whose operands are written
+//! `#:lower16:sym` and `#:upper16:sym`. GNU as reads the suffix in exactly
+//! two places, and this backend reads it in the same two: in `.word` and
+//! `.long`, which its `s_arm_elf_cons` handles, and on the target of a `b`,
+//! `bl` or `blx`, whose operand type `parse_operands` gives a `parse_reloc`
+//! call. A `(plt)` on a branch changes nothing about the object — GNU as
+//! asks for `R_ARM_PLT32` and then writes the `R_ARM_CALL` or
+//! `R_ARM_JUMP24` a plain branch would get, since a linker routes either
+//! through a PLT entry when it needs one — so the suffix is accepted and the
+//! branch is relocated as it always was.
+//!
+//! A `_GLOBAL_OFFSET_TABLE_` in a four-byte data field is `R_ARM_BASE_PREL`,
+//! the distance from the field to the GOT, whether it was written as a
+//! difference against a label or on its own; that is `md_apply_fix`'s rule,
+//! and it is what makes `.word _GLOBAL_OFFSET_TABLE_ - (1b + 8)` next to an
+//! `add rn, pc, rn` load the GOT's address.
+//!
 //! # Deliberate differences from GNU as
 //!
 //! GNU as is the reference for what this backend writes — its literal pools,
@@ -34,6 +55,20 @@
 //!   none of the three, so the line is a syntax error there; once the layout
 //!   is known it is an ordinary number, and rsasm puts it in the pool. The
 //!   case is in `tools/mc-diff/arm-programs.txt`.
+//!
+//! The relocation suffixes differ in what each assembler will read, rather
+//! than in what either writes. `s_arm_elf_cons` strikes the suffix out of the
+//! line and parses the rest again, so `.word sym(GOT) + 4` is `.word sym + 4`
+//! relocated as a GOT entry; here the suffix binds to the symbol it follows,
+//! which comes to the same relocation and addend for every expression either
+//! assembler resolves, and differs only at the edges. `.word sym(PLT) + 4` is
+//! a syntax error in GNU as, whose `(plt)` case emits the symbol and stops
+//! reading, and is `.word sym + 4` here. `.4byte` and `.int` are plain
+//! four-byte directives in GNU as, which gives the suffix only to `.word` and
+//! `.long`, and take it here. A suffix GNU as knows but this backend has no
+//! relocation for — `(TARGET1)`, `(SBREL)`, the thread-local ones — is
+//! refused as unrecognised. And `sym(GOT) - label` is refused, there being no
+//! PC-relative counterpart of `R_ARM_GOT_BREL` for the difference to become.
 
 #[doc(hidden)]
 pub mod attr_data;
@@ -102,6 +137,15 @@ pub struct Arm {
 
 /// The state's `bits` value that means Thumb.
 const THUMB_BITS: u8 = 16;
+
+/// The `sym(NAME)` suffixes a `.word` takes; see
+/// [`Arm::data_paren_modifiers`].
+const DATA_SUFFIXES: &[&str] = &["got", "got_prel", "gotoff", "plt"];
+
+/// The one a branch target takes. GNU as's `encode_branch` also allows
+/// `(tlscall)`, which needs the thread-local relocations this backend does
+/// not write.
+const BRANCH_SUFFIXES: &[&str] = &["plt"];
 
 /// Label flag: defined in Thumb code.
 const LABEL_THUMB: u8 = 1;
@@ -260,6 +304,68 @@ impl Architecture for Arm {
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {
         reloc::data(size, pcrel)
+    }
+
+    /// The suffixes `s_arm_elf_cons` reads after a symbol in a `.word`, of
+    /// which these are the ones this backend has a relocation for; see
+    /// [`reloc::modifier`]. GNU as knows more — `(TARGET1)`, `(SBREL)` and
+    /// the thread-local ones — and refuses anything not in its table, which
+    /// is what an unlisted name gets here.
+    fn data_paren_modifiers(&self) -> &'static [&'static str] {
+        DATA_SUFFIXES
+    }
+
+    fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
+        reloc::modifier(name, size, pcrel)
+    }
+
+    /// `(PLT)` on a branch target is the relocation the branch already has:
+    /// GNU as asks for `R_ARM_PLT32` and then writes `R_ARM_CALL` or
+    /// `R_ARM_JUMP24`, the same numbers a plain `bl sym` and `b sym` get,
+    /// because a linker routes either through a PLT entry when it needs one.
+    /// Returning the fixup's own relocation says so.
+    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+        if name == "plt" && kind.pcrel {
+            return Some(kind.reloc);
+        }
+        reloc::modifier(name, kind.size, kind.pcrel)
+    }
+
+    /// `(PLT)` names the function itself where nothing built a PLT; the GOT
+    /// suffixes name a slot in a table only a linker writes.
+    fn flat_modifier(&self, name: &str) -> crate::arch::FlatModifier {
+        if name == "plt" {
+            crate::arch::FlatModifier::Plain
+        } else {
+            crate::arch::FlatModifier::LinkerOnly
+        }
+    }
+
+    /// `:lower16:(sym - label)` is the PC-relative half, which is a
+    /// relocation of its own rather than the absolute one with a difference
+    /// in it.
+    fn pcrel_reloc(&self, reloc: u32, size: u8) -> Option<u32> {
+        if let Some(half) = reloc::half_pcrel(reloc) {
+            return Some(half);
+        }
+        if reloc != 0 && Some(reloc) == reloc::data(size, false) {
+            return reloc::data(size, true);
+        }
+        None
+    }
+
+    /// GNU as's `md_apply_fix` turns a four-byte data reference to
+    /// `_GLOBAL_OFFSET_TABLE_` into `R_ARM_BASE_PREL`, whether it was written
+    /// as a difference against a label or on its own, so that
+    /// `.word _GLOBAL_OFFSET_TABLE_ - (1b + 8)` next to an `add rn, pc, rn`
+    /// loads the GOT's address. Nothing else names the symbol that way: the
+    /// `:lower16:` halves of it keep the `movw`/`movt` relocations.
+    fn reloc_for_symbol(&self, reloc: u32, name: &str) -> u32 {
+        if name == "_GLOBAL_OFFSET_TABLE_" && matches!(reloc, reloc::ABS32 | reloc::REL32) {
+            reloc::BASE_PREL
+        } else {
+            reloc
+        }
     }
 
     /// llvm-mc names a local label in every relocation but these two (its
@@ -516,7 +622,13 @@ impl Architecture for Arm {
         };
         let ops = {
             let mut cur = req.cursor();
-            let mut p = operand::Parser { cx };
+            // Only a branch target reads a `(plt)` suffix; see
+            // `operand::Parser::suffixes`.
+            let suffixes = match r.mnem {
+                Mnem::B | Mnem::Bl | Mnem::Blx => BRANCH_SUFFIXES,
+                _ => &[],
+            };
+            let mut p = operand::Parser { cx, suffixes };
             p.parse_list(&mut cur)?
         };
         // `!` requests writeback, which only the block transfers' base

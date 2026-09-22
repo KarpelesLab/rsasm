@@ -132,12 +132,14 @@ impl Architecture for PowerPc {
     }
 
     /// `@pcrel` only says the field is relative to the instruction, which a
-    /// flat image resolves as it would any PC-relative field.
+    /// flat image resolves as it would any PC-relative field, and a flat
+    /// image has no PLT for `@plt` to go through or to keep `@local` out of,
+    /// so both are the branch they are written on.
     fn flat_modifier(&self, name: &str) -> FlatModifier {
-        if name == "pcrel" {
-            FlatModifier::Plain
-        } else {
-            FlatModifier::LinkerOnly
+        match name {
+            "pcrel" => FlatModifier::Plain,
+            "plt" | "local" => FlatModifier::PcRelative,
+            _ => FlatModifier::LinkerOnly,
         }
     }
 

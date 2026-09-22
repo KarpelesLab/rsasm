@@ -5,6 +5,10 @@
 //! `$t3`, `$sp`), or — for two of them — by either of two ABI spellings
 //! (`$fp` and `$s8` are both register 30). The number is what gets encoded, so
 //! the table maps every accepted spelling onto one.
+//!
+//! Two smaller files sit beside it: the floating-point registers `$f0`-`$f31`,
+//! and the eight flags `$fcc0`-`$fcc7` that MIPS IV gave the floating-point
+//! comparisons to write and the branches to read.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -15,6 +19,10 @@ pub enum RegClass {
     Gpr,
     /// Floating point, `$f0`-`$f31`.
     Fpr,
+    /// Floating-point condition flag, `$fcc0`-`$fcc7`. Before MIPS IV there
+    /// was one flag and no way to name it, which is why every instruction
+    /// that takes one also has a form that leaves `$fcc0` implied.
+    Fcc,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -34,6 +42,13 @@ impl Reg {
     pub fn fpr(num: u8) -> Reg {
         Reg {
             class: RegClass::Fpr,
+            num,
+        }
+    }
+
+    pub fn fcc(num: u8) -> Reg {
+        Reg {
+            class: RegClass::Fcc,
             num,
         }
     }
@@ -84,6 +99,9 @@ fn index() -> &'static HashMap<&'static str, Reg> {
         for n in 0..32u8 {
             m.insert(FPR_NAMES[n as usize], Reg::fpr(n));
         }
+        for n in 0..8u8 {
+            m.insert(FCC_NAMES[n as usize], Reg::fcc(n));
+        }
         m
     })
 }
@@ -94,6 +112,11 @@ const FPR_NAMES: [&str; 32] = [
     "f8",  "f9",  "f10", "f11", "f12", "f13", "f14", "f15",
     "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23",
     "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31",
+];
+
+#[rustfmt::skip]
+const FCC_NAMES: [&str; 8] = [
+    "fcc0", "fcc1", "fcc2", "fcc3", "fcc4", "fcc5", "fcc6", "fcc7",
 ];
 
 /// Looks up a register by the name written after the `$`, lowercased.
@@ -110,6 +133,7 @@ pub fn name_of(r: Reg) -> String {
             .map(|n| format!("${n}"))
             .unwrap_or_else(|| format!("${}", r.num)),
         RegClass::Fpr => format!("$f{}", r.num),
+        RegClass::Fcc => format!("$fcc{}", r.num),
     }
 }
 
@@ -142,8 +166,16 @@ mod tests {
     }
 
     #[test]
+    fn condition_flags_are_a_third_file() {
+        assert_eq!(lookup("fcc0"), Some(Reg::fcc(0)));
+        assert_eq!(lookup("fcc7"), Some(Reg::fcc(7)));
+        assert_ne!(lookup("fcc0"), lookup("f0"));
+        assert_eq!(lookup("fcc8"), None);
+    }
+
+    #[test]
     fn names_round_trip() {
-        for n in ["$zero", "$a0", "$t9", "$ra", "$f12"] {
+        for n in ["$zero", "$a0", "$t9", "$ra", "$f12", "$fcc3"] {
             let r = lookup(n.trim_start_matches('$')).expect("known name");
             assert_eq!(name_of(r), n);
         }

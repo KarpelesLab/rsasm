@@ -871,19 +871,16 @@ impl<'c, 'a> Encoder<'c, 'a> {
         });
     }
 
-    /// Reads a value destined for the low halfword, applying an `@l`, `@h` or
-    /// `@ha` written on a constant.
+    /// Reads a value destined for the low halfword, applying a modifier that
+    /// names a half of a known value — `@l`, `@ha`, `@higher` and the rest —
+    /// where it is written on a constant.
     ///
     /// The core treats relocation modifiers as annotations that only choose
     /// a relocation, so a constant reaches the backend unmodified; without
     /// this, `lis 3, 0x12348000@ha` would be rejected and `lis 3, 0x8000@ha`
     /// silently encoded as 0x8000 rather than 1.
     fn halfword_value(&mut self, op: &Operand, e: ExprRef) -> Folded {
-        let top = match &self.cx.exprs.get(e).kind {
-            ExprKind::Modifier(n, inner) => Some((self.cx.name(*n).to_ascii_lowercase(), *inner)),
-            _ => None,
-        };
-        let Some((name, inner)) = top else {
+        let Some((name, inner)) = self.applied_modifier(e) else {
             return match self.cx.constant(e) {
                 // A modifier buried inside arithmetic on a constant has no
                 // meaning the linker could supply either.
@@ -898,14 +895,31 @@ impl<'c, 'a> Encoder<'c, 'a> {
         let Some(v) = self.cx.constant(inner) else {
             return Folded::Symbolic;
         };
-        let Some(half) = half_function(&name) else {
+        let Some(half) = halfword_modifier(Some(&name)) else {
             self.reject(
                 op,
                 format!("relocation modifier `@{name}` is not supported here"),
             );
             return Folded::Invalid;
         };
-        Folded::Truncated(half(v))
+        // The halves above bit 31 exist only in PowerPC64's table, and GNU as
+        // will not read the spelling at all in 32-bit code.
+        if half.ppc32 == 0 && self.cx.state.bits < 64 {
+            self.reject(op, wider_object(&name));
+            return Folded::Invalid;
+        }
+        match half.link {
+            Linked::Part(fold) => Folded::Truncated(fold(v)),
+            Linked::Whole | Linked::Table(_) => {
+                self.reject(
+                    op,
+                    format!(
+                        "relocation modifier `@{name}` names an entry the linker builds, so it needs a symbol rather than a number"
+                    ),
+                );
+                Folded::Invalid
+            }
+        }
     }
 
     /// A relocation against the low halfword of the instruction word.
@@ -918,27 +932,46 @@ impl<'c, 'a> Encoder<'c, 'a> {
         // plain halfword ones in 32-bit code, where llvm-mc writes numbers
         // `R_PPC_*` does not define.
         let split = disp != Disp::D && self.cx.state.bits == 64;
-        let reloc = match (self.modifier(e).as_deref(), split) {
-            (None, false) => reloc::ADDR16,
-            (None, true) => reloc::ADDR16_DS,
-            (Some("l"), false) => reloc::ADDR16_LO,
-            (Some("l"), true) => reloc::ADDR16_LO_DS,
-            (Some("h" | "hi"), false) => reloc::ADDR16_HI,
-            (Some("ha" | "h_a"), false) => reloc::ADDR16_HA,
-            (Some(other), _) => {
-                self.cx.error(
-                    span,
-                    format!("relocation modifier `@{other}` is not supported here"),
-                );
-                self.failed = true;
-                return;
-            }
+        let name = self.modifier(e);
+        let Some(half) = halfword_modifier(name.as_deref()) else {
+            let name = name.unwrap_or_default();
+            self.cx.error(
+                span,
+                format!("relocation modifier `@{name}` is not supported here"),
+            );
+            self.failed = true;
+            return;
         };
+        let reloc = match (self.cx.state.bits == 64, split) {
+            (false, _) => half.ppc32,
+            (true, false) => half.ppc64,
+            (true, true) => half.ppc64_split,
+        };
+        if reloc == 0 {
+            let name = name.unwrap_or_default();
+            self.cx.error(
+                span,
+                if half.ppc32 == 0 && self.cx.state.bits < 64 {
+                    wider_object(&name)
+                } else {
+                    format!(
+                        "relocation modifier `@{name}` has no relocation for a {} displacement, whose low bits belong to the opcode",
+                        disp.form()
+                    )
+                },
+            );
+            self.failed = true;
+            return;
+        }
         let mut kind = FixupKind::data(2).with_reloc(reloc);
-        // What the linker does with `@l`, `@h` and `@ha`, for a flat image
-        // or a value that resolves while assembling.
-        if let Some(half) = self.modifier(e).as_deref().and_then(half_function) {
-            kind = kind.link(LinkValue::Split(half));
+        // What the linker does with a modifier that names a half of the
+        // address itself, for a flat image or a value that resolves while
+        // assembling. The rest name a GOT or TOC entry, which is the
+        // linker's to build and a flat image never has.
+        match half.link {
+            Linked::Whole => {}
+            Linked::Part(fold) => kind = kind.link(LinkValue::Split(fold)),
+            Linked::Table(needs) => kind = kind.link(LinkValue::LinkerOnly(needs)),
         }
         // A DS- or DQ-form halfword cannot be overwritten whole: its low two
         // or four bits belong to the opcode. Both take the same relocation,
@@ -958,37 +991,117 @@ impl<'c, 'a> Encoder<'c, 'a> {
 
     /// A branch target. The fixup covers the whole instruction word, since the
     /// AA and LK bits share the displacement field's bytes.
+    ///
+    /// `@plt` routes the call through the procedure linkage table and
+    /// `@local` tells the linker to keep it direct; both are relocations of
+    /// their own, and both exist only in PowerPC32's table. Everything else
+    /// the references spell on a branch is refused, for the reasons
+    /// [`Encoder::branch_reloc`] gives.
     fn branch(&mut self, op: &Operand, bits: u8, pcrel: bool) {
         let Some(Value::Expr(e)) = Self::plain(op) else {
             self.expected(op, "a branch target");
             return;
         };
-        // The core would quietly fall back to REL24 for a modifier it does
-        // not know, and `bl foo@plt` meaning a plain REL24 is exactly the kind
-        // of wrong answer that links and then fails at run time.
-        if let Some(m) = self.modifier(e) {
-            self.reject(
-                op,
-                format!("relocation modifier `@{m}` is not supported on a branch target"),
-            );
-            return;
-        }
         let (scatter, rel, abs): (fn(u64, i64) -> u64, u32, u32) = if bits == 26 {
             (i_form, reloc::REL24, reloc::ADDR24)
         } else {
             (b_form, reloc::REL14, reloc::ADDR14)
         };
-        let kind = if pcrel {
+        let modified = self.modifier(e);
+        let rel = match &modified {
+            None => rel,
+            Some(m) => match self.branch_reloc(op, m, bits, pcrel) {
+                Some(r) => r,
+                None => return,
+            },
+        };
+        let mut kind = if pcrel {
             FixupKind::pcrel(4, 0).with_reloc(rel)
         } else {
             FixupKind::data(4).signed().with_reloc(abs)
         };
+        // Whether the call goes through the PLT is the linker's to decide, so
+        // the relocation has to reach it even where the target is in this
+        // section and the distance is already known. llvm-mc keeps it for
+        // `@local` too; GNU as resolves that one away.
+        if modified.is_some() {
+            kind = kind.relocated_in_objects();
+        }
         self.fixups.push(Fixup {
             offset: 0,
             expr: e,
             kind: kind.with_field(bits, 4).scatter(scatter),
             span: op.span,
         });
+    }
+
+    /// The relocation a modifier on a branch target selects, or `None` having
+    /// reported why there is none.
+    ///
+    /// Only `@plt` and `@local` on a 24-bit PC-relative branch in a 32-bit
+    /// object survive. The rest are refused because the two references
+    /// disagree about them and one of the two answers cannot be linked:
+    ///
+    /// * In a 64-bit object `powerpc64-linux-gnu-as` does not read `@plt` at
+    ///   all, and llvm-mc writes R_PPC_PLTREL24's number 18, which PowerPC64
+    ///   leaves undefined — GNU ld refuses the object with "unsupported
+    ///   relocation type 0x12". The ELFv2 way to call through the PLT is a
+    ///   plain `bl` and a `nop`, which the linker turns into a stub.
+    /// * On a 14-bit conditional branch, or an absolute one, GNU as writes
+    ///   the 24-bit PC-relative PLTREL24 into a field that is neither, and
+    ///   llvm-mc drops the modifier for a plain REL14 — the quiet answer
+    ///   that links and then reaches the wrong place at run time.
+    /// * `@notoc` is R_PPC64_REL24_P9NOTOC to GNU as and R_PPC64_REL24_NOTOC
+    ///   to llvm-mc: two different relocations for one spelling.
+    /// * The halfword modifiers (`bl foo@ha`) are GNU as putting an
+    ///   ADDR16 relocation on an instruction that has no halfword field;
+    ///   llvm-mc refuses them.
+    fn branch_reloc(&mut self, op: &Operand, name: &str, bits: u8, pcrel: bool) -> Option<u32> {
+        let reloc = match name {
+            "plt" => reloc::PLTREL24,
+            "local" => reloc::LOCAL24PC,
+            _ => {
+                self.reject(
+                    op,
+                    format!("relocation modifier `@{name}` is not supported on a branch target"),
+                );
+                return None;
+            }
+        };
+        if bits != 26 || !pcrel {
+            self.reject(
+                op,
+                format!(
+                    "relocation modifier `@{name}` needs a 24-bit PC-relative branch, which this is not"
+                ),
+            );
+            return None;
+        }
+        if self.cx.state.bits >= 64 {
+            self.reject(
+                op,
+                format!(
+                    "relocation modifier `@{name}` exists only in PowerPC32's table: an ELFv2 call is a plain `bl`, which the linker routes through a stub or not as it sees fit"
+                ),
+            );
+            return None;
+        }
+        Some(reloc)
+    }
+
+    /// The modifier chain applied to the whole of `e`, joined the way
+    /// [`Encoder::modifier`] joins one, with what it is applied to.
+    fn applied_modifier(&self, e: ExprRef) -> Option<(String, ExprRef)> {
+        match &self.cx.exprs.get(e).kind {
+            ExprKind::Modifier(n, inner) => {
+                let name = self.cx.name(*n).to_ascii_lowercase();
+                Some(match self.applied_modifier(*inner) {
+                    Some((first, base)) => (format!("{first}@{name}"), base),
+                    None => (name, *inner),
+                })
+            }
+            _ => None,
+        }
     }
 
     /// The `@`-modifier applied anywhere in an expression, lowercased. A
@@ -1064,7 +1177,8 @@ impl Disp {
 enum Folded {
     /// An ordinary constant, still subject to the field's range check.
     Plain(i64),
-    /// A constant cut down to 16 bits by `@l`/`@h`/`@ha`, which fits by
+    /// A constant cut down to one halfword by `@l`, `@ha`, `@higher` or
+    /// another of the modifiers that name a half of a value, which fits by
     /// construction.
     Truncated(i64),
     /// Not known until link time: needs a relocation.
@@ -1106,16 +1220,123 @@ fn b_form(word: u64, v: i64) -> u64 {
     (word & 0xffff_0003) | (((v >> 2) as u64 & 0x3fff) << 2)
 }
 
-/// The halfword an `@l`, `@h` or `@ha` modifier selects from a value.
-fn half_function(name: &str) -> Option<fn(i64) -> i64> {
+/// What a relocation modifier does to a 16-bit field.
+struct Half {
+    /// The `R_PPC_*` relocation, or zero — `R_PPC_NONE` — where PowerPC32
+    /// has none and GNU as refuses the spelling in 32-bit code.
+    ppc32: u32,
+    /// The `R_PPC64_*` relocation for a D-form field, which is a whole
+    /// halfword.
+    ppc64: u32,
+    /// The `R_PPC64_*` relocation for a DS- or DQ-form field, whose low bits
+    /// belong to the opcode. Zero for every modifier both references refuse
+    /// there, which is all of them but `@l`, `@got`, `@got@l`, `@toc` and
+    /// `@toc@l`.
+    ppc64_split: u32,
+    /// What the field holds once the address is known.
+    link: Linked,
+}
+
+/// What a 16-bit field's modifier makes of the address it names, where a
+/// flat image or a value that resolves while assembling means the assembler
+/// has to work it out rather than leave it to a relocation.
+#[derive(Copy, Clone)]
+enum Linked {
+    /// The value itself, range-checked like any other displacement.
+    Whole,
+    /// One halfword of it, which fits by construction.
+    Part(fn(i64) -> i64),
+    /// The offset of an entry only the linker can build; the string says
+    /// which, for the diagnostic.
+    Table(&'static str),
+}
+
+/// The table of modifiers a 16-bit field takes, or `None` for a spelling
+/// neither reference reads there.
+///
+/// `None` as the name is the field with no modifier at all. The numbers are
+/// what `powerpc64-linux-gnu-as` and llvm-mc both write for
+/// `addi 3, 3, foo@<name>` and, for `ppc64_split`, for `ld 3, foo@<name>(2)`.
+///
+/// What the references read here and this table leaves out:
+///
+/// * `@tprel`, `@dtprel` and the `@got@tls*` forms, which both references
+///   agree on. The symbol type they need is there — a symbol defined in
+///   `.tdata` or `.tbss` is `STT_TLS` — and what is missing is the
+///   relocations themselves, read out of reference objects for both word
+///   sizes, and for the dynamic models the `@tls` and `(sym@tlsgd)` markers
+///   on the instructions a linker rewrites, which this backend does not
+///   parse.
+/// * `@plt@l`, `@plt@h` and `@plt@ha`, the halves of a PLT entry's address,
+///   and the `@sectoff` and `@sdarel` families. Only GNU as reads them, and
+///   the PowerPC harnesses run against llvm-mc, so nothing rsasm wrote for
+///   them could be checked.
+fn halfword_modifier(name: Option<&str>) -> Option<Half> {
+    // The half of a value each spelling selects. The `a` forms
+    // pre-compensate for the half below them being sign-extended when it is
+    // added back, which is what a `lis` and `addi` pair needs.
+    const LO: fn(i64) -> i64 = |v| v & 0xffff;
+    const HI: fn(i64) -> i64 = |v| (v >> 16) & 0xffff;
+    const HA: fn(i64) -> i64 = |v| (v.wrapping_add(0x8000) >> 16) & 0xffff;
+    const HIGHER: fn(i64) -> i64 = |v| (v >> 32) & 0xffff;
+    const HIGHERA: fn(i64) -> i64 = |v| (v.wrapping_add(0x8000) >> 32) & 0xffff;
+    const HIGHEST: fn(i64) -> i64 = |v| (v >> 48) & 0xffff;
+    const HIGHESTA: fn(i64) -> i64 = |v| (v.wrapping_add(0x8000) >> 48) & 0xffff;
+
+    let half = |ppc32, ppc64, ppc64_split, fold: fn(i64) -> i64| Half {
+        ppc32,
+        ppc64,
+        ppc64_split,
+        link: Linked::Part(fold),
+    };
+    let linked = |ppc32, ppc64, ppc64_split, needs| Half {
+        ppc32,
+        ppc64,
+        ppc64_split,
+        link: Linked::Table(needs),
+    };
+    use reloc::*;
+    let Some(name) = name else {
+        return Some(Half {
+            ppc32: ADDR16,
+            ppc64: ADDR16,
+            ppc64_split: ADDR16_DS,
+            link: Linked::Whole,
+        });
+    };
     Some(match name {
-        "l" => |v| v & 0xffff,
-        "h" | "hi" => |v| (v >> 16) & 0xffff,
-        // `@ha` pre-compensates for the low half being sign-extended when it
-        // is added back, which is what `lis` + `addi` pairs need.
-        "ha" | "h_a" => |v| (v.wrapping_add(0x8000) >> 16) & 0xffff,
+        "l" => half(ADDR16_LO, ADDR16_LO, ADDR16_LO_DS, LO),
+        "h" => half(ADDR16_HI, ADDR16_HI, 0, HI),
+        "ha" => half(ADDR16_HA, ADDR16_HA, 0, HA),
+        "high" => half(0, ADDR16_HIGH, 0, HI),
+        "higha" => half(0, ADDR16_HIGHA, 0, HA),
+        "higher" => half(0, ADDR16_HIGHER, 0, HIGHER),
+        "highera" => half(0, ADDR16_HIGHERA, 0, HIGHERA),
+        "highest" => half(0, ADDR16_HIGHEST, 0, HIGHEST),
+        "highesta" => half(0, ADDR16_HIGHESTA, 0, HIGHESTA),
+        "got" => linked(GOT16, GOT16, GOT16_DS, GOT),
+        "got@l" => linked(GOT16_LO, GOT16_LO, GOT16_LO_DS, GOT),
+        "got@h" => linked(GOT16_HI, GOT16_HI, 0, GOT),
+        "got@ha" => linked(GOT16_HA, GOT16_HA, 0, GOT),
+        "toc" => linked(0, TOC16, TOC16_DS, TOC),
+        "toc@l" => linked(0, TOC16_LO, TOC16_LO_DS, TOC),
+        "toc@h" => linked(0, TOC16_HI, 0, TOC),
+        "toc@ha" => linked(0, TOC16_HA, 0, TOC),
         _ => return None,
     })
+}
+
+/// What the linker builds for the modifiers that name a table entry rather
+/// than a part of the address itself.
+const GOT: &str = "a GOT entry";
+const TOC: &str = "a TOC entry";
+
+/// The diagnostic for a modifier PowerPC32's relocation table has no number
+/// for, which is every half above bit 31 and everything about the TOC.
+fn wider_object(name: &str) -> String {
+    format!(
+        "relocation modifier `@{name}` needs a 64-bit object: PowerPC32's relocations do not reach past bit 31 and it has no TOC"
+    )
 }
 
 /// DS-form displacement: 14 bits of a halfword whose low two bits are opcode.

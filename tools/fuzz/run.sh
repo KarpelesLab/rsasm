@@ -49,7 +49,7 @@ arm-programs|1200|
 riscv|60000|
 powerpc|60000|
 mips|60000|
-sparc|40000|
+sparc|60000|
 m68k|60000|
 sh|40000|
 rx|30000|

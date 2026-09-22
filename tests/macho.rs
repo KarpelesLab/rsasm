@@ -634,6 +634,15 @@ fn arm64_page_references_need_the_darwin_spelling() {
     assert!(err.contains("@PAGE"), "{err}");
 }
 
+/// llvm-mc refuses this too ("unknown AArch64 fixup kind"): the move-wide
+/// groups are an ELF spelling, and Mach-O has no relocation for one.
+#[cfg(feature = "aarch64")]
+#[test]
+fn arm64_move_wide_groups_are_refused() {
+    let err = macho_for("aarch64", "\tmovz x0, :abs_g0_nc:_ext\n").expect_err("should be refused");
+    assert!(err.contains("16-bit group of an address"), "{err}");
+}
+
 /// llvm-mc refuses this too.
 #[cfg(feature = "aarch64")]
 #[test]

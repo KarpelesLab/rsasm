@@ -2,7 +2,8 @@
 #
 # Deliberately the same instruction list as mips.txt: the point of this file is
 # that every word comes out byte-reversed and nothing else changes. See
-# mips.txt for the notes on reorder and macro mode.
+# mips.txt for the notes on reorder mode, macro mode and what the two
+# assemblers deliberately differ over.
 # ---- R-format arithmetic and logic ----
 add $1, $2, $3
 add $t0, $t1, $t2
@@ -131,6 +132,13 @@ tlt $4, $5
 tltu $4, $5
 teq $4, $5, 7
 tne $4, $5, 1023
+tgei $4, 0
+tgei $4, -1
+tgeiu $4, 32767
+tlti $5, -32768
+tltiu $5, -1
+teqi $6, 1234
+tnei $7, -1234
 mfc0 $4, $12
 mtc0 $4, $12
 mfc0 $4, $12, 1
@@ -183,3 +191,20 @@ c.lt.d $f0, $f2
 c.nge.s $f0, $f2
 c.le.s $f0, $f2
 c.ngt.s $f0, $f2
+
+# ---- the floating-point condition flags ----
+# MIPS IV widened the FPU's single flag into eight, so a comparison says which
+# one it writes and a conditional move says which one it reads; without a flag
+# operand the instruction means $fcc0.
+c.eq.s $fcc0, $f0, $f2
+c.eq.s $fcc1, $f0, $f2
+c.lt.d $fcc3, $f4, $f6
+c.ngt.s $fcc7, $f30, $f28
+c.un.d $fcc5, $f0, $f2
+movf $4, $5, $fcc0
+movt $4, $5, $fcc5
+movf $sp, $ra, $fcc7
+movf.s $f0, $f2, $fcc1
+movt.s $f30, $f28, $fcc7
+movf.d $f4, $f6, $fcc2
+movt.d $f4, $f6, $fcc6

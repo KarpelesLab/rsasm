@@ -5,10 +5,10 @@
 //! llvm-mc is the reference for MIPS (see the README's Verification
 //! section), and `tools/mc-diff` compares these sections along with the rest
 //! of the object. GNU as writes `.MIPS.abiflags` identically, and a
-//! `.reginfo` whose masks it works out the same way but whose `sh_flags`
-//! leave out `SHF_ALLOC`; it also writes an empty `.pdr` and a
-//! `.gnu.attributes` recording the floating-point ABI, neither of which
-//! llvm-mc nor rsasm writes.
+//! `.reginfo` whose `sh_flags` leave out `SHF_ALLOC` and whose masks it
+//! works out almost the same way; the one place the two differ is below. It
+//! also writes an empty `.pdr` and a `.gnu.attributes` recording the
+//! floating-point ABI, neither of which llvm-mc nor rsasm writes.
 //!
 //! # The register masks
 //!
@@ -28,6 +28,34 @@
 //! `ri_cprmask[0]`, `[2]` and `[3]` are the other coprocessors' registers,
 //! and stay zero: this backend has no operand that names one. `ri_gp_value`
 //! is zero in both references, which leave it to the linker.
+//!
+//! # Double precision on a 32-bit floating-point file
+//!
+//! Where the floating-point registers are 32 bits wide — a 32-bit target
+//! that has not said `.module fp=64` — a double-precision value lives in an
+//! even register and the odd one above it, so `add.d $f4, $f6, $f8` names
+//! six registers and not three. Both references mark the whole pair for an
+//! operand that holds 64 bits: the `.d` operands of the arithmetic, the
+//! comparisons, `mov.d` and the conditional moves, and the register of
+//! `ldc1` and `sdc1`. A single-precision or integer operand marks only
+//! itself, which is why `lwc1`, `mtc1` and the `.s` forms are unchanged, and
+//! why a 64-bit target or `.module fp=64` — where one register holds the
+//! whole value — marks one register everywhere. A condition flag belongs to
+//! no file and is counted nowhere, as `mark` says below.
+//!
+//! The two references part company on the operands of a *mixed*-format
+//! instruction. llvm-mc reads each operand's own format, so `cvt.d.s
+//! $f4, $f6` pairs only `$f4`; GNU as pairs every floating-point operand of
+//! any instruction that has a double-precision form, which its own source
+//! calls "overly pessimistic for things like cvt.d.s". rsasm follows
+//! llvm-mc, as the README's Verification section says it does for these
+//! sections.
+//!
+//! They part company again where the register written is odd, which both
+//! warn about: GNU as keeps the number and marks the one above it, while
+//! llvm-mc rounds the encoding itself down to the even half of the pair.
+//! rsasm encodes the number written, as GNU as does, and marks the pair that
+//! number is half of.
 //!
 //! # The ABI flags
 //!
@@ -55,8 +83,28 @@ pub(crate) fn mark(state: &mut ArchState, r: Reg) {
     let bit = match r.class {
         RegClass::Gpr => u64::from(r.num),
         RegClass::Fpr => u64::from(r.num) + 32,
+        // The condition flags are neither file: llvm-mc counts a register
+        // towards a mask only when it belongs to one of the classes a mask
+        // is about, and `$fcc0`-`$fcc7` belong to none of them.
+        RegClass::Fcc => return,
     };
     state.used |= 1 << bit;
+}
+
+/// Records a floating-point operand. `wide` says it holds a 64-bit value,
+/// which on a 32-bit floating-point file is the named register together with
+/// the other half of its pair; see the module note.
+pub(crate) fn mark_fpr(state: &mut ArchState, r: Reg, wide: bool) {
+    mark(state, r);
+    if wide && !fp64(state) {
+        mark(state, Reg::fpr(r.num ^ 1));
+    }
+}
+
+/// True where one floating-point register holds a double: on a 64-bit target
+/// always, and on a 32-bit one once the source has said `.module fp=64`.
+fn fp64(state: &ArchState) -> bool {
+    state.bits == 64 || state.features & super::FEATURE_FP64 != 0
 }
 
 /// Records `$zero`, which the aliases that encode one put in a register
@@ -158,7 +206,7 @@ pub(crate) fn sections(bits: u8, endian: Endian, state: &ArchState) -> Vec<AttrS
     // what a source changes it with.
     let wide = bits == 64;
     let soft = state.features & super::FEATURE_SOFTFLOAT != 0;
-    let fp64 = wide || state.features & super::FEATURE_FP64 != 0;
+    let fp64 = fp64(state);
     let odd_spreg = state.features & super::FEATURE_NO_ODD_SPREG == 0;
     // `cpr1_size` is the floating-point file: none, 32 bits or 64.
     let cpr1 = match (soft, fp64) {

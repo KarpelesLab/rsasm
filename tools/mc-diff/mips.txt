@@ -10,6 +10,11 @@
 # Macro mode: both assemblers expand `li`, `la`, `move` and the ordered
 # branches. rsasm has no `.set nomacro`; llvm-mc only warns under it.
 #
+# Deliberate divergence: the immediate traps take either spelling of a 16-bit
+# pattern in GNU as, as every other 16-bit field does, and llvm-mc insists on
+# the signed one -- it refuses `tltiu $5, 0xffff` and assembles `tltiu $5, -1`
+# to the same word. rsasm follows GNU as; only the signed spelling is here.
+#
 # Deliberate divergence: `div $rs, $rt` written with two operands is the raw
 # DIV instruction here, where llvm-mc expands it into a divide-by-zero trap
 # sequence. The three-operand `div $zero, $rs, $rt` spelling is unambiguous
@@ -143,6 +148,13 @@ tlt $4, $5
 tltu $4, $5
 teq $4, $5, 7
 tne $4, $5, 1023
+tgei $4, 0
+tgei $4, -1
+tgeiu $4, 32767
+tlti $5, -32768
+tltiu $5, -1
+teqi $6, 1234
+tnei $7, -1234
 mfc0 $4, $12
 mtc0 $4, $12
 mfc0 $4, $12, 1
@@ -195,3 +207,20 @@ c.lt.d $f0, $f2
 c.nge.s $f0, $f2
 c.le.s $f0, $f2
 c.ngt.s $f0, $f2
+
+# ---- the floating-point condition flags ----
+# MIPS IV widened the FPU's single flag into eight, so a comparison says which
+# one it writes and a conditional move says which one it reads; without a flag
+# operand the instruction means $fcc0.
+c.eq.s $fcc0, $f0, $f2
+c.eq.s $fcc1, $f0, $f2
+c.lt.d $fcc3, $f4, $f6
+c.ngt.s $fcc7, $f30, $f28
+c.un.d $fcc5, $f0, $f2
+movf $4, $5, $fcc0
+movt $4, $5, $fcc5
+movf $sp, $ra, $fcc7
+movf.s $f0, $f2, $fcc1
+movt.s $f30, $f28, $fcc7
+movf.d $f4, $f6, $fcc2
+movt.d $f4, $f6, $fcc6

@@ -415,8 +415,13 @@ fn data_relocations() {
             (7, R_V810_WORD, 0),
         ]
     );
-    // GNU as silently drops the `- .` here; rsasm refuses.
-    refused("rh850", " .short foo - .\n", "cannot be relocated");
+    // GNU as silently drops the `- .` here; rsasm refuses, there being no
+    // two-byte PC-relative relocation for it.
+    refused(
+        "rh850",
+        " .short foo - .\n",
+        "no relocation for a difference of symbols",
+    );
 }
 
 #[test]

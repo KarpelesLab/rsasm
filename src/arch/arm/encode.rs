@@ -7,7 +7,7 @@
 
 use super::imm;
 use super::insn::{AL, Mnem, Transfer};
-use super::operand::{Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
+use super::operand::{Half, Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
 use super::reg::{self, Reg};
 use super::{Insn, reloc};
 use crate::arch::{AsmCtx, Literal};
@@ -1289,18 +1289,76 @@ fn multiply(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 
 // ---- movw / movt and the small unary operations ----------------------------
 
+/// The 16-bit immediate of an A32 `movw`/`movt`, split into `imm4` and
+/// `imm12`.
+fn scatter_mov16(w: u64, v: i64) -> u64 {
+    let v = v as u64 & 0xffff;
+    (w & !0x000f_0fff) | ((v & 0xf000) << 4) | (v & 0xfff)
+}
+
+/// `movw rd, #:lower16:sym` and `movt rd, #:upper16:sym`, whose relocation
+/// leaves the whole address to the linker and tells it which half to keep.
+///
+/// The field holds the addend, not the half of it, since the ARM relocations
+/// are `REL` and the linker adds the symbol before splitting; only a value
+/// that is already known is split here, which is what [`LinkValue::Split`]
+/// says. GNU as refuses an addend the sixteen bits cannot hold rather than
+/// truncate it.
+pub fn mov16_kind(top: bool) -> FixupKind {
+    FixupKind::data(4)
+        .with_field(16, 1)
+        .with_reloc(if top {
+            reloc::MOVT_ABS
+        } else {
+            reloc::MOVW_ABS_NC
+        })
+        .with_addend_limits(-0x8000, 0x7fff)
+        .link(LinkValue::Split(if top {
+            |v| (v >> 16) & 0xffff
+        } else {
+            |v| v & 0xffff
+        }))
+        .scatter(scatter_mov16)
+}
+
+/// Checks that the half the source wrote is the one this instruction holds,
+/// as GNU as's `do_mov16` does.
+pub fn half_matches(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, half: Half, span: Span) -> Option<bool> {
+    let top = ins.mnem == Mnem::Movt;
+    if (half == Half::Upper) != top {
+        cx.error(
+            span,
+            format!("`{}` is not allowed in `{}`", half.name(), ins.text),
+        );
+        return None;
+    }
+    Some(top)
+}
+
 fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     arity(cx, ins, &[2])?;
     let rd = reg_of(cx, &ins.ops[0])?;
     no_pc(cx, ins.ops[0].span, rd)?;
     let rd = rd as u32;
-    let v = imm_bits(cx, &ins.ops[1], 16)?;
     let top = if ins.mnem == Mnem::Movw {
         0x0300_0000
     } else {
         0x0340_0000
     };
+    if let OperandKind::Half(half, e) = ins.ops[1].kind {
+        let upper = half_matches(cx, ins, half, ins.ops[1].span)?;
+        return Some(vec![Variant {
+            bytes: word(ins.cond, top | (rd << 12)).to_le_bytes().to_vec(),
+            fixups: vec![Fixup {
+                offset: 0,
+                expr: e,
+                kind: mov16_kind(upper),
+                span: ins.ops[1].span,
+            }],
+        }]);
+    }
+    let v = imm_bits(cx, &ins.ops[1], 16)?;
     Some(one(word(
         ins.cond,
         top | ((v & 0xf000) << 4) | (rd << 12) | (v & 0xfff),

@@ -168,6 +168,28 @@ pub struct Mem {
     pub span: Span,
 }
 
+/// Which half of a 32-bit value a `movw`/`movt` operand asks for.
+///
+/// A whole address takes two instructions to build, and the pair writes the
+/// halves of one value, so each half needs a relocation that says which it is
+/// rather than a number the assembler could compute.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Half {
+    /// `:lower16:`, bits 0 to 15.
+    Lower,
+    /// `:upper16:`, bits 16 to 31.
+    Upper,
+}
+
+impl Half {
+    pub fn name(self) -> &'static str {
+        match self {
+            Half::Lower => ":lower16:",
+            Half::Upper => ":upper16:",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum OperandKind {
     Reg(Reg),
@@ -189,6 +211,9 @@ pub enum OperandKind {
     },
     /// `=expr`: a value for `ldr` to load from the literal pool.
     Literal(ExprRef),
+    /// `#:lower16:expr` or `#:upper16:expr`: one half of a 32-bit value, which
+    /// only `movw` and `movt` take.
+    Half(Half, ExprRef),
     /// `{expr}`: `nop`'s hint number and the coprocessor opcode of `cdp`.
     Braced(ExprRef),
     /// A VFP or NEON register, perhaps with a lane index.
@@ -255,6 +280,7 @@ impl Operand {
             OperandKind::Mem(_) => "a memory operand".into(),
             OperandKind::List { .. } => "a register list".into(),
             OperandKind::Literal(_) => "a literal pool value".into(),
+            OperandKind::Half(h, _) => format!("a `{}` value", h.name()),
             OperandKind::Braced(_) => "a value in braces".into(),
             OperandKind::Vec(v) => format!("register `{}{}`", v.kind.letter(), v.n),
             OperandKind::VecList { .. } => "a vector register list".into(),
@@ -264,6 +290,11 @@ impl Operand {
 
 pub struct Parser<'c, 'a> {
     pub cx: &'c mut AsmCtx<'a>,
+    /// The `sym(NAME)` relocation suffixes this instruction's operands may
+    /// carry. GNU as reads one only for the operand type its branches use, so
+    /// `bl sym(PLT)` is a branch target and `ldr r0, =sym(GOT)` is the syntax
+    /// error `parse_big_immediate` gives.
+    pub suffixes: &'static [&'static str],
 }
 
 impl Parser<'_, '_> {
@@ -461,13 +492,63 @@ impl Parser<'_, '_> {
             _ => None,
         };
         cur.eat_punct(Punct::Hash);
-        let e = self.cx.expr_parser().parse(cur)?;
+        if let Some(half) = self.eat_half(cur)? {
+            let e = self.expr(cur)?;
+            return Some(Operand {
+                kind: OperandKind::Half(half, e),
+                span: start.to(cur.nth(0).span),
+                word: None,
+                writeback: false,
+            });
+        }
+        let e = self.expr(cur)?;
         Some(Operand {
             kind: OperandKind::Imm(e),
             span: start.to(cur.nth(0).span),
             word,
             writeback: false,
         })
+    }
+
+    /// An expression, with whatever relocation suffixes this instruction
+    /// allows after a symbol in it.
+    fn expr(&mut self, cur: &mut Cursor<'_>) -> Option<ExprRef> {
+        let mut p = self.cx.expr_parser();
+        p.paren_modifiers = self.suffixes;
+        p.parse(cur)
+    }
+
+    /// `:lower16:` or `:upper16:` in front of an operand, if one is there.
+    /// `Some(None)` means there was none; an error inside one returns `None`.
+    fn eat_half(&mut self, cur: &mut Cursor<'_>) -> Option<Option<Half>> {
+        if !cur.check_punct(Punct::Colon) {
+            return Some(None);
+        }
+        let colon = cur.advance();
+        let name = cur.peek();
+        let text = match name.kind {
+            TokKind::Ident(n) => self.cx.interner.get(n).to_ascii_lowercase(),
+            _ => String::new(),
+        };
+        let half = match text.as_str() {
+            "lower16" => Half::Lower,
+            "upper16" => Half::Upper,
+            _ => {
+                self.cx.error(
+                    colon.span.to(name.span),
+                    "expected `:lower16:` or `:upper16:`",
+                );
+                return None;
+            }
+        };
+        cur.advance();
+        if cur.eat_punct(Punct::Colon).is_none() {
+            let span = cur.peek().span;
+            self.cx
+                .error(span, format!("expected `:` to close `{}`", half.name()));
+            return None;
+        }
+        Some(Some(half))
     }
 
     fn parse_reglist(&mut self, cur: &mut Cursor<'_>) -> Option<Operand> {

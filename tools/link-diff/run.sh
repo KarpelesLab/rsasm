@@ -39,22 +39,22 @@
 #   binaries and Intel HEX for them, not ELF, so there is nothing to link.
 # * The GOT and PLT modifiers only appear where the backend has them: x86-64
 #   (`@GOTPCREL`, `@PLT`), i386 (`@GOT`, `@GOTOFF`, `@PLT`,
-#   `_GLOBAL_OFFSET_TABLE_`) and AArch64 (`:got:`, `:got_lo12:`). The ARM
-#   backend has no `sym(GOT)`, `sym(PLT)` or `:lower16:`/`:upper16:`
-#   operands, the AArch64 one no `:abs_g0_nc:` and its relatives, and the
-#   PowerPC one refuses `bl foo@plt` and the `@higher` and `@highest` halves
-#   rather than guessing at them; those sources are not in the corpora
-#   because rsasm does not assemble them at all.
-# * The thread-local storage models are in the x86-64 and i386 rows, where
-#   the linker turns each of them into local exec: `@TLSGD`, `@TLSLD` and
-#   `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the
-#   descriptor pair `@TLSDESC`/`@TLSCALL`. The other backends' families are
-#   absent for the same reason as their GOT and PLT modifiers: the operands
-#   do not parse there. The ARM backend has no `sym(TLSGD)` and its
-#   relatives, the AArch64 one no `:tprel_g0:` and its, and the PowerPC one
-#   refuses `@tprel`, `@dtprel` and `@got@tls*`. What no longer stands in
-#   their way is the symbol type: a symbol defined in a section with
-#   `SHF_TLS` is `STT_TLS` on every target.
+#   `_GLOBAL_OFFSET_TABLE_`), ARM (`sym(GOT)`, `sym(GOTOFF)`,
+#   `sym(GOT_PREL)`, `sym(PLT)`, `_GLOBAL_OFFSET_TABLE_` and the
+#   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
+#   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
+#   `@toc` and the halves of a 64-bit address). The thread-local models are
+#   in the x86-64 and i386 rows, where the linker turns each of them into
+#   local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`,
+#   `@TPOFF` and `@NTPOFF`, and the descriptor pair `@TLSDESC`/`@TLSCALL`.
+#   The other three still have none -- ARM's `(TLSGD)`, AArch64's
+#   `:tprel_g0:`, PowerPC's `@tprel` and `@dtprel` -- but no longer for want
+#   of `STT_TLS`, which a symbol in a thread-local section now has on every
+#   target. What each lacks is its own: the relocations, the operand syntax
+#   that selects them, and the marker relocations that cover no field but
+#   tell the linker which instructions to rewrite (ARM's `(tlscall)` and
+#   `.tlsdescseq`, AArch64's `.tlsdesccall`, PowerPC's `@tls` and
+#   `bl __tls_get_addr(sym@tlsgd)`); each backend says where it refuses them.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot

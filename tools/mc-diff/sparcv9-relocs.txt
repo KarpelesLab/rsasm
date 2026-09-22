@@ -1,0 +1,30 @@
+=== the relocations the V9 branches need
+# `BPcc`, `FBPfcc` and `BPr` narrow the displacement to make room for the
+# bank and the prediction hint, so each has a relocation of its own that
+# `Bicc` and `FBfcc` do not use.
+        .text
+        .globl  glob
+        .weak   weak1
+start:
+        be      glob
+        be      %icc, glob
+        be      %xcc, weak1
+        brz     %g1, glob
+        brnz    %g1, ext
+        fbe     glob
+        fbe     %fcc0, glob
+        fbo     %fcc3, weak1
+        fbne    ext
+        fbne    %fcc2, ext
+        nop
+glob:   nop
+weak1:  nop
+
+=== backwards to a label in the same section
+        .text
+back:
+        nop
+        be      %icc, back
+        brz     %g1, back
+        fbe     back
+        fbe     %fcc1, back

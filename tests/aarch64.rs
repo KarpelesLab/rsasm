@@ -661,6 +661,66 @@ fn lo12_and_got_operators() {
     );
 }
 
+/// The move-wide operators, which name one 16-bit group of an address. The
+/// operator supplies the shift, so none is written, and every group of a
+/// symbol reaches the linker whichever section the symbol is in.
+#[test]
+fn movw_group_operators() {
+    let src = "f:\n movz x0, :abs_g0_nc:var\n movk x0, :abs_g1_nc:var\n \
+               movk x0, :abs_g2_nc:var\n movk x0, :abs_g3:var\n movz x1, :abs_g0:var\n \
+               movz x2, :abs_g1:var\n movz x3, :abs_g2:var\n movn x4, :abs_g0_s:var\n \
+               movz x5, :abs_g1_s:var\n movz x6, :abs_g2_s:var\n movz x7, :prel_g0:var\n \
+               movk x7, :prel_g0_nc:var\n movz x8, :prel_g1:var\n movk x8, :prel_g1_nc:var\n \
+               movz x9, :prel_g2:var\n movk x9, :prel_g2_nc:var\n movz x10, :prel_g3:var\n \
+               movz w11, :abs_g0:var\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "00 00 80 d2 00 00 a0 f2 00 00 c0 f2 00 00 e0 f2 01 00 80 d2 02 00 a0 d2 \
+         03 00 c0 d2 04 00 80 92 05 00 a0 d2 06 00 c0 d2 07 00 80 d2 07 00 80 f2 \
+         08 00 a0 d2 08 00 a0 f2 09 00 c0 d2 09 00 c0 f2 0a 00 e0 d2 0b 00 80 52"
+    );
+    assert_eq!(
+        relocs(src),
+        [
+            264, // MOVW_UABS_G0_NC
+            266, // MOVW_UABS_G1_NC
+            268, // MOVW_UABS_G2_NC
+            269, // MOVW_UABS_G3
+            263, // MOVW_UABS_G0
+            265, // MOVW_UABS_G1
+            267, // MOVW_UABS_G2
+            270, // MOVW_SABS_G0
+            271, // MOVW_SABS_G1
+            272, // MOVW_SABS_G2
+            287, // MOVW_PREL_G0
+            288, // MOVW_PREL_G0_NC
+            289, // MOVW_PREL_G1
+            290, // MOVW_PREL_G1_NC
+            291, // MOVW_PREL_G2
+            292, // MOVW_PREL_G2_NC
+            293, // MOVW_PREL_G3
+            263, // MOVW_UABS_G0
+        ]
+    );
+}
+
+/// A group of a constant needs no linker, so it is taken here. A signed group
+/// that comes out negative is written as its inverse, which turns `movz` into
+/// `movn` and `movn` into `movz`.
+#[test]
+fn movw_groups_of_a_constant_are_taken_here() {
+    let src = ".set k, 0x123456789abcdef0\nf:\n movz x0, :abs_g0_nc:k\n \
+               movk x0, :abs_g1_nc:k\n movk x0, :abs_g2_nc:k\n movk x0, :abs_g3:k\n \
+               movz x1, :abs_g0_s:-0x1234\n movn x2, :abs_g1_s:0x12340000\n \
+               movz x3, :abs_g1:0x12340000\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "00 de 9b d2 80 57 b3 f2 00 cf ca f2 80 46 e2 f2 \
+         61 46 82 92 82 46 a2 d2 83 46 a2 d2"
+    );
+    assert!(relocs(src).is_empty());
+}
+
 #[test]
 fn elf_machine_and_data_relocations() {
     let a = rsasm::arch::lookup(ARCH).expect("backend present");
@@ -750,6 +810,22 @@ fn operand_shape_errors() {
     rejects("sub x0, x0, :lo12:var", &["plain `add`"]);
     rejects("ldp x0, x1, [x2, :lo12:var]", &[":lo12:"]);
     rejects("b :lo12:var", &[":lo12:"]);
+    // The move-wide operators, refused exactly where GNU as refuses them.
+    rejects("movz w0, :abs_g2:var", &["32-bit register"]);
+    rejects("movz w0, :prel_g3:var", &["32-bit register"]);
+    rejects("movk x0, :prel_g0:var", &["negated"]);
+    rejects("movk x0, :abs_g1_s:var", &["negated"]);
+    rejects(
+        "movz x0, :abs_g0_nc:var, lsl 16",
+        &["sets the shift itself"],
+    );
+    rejects("movz x0, :abs_g0:0x12345", &["0 to 65535"]);
+    rejects("movz x0, :prel_g0:0x12345", &["-32768 to 32767"]);
+    rejects(
+        "movz x0, :abs_g3_s:var",
+        &["unsupported relocation operator"],
+    );
+    rejects("mov x0, :abs_g0_nc:var", &["not valid in this operand"]);
     rejects("smull x0, x1, x2", &["two `w` sources"]);
 }
 
