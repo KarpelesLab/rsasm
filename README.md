@@ -137,7 +137,10 @@ but 18 forms where both manuals show MAME to be wrong.
   and narrowing forms, scalars and lanes, `vmov`'s modified immediate with
   the `cmode` GNU as picks for it, `vldm`/`vstm`/`vpush`/`vpop`, and the
   `vld1`-`vld4` and `vst1`-`vst4` structure transfers with their lists,
-  alignments and lane indices
+  alignments and lane indices; and the `.ARM.attributes` GNU as writes into
+  every ARM object, without which `objdump` disassembles it against a default
+  CPU -- with `.arch`, `.cpu`, `.fpu`, `.arch_extension`, `.object_arch` and
+  `.eabi_attribute` to change it
 - AArch64 the same way: literal pools (`ldr x0, =0x123456789`, `ldr w0, =sym`,
   `.ltorg`, `.pool`) with `$x`/`$d` mapping symbols, and the system
   instructions with every operand name GNU as knows — `dc`, `ic`, `at`,
@@ -155,6 +158,13 @@ but 18 forms where both manuals show MAME to be wrong.
   objects prepared for linker relaxation, with every branch relocated, local
   labels in the relocations, `EF_AVR_LINKRELAX_PREPARED` in `e_flags`, and
   `.align` and `.org` in code recorded in `.avr.prop`
+- the sections a reference writes into every object of its own accord, which
+  say what a linker and a loader may do with it: ARM's `.ARM.attributes`,
+  RISC-V's `.riscv.attributes` (the ISA string, and `.attribute` to change
+  it), MIPS's `.reginfo` or `.MIPS.options` with the register masks and its
+  `.MIPS.abiflags`, V850's `.note.renesas`, MSP430's `.MSP430.attributes`,
+  and the `.gnu.attributes` that `.gnu_attribute` asks for, which on PowerPC
+  is where the floating-point ABI is recorded
 - MSP430 objects as GNU as writes them for a linker that relaxes code: every
   reference from code relocated, differences of code labels as
   `R_MSP430_SYM_DIFF` pairs (in the line table too), the `.MSP430.attributes`

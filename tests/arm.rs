@@ -1303,3 +1303,65 @@ fn a_pool_entry_is_shared_by_how_the_number_was_written() {
          78 88 99 aa bb cc dd ee",
     );
 }
+
+/// The build attributes, which GNU as writes into every ARM object and
+/// `objdump` reads to know what to disassemble against.
+///
+/// Every expected string is `arm-none-eabi-objcopy --dump-section
+/// .ARM.attributes` of the reference's object for `-march=armv7ve
+/// -mfpu=neon-vfpv4`, which is what this backend is.
+#[test]
+fn objects_carry_the_build_attributes_gnu_as_writes() {
+    for (name, src, want) in [
+        (
+            "the CPU and unit the backend is",
+            "\tnop\n",
+            "41 26 00 00 00 61 65 61 62 69 00 01 1c 00 00 00 05 37 56 45 00 06 0a 07 41 \
+             08 01 09 02 0a 05 0c 02 2a 01 2c 02 44 03",
+        ),
+        (
+            "`.arch` names another architecture",
+            "\t.arch armv6\n\tnop\n",
+            "41 1c 00 00 00 61 65 61 62 69 00 01 12 00 00 00 05 36 00 06 06 08 01 09 01 \
+             0a 05 0c 02",
+        ),
+        (
+            "`.cpu` names a CPU, which has a name of its own",
+            "\t.cpu cortex-a9\n\tnop\n",
+            "41 2a 00 00 00 61 65 61 62 69 00 01 20 00 00 00 05 43 6f 72 74 65 78 2d 41 \
+             39 00 06 0a 07 41 08 01 09 02 0a 05 0c 02 2a 01 44 01",
+        ),
+        (
+            "`.fpu` replaces the unit",
+            "\t.fpu vfpv2\n\tnop\n",
+            "41 24 00 00 00 61 65 61 62 69 00 01 1a 00 00 00 05 37 56 45 00 06 0a 07 41 \
+             08 01 09 02 0a 02 2a 01 2c 02 44 03",
+        ),
+        (
+            "`.object_arch` replaces the architecture alone",
+            "\t.object_arch armv4t\n\tnop\n",
+            "41 24 00 00 00 61 65 61 62 69 00 01 1a 00 00 00 05 37 56 45 00 06 02 08 01 \
+             09 02 0a 05 0c 02 2a 01 2c 02 44 03",
+        ),
+        (
+            "`.eabi_attribute` adds a tag by number",
+            "\t.eabi_attribute 24, 1\n\tnop\n",
+            "41 28 00 00 00 61 65 61 62 69 00 01 1e 00 00 00 05 37 56 45 00 06 0a 07 41 \
+             08 01 09 02 0a 05 0c 02 18 01 2a 01 2c 02 44 03",
+        ),
+        (
+            "`.eabi_attribute` names its tag",
+            "\t.eabi_attribute Tag_ABI_align8_needed, 1\n\tnop\n",
+            "41 28 00 00 00 61 65 61 62 69 00 01 1e 00 00 00 05 37 56 45 00 06 0a 07 41 \
+             08 01 09 02 0a 05 0c 02 18 01 2a 01 2c 02 44 03",
+        ),
+    ] {
+        let asm = assemble_for("arm", src);
+        assert!(!asm.diags().has_errors(), "{name}: {src}");
+        assert_eq!(
+            hex(&section(&asm, ".ARM.attributes")),
+            want.replace("             ", ""),
+            "{name}"
+        );
+    }
+}

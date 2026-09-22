@@ -628,3 +628,80 @@ fn n64_objects_use_rela_with_the_mips64el_info_layout() {
     );
     assert_eq!(&rela[16..24], &[8, 0, 0, 0, 0, 0, 0, 0], "r_addend");
 }
+
+/// `.reginfo` (or, on n64, `.MIPS.options`) and `.MIPS.abiflags`, which
+/// llvm-mc writes into every MIPS object: which registers the code touches,
+/// and what it needs of a processor.
+///
+/// Every expected string is `llvm-objcopy --dump-section` of llvm-mc's
+/// object for the matching triple. The masks count the registers each
+/// *encoding* names, so `nop` is `sll $zero, $zero, 0` and marks `$zero`,
+/// and `move $4, $5` is `or $4, $5, $zero` and marks all three.
+#[test]
+fn objects_carry_the_register_masks_and_abi_flags() {
+    for (arch, src, name, want) in [
+        (
+            "mips",
+            "\tnop\n",
+            ".reginfo",
+            "00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\tmove $4, $5\n\tadd.s $f0, $f1, $f2\n",
+            ".reginfo",
+            "00 00 00 31 00 00 00 00 00 00 00 07 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mipsel",
+            "\tnop\n",
+            ".reginfo",
+            "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips",
+            "\tnop\n",
+            ".MIPS.abiflags",
+            "00 00 20 01 01 01 00 01 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+        (
+            "mips64",
+            "\tnop\n",
+            ".MIPS.options",
+            "01 28 00 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 \
+             00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+        ),
+        (
+            "mips64",
+            "\tnop\n",
+            ".MIPS.abiflags",
+            "00 00 40 01 02 02 00 01 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00 00",
+        ),
+    ] {
+        let asm = assemble_for(arch, src);
+        assert!(!asm.diags().has_errors(), "{arch}: {src}");
+        assert_eq!(
+            hex(&section(&asm, name)),
+            want.split_whitespace().collect::<Vec<_>>().join(" "),
+            "{arch} {name}: {src}"
+        );
+    }
+}
+
+/// `.set noreorder` is the only thing in a source that changes the header:
+/// both references record it as `EF_MIPS_NOREORDER`.
+#[test]
+fn noreorder_is_recorded_in_the_header() {
+    for (src, want) in [
+        ("\tnop\n", 0x5000_1004u32),
+        ("\t.set noreorder\n", 0x5000_1005),
+    ] {
+        let asm = assemble_for("mips", src);
+        let elf = rsasm::output::elf::build(&asm).expect("an object");
+        assert_eq!(
+            u32::from_be_bytes([elf[36], elf[37], elf[38], elf[39]]),
+            want,
+            "{src}"
+        );
+    }
+}

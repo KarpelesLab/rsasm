@@ -1404,3 +1404,29 @@ fn rh850_floating_point() {
         ],
     );
 }
+
+/// `.note.renesas`, which GNU as writes into every V850 object: six notes
+/// saying what a linker may put it together with.
+///
+/// Both strings are `v850-elf-objcopy --dump-section .note.renesas` of the
+/// reference's object, for no `-m` option and for `-mv850e3v5`. Only the
+/// floating-point note differs: FPU-3 on RH850, none on the V850.
+#[test]
+fn objects_carry_the_renesas_notes() {
+    let common = "04 00 00 00 04 00 00 00 01 00 00 00 52 45 4c 00 01 00 00 00 \
+                  04 00 00 00 04 00 00 00 02 00 00 00 52 45 4c 00 02 00 00 00 \
+                  04 00 00 00 04 00 00 00 03 00 00 00 52 45 4c 00";
+    let rest = "04 00 00 00 04 00 00 00 04 00 00 00 52 45 4c 00 00 00 00 00 \
+                04 00 00 00 04 00 00 00 05 00 00 00 52 45 4c 00 00 00 00 00 \
+                04 00 00 00 04 00 00 00 06 00 00 00 52 45 4c 00 00 00 00 00";
+    for (arch, fpu) in [("v850", "00 00 00 00"), ("rh850", "02 00 00 00")] {
+        let asm = assemble_for(arch, "\tnop\n");
+        assert!(!asm.diags().has_errors(), "{arch}");
+        let want = format!("{common} {fpu} {rest}");
+        assert_eq!(
+            hex(&section(&asm, ".note.renesas")),
+            want.split_whitespace().collect::<Vec<_>>().join(" "),
+            "{arch}"
+        );
+    }
+}

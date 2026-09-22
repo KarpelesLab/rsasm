@@ -30,6 +30,10 @@ use operand::{Operand, OperandParser};
 
 pub const NAMES: &[&str] = &["mips", "mipsel", "mips64", "mips64el"];
 
+/// `ArchState::features` bit: the source has said `.set noreorder`, which
+/// the header records as `EF_MIPS_NOREORDER`.
+const FEATURE_NOREORDER: u64 = 1;
+
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     let (canonical, endian, bits) = match name {
         "mips" | "mips32" => ("mips", Endian::Big, 32),
@@ -95,13 +99,15 @@ impl Architecture for Mips {
     }
 
     /// What llvm-mc writes for the default CPUs: MIPS32 with the o32 ABI and
-    /// `EF_MIPS_CPIC`, or MIPS64 (n64 has no ABI bits) with `EF_MIPS_CPIC`.
-    fn elf_flags(&self, _state: &ArchState) -> u32 {
-        if self.bits == 64 {
+    /// `EF_MIPS_CPIC`, or MIPS64 (n64 has no ABI bits) with `EF_MIPS_CPIC`,
+    /// plus `EF_MIPS_NOREORDER` once the source has said `.set noreorder`.
+    fn elf_flags(&self, state: &ArchState) -> u32 {
+        let base = if self.bits == 64 {
             0x6000_0004
         } else {
             0x5000_1004
-        }
+        };
+        base | u32::from(state.features & FEATURE_NOREORDER != 0)
     }
 
     fn align_is_log2(&self) -> bool {
@@ -193,7 +199,9 @@ impl Architecture for Mips {
     ///
     /// rsasm assembles exactly what is written: it never moves an instruction
     /// into a delay slot and never inserts a `nop` after a branch. That is
-    /// `.set noreorder`, so that option is accepted and changes nothing.
+    /// `.set noreorder`, so that option is accepted; all it changes is the
+    /// header's `EF_MIPS_NOREORDER`, which both references set once a file
+    /// has said it.
     ///
     /// `.set reorder` is refused rather than ignored, because the difference
     /// is not cosmetic. Under `reorder` the assembler fills the delay slot,
@@ -224,10 +232,18 @@ impl Architecture for Mips {
             // Options whose effect rsasm already has, or that only make an
             // assembler stricter about what it accepts and never change an
             // encoding, so accepting them silently is safe.
-            "noreorder" | "noat" | "at" | "nomacro" | "macro" | "push" | "pop" | "nomips16"
-            | "nomicromips" | "mips1" | "mips2" | "mips3" | "mips4" | "mips5" | "mips32"
-            | "mips32r2" | "mips32r6" | "mips64" | "mips64r2" | "mips64r6" | "hardfloat"
-            | "softfloat" | "nodsp" => {
+            // The object records that the file said it, and keeps the
+            // record even if a `.set reorder` followed, as both references
+            // do; rsasm refuses that one anyway.
+            "noreorder" => {
+                cur.advance();
+                cx.state.features |= FEATURE_NOREORDER;
+                true
+            }
+            "noat" | "at" | "nomacro" | "macro" | "push" | "pop" | "nomips16" | "nomicromips"
+            | "mips1" | "mips2" | "mips3" | "mips4" | "mips5" | "mips32" | "mips32r2"
+            | "mips32r6" | "mips64" | "mips64r2" | "mips64r6" | "hardfloat" | "softfloat"
+            | "nodsp" => {
                 cur.advance();
                 true
             }
