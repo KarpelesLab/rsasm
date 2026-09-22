@@ -200,17 +200,16 @@ impl Architecture for Arm {
         reloc::data(size, pcrel)
     }
 
-    /// GNU as's `arm_fix_adjustable`, which rsasm follows for whole ARM
-    /// objects, takes every relocation this backend writes through the
-    /// section symbol, with the label's offset folded into the field: only a
-    /// function symbol (see `keeps_reloc_symbol`), a `movw`/`movt` half and
-    /// the GOT, TLS and group relocations, none of which are written here,
-    /// keep the label. llvm-mc names the label in every relocation but
-    /// `R_ARM_ABS32` and `R_ARM_PREL31` (its
-    /// `ARMELFObjectWriter::needsRelocateWithSymbol`); a linker reads the
-    /// two the same, since what the label adds is in the field.
-    fn relocates_with_label(&self, _reloc: u32) -> bool {
-        false
+    /// llvm-mc names a local label in every relocation but these two (its
+    /// `ARMELFObjectWriter::needsRelocateWithSymbol`), and rsasm follows it:
+    /// GNU as's `arm_fix_adjustable` instead folds the label's offset into
+    /// the field and relocates against the section. A linker reads the two
+    /// the same, and the whole-object corpora accept either, but a relocation
+    /// under `REL` carries no addend of its own, so only the llvm-mc form
+    /// says where it points without reading the field — which is what
+    /// `tools/dwarf-diff` compares.
+    fn relocates_with_label(&self, reloc: u32) -> bool {
+        !matches!(reloc, reloc::ABS32 | reloc::PREL31)
     }
 
     /// llvm-mc's conventions, as for every ARM encoding, in either
@@ -263,7 +262,7 @@ impl Architecture for Arm {
         let len = len as usize;
         if state.bits == THUMB_BITS {
             let mut out = vec![0; len % 2];
-            if (len - out.len()) % 4 != 0 {
+            if !(len - out.len()).is_multiple_of(4) {
                 out.extend_from_slice(&thumb::NOP.to_le_bytes());
             }
             while out.len() < len {
