@@ -159,6 +159,48 @@ impl Architecture for Arm {
         0x0500_0000
     }
 
+    /// `.ARM.attributes`, which GNU as adds to every object and GNU ld reads
+    /// to decide what the program may contain. Without it the linker assumes
+    /// the oldest architecture: it routes every ARM/Thumb call through an
+    /// interworking veneer instead of turning it into `blx`, and replaces a
+    /// branch to an undefined weak symbol with `mov r0, r0` rather than the
+    /// ARMv6T2 `nop`. Both showed up as different linked bytes in
+    /// `tools/link-diff`.
+    ///
+    /// The contents are one architecture's, because the backend is one
+    /// architecture: the whole of ARMv7-A/R with the virtualization and
+    /// divide extensions, VFPv4 and NEON, which is what `tools/xas-diff`
+    /// assembles the reference with (`-march=armv7ve -mfpu=neon-vfpv4`).
+    /// These are that run's bytes. GNU as varies them with `-march` and
+    /// `-mfpu`, and with the extensions a file actually uses; rsasm has no
+    /// such options, so it writes the one set.
+    fn elf_attributes(&self, _state: &ArchState) -> Option<(&'static str, Vec<u8>)> {
+        // Format 'A', then one vendor section — its length, "aeabi\0" — and
+        // inside it a file-scope (1) subsection with its own length and the
+        // tags, each a number and a value, the string ones NUL-terminated.
+        #[rustfmt::skip]
+        const TAGS: &[u8] = &[
+            5, b'7', b'V', b'E', 0, // Tag_CPU_name "7VE"
+            6, 10,                  // Tag_CPU_arch v7
+            7, b'A',                // Tag_CPU_arch_profile Application
+            8, 1,                   // Tag_ARM_ISA_use yes
+            9, 2,                   // Tag_THUMB_ISA_use Thumb-2
+            10, 5,                  // Tag_FP_arch VFPv4
+            12, 2,                  // Tag_Advanced_SIMD_arch NEON with FMA
+            42, 1,                  // Tag_MPextension_use allowed
+            44, 2,                  // Tag_DIV_use v7-A with division
+            68, 3,                  // Tag_Virtualization_use TrustZone and virt
+        ];
+        let mut sub = vec![1u8];
+        sub.extend_from_slice(&(5 + TAGS.len() as u32).to_le_bytes());
+        sub.extend_from_slice(TAGS);
+        let mut out = vec![b'A'];
+        out.extend_from_slice(&(4 + 6 + sub.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"aeabi\0");
+        out.extend_from_slice(&sub);
+        Some((".ARM.attributes", out))
+    }
+
     fn align_is_log2(&self) -> bool {
         true
     }

@@ -310,10 +310,11 @@ fn an_unknown_relocation_modifier_in_data_is_an_error() {
     // program: `.quad foo@bogus` became an absolute reference to `foo`.
     let e = errors(".quad foo@bogus\n");
     assert!(e.contains("`@bogus` is not a relocation modifier"), "{e}");
-    // A modifier the target does know still selects its relocation.
+    // A modifier the target does know still selects its relocation: in an
+    // eight-byte field that is the 64-bit form, as `as --64` writes it.
     let asm = assemble(".quad foo@GOTPCREL\n");
     assert!(!asm.diags.has_errors());
-    assert_eq!(asm.relocs[0].kind, 9, "R_X86_64_GOTPCREL");
+    assert_eq!(asm.relocs[0].kind, 28, "R_X86_64_GOTPCREL64");
 }
 
 #[test]
