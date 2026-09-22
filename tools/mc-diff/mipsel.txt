@@ -2,7 +2,8 @@
 #
 # Deliberately the same instruction list as mips.txt: the point of this file is
 # that every word comes out byte-reversed and nothing else changes. See
-# mips.txt for the notes on reorder and macro mode.
+# mips.txt for the notes on reorder mode, macro mode and what the two
+# assemblers deliberately differ over.
 # ---- R-format arithmetic and logic ----
 add $1, $2, $3
 add $t0, $t1, $t2
@@ -131,6 +132,13 @@ tlt $4, $5
 tltu $4, $5
 teq $4, $5, 7
 tne $4, $5, 1023
+tgei $4, 0
+tgei $4, -1
+tgeiu $4, 32767
+tlti $5, -32768
+tltiu $5, -1
+teqi $6, 1234
+tnei $7, -1234
 mfc0 $4, $12
 mtc0 $4, $12
 mfc0 $4, $12, 1

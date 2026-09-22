@@ -61,7 +61,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3106 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 537 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9499 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 736 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 796 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 306 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3744 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1280 |
@@ -345,7 +345,13 @@ backend. Four such choices are worth knowing about:
   the source asks for one, and MIPS's `.reginfo` and `.MIPS.abiflags` are
   llvm-mc's: GNU as writes the same `.MIPS.abiflags`, a `.reginfo` without
   `SHF_ALLOC`, and beside them a `.pdr` and a `.gnu.attributes` that rsasm
-  writes neither of. RISC-V's `.riscv.attributes` is the same in both.
+  writes neither of. The two also work the register masks out differently
+  where the floating-point file is 32 bits wide and a double therefore fills
+  a register pair: llvm-mc counts the pair for each operand that holds a
+  double, and GNU as counts it for every floating-point operand of any
+  instruction with a double-precision form, so they part company on
+  `cvt.d.s` and the other mixed conversions. rsasm counts what llvm-mc
+  counts. RISC-V's `.riscv.attributes` is the same in both.
   `tools/mc-diff` leaves `.ARM.attributes` out of its comparison for that
   reason, and `tools/xas-diff` compares it.
 - **m68k floating-point immediates.** Both references write a single or
@@ -914,7 +920,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,651 of 8,651 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,801 of 38,801 match across twenty-one target variants. For RISC-V
+  supports. 38,861 of 38,861 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU

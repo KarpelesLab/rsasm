@@ -303,11 +303,14 @@ impl Args<'_> {
     }
 
     /// A floating-point register operand, recorded in `ri_cprmask[1]`.
-    pub fn fpr(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Reg> {
+    /// `wide` says the operand holds a 64-bit value and so names a register
+    /// pair, which the caller reads from [`Def::wide_fpr`]; see
+    /// [`super::abi`].
+    pub fn fpr(&self, cx: &mut AsmCtx<'_>, i: usize, wide: bool) -> Option<Reg> {
         let o = self.at(cx, i)?;
         match o.fpr() {
             Some(r) => {
-                super::abi::mark(cx.state, r);
+                super::abi::mark_fpr(cx.state, r, wide);
                 Some(r)
             }
             None => {
@@ -526,6 +529,12 @@ pub fn encode(
             let v = a.imm(cx, 1)?;
             place_imm16(cx, &mut w, base | rt(t.num), v, "immediate")?;
         }
+        Form::RsImm => {
+            a.arity(cx, 2)?;
+            let s = a.gpr(cx, 0)?;
+            let v = a.imm(cx, 1)?;
+            place_imm16(cx, &mut w, base | rs(s.num), v, "immediate")?;
+        }
         Form::RtMem => {
             a.arity(cx, 2)?;
             let t = a.gpr(cx, 0)?;
@@ -534,7 +543,7 @@ pub fn encode(
         }
         Form::FtMem => {
             a.arity(cx, 2)?;
-            let t = a.fpr(cx, 0)?;
+            let t = a.fpr(cx, 0, def.wide_fpr(0))?;
             let m = a.mem(cx, 1)?;
             place_disp(cx, &mut w, base | rt(t.num) | rs(m.base.num), m.disp)?;
         }
@@ -552,6 +561,22 @@ pub fn encode(
         Form::RsOff => {
             a.arity(cx, 2)?;
             let s = a.gpr(cx, 0)?;
+            // A linking branch writes `$ra` before anything can read the
+            // register it tested, so testing `$ra` itself is unpredictable:
+            // an exception that restarts the instruction would find the link
+            // in place of the value. GNU as refuses the form and llvm-mc
+            // assembles it; rsasm follows GNU as.
+            if s == reg::RA && def.links() {
+                let span = a.ops.first().map_or(a.span, |o| o.span);
+                cx.error(
+                    span,
+                    format!(
+                        "`{}` links through $ra, so the register it tests may not be $ra",
+                        a.mnemonic
+                    ),
+                );
+                return None;
+            }
             let target = a.imm(cx, 1)?;
             w.push_fixup(base | rs(s.num), target.expr, branch_fixup(), target.span);
         }
@@ -612,24 +637,34 @@ pub fn encode(
         }
         Form::FdFsFt => {
             a.arity(cx, 3)?;
-            let (fd, fs, ft) = (a.fpr(cx, 0)?, a.fpr(cx, 1)?, a.fpr(cx, 2)?);
+            let (fd, fs, ft) = (
+                a.fpr(cx, 0, def.wide_fpr(0))?,
+                a.fpr(cx, 1, def.wide_fpr(1))?,
+                a.fpr(cx, 2, def.wide_fpr(2))?,
+            );
             w.push(base | sa(fd.num as u32) | rd(fs.num) | rt(ft.num));
         }
         Form::FdFs => {
             a.arity(cx, 2)?;
-            let (fd, fs) = (a.fpr(cx, 0)?, a.fpr(cx, 1)?);
+            let (fd, fs) = (
+                a.fpr(cx, 0, def.wide_fpr(0))?,
+                a.fpr(cx, 1, def.wide_fpr(1))?,
+            );
             w.push(base | sa(fd.num as u32) | rd(fs.num));
         }
         Form::CcFsFt => {
             a.arity_between(cx, 2, 3)?;
             let (flag, skip) = a.leading_fcc(cx, a.ops.len() == 3)?;
-            let (fs, ft) = (a.fpr(cx, skip)?, a.fpr(cx, skip + 1)?);
+            let (fs, ft) = (
+                a.fpr(cx, skip, def.wide_fpr(0))?,
+                a.fpr(cx, skip + 1, def.wide_fpr(1))?,
+            );
             w.push(base | cc_lo(flag.num) | rd(fs.num) | rt(ft.num));
         }
         Form::RtFs => {
             a.arity(cx, 2)?;
             let t = a.gpr(cx, 0)?;
-            let fs = a.fpr(cx, 1)?;
+            let fs = a.fpr(cx, 1, def.wide_fpr(1))?;
             w.push(base | rt(t.num) | rd(fs.num));
         }
         Form::RdRsCc => {
@@ -640,7 +675,10 @@ pub fn encode(
         }
         Form::FdFsCc => {
             a.arity(cx, 3)?;
-            let (fd, fs) = (a.fpr(cx, 0)?, a.fpr(cx, 1)?);
+            let (fd, fs) = (
+                a.fpr(cx, 0, def.wide_fpr(0))?,
+                a.fpr(cx, 1, def.wide_fpr(1))?,
+            );
             let flag = a.fcc(cx, 2)?;
             w.push(base | sa(fd.num as u32) | rd(fs.num) | cc(flag.num));
         }

@@ -162,10 +162,60 @@ foo:
 bc1t foo
 .p2align 6
 
-# `bc1fl` and `bc1tl` are the likely forms, whose delay slot is annulled when
-# the branch is not taken, and each of the four can name the flag it tests.
-# llvm-mc fills the delay slot with a `nop` here as it does for any other
-# branch, and the alignment below absorbs it.
+# The MIPS II "likely" twins of every conditional branch, whose delay slot is
+# annulled when the branch is not taken, and the flag each COP1 branch tests
+# when it is written out. llvm-mc fills the delay slot with a `nop` here as it
+# does for any other branch, and the alignment below absorbs it.
+=== beql backward
+foo:
+beql $1, $2, foo
+.p2align 6
+
+=== bnel
+foo:
+bnel $a0, $a1, foo
+.p2align 6
+
+=== blezl
+foo:
+blezl $a0, foo
+.p2align 6
+
+=== bgtzl
+foo:
+bgtzl $a0, foo
+.p2align 6
+
+=== bltzl
+foo:
+bltzl $a0, foo
+.p2align 6
+
+=== bgezl
+foo:
+bgezl $a0, foo
+.p2align 6
+
+=== bltzall
+foo:
+bltzall $a0, foo
+.p2align 6
+
+=== bgezall
+foo:
+bgezall $a0, foo
+.p2align 6
+
+=== beqzl
+foo:
+beqzl $v0, foo
+.p2align 6
+
+=== bnezl
+foo:
+bnezl $v0, foo
+.p2align 6
+
 === bc1f on a named flag
 foo:
 bc1f $fcc3, foo

@@ -1,6 +1,7 @@
 # MIPS64, big endian. Compared against `llvm-mc -triple=mips64`.
 #
-# See mips.txt for the notes on reorder and macro mode; they apply here too.
+# See mips.txt for the notes on reorder mode, macro mode and what the two
+# assemblers deliberately differ over; they apply here too.
 # This file repeats the 32-bit instruction list, because every one of those
 # encodings must be unchanged on a 64-bit target, and then adds the doubleword
 # instructions that only exist here.
@@ -159,6 +160,8 @@ move $a0, $v0
 not $4, $5
 neg $4, $5
 negu $4, $5
+dneg $4, $5
+dnegu $4, $5
 
 # ---- li / la: the one- and two-instruction split ----
 li $4, 0
@@ -196,6 +199,12 @@ tlt $4, $5
 tltu $4, $5
 teq $4, $5, 7
 tne $4, $5, 1023
+tgei $4, 0
+tgeiu $4, 32767
+tlti $5, -32768
+tltiu $5, -1
+teqi $6, 1234
+tnei $7, -1234
 mfc0 $4, $12
 mtc0 $4, $12
 mfc0 $4, $12, 1
