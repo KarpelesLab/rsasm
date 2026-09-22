@@ -120,8 +120,12 @@ while IFS='|' read -r name count extra; do
   n=$((count * scale))
   echo "=== $name --seed $seed --count $n $extra"
   start=$SECONDS
+  # A fuzzer that hangs would otherwise sit there until the whole job times
+  # out, with nothing in the log to say which one it was. Killed at the
+  # deadline it writes no summary line, so it reads as "did not finish".
   # shellcheck disable=SC2086
-  "$script" fuzz --seed "$seed" --count "$n" $extra > "$log" 2>&1
+  timeout "${FUZZ_TIMEOUT:-1800}" "$script" fuzz --seed "$seed" --count "$n" $extra \
+    > "$log" 2>&1
   status=$?
   cat "$log"
   took=$((SECONDS - start))
