@@ -291,6 +291,14 @@ impl<'c, 'a> Asm<'c, 'a> {
         self.emit(encode::i_imm(w as u64, imm) as u32);
     }
 
+    /// `op rd, rs1, shamt`. A shift is not an I-type: `funct7` sits in the
+    /// top of what would be the immediate, so the amount goes in on its own
+    /// rather than through `i_imm`, which would wipe it out.
+    pub fn shift_const(&mut self, base: u32, rd: Reg, rs1: Reg, shamt: u32) {
+        let w = encode::rs1(encode::rd(base, rd.bits()), rs1.bits());
+        self.emit(w | (shamt << 20));
+    }
+
     /// `op rd, rs1, imm` where the immediate came from the source.
     pub fn i_expr(&mut self, base: u32, rd: Reg, rs1: Reg, imm: &Imm) -> Option<()> {
         let w = encode::rs1(encode::rd(base, rd.bits()), rs1.bits());
@@ -567,6 +575,13 @@ impl<'c, 'a> Asm<'c, 'a> {
                 };
                 self.emit(base | (pred << 24) | (succ << 20));
             }
+            // Binutils has two `unimp` rows: `c.unimp` for the C extension
+            // and the four-byte one for the base ISA, and it takes the
+            // shorter where it can. This is that choice, not a compression:
+            // `csrrw x0, cycle, x0`, the same word written out, stays wide.
+            Kind::Nullary if name == "unimp" && self.rvc => {
+                self.emit_fixed(Insn::short(compress::C_UNIMP));
+            }
             Kind::Nullary => self.emit(base),
         }
         Some(())
@@ -577,6 +592,22 @@ impl<'c, 'a> Asm<'c, 'a> {
     fn jalr(&mut self, base: u32, ops: &Operands<'_>, count: usize) -> Option<()> {
         let (rd, mem) = match count {
             1 => (reg::RA, self.address_or_reg(ops, 0)?),
+            // `jalr rs, off` links into `ra` and adds the offset to `rs`,
+            // where `jalr rd, rs` links into `rd`: which one it is depends on
+            // whether the second operand is a register, exactly as it does in
+            // GNU as.
+            2 if !ops.is_reg(self.cx, 1) && !ops.looks_like_mem(self.cx, 1) => {
+                let rs1 = ops.xreg(self.cx, 0)?;
+                let off = ops.imm(self.cx, 1)?;
+                (
+                    reg::RA,
+                    Mem {
+                        base: rs1,
+                        off: Some(off),
+                        span: ops.piece_span(1),
+                    },
+                )
+            }
             2 => (ops.xreg(self.cx, 0)?, self.address_or_reg(ops, 1)?),
             _ => {
                 let rd = ops.xreg(self.cx, 0)?;

@@ -244,6 +244,13 @@ impl Architecture for Riscv {
         }
 
         let (base, ordering) = split_ordering(&mnemonic);
+        // A three-operand mnemonic whose last operand is not a register is
+        // the immediate form: `and a0, a1, 4` is `andi`, `csrrs a0, frm, 3`
+        // is `csrrsi` (see `insn::immediate_alias`).
+        let base = match insn::immediate_alias(base) {
+            Some(alias) if ops.len() == 3 && !ops.is_reg(a.cx, 2) => alias,
+            _ => base,
+        };
         let Some(def) = insn::lookup(base) else {
             a.error(
                 req.mnemonic_span,
