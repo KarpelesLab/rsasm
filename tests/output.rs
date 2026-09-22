@@ -409,3 +409,48 @@ fn code32_inside_an_x86_64_object_keeps_x86_64_numbering_and_class() {
     let b = output::elf::build(&asm).expect("ELF output");
     assert_eq!(b[4], 2, "ELFCLASS64");
 }
+
+#[test]
+fn a_relaxable_got_load_takes_the_x_relocation() {
+    // The two numbers a linker rewrites a `@GOTPCREL` load through, and the
+    // 64-bit form in data. Taken from `x86_64-elf-as --64`, which writes
+    // REX_GOTPCRELX (42) for the forms whose rewritten shape keeps a REX
+    // prefix (`movq`, and `movl` into an extended register), GOTPCRELX (41)
+    // for the rest of the rewritable forms, and plain GOTPCREL (9) for an
+    // instruction it cannot rewrite.
+    let src = "movq foo@GOTPCREL(%rip), %rax\n\
+               movl foo@GOTPCREL(%rip), %eax\n\
+               movl foo@GOTPCREL(%rip), %r8d\n\
+               movw foo@GOTPCREL(%rip), %ax\n\
+               jmp *foo@GOTPCREL(%rip)\n\
+               call *foo@GOTPCREL(%rip)\n\
+               push foo@GOTPCREL(%rip)\n\
+               testl %eax, foo@GOTPCREL(%rip)\n\
+               addq foo@GOTPCREL(%rip), %rax\n\
+               incl foo@GOTPCREL(%rip)\n\
+               leaq foo@GOTPCREL(%rip), %rax\n\
+               movq %rax, foo@GOTPCREL(%rip)\n\
+               .quad foo@GOTPCREL\n\
+               .long foo@GOTPCREL\n";
+    let asm = assemble_for("x86-64", src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![42, 41, 42, 9, 41, 41, 41, 41, 42, 9, 9, 9, 28, 9]
+    );
+}
+
+#[test]
+fn an_i386_got_load_takes_got32x_only_where_it_is_relaxable() {
+    // `as --32`: the `mov` load and the indirect jump are rewritable
+    // (R_386_GOT32X, 43), the increment is not (R_386_GOT32, 3).
+    let src = "movl foo@GOT(%ebx), %eax\njmp *foo@GOT(%ebx)\nincl foo@GOT(%ebx)\n";
+    let asm = assemble_for("i386", src);
+    let kinds: Vec<u32> = asm.relocs.iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, vec![43, 43, 3]);
+}

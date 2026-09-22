@@ -37,6 +37,9 @@ mod x86_64 {
     pub const GOTPC32: u32 = 26;
     pub const GOT64: u32 = 27;
     pub const PC64: u32 = 24;
+    pub const GOTPCREL64: u32 = 28;
+    pub const GOTPCRELX: u32 = 41;
+    pub const REX_GOTPCRELX: u32 = 42;
 }
 
 mod i386 {
@@ -163,12 +166,27 @@ impl Abi {
     /// reference to `_GLOBAL_OFFSET_TABLE_` means in i386 code.
     pub const I386_GOTPC: u32 = i386::GOTPC;
 
-    /// `@GOTPCREL` is RIP-relative, so it only exists on x86-64.
-    pub fn gotpcrel(self) -> Option<u32> {
-        match self {
-            Abi::X86_64 => Some(x86_64::GOTPCREL),
-            Abi::I386 => None,
+    /// `@GOTPCREL` is RIP-relative, so it only exists on x86-64. An eight-byte
+    /// field takes the 64-bit number, as GNU as writes `.quad foo@GOTPCREL`.
+    pub fn gotpcrel(self, size: u8) -> Option<u32> {
+        match (self, size) {
+            (Abi::X86_64, 8) => Some(x86_64::GOTPCREL64),
+            (Abi::X86_64, _) => Some(x86_64::GOTPCREL),
+            (Abi::I386, _) => None,
         }
+    }
+
+    /// `R_X86_64_GOTPCRELX` and `R_X86_64_REX_GOTPCRELX`: the same GOT load
+    /// on one of the instruction forms the linker may rewrite into a direct
+    /// reference, with the two numbers distinguished by whether the
+    /// instruction carries a REX prefix — the linker needs to know, since the
+    /// form it rewrites to keeps it.
+    pub const X86_64_GOTPCRELX: u32 = x86_64::GOTPCRELX;
+    pub const X86_64_REX_GOTPCRELX: u32 = x86_64::REX_GOTPCRELX;
+
+    /// True for the two relaxable `@GOTPCREL` numbers.
+    pub fn is_gotpcrelx(reloc: u32) -> bool {
+        reloc == x86_64::GOTPCRELX || reloc == x86_64::REX_GOTPCRELX
     }
 
     /// The relocation NASM's `wrt ..got` selects: the address of the symbol's
@@ -222,6 +240,6 @@ mod tests {
     fn i386_has_no_64_bit_or_rip_relative_relocations() {
         assert_eq!(Abi::I386.abs(8), None);
         assert_eq!(Abi::I386.pcrel(8), None);
-        assert_eq!(Abi::I386.gotpcrel(), None);
+        assert_eq!(Abi::I386.gotpcrel(4), None);
     }
 }
