@@ -191,6 +191,13 @@ pub const IW_THUMB_ADR: u8 = 9;
 /// [`IW_THUMB_ADR`] where the addend is already odd, so setting the Thumb bit
 /// in it changes nothing.
 pub const IW_THUMB_ADR_ODD: u8 = 10;
+/// The 16-bit form of a Thumb `ldr rt, label` layout may widen. It shares
+/// `relax_adr` with the `adr` above, so a Thumb function widens it too,
+/// although the load leaves the address alone.
+pub const IW_THUMB_LDR16: u8 = 11;
+/// Any other PC-relative load or preload that names a label, in either
+/// instruction set: only the weak target it refuses is of interest.
+pub const IW_PCREL_LOAD: u8 = 12;
 
 impl Architecture for Arm {
     fn name(&self) -> &'static str {
@@ -557,9 +564,17 @@ impl Architecture for Arm {
         // `md_convert_frag` ORs the bit into the *addend*, not into the
         // finished `S + A - P`, so it adds one only where the addend is even;
         // which of the two classes the instruction carries says that, since
-        // the addend is known when the `adr` is read.
+        // the addend is known when the `adr` is read. A `ldr rt, label`
+        // shares the sizing but not the bit: `relax_adr` widens it for a
+        // Thumb function, and the value it then writes is the plain address.
         match class {
             IW_THUMB_ADR16 if thumb => return Interwork::Relocate,
+            // A PC-relative load resolves against a global symbol in its own
+            // section, and a weak one leaves GNU as with a fixup it cannot
+            // resolve and a field no relocation covers.
+            IW_THUMB_LDR16 if thumb || t.weak => return Interwork::Relocate,
+            IW_PCREL_LOAD if t.weak => return Interwork::Relocate,
+            IW_THUMB_LDR16 | IW_PCREL_LOAD => return Interwork::AsWritten,
             IW_THUMB_ADR if thumb => {
                 return Interwork::Becomes {
                     patch: |w| w,

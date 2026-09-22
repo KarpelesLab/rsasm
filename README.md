@@ -58,7 +58,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17085 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21811 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3106 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3144 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 537 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9499 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 796 |
@@ -154,6 +154,11 @@ form by form and in random whole programs as well.
   halfword loads take an entry as well, and `vldr d0, =x` takes two slots and
   aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
   `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
+  the PC-relative loads that name a label rather than a pool entry
+  (`ldr r0, label`, the byte, halfword, doubleword and preload forms, and in
+  ARM state the stores as well), which in Thumb pick between a 16-bit form
+  reaching a word-aligned label 1020 bytes ahead and a 32-bit one reaching
+  4095 bytes either way,
   `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
   the two instruction sets, the position-independent operands
   (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
@@ -945,7 +950,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,654 of 8,654 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,889 of 38,889 match across twenty-one target variants. For RISC-V
+  supports. 38,891 of 38,891 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -961,7 +966,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,474 of 25,474 match across fifty-seven
+  from checksum-pinned sources. 25,510 of 25,510 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -985,13 +990,13 @@ is what hid them from rsasm for as long as it did.
   the x86 and AArch64 thread-local access models, which the linker turns into
   local exec, weak definitions a second object overrides, `.comm` symbols
   merged between objects with different sizes, `.bss`, and references into
-  another object's sections. The targets whose linker relaxes — SuperH, RX, RL78, MSP430,
-  V850/RH850, AVR and RISC-V — are linked a second time with `--relax`, which
-  is what their difference records, `R_MSP430_SYM_DIFF` pairs and `.avr.prop`
-  exist for. Two more rows link [PE/COFF](#pecoff) objects into an image with
-  GNU ld for mingw, where what a link has to get right is `@IMGREL`,
-  `.secrel32` and `.secidx` and the addend a COFF relocation keeps in its
-  field. 239 of 239 match across twenty-nine variants.
+  another object's sections. The targets whose linker relaxes — SuperH, RX,
+  RL78, MSP430, V850/RH850, AVR and RISC-V — are linked a second time with
+  `--relax`, which is what their difference records, `R_MSP430_SYM_DIFF`
+  pairs and `.avr.prop` exist for. Two more rows link [PE/COFF](#pecoff)
+  objects into an image with GNU ld for mingw, where what a link has to get
+  right is `@IMGREL`, `.secrel32` and `.secidx` and the addend a COFF
+  relocation keeps in its field. 239 of 239 match across twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
   symbols included, and as `win64` and `win32` COFF objects. 444 of 444
