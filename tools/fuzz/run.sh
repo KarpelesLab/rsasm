@@ -36,8 +36,9 @@ root=$(cd "$here/../.." && pwd)
 # The counts are chosen so the whole set runs in a few minutes on a
 # four-core runner, and are scaled by --scale. Instruction fuzzers compare a
 # case in a section of its own and batch 200 of them per assembler run, so
-# they are cheap; the whole-program ones (arm-programs, avr, mcs51) run one
-# assembler per program and are an order of magnitude dearer per case.
+# they are cheap; the whole-program ones (arm-programs, avr, mcs51, mos6502,
+# i8080, nasm) run one assembler per program and are an order of magnitude
+# dearer per case.
 FUZZERS="
 x86|30000|
 aarch64|20000|

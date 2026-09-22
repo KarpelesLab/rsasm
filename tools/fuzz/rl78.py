@@ -78,6 +78,7 @@ def truncates_a_long_branch(text, res, target):
     """
     g, r = res.get("gas"), res.get("rsasm")
     return bool(g and g[0] == "ok" and r[0] == "err"
+                and BRANCH.match(text.split()[0]) is not None
                 and "out of range" in str(r[1]))
 
 
