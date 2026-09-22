@@ -153,3 +153,32 @@ _start:
 reader:
         ldi     r24, lo8(bigger)
         ret
+
+# A common block that names no alignment is aligned by its size, so the
+# merged `grows` takes the larger object's 16; what `.lcomm` reserves is
+# aligned by its size too, and a `.local` symbol's `.comm` as it asks.
+=== common blocks aligned by their size, and objects reserved in .bss
+--- a.s
+        .comm   odd3, 3
+        .comm   grows, 5
+        .lcomm  lone1, 1
+        .lcomm  lone6, 6
+        .lcomm  lone9, 9
+        .data
+        .long   odd3, grows, lone1, lone6, lone9
+        .text
+        .globl  _start
+_start:
+        ret
+--- b.s
+        .comm   odd3, 3
+        .comm   grows, 24
+        .local  loc2
+        .comm   loc2, 2, 8
+        .lcomm  ltwo, 2
+        .data
+        .long   grows, loc2, ltwo
+        .text
+        .globl  reader
+reader:
+        ret

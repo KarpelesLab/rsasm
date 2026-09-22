@@ -70,7 +70,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 5553 |
 | NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 558 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | AS | 1276 |
-| Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1935 |
+| Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1938 |
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
 | MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
 | Intel 8080, in Intel mnemonics | `i8080` | AS | 278 |
@@ -352,12 +352,11 @@ form by form and in random whole programs as well.
 Anything that produces incorrect output rather than an error is listed here,
 separately:
 
-- `.lcomm`, and `.comm` of a symbol declared `.local`, write a local common
-  symbol rather than allocating the space in `.bss` as both references do.
+- Nothing is known to be, at the moment.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
-backend. Four such choices are worth knowing about:
+backend. Five such choices are worth knowing about:
 
 - **Which references are left to the linker.** A PC-relative reference to a
   global or weak symbol is relocated even when the symbol is in the same
@@ -395,6 +394,24 @@ backend. Four such choices are worth knowing about:
   counts. RISC-V's `.riscv.attributes` is the same in both.
   `tools/mc-diff` leaves `.ARM.attributes` out of its comparison for that
   reason, and `tools/xas-diff` compares it.
+- **Common blocks, and symbols only a directive names.** On every ELF
+  target GNU as is followed, since it is the assembler a GNU toolchain runs
+  and aligning less than it does can misalign what the linker places. A
+  `.comm` or `.tls_common` that names no alignment (or 0) is aligned to its
+  size rounded up to a power of two, at most 16, where llvm-mc aligns it to
+  1. `.lcomm`, and a `.comm` of a symbol `.local` named first, reserve the
+  object in `.bss`, as both references do; `.lcomm` aligns it to 8, 4 or 2 by
+  its size (to 8 whatever the size on PowerPC, and not at all on AVR and
+  MSP430), where llvm-mc packs `.bss`. A name only `.type`, `.size`,
+  `.globl`, `.local` or a visibility mentions is written as a global
+  undefined symbol, and one only `.weak` mentions is left out, even after a
+  `.globl`, which leaves it weak; llvm-mc keeps the weak one, leaves out the
+  one only `.size` names, makes the `.local` one local, and refuses `.globl`
+  after `.weak`. The NASM dialect keeps an `extern` nothing refers to out of
+  the object, as NASM does. Mach-O and COFF objects follow llvm-mc here,
+  as they do elsewhere: a common block's alignment is Darwin's power of two
+  in the one and makes the block larger in the other, and `.lcomm` packs
+  `.bss` in both, where the mingw GNU as aligns by size as on ELF.
 - **m68k floating-point immediates.** Both references write a single or
   double precision `#1.5` the same way. An extended-precision one GNU as 2.47
   writes without the 16 zero bits of the 68881 format — its own `.extend`
@@ -959,7 +976,7 @@ and a loader may do with the object, and leaving them out of the comparison
 is what hid them from rsasm for as long as it did.
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
-  16-bit mode, in AT&T and Intel syntax. 8,654 of 8,654 match.
+  16-bit mode, in AT&T and Intel syntax. 8,660 of 8,660 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
   supports. 38,899 of 38,899 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
@@ -1025,7 +1042,7 @@ is what hid them from rsasm for as long as it did.
   characteristics and bytes, every symbol with its auxiliary records, every
   relocation — from single statements, hand-written programs and Clang's
   output, and against GNU as 2.47 for mingw as relocations with the addends
-  their fields hold. 292 of 292 comparisons match. `tools/oracles/build.sh`
+  their fields hold. 294 of 294 comparisons match. `tools/oracles/build.sh`
   builds GNU as for mingw alongside the other cross assemblers.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols

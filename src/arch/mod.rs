@@ -822,6 +822,42 @@ pub struct ModifierSymbols {
     pub tls: bool,
 }
 
+/// How `.lcomm` reserves an object in `.bss`; see
+/// [`Architecture::local_common`].
+#[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
+pub struct LocalCommon {
+    /// The alignment an object gets from its size when the directive names
+    /// none.
+    pub align: fn(u64) -> u64,
+    /// Whether `.lcomm` reads a third operand, a byte alignment. On ELF only
+    /// PowerPC's GNU as and llvm-mc do; COFF's always does.
+    pub takes_align: bool,
+    /// The symbol's type.
+    pub ty: crate::symbol::SymType,
+}
+
+impl LocalCommon {
+    /// GNU as's `TC_IMPLICIT_LCOMM_ALIGNMENT`: the largest of 8, 4 and 2 that
+    /// the size reaches, else 1. llvm-mc aligns nothing.
+    pub const GNU: LocalCommon = LocalCommon {
+        align: |size| match size {
+            8.. => 8,
+            4.. => 4,
+            2.. => 2,
+            _ => 1,
+        },
+        takes_align: false,
+        ty: crate::symbol::SymType::Object,
+    };
+
+    /// No alignment at all, for the targets whose GNU as packs `.bss`.
+    pub const PACKED: LocalCommon = LocalCommon {
+        align: |_| 1,
+        ..LocalCommon::GNU
+    };
+}
+
 pub trait Architecture {
     /// Canonical name, as accepted by `--arch` and `.arch`.
     fn name(&self) -> &'static str;
@@ -1185,6 +1221,23 @@ pub trait Architecture {
     /// as [`Architecture::section_symbols`].
     fn common_symbols(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// How `.lcomm` lays out what it reserves in an ELF object. Every ELF
+    /// target's GNU as aligns an object to 8, 4 or 2 bytes by its size, as
+    /// [`LocalCommon::GNU`] does, except where the target overrides that:
+    /// AVR and MSP430 pack `.bss`, and PowerPC aligns every object to 8 and
+    /// leaves its symbol untyped. llvm-mc packs `.bss` on every target, and
+    /// GNU as is followed here, since the object the linker then places is
+    /// the one the assembler of a GNU toolchain aligned. A COFF object
+    /// follows llvm-mc, as it does in everything else.
+    ///
+    /// A `.comm` of a symbol `.local` named first is reserved the same way
+    /// but aligned only as the directive asks, by both references; and a
+    /// global `.comm` that names no alignment is given one by the core, the
+    /// same on every ELF target.
+    fn local_common(&self) -> LocalCommon {
+        LocalCommon::GNU
     }
 
     /// Whether a relocation of type `reloc` keeps its addend in the relocated

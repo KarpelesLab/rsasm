@@ -211,3 +211,24 @@ start:
         .section .tdata,"awT",@progbits
         .globl  tv
 tv:     .long   1
+# rsasm follows GNU as for common blocks, and so parts from llvm-mc on
+# what these leave out: a `.comm` that names no alignment, which GNU as
+# aligns by its size and llvm-mc to 1; what `.lcomm` reserves, which
+# llvm-mc packs; and a symbol only `.size`, `.local` or `.weak` names (see
+# the x86 corpora in tools/gas-diff, and tests/output.rs).
+=== a .local .comm with its alignment, reserved in .bss
+        .local  b8, b4
+        .comm   b8, 8, 8
+        .comm   b4, 3, 4
+        .data
+        .long   b8, b4
+
+=== symbols only a directive names, where the references agree
+        .type   tfunc, @function
+        .type   tobj, @object
+        .hidden hid
+        .protected prot
+        .internal intl
+        .globl  gonly
+        .type   .Ltyped, @function
+        .hidden .Lhid

@@ -33,6 +33,13 @@ f2:     ret
         movq    local_buf(%rip), %rax
         movq    shared(%rip), %rax
         leaq    aligned(%rip), %rcx
+=== lcomm packs bss, as llvm-mc does and unlike ELF
+        .lcomm  p1, 1
+        .lcomm  p4, 4
+        .lcomm  p3, 3
+        .lcomm  p16, 16
+        .lcomm  p2, 2, 2
+        .lcomm  p5, 5
 === section flags
         .section .code,"xr"
         ret

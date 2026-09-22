@@ -639,12 +639,19 @@ fn collect_symbols(
         // A symbol declared global and never defined is written even if
         // nothing refers to it, as both references write it: it makes the
         // linker pull in whatever defines it, which is what the
-        // `.globl __do_copy_data` avr-gcc and Clang emit is for. NASM has no
-        // spelling for that — an undefined symbol there was declared
-        // `extern` — and leaves one nothing refers to out of the object, so
-        // the NASM dialect does the same.
-        let keep_undefined =
-            sym.binding == Binding::Global && asm.options.dialect != crate::lexer::Dialect::Nasm;
+        // `.globl __do_copy_data` avr-gcc and Clang emit is for. GNU as
+        // writes one that `.type`, `.size`, `.local` or a visibility named
+        // too, as a global undefined symbol; `.weak` alone it leaves out, as
+        // it does any weak symbol nothing refers to, and a `.L` name, which
+        // is the assembly's own. llvm-mc splits from it three ways: it keeps
+        // the weak one, leaves out the one only `.size` named, and makes the
+        // one `.local` named a local undefined symbol. NASM has no spelling
+        // for any of this — an undefined symbol there was declared `extern`
+        // — and leaves one nothing refers to out of the object, so the NASM
+        // dialect does the same.
+        let keep_undefined = asm.options.dialect != crate::lexer::Dialect::Nasm
+            && (sym.binding == Binding::Global
+                || (sym.declared && sym.binding != Binding::Weak && !raw.starts_with(".L")));
         if !sym.is_defined() && !sym.used && !keep_undefined {
             continue;
         }

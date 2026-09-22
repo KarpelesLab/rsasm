@@ -695,3 +695,108 @@ fn tls_models_need_a_thread_local_variable() {
         asm.diags.render(&asm.sm, false)
     );
 }
+
+#[test]
+#[cfg(feature = "riscv")]
+fn a_common_block_with_no_alignment_is_aligned_by_its_size() {
+    // `riscv64-elf-as`'s values, which every ELF target's GNU as shares: the
+    // size rounded up to a power of two, at most 16, and 1 for an empty
+    // block; an alignment of 0 counts as none, and any other is kept as
+    // written. llvm-mc, the reference `tools/mc-diff` checks RISC-V objects
+    // against, aligns all of these to 1.
+    let b = elf_for(
+        "riscv64",
+        concat!(
+            ".comm c0, 0\n.comm c1, 1\n.comm c3, 3\n.comm c5, 5\n.comm c9, 9\n",
+            ".comm c16, 16\n.comm c100, 100\n.comm czero, 12, 0\n.comm codd, 8, 3\n",
+            ".tls_common tc40, 40\n",
+        ),
+    );
+    let syms = symbols_of(&b);
+    let value = |n: &str| {
+        let s = syms.iter().find(|s| s.0 == n).expect(n);
+        assert_eq!(s.2, 0xfff2, "{n} is SHN_COMMON");
+        s.3
+    };
+    for (name, align) in [
+        ("c0", 1),
+        ("c1", 1),
+        ("c3", 4),
+        ("c5", 8),
+        ("c9", 16),
+        ("c16", 16),
+        ("c100", 16),
+        ("czero", 16),
+        ("codd", 3),
+        ("tc40", 16),
+    ] {
+        assert_eq!(value(name), align, "{name}");
+    }
+}
+
+#[test]
+#[cfg(feature = "riscv")]
+fn lcomm_reserves_its_object_in_bss_aligned_by_its_size() {
+    // `riscv64-elf-as`'s layout: `.lcomm` aligns an object of 8 bytes or
+    // more to 8, of 4 to 4 and of 2 to 2, and gives the symbol its size and
+    // `STT_OBJECT`; a `.comm` of a symbol `.local` named first is reserved in
+    // `.bss` too, aligned only as it asks. llvm-mc packs both.
+    let b = elf_for(
+        "riscv64",
+        concat!(
+            ".lcomm a1, 1\n.lcomm a4, 4\n.lcomm a3, 3\n.lcomm a17, 17\n",
+            ".lcomm a2, 2\n.lcomm a5, 5\n.local l1, l3\n.comm l1, 1\n.comm l3, 3\n",
+        ),
+    );
+    let secs = sections_of(&b);
+    let bss = secs.iter().position(|s| s.0 == ".bss").unwrap() as u16;
+    let syms = symbols_of(&b);
+    let sym = |n: &str| {
+        let s = syms.iter().find(|s| s.0 == n).expect(n);
+        (s.1, s.2, s.3, s.4)
+    };
+    const LOCAL_OBJECT: u8 = 1;
+    for (name, value, size) in [
+        ("a1", 0, 1),
+        ("a4", 4, 4),
+        ("a3", 8, 3),
+        ("a17", 0x10, 17),
+        ("a2", 0x22, 2),
+        ("a5", 0x24, 5),
+        ("l1", 0x29, 1),
+        ("l3", 0x2a, 3),
+    ] {
+        assert_eq!(sym(name), (LOCAL_OBJECT, bss, value, size), "{name}");
+    }
+}
+
+#[test]
+#[cfg(feature = "riscv")]
+fn a_symbol_only_a_directive_names_is_written_undefined() {
+    // `riscv64-elf-as`'s symbols, the same on every ELF target: `.type`,
+    // `.size`, `.local` and a visibility each make a global undefined symbol
+    // of a name nothing else mentions, and `.weak` alone makes none, even
+    // with `.globl` or `.type` after it. llvm-mc keeps the weak one, leaves
+    // the sized one out and makes the `.local` one local.
+    let b = elf_for(
+        "riscv64",
+        concat!(
+            ".type t_func, %function\n.type t_obj, %object\n.size s_only, 4\n",
+            ".hidden h_only\n.protected p_only\n.internal i_only\n.weak w_only\n",
+            ".globl g_only\n.local l_only\n.weak wg\n.globl wg\n.weak wt\n",
+            ".type wt, %function\n.type .Lt, %function\n",
+        ),
+    );
+    let syms = symbols_of(&b);
+    let sym = |n: &str| syms.iter().find(|s| s.0 == n).map(|s| (s.1, s.2, s.4));
+    const GLOBAL: u8 = 1 << 4;
+    assert_eq!(sym("t_func"), Some((GLOBAL | 2, 0, 0)));
+    assert_eq!(sym("t_obj"), Some((GLOBAL | 1, 0, 0)));
+    assert_eq!(sym("s_only"), Some((GLOBAL, 0, 4)));
+    for name in ["h_only", "p_only", "i_only", "g_only", "l_only"] {
+        assert_eq!(sym(name), Some((GLOBAL, 0, 0)), "{name}");
+    }
+    for name in ["w_only", "wg", "wt", ".Lt"] {
+        assert_eq!(sym(name), None, "{name}");
+    }
+}

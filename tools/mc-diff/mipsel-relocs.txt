@@ -165,3 +165,25 @@ f:      add.d   $f4, $f5, $f6
         c.eq.d  $f9, $f10
         ldc1    $f11, 8($sp)
         cvt.d.s $f13, $f14
+
+# rsasm follows GNU as for common blocks, and so parts from llvm-mc on
+# what these leave out: a `.comm` that names no alignment, which GNU as
+# aligns by its size and llvm-mc to 1; what `.lcomm` reserves, which
+# llvm-mc packs; and a symbol only `.size`, `.local` or `.weak` names (see
+# the x86 corpora in tools/gas-diff, and tests/output.rs). A `.L` name
+# only a directive names is left out too, as GNU as leaves it out; llvm-mc
+# writes it for o32, where its own local labels start with `$` instead.
+=== a .local .comm with its alignment, reserved in .bss
+        .local  b8, b4
+        .comm   b8, 8, 8
+        .comm   b4, 3, 4
+        .data
+        .word   b8, b4
+
+=== symbols only a directive names, where the references agree
+        .type   tfunc, @function
+        .type   tobj, @object
+        .hidden hid
+        .protected prot
+        .internal intl
+        .globl  gonly

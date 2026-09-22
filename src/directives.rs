@@ -1083,7 +1083,24 @@ impl Assembler {
                 return true;
             };
             let id = self.symbols.intern(name, span);
-            self.symbols.get_mut(id).binding = binding;
+            let elf = self.options.format == crate::output::Format::Elf;
+            let sym = self.symbols.get_mut(id);
+            // GNU as keeps a symbol weak once `.weak` has named it, whatever
+            // `.globl` says after, where llvm-mc refuses the pair; and a
+            // `.local` after `.comm` leaves the block common and global.
+            let keep = elf
+                && match binding {
+                    Binding::Global => sym.binding == Binding::Weak,
+                    Binding::Local => matches!(sym.value, SymbolValue::Common { .. }),
+                    _ => false,
+                };
+            if !keep {
+                sym.binding = binding;
+            }
+            sym.declared = true;
+            if binding == Binding::Local && !sym.is_defined() {
+                sym.declared_local = true;
+            }
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
             }
@@ -1097,7 +1114,9 @@ impl Assembler {
                 return true;
             };
             let id = self.symbols.intern(name, span);
-            self.symbols.get_mut(id).visibility = vis;
+            let sym = self.symbols.get_mut(id);
+            sym.visibility = vis;
+            sym.declared = true;
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
             }
@@ -1163,7 +1182,9 @@ impl Assembler {
             return true;
         };
         let id = self.symbols.intern(name, nspan);
-        self.symbols.get_mut(id).size = Some(e);
+        let sym = self.symbols.get_mut(id);
+        sym.size = Some(e);
+        sym.declared = true;
         true
     }
 
@@ -1200,7 +1221,9 @@ impl Assembler {
             }
         };
         let id = self.symbols.intern(name, nspan);
-        self.symbols.get_mut(id).ty = ty;
+        let sym = self.symbols.get_mut(id);
+        sym.ty = ty;
+        sym.declared = true;
         let _ = span;
         true
     }
@@ -1209,7 +1232,7 @@ impl Assembler {
     /// and the type the block gets: a thread-local common block is
     /// `STT_TLS`, and the linker gathers it into the thread-local image
     /// rather than into `.bss`.
-    fn dir_comm(&mut self, cur: &mut Cursor<'_>, span: Span, local: bool, ty: SymType) -> bool {
+    fn dir_comm(&mut self, cur: &mut Cursor<'_>, span: Span, lcomm: bool, ty: SymType) -> bool {
         let Some((name, nspan)) = self.expect_name(cur) else {
             return true;
         };
@@ -1223,55 +1246,150 @@ impl Assembler {
         let Some(size) = self.eval_absolute(e, "`.comm` size") else {
             return true;
         };
-        let mut align = 1u64;
         let mut given = None;
-        if cur.eat_punct(Punct::Comma).is_some()
-            && let Some(e) = self.parse_expr(cur)
-        {
-            let v = self.eval_absolute(e, "`.comm` alignment").unwrap_or(1);
-            align = v.max(1) as u64;
-            given = Some(v.max(0) as u64);
+        let mut align_span = span;
+        if cur.eat_punct(Punct::Comma).is_some() {
+            align_span = cur.peek().span;
+            if let Some(e) = self.parse_expr(cur) {
+                let v = self.eval_absolute(e, "`.comm` alignment").unwrap_or(1);
+                given = Some(v.max(0) as u64);
+            }
         }
         if size < 0 {
             self.diags.error(span, "`.comm` size must not be negative");
             return true;
         }
-        // COFF has no local common block: `.lcomm` puts the object in
-        // `.bss` instead, which is where llvm-mc and GNU as put it.
-        if local && self.options.format.is_coff() {
-            self.coff_lcomm(name, nspan, size as u64, align, span);
+        let size = size as u64;
+        let coff = self.options.format.is_coff();
+        let elf = self.options.format == crate::output::Format::Elf;
+        // Neither format has a local common block. `.lcomm` reserves the
+        // object in `.bss` instead, and on ELF so does a `.comm` of a symbol
+        // `.local` named first, which is where llvm-mc and GNU as put both.
+        let declared_local = self
+            .symbols
+            .lookup(name)
+            .is_some_and(|id| self.symbols.get(id).declared_local);
+        if lcomm || (elf && declared_local) {
+            let rule = self.target().local_common();
+            let (align, sym_ty) = if lcomm {
+                if given.is_some() && !coff && !rule.takes_align {
+                    self.diags
+                        .error(align_span, "`.lcomm` takes no alignment on this target");
+                    return true;
+                }
+                // COFF objects follow llvm-mc, which packs `.bss`; the mingw
+                // GNU as aligns by size there too.
+                let implicit = if coff { 1 } else { (rule.align)(size) };
+                (given.unwrap_or(implicit), rule.ty)
+            } else {
+                // GNU as reads an alignment of 0 as none here too.
+                (given.filter(|&a| a != 0).unwrap_or(1), SymType::Object)
+            };
+            if !align.is_power_of_two() {
+                self.diags
+                    .error(align_span, "the alignment must be a power of two");
+                return true;
+            }
+            // COFF has no symbol types to give; a thread-local block keeps
+            // its type in `.bss`, as GNU as leaves it there.
+            let ty = if coff {
+                None
+            } else if ty == SymType::Tls {
+                Some(ty)
+            } else {
+                Some(sym_ty)
+            };
+            self.reserve_bss(name, nspan, size, align, ty, span);
+            for sym in self.target().common_symbols() {
+                self.refer_to_symbol(sym, nspan);
+            }
             return true;
         }
-        let mut size = size as u64;
+        let mut size = size;
         // A COFF common block records only its size, and `.comm`'s alignment
         // is a power of two there, as both references read it. llvm-mc makes
         // the block at least that large, which is how the linker, placing it
         // at a boundary of its size, honours the alignment.
-        if self.options.format.is_coff()
-            && let Some(log2) = given
-        {
-            if log2 > 5 {
-                self.diags.error(
-                    span,
-                    format!("a COFF common block can be aligned to at most 32 bytes, not 2^{log2}"),
-                );
-                return true;
+        let align = if coff {
+            match given {
+                Some(log2) if log2 > 5 => {
+                    self.diags.error(
+                        span,
+                        format!(
+                            "a COFF common block can be aligned to at most 32 bytes, not 2^{log2}"
+                        ),
+                    );
+                    return true;
+                }
+                Some(log2) => {
+                    size = size.max(1 << log2);
+                    1 << log2
+                }
+                None => 1,
             }
-            align = 1 << log2;
-            size = size.max(align);
-        }
+        } else {
+            match given {
+                Some(align) if align != 0 => align,
+                // GNU as, for every ELF target, aligns a block that names no
+                // alignment, or 0, to its size rounded up to a power of two,
+                // but to no more than 16 bytes. llvm-mc aligns it to 1.
+                _ => size.max(1).next_power_of_two().min(16),
+            }
+        };
         let id = self.symbols.intern(name, nspan);
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Common { size, align };
         sym.def_span = nspan;
         sym.ty = ty;
-        if !local {
-            sym.binding = Binding::Global;
-        }
+        sym.binding = Binding::Global;
         for sym in self.target().common_symbols() {
             self.refer_to_symbol(sym, nspan);
         }
         true
+    }
+
+    /// Reserves `size` zero bytes in `.bss` for `name`, aligned to `align`,
+    /// and leaves the current section as it was: what `.lcomm` does, and on
+    /// ELF a `.comm` of a symbol declared `.local`.
+    fn reserve_bss(
+        &mut self,
+        name: crate::intern::Name,
+        nspan: Span,
+        size: u64,
+        align: u64,
+        ty: Option<SymType>,
+        span: Span,
+    ) {
+        let bss = self.standard_section(".bss");
+        let saved = self.cur;
+        self.set_section(bss);
+        // GNU as pads to the alignment with a fragment of zeros, which on ARM
+        // and AArch64 is data the first time; the object itself it reserves
+        // without marking anything.
+        if align > 1 {
+            self.map_data_frag();
+        }
+        self.align_to(align, span);
+        let size = self.exprs.int(size, span);
+        // Both references give the symbol the object's size and type, as if
+        // `.size` and `.type` had.
+        if let Some(id) = self.define_label(&crate::parser::LabelDef::Named(name, nspan))
+            && let Some(ty) = ty
+        {
+            let sym = self.symbols.get_mut(id);
+            sym.ty = ty;
+            sym.size = Some(size);
+        }
+        let fill = self.exprs.int(0, span);
+        self.cur_section().push(crate::section::Fragment::new(
+            crate::section::FragKind::Space {
+                size,
+                fill,
+                resolved: 0,
+            },
+            span,
+        ));
+        self.set_section(saved);
     }
 
     // ---- conditionals -----------------------------------------------------
