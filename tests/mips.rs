@@ -379,6 +379,110 @@ fn hi_and_lo_split_a_32_bit_address() {
     );
 }
 
+// ---- thread-local storage -------------------------------------------------
+
+/// Relocation types, in order, for an assembled source.
+#[track_caller]
+fn relocs(arch: &str, src: &str) -> Vec<u32> {
+    let asm = assemble_for(arch, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    asm.relocs.iter().map(|r| r.kind).collect()
+}
+
+/// The seven thread-local operators, each in a 16-bit field. Nothing computes
+/// one: the thread's block is the linker's to lay out, so every field stays
+/// zero and carries a relocation.
+#[test]
+fn thread_local_operators_leave_their_field_to_the_linker() {
+    let src = "\
+        .text\n\
+        addiu $4, $gp, %tlsgd(tv)\n\
+        addiu $4, $gp, %tlsldm(tv)\n\
+        lui $5, %dtprel_hi(tv)\n\
+        addiu $5, $5, %dtprel_lo(tv)\n\
+        lw $6, %gottprel(tv)($gp)\n\
+        lui $7, %tprel_hi(tv)\n\
+        addiu $7, $7, %tprel_lo(tv)\n";
+    enc(
+        src,
+        "27 84 00 00 27 84 00 00 3c 05 00 00 24 a5 00 00 \
+         8f 86 00 00 3c 07 00 00 24 e7 00 00",
+    );
+    assert_eq!(
+        relocs("mips", src),
+        [
+            42, // TLS_GD
+            43, // TLS_LDM
+            44, // TLS_DTPREL_HI16
+            45, // TLS_DTPREL_LO16
+            46, // TLS_GOTTPREL
+            49, // TLS_TPREL_HI16
+            50, // TLS_TPREL_LO16
+        ]
+    );
+    // The numbers are the same in n64, where they fill the first of the three
+    // types an `r_info` holds and leave the other two `R_MIPS_NONE`.
+    assert_eq!(
+        relocs(
+            "mips64",
+            "lui $4, %tprel_hi(tv)\ndaddiu $4, $4, %tprel_lo(tv)"
+        ),
+        [49, 50]
+    );
+}
+
+/// Whatever `.type` said, both references make the target of a thread-local
+/// access `STT_TLS`, and relocate against the variable rather than against
+/// its section even where it is local.
+#[test]
+fn a_thread_local_access_names_the_variable() {
+    let asm = assemble_for(
+        "mips",
+        ".text\nlui $4, %tprel_hi(loc)\n\
+         .section .tdata,\"awT\",@progbits\nloc: .word 1\n",
+    );
+    assert!(!asm.diags.has_errors());
+    let target = asm.relocs[0].symbol.expect("a symbol");
+    assert_eq!(asm.display_name(target), "loc");
+    assert_eq!(asm.symbols.get(target).ty, rsasm::symbol::SymType::Tls);
+
+    // An undefined name a thread-local operator reaches becomes thread-local
+    // too, which is what a linker needs to resolve the access at all.
+    let asm = assemble_for("mips", "lui $4, %tprel_hi(ext)");
+    assert!(!asm.diags.has_errors());
+    let target = asm.relocs[0].symbol.expect("a symbol");
+    assert_eq!(asm.symbols.get(target).ty, rsasm::symbol::SymType::Tls);
+}
+
+/// GNU as refuses an access to something that cannot be a thread-local
+/// variable; llvm-mc assembles the first two, and rsasm follows GNU as.
+#[test]
+fn a_thread_local_access_needs_a_thread_local_variable() {
+    let e = errors_for("mips", ".text\nlui $4, %tprel_hi(d)\n.data\nd: .word 1");
+    assert!(e.contains("outside a thread-local section"), "{e}");
+
+    let e = errors_for("mips", "addiu $4, $4, %tprel_lo(4)");
+    assert!(e.contains("not a number"), "{e}");
+
+    let e = errors_for("mips", ".text\nlui $4, %tprel_hi(a - b)\na: nop\nb: nop");
+    assert!(e.contains("not a number or a difference"), "{e}");
+}
+
+/// `rdhwr $3, $29` reads the thread pointer, and neither reference relocates
+/// it: the offset added to it is what carries the relocation. Its second
+/// operand numbers a hardware register, so `.reginfo` does not count it.
+#[test]
+fn rdhwr_reads_a_hardware_register_without_a_relocation() {
+    enc("rdhwr $3, $29", "7c 03 e8 3b");
+    enc("rdhwr $4, $0", "7c 04 00 3b");
+    enc("rdhwr $sp, $31", "7c 1d f8 3b");
+    assert!(relocs("mips", "rdhwr $3, $29").is_empty());
+}
+
 #[test]
 fn a_real_loop() {
     enc(
@@ -571,7 +675,7 @@ fn bad_operands_are_diagnosed() {
     assert!(errors_for("mips", "add.s $f0, $f2, $4").contains("floating-point register"));
     assert!(errors_for("mips", "add $f0, $f2, $f4").contains("integer register"));
     assert!(errors_for("mips", "lw $1, 8($f0)").contains("base register"));
-    assert!(errors_for("mips", "lui $4, %got(sym)").contains("%hi or %lo"));
+    assert!(errors_for("mips", "lui $4, %got(sym)").contains("unsupported relocation operator"));
     assert!(errors_for("mips", "li $4, sym").contains("assembly time"));
     assert!(errors_for("mips", "div $4, $8, $9").contains("$zero"));
     assert!(errors_for("mips", "teq $4, $5, 1024").contains("0 to 1023"));

@@ -142,6 +142,12 @@ tnei $7, -1234
 mfc0 $4, $12
 mtc0 $4, $12
 mfc0 $4, $12, 1
+# `rdhwr` reads a register the kernel lets user code see; `$29` is the thread
+# pointer a local-exec thread-local access starts from. Its second operand is
+# not one of the integer registers, so the object's masks do not count it.
+rdhwr $3, $29
+rdhwr $4, $0
+rdhwr $sp, $31
 
 # ---- coprocessor 1 ----
 mfc1 $4, $f0
@@ -208,3 +214,18 @@ movf.s $f0, $f2, $fcc1
 movt.s $f30, $f28, $fcc7
 movf.d $f4, $f6, $fcc2
 movt.d $f4, $f6, $fcc6
+
+# ---- thread-local access models ----
+# Any 16-bit field takes one, an instruction's own immediate or a memory
+# operand's displacement, and nothing computes it: what the operator picks is
+# the relocation, which tools/mc-diff/mipsel-relocs.txt checks.
+addiu $4, $gp, %tlsgd(tv)
+addiu $4, $gp, %tlsldm(tv)
+lui $5, %dtprel_hi(tv)
+addiu $5, $5, %dtprel_lo(tv)
+lw $6, %gottprel(tv)($gp)
+lui $7, %tprel_hi(tv)
+addiu $7, $7, %tprel_lo(tv)
+ori $8, $8, %tprel_lo(tv)
+lw $9, %tprel_lo(tv)($3)
+sw $10, %dtprel_lo(tv)($10)

@@ -23,7 +23,10 @@ use crate::source::Span;
 /// A `%hi` / `%lo` wrapper around an expression.
 ///
 /// These are not general expression operators: they select which half of a
-/// 32-bit address a 16-bit field gets, and which relocation carries it.
+/// 32-bit address a 16-bit field gets, and which relocation carries it. The
+/// thread-local models are spelled the same way and go in the same fields;
+/// what sets them apart is that nothing here can ever compute one, since a
+/// thread's block is laid out by the linker.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum RelocMod {
     #[default]
@@ -33,6 +36,25 @@ pub enum RelocMod {
     Hi,
     /// `%lo(x)` — bits 15..0 of `x`.
     Lo,
+    /// `%tlsgd(x)` — the GOT entry general dynamic hands to
+    /// `__tls_get_addr`, as an offset from `$gp`.
+    TlsGd,
+    /// `%tlsldm(x)` — the same entry for local dynamic, which names the
+    /// module rather than the variable.
+    TlsLdm,
+    /// `%dtprel_hi(x)` — the high half of the variable's offset within its
+    /// module's block, which local dynamic adds to what the call returned.
+    DtprelHi,
+    /// `%dtprel_lo(x)` — the low half of that offset.
+    DtprelLo,
+    /// `%gottprel(x)` — the GOT entry initial exec reads, holding the
+    /// offset from the thread pointer.
+    Gottprel,
+    /// `%tprel_hi(x)` — the high half of that offset, for local exec, where
+    /// the linker knows it without a GOT entry.
+    TprelHi,
+    /// `%tprel_lo(x)` — the low half of it.
+    TprelLo,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -244,10 +266,21 @@ impl OperandParser<'_, '_> {
             let modifier = match name.as_str() {
                 "hi" => RelocMod::Hi,
                 "lo" => RelocMod::Lo,
+                "tlsgd" => RelocMod::TlsGd,
+                "tlsldm" => RelocMod::TlsLdm,
+                "dtprel_hi" => RelocMod::DtprelHi,
+                "dtprel_lo" => RelocMod::DtprelLo,
+                "gottprel" => RelocMod::Gottprel,
+                "tprel_hi" => RelocMod::TprelHi,
+                "tprel_lo" => RelocMod::TprelLo,
                 _ => {
                     self.cx.error(
                         pct.span.to(tok.span),
-                        format!("unsupported relocation operator `%{name}`; expected %hi or %lo"),
+                        format!(
+                            "unsupported relocation operator `%{name}`; this backend has \
+                             %hi, %lo and the thread-local %tlsgd, %tlsldm, %dtprel_hi, \
+                             %dtprel_lo, %gottprel, %tprel_hi and %tprel_lo"
+                        ),
                     );
                     return None;
                 }
