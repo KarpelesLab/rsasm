@@ -204,6 +204,16 @@ far:    adrl    r3, back
         adr     r0, other
         .data
 other:  .word   0
+=== refused: adr to a weak symbol
+        .syntax unified
+        .weak   w
+w:      .word   0
+        adr     r0, w
+=== refused: adrl to a weak symbol
+        .syntax unified
+        .weak   w
+w:      .word   0
+        adrl    r0, w
 === a load that names its label
         .syntax unified
 back:   .word   0x12345678
@@ -295,6 +305,75 @@ back:   .word   0
         .syntax unified
 back:   .word   0
         ldr     pc, back + 1
+=== a coprocessor transfer that names its label
+# `encode_arm_cp_address` reads a bare address as any other PC-relative
+# coprocessor transfer: the offset counts words in eight bits, which is a
+# quarter of what `ldr` reaches.
+        .syntax unified
+back:   .word   0x12345678
+        vldr    s0, back
+        vldr    d1, back
+        vstr    s2, back
+        vstr    d3, back
+        ldc     p1, c2, back
+        ldcl    p1, c3, back
+        ldc2    p1, c4, back
+        ldc2l   p1, c5, back
+        stc     p1, c6, back
+        stcl    p1, c7, back
+        stc2    p1, c8, back
+        stc2l   p1, c9, back
+        vldreq  s4, back
+        ldcne   p1, c10, back
+        vldr    s5, fwd
+        vldr    s6, back + 4
+        vldr    s7, .
+fwd:    bx      lr
+=== a coprocessor transfer that names the label the biased PC is already on
+        .syntax unified
+        vldr    s0, . + 8
+        ldc     p1, c2, . + 8
+        bx      lr
+=== a coprocessor transfer reaches 1020 bytes forward
+        .syntax unified
+        vldr    s0, fwd
+        .space  1024
+fwd:    bx      lr
+=== refused: a coprocessor transfer past 1020 bytes
+        .syntax unified
+        vldr    s0, fwd
+        .space  1028
+fwd:    bx      lr
+=== a coprocessor transfer reaches 1020 bytes back
+        .syntax unified
+back:   .word   0
+        .space  1008
+        ldc     p1, c2, back
+=== refused: a coprocessor transfer further back than that
+        .syntax unified
+back:   .word   0
+        .space  1012
+        ldc     p1, c2, back
+=== refused: a coprocessor transfer that names a label off a word boundary
+        .syntax unified
+back:   .word   0
+        vldr    s0, back + 2
+=== refused: a coprocessor transfer that names a label in another section
+        .syntax unified
+        ldc     p1, c2, other
+        .data
+other:  .word   0
+=== refused: a coprocessor transfer that names an undefined symbol
+        .syntax unified
+        vldr    s0, ext
+=== refused: a coprocessor transfer that names a weak symbol
+        .syntax unified
+        .weak   w
+w:      .word   0
+        vldr    s0, w
+=== refused: a coprocessor transfer that names a number rather than a label
+        .syntax unified
+        ldc     p1, c2, 0x100
 === calls between ARM and Thumb functions
         .syntax unified
         .arm

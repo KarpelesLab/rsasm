@@ -1618,6 +1618,16 @@ impl Assembler {
         fi: usize,
         at: u64,
     ) -> Option<i64> {
+        // A fixup that leaves its target out wants only the addend, which
+        // the expression already holds; see `FixupKind::without_symbol`.
+        if kind.without_symbol {
+            let addend = self.eval(e).ok()?.addend;
+            if !kind.pcrel {
+                return Some(addend);
+            }
+            let here = (self.section(section).addr + at) as i64 + kind.adjust as i64;
+            return Some(addend - (here & !(kind.pc_align.max(1) as i64 - 1)));
+        }
         let v = match self.eval(e) {
             Ok(v) => v,
             // In a flat image every label has its address by now, so an

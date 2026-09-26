@@ -56,6 +56,7 @@
 //! its mapping symbols and its interworking — but not for what it accepts.
 //! Two things it refuses are assembled here, and llvm-mc, which writes the
 //! same object rsasm does for both, is the reference for them instead.
+//! A third is a field GNU as fills in differently, and wrongly.
 //!
 //! * A branch to a *local* label in another section that is an odd number of
 //!   halfwords into Thumb code. GNU as's `arm_fix_adjustable` relocates such
@@ -74,6 +75,16 @@
 //!   none of the three, so the line is a syntax error there; once the layout
 //!   is known it is an ordinary number, and rsasm puts it in the pool. The
 //!   case is in `tools/mc-diff/arm-programs.txt`.
+//! * The offset of a T32 coprocessor transfer on coprocessor 9 with P set
+//!   and W clear — `ldc p9, c1, [r0, #8]`, and every `ldc`, `stc` and label
+//!   form of that shape. `md_apply_fix` tells the half-precision
+//!   `vldr`/`vstr`, whose offset counts halfwords, from the word-counting
+//!   rest by the finished word, `(newval & 0x0f200f00) == 0x0d000900`, which
+//!   an `ldc` of coprocessor 9 matches as well; GNU as then writes half the
+//!   field the architecture asks for, and accepts an offset that is only a
+//!   multiple of two. The bytes it writes read back as a different address,
+//!   so rsasm counts words, as llvm-mc does. The case is in
+//!   `tools/mc-diff/thumb-programs.txt`.
 //!
 //! The relocation suffixes differ in what each assembler will read, rather
 //! than in what either writes. `s_arm_elf_cons` strikes the suffix out of the
@@ -230,9 +241,16 @@ pub const IW_THUMB_ADR_ODD: u8 = 10;
 /// `relax_adr` with the `adr` above, so a Thumb function widens it too,
 /// although the load leaves the address alone.
 pub const IW_THUMB_LDR16: u8 = 11;
-/// Any other PC-relative load or preload that names a label, in either
-/// instruction set: only the weak target it refuses is of interest.
-pub const IW_PCREL_LOAD: u8 = 12;
+/// A PC-relative reference GNU as resolves within the section and has no
+/// relocation for: a load, a store, a preload or a coprocessor transfer that
+/// names a label, an A32 `adr` or `adrl`, and a Thumb `adr.n`. A global
+/// target in the same section it resolves, so only the weak one it refuses
+/// is of interest.
+pub const IW_STRONG_ONLY: u8 = 12;
+/// A 32-bit Thumb `adr` layout will not resize, which is the one such
+/// reference GNU as writes for a weak target rather than refusing; see
+/// [`crate::section::FixupKind::without_symbol`].
+pub const IW_THUMB_ADR32: u8 = 13;
 
 impl Architecture for Arm {
     fn name(&self) -> &'static str {
@@ -664,13 +682,35 @@ impl Architecture for Arm {
         // shares the sizing but not the bit: `relax_adr` widens it for a
         // Thumb function, and the value it then writes is the plain address.
         match class {
-            IW_THUMB_ADR16 if thumb => return Interwork::Relocate,
+            // `relax_adr` widens an `adr` of a weak symbol as it widens one
+            // of a Thumb function, since it cannot know where either will end
+            // up.
+            IW_THUMB_ADR16 if thumb || t.weak => return Interwork::Relocate,
             // A PC-relative load resolves against a global symbol in its own
             // section, and a weak one leaves GNU as with a fixup it cannot
             // resolve and a field no relocation covers.
             IW_THUMB_LDR16 if thumb || t.weak => return Interwork::Relocate,
-            IW_PCREL_LOAD if t.weak => return Interwork::Relocate,
-            IW_THUMB_LDR16 | IW_PCREL_LOAD => return Interwork::AsWritten,
+            IW_STRONG_ONLY if t.weak => return Interwork::Relocate,
+            IW_THUMB_LDR16 | IW_STRONG_ONLY => return Interwork::AsWritten,
+            // The widened `adr` is the one such reference GNU as writes for a
+            // weak target instead of refusing it, and `arm_force_relocation`
+            // then resolves it without the target: the field holds the addend
+            // less the PC, plus the Thumb bit where the class says the addend
+            // is even.
+            IW_THUMB_ADR | IW_THUMB_ADR_ODD | IW_THUMB_ADR32 if t.weak => {
+                let link = if thumb && class == IW_THUMB_ADR {
+                    LinkValue::Split(|v| v + 1)
+                } else {
+                    LinkValue::Plain
+                };
+                return Interwork::Becomes {
+                    patch: |w| w,
+                    kind: FixupKind {
+                        link,
+                        ..thumb::adr32_kind().without_symbol()
+                    },
+                };
+            }
             IW_THUMB_ADR if thumb => {
                 return Interwork::Becomes {
                     patch: |w| w,
@@ -686,7 +726,9 @@ impl Architecture for Arm {
                     kind: thumb::adr32_kind(),
                 };
             }
-            IW_THUMB_ADR16 | IW_THUMB_ADR | IW_THUMB_ADR_ODD => return Interwork::AsWritten,
+            IW_THUMB_ADR16 | IW_THUMB_ADR | IW_THUMB_ADR_ODD | IW_THUMB_ADR32 => {
+                return Interwork::AsWritten;
+            }
             _ => {}
         }
         // A 16-bit branch has no relocation, so where the target is not

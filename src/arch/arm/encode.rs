@@ -621,15 +621,23 @@ fn extra_bits(t: Transfer) -> (u32, u32) {
 /// no symbol to subtract the PC from; nothing resolves it, and the field has
 /// no relocation, so the line stops at "internal_relocation (type:
 /// OFFSET_IMM) not fixed up". `.set x, 4` counts as a number too.
+///
+/// This half returns the complaint rather than reporting it, for a caller
+/// that has its own way of saying what did not fit.
+pub fn pcrel_number(cx: &AsmCtx<'_>, e: ExprRef) -> Option<String> {
+    cx.constant(e)
+        .map(|v| format!("a PC-relative address names a label, and {v} is a number"))
+}
+
+/// [`pcrel_number`], reported here.
 pub fn pcrel_label(cx: &mut AsmCtx<'_>, span: Span, e: ExprRef) -> Option<()> {
-    if let Some(v) = cx.constant(e) {
-        cx.error(
-            span,
-            format!("a PC-relative address names a label, and {v} is a number"),
-        );
-        return None;
+    match pcrel_number(cx, e) {
+        Some(msg) => {
+            cx.error(span, msg);
+            None
+        }
+        None => Some(()),
     }
-    Some(())
 }
 
 /// `check_ldr_r15_aligned`: loading the PC from an address the PC itself is
@@ -684,7 +692,7 @@ fn pcrel_transfer(
         (
             FixupKind::pcrel(4, 8)
                 .with_limits(-255, 255)
-                .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
                 .scatter(scatter_literal8),
             // P and the immediate form of mode 3, L, the PC as the base, and
             // the two bits that say which width and sign.
@@ -694,7 +702,7 @@ fn pcrel_transfer(
         (
             FixupKind::pcrel(4, 8)
                 .with_limits(-4095, 4095)
-                .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
                 .scatter(scatter_literal),
             0x0500_0000
                 | UP
@@ -930,7 +938,7 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
                 expr: e,
                 kind: FixupKind::pcrel(4, 8)
                     .with_limits(-4095, 4095)
-                    .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                    .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
                     .scatter(scatter_literal),
                 span: ins.ops[0].span,
             }],
@@ -1148,7 +1156,9 @@ fn scatter_adrl(w: u64, v: i64) -> u64 {
 }
 
 /// `adr rd, label` and `adrl rd, label`, which GNU as resolves within the
-/// section and refuses to relocate.
+/// section and refuses to relocate. A weak label is refused with them, since
+/// a later definition could take its place and `BFD_RELOC_ARM_IMMEDIATE`
+/// cannot say so.
 fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     no_flags(cx, ins)?;
     arity(cx, ins, &[2])?;
@@ -1176,6 +1186,7 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let kind = FixupKind::pcrel(size, 8)
         .accepting(reaches)
         .with_range_hint(what)
+        .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
         .scatter(if long { scatter_adrl } else { scatter_adr });
     let w = word(ins.cond, rd << 12) as u64;
     let bytes = if long {
