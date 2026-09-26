@@ -163,6 +163,11 @@ TARGETS = {
 # their register operand is a coprocessor-2 register, which
 # src/arch/mips/reg.rs has no class for, and the backend has neither `mfc2`
 # nor `cfc2` nor `bc2t` either.
+#
+# `rdhwr` stays on the list although the backend now assembles it, because
+# the level this fuzzer compares at is below the one that added it: GNU as
+# under `-mips32` refuses it and the `mips:isa32` disassembler prints its
+# word as data, where rsasm, which selects no CPU, takes it at any level.
 NOT_IMPLEMENTED = re.compile(r"""^(
     c[lt]o | dc[lt]o | dc[lt]z | clz | ins | dins[mu]? | ext | dext[mu]? | wsbh | dsbh | dshd
   | seb | seh | d?ro[lr](32|v)? | d?rot[lr](32|v)?
