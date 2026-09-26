@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/KarpelesLab/rsasm/compare/v0.1.3...v0.1.4) - 2026-09-26
+
+### Other
+
+- Merge the RISC-V thread-local operands and descriptors
+- Merge master's ARM coprocessor loads into the RISC-V thread-local operands
+- Merge master's AArch64 and m68k work into the RISC-V thread-local operands
+- Merge master's MIPS and SPARC thread-local operators into the RISC-V ones
+- Assemble RISC-V's thread-local operands, in RV32 and RV64
+- Recompute the counts after the ARM thread-local merge
+- Merge the ARM thread-local suffixes and marks
+- Recompute the counts after the thread-local and common-symbol merges
+- Merge the common-symbol alignment and directive-only symbols
+- Merge the PowerPC thread-local modifiers
+- Give PowerPC its thread-local access models, in both word sizes
+- Bring the Mach-O count up to the thread-local cases
+- Merge ARM loads that name a label
+- Recount the ARM row and the harness totals after the PC-relative loads
+- Merge remote-tracking branch 'origin/master' into worktree-agent-ac8c8e5ff29ea168b
+- Assemble ARM loads that name a label instead of a pool entry
+- Merge the ARM relocation suffixes and the halves of an address
+- Merge the SPARC floating-point families
+- Merge the AArch64 address-group operators and the pmov index
+- Merge the PowerPC branch and halfword relocation modifiers
+- Merge the MIPS condition flags, conditional moves and jalx
+- Merge master into the condition-flag work
+- Name the floating-point condition flags, and assemble jalx
+- Say why the not-generated list starts at 2
+- Write down the flat-binary branch width NASM and rsasm disagree on
+- List the pmov spelling among what AArch64's fuzzer drops
+- Record the `pmov` index the AArch64 table does not have
+- Say what the branch-over-a-gap cases are for, and what they found
+- Say what the RISC-V program cases reach, and what they found
+- Mention FUZZ_TIMEOUT in the runner's documentation
+- Account for what other seeds turn up
+- Say in the RISC-V fuzzer's docstring what the program cases are for
+- Kill a fuzzer that hangs, and say which one it was
+- Check for llvm-readobj before the fuzz job runs
+- Describe the three whole-program fuzzers in the README
+- Say how much the fuzz job runs and how long it takes
+- Merge master: one long branch candidate, the shorter of the two
+- Fold an index with no base in the NASM dialect
+- Give CI three times the cases: 745,000 in under two minutes
+- Record the `adr` expression GNU as refuses
+- Account for what a heavier run turns up
+- Fuzz the NASM dialect against NASM
+- Narrow the RL78 truncation rule to branches
+- cargo fmt
+- Fuzz whole branches over a gap, not only single instructions
+- List the new fuzzers in both READMEs
+- Merge branch 'master' into worktree-agent-aacdb62e96c7282d5
+- Fuzz the 6502 and the 8080, and expand a RISC-V branch that cannot reach
+- cargo fmt
+- Run the fuzzers in CI, and say how to repeat a failure
+- Fuzz SuperH, RX, RL78, V850 and the Z80
+- Fuzz SPARC, and read the forms its disassembler prints
+- Fuzz RISC-V and MIPS, and read the aliases both references read
+- Give every fuzzer one summary line and a runner to drive them from
+- Refuse a wide pool entry that is not a number in the engine too
+- Say what the pools hold in the README, and keep an overflow quiet
+- Test the wider and narrower pool entries
+- Put the pool layouts in the ARM and Thumb corpora
+- Share a pool entry by what the source wrote, not by its i64
+- Assemble the VFP and halfword literal loads
+- Give the literal pool a per-backend layout policy
+- Merge the release commit
+- Reconcile the ARM pool findings with the DWARF comparison
+- ARM whole-program pool fuzzer, and fixes it found
+
 ## [0.1.3](https://github.com/KarpelesLab/rsasm/compare/v0.1.2...v0.1.3) - 2026-09-21
 
 ### Other
