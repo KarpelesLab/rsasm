@@ -28,12 +28,13 @@
 //! with `sethi`.
 
 use super::insn::{Form, StateOp};
-use super::operand::{Addr, Imm, ImmPart, Offset, Operand, OperandKind};
+use super::operand::{Addr, Imm, ImmPart, Offset, Operand, OperandKind, TlsOp};
 use super::reg::{self, FpWidth, Reg, RegClass};
 use super::reloc;
 use crate::arch::AsmCtx;
 use crate::expr::ExprRef;
-use crate::section::{Fixup, FixupKind, Variant};
+use crate::reloc::RelocClass;
+use crate::section::{Fixup, FixupKind, LinkValue, RelocSymbol, Variant};
 use crate::source::Span;
 
 /// `op` field values, i.e. which format the word uses.
@@ -235,6 +236,43 @@ pub fn simm13_fixup() -> FixupKind {
         .scatter(simm13)
 }
 
+/// The field a thread-local operator names.
+///
+/// Nothing here computes one. The value is a variable's offset within a
+/// thread's block, or into the GOT entry holding one, which only the linker
+/// lays out; and the linker may rewrite the whole sequence into another
+/// model, so even a variable defined in this file is relocated. Both
+/// references leave the field exactly as the instruction was written, which
+/// is what [`keep_word`] does should a flat image ever get this far.
+pub fn tls_fixup(reloc: u32) -> FixupKind {
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .with_class(RelocClass::ThreadLocal)
+        .link(LinkValue::LinkerOnly(TLS_BLOCK))
+        .linker_only()
+        .scatter(keep_word)
+}
+
+/// A thread-local operator written after the last operand: a relocation
+/// covering no bytes, which says what the instruction as a whole is for. The
+/// symbol is named even where it is a local label, since the linker looks the
+/// variable up by it.
+pub fn tls_mark_fixup(reloc: u32) -> FixupKind {
+    FixupKind::data(0)
+        .with_reloc(reloc)
+        .with_reloc_symbol(RelocSymbol::Symbol)
+        .with_class(RelocClass::ThreadLocal)
+        .link(LinkValue::LinkerOnly(TLS_BLOCK))
+        .linker_only()
+}
+
+/// What a thread-local operator refers to, for the flat-binary refusal.
+const TLS_BLOCK: &str = "a variable's place in a thread's block";
+
+fn keep_word(w: u64, _: i64) -> u64 {
+    w
+}
+
 // ---- operand slots --------------------------------------------------------
 
 /// The `reg_or_imm` slot every format 3 instruction ends with.
@@ -258,6 +296,19 @@ pub fn source(cx: &mut AsmCtx<'_>, op: &Operand) -> Option<(u32, Option<Pending>
     immediate(cx, &imm)
 }
 
+/// Said where a thread-local mark was written as an operand. GNU as reads it
+/// only after the last one, since it stands for the instruction and not for
+/// any field of it.
+fn mark_out_of_place(cx: &mut AsmCtx<'_>, span: Span, op: TlsOp) {
+    cx.error(
+        span,
+        format!(
+            "`%{}()` marks the whole instruction; write it after the last operand",
+            op.name
+        ),
+    );
+}
+
 /// The same slot, given an already-extracted immediate.
 fn immediate(cx: &mut AsmCtx<'_>, imm: &Imm) -> Option<(u32, Option<Pending>)> {
     match imm.part {
@@ -275,6 +326,23 @@ fn immediate(cx: &mut AsmCtx<'_>, imm: &Imm) -> Option<(u32, Option<Pending>)> {
                 imm.span,
                 "`%hi()` produces 22 bits and only fits in `sethi`; use `%lo()` here",
             );
+            None
+        }
+        // Both references take any of the ten thread-local field operators
+        // in any field, high or low: the relocation names a step of a model
+        // rather than a part of a value, and the linker writes whatever
+        // field it finds. The marks are the exception; they go after the
+        // last operand, not in place of one.
+        ImmPart::Tls(op) if !op.mark => Some((
+            I_BIT,
+            Some(Pending {
+                expr: imm.expr,
+                kind: tls_fixup(op.reloc),
+                span: imm.span,
+            }),
+        )),
+        ImmPart::Tls(op) => {
+            mark_out_of_place(cx, imm.span, op);
             None
         }
         ImmPart::Whole => match cx.constant(imm.expr) {
@@ -420,7 +488,7 @@ pub fn small_signed(cx: &mut AsmCtx<'_>, imm: &Imm, bits: u32, what: &str) -> Op
     if imm.part != ImmPart::Whole {
         cx.error(
             imm.span,
-            format!("`%hi()`/`%lo()` cannot be used as {what}"),
+            format!("{} cannot be used as {what}", imm.part.spelling()),
         );
         return None;
     }
@@ -447,7 +515,10 @@ pub fn small_signed(cx: &mut AsmCtx<'_>, imm: &Imm, bits: u32, what: &str) -> Op
 pub fn shift_count(cx: &mut AsmCtx<'_>, imm: &Imm, x: bool) -> Option<u32> {
     let max = if x { 63 } else { 31 };
     if imm.part != ImmPart::Whole {
-        cx.error(imm.span, "a shift count cannot use `%hi()` or `%lo()`");
+        cx.error(
+            imm.span,
+            format!("a shift count cannot use {}", imm.part.spelling()),
+        );
         return None;
     }
     let Some(v) = cx.constant(imm.expr) else {
@@ -464,17 +535,23 @@ pub fn shift_count(cx: &mut AsmCtx<'_>, imm: &Imm, x: bool) -> Option<u32> {
     Some(v as u32)
 }
 
-/// `sethi`'s 22-bit field, from either `%hi(x)` or a plain expression.
-pub fn sethi_field(imm: &Imm) -> Pending {
+/// `sethi`'s 22-bit field, from `%hi(x)`, a thread-local operator, or a plain
+/// expression.
+pub fn sethi_field(cx: &mut AsmCtx<'_>, imm: &Imm) -> Option<Pending> {
     let kind = match imm.part {
         ImmPart::Hi => hi22_fixup(),
+        ImmPart::Tls(op) if op.mark => {
+            mark_out_of_place(cx, imm.span, op);
+            return None;
+        }
+        ImmPart::Tls(op) => tls_fixup(op.reloc),
         _ => imm22_fixup(),
     };
-    Pending {
+    Some(Pending {
         expr: imm.expr,
         kind,
         span: imm.span,
-    }
+    })
 }
 
 // ---- one instruction ------------------------------------------------------
@@ -718,7 +795,10 @@ pub fn encode(
                 return None;
             };
             if imm.part != ImmPart::Whole {
-                cx.error(imm.span, "a call target cannot use `%hi()` or `%lo()`");
+                cx.error(
+                    imm.span,
+                    format!("a call target cannot use {}", imm.part.spelling()),
+                );
                 return None;
             }
             Some(one(Word::fixed(
@@ -748,7 +828,8 @@ pub fn encode(
             }
             let rd = int_reg(cx, &ops[1], "destination")?;
             let word = format2(u32::from(rd.num), OP2_SETHI, 0);
-            Some(one(Word::fixed(word, sethi_field(&imm))))
+            let field = sethi_field(cx, &imm)?;
+            Some(one(Word::fixed(word, field)))
         }
 
         Form::Jmpl => {

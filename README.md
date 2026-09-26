@@ -61,8 +61,8 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3190 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 567 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 802 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 310 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 848 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 340 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3747 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
@@ -144,9 +144,27 @@ form by form and in random whole programs as well.
   `%tlsdesc_call` mark on the `jalr`), each `auipc` form completed by the
   same `%pcrel_lo(label)` an ordinary PC-relative pair takes, with
   `la.tls.ie` and `la.tls.gd` expanding to such a pair; there is no
-  thread-local modifier in a RISC-V data word, since GNU as has none. On
-  every target a thread-local model on a symbol defined outside a
-  thread-local section is refused, as GNU as refuses it
+  thread-local modifier in a RISC-V data word, since GNU as has none. MIPS
+  reads the seven operators
+  GNU as has, in o32 and n64 alike and in any 16-bit field: `%tlsgd` and
+  `%tlsldm` for the GOT entries `__tls_get_addr` is given, `%gottprel` for
+  the one initial exec reads, `%dtprel_hi`/`%dtprel_lo` for an offset within
+  a module's block and `%tprel_hi`/`%tprel_lo` for one from the thread
+  pointer; an n64 `r_info` holds one of them and leaves its other two types
+  `R_MIPS_NONE`, which is what both references compose. SPARC reads the
+  eighteen operators its GNU as reads, the same in V8 and V9: the local-exec
+  halves `%tle_hix22()` and `%tle_lox10()`, initial exec's `%tie_hi22()` and
+  `%tie_lo10()`, general dynamic's `%tgd_hi22()` and `%tgd_lo10()`, and local
+  dynamic's `%tldm_hi22()`, `%tldm_lo10()`, `%tldo_hix22()` and
+  `%tldo_lox10()`, each of which names a step of a model rather than a part of
+  a value and so goes in whichever field the instruction has; and the eight
+  that fill no field at all and are written after the last operand —
+  `%tie_ld()`, `%tie_ldx()`, `%tie_add()`, `%tgd_add()`, `%tldm_add()`,
+  `%tldo_add()`, and `%tgd_call()` and `%tldm_call()`, which take the place of
+  the displacement of the `call __tls_get_addr` they mark instead of sitting
+  beside it, since the linker finds the function by name. On every target a
+  thread-local model on a symbol defined outside a thread-local section is
+  refused, as GNU as refuses it
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -317,17 +335,29 @@ form by form and in random whole programs as well.
   accepted
 - thread-local storage on the other targets: the symbols and sections are
   right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
-  RISC-V and SuperH read the access-model operands; the rest refuse theirs
-  (MIPS's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives) rather than
-  assemble them as something else. Mach-O's `@TLVP` and PE's
-  thread-local sections are their formats' own idea of the same thing, and
-  are not there either, so an AArch64 thread-local operator in either format
-  is refused as llvm-mc refuses it
+  MIPS, RISC-V, SPARC and SuperH read the access-model operands; m68k refuses
+  its `@TLSGD`, `@TLSLDM`, `@TLSLDO`, `@TLSIE` and `@TLSLE` rather than
+  assemble them as something else. SPARC's data operators — `%r_disp32()`,
+  `%r_plt32()` and the thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`,
+  which GNU as reads in `.word` and `.xword` — are not there either; llvm-mc,
+  which is what the SPARC harnesses compare against, has none of them.
+  Mach-O's `@TLVP` and PE's thread-local sections are their formats' own idea
+  of the same thing, and are not there either, so an AArch64 thread-local
+  operator in either format is refused as llvm-mc refuses it
 - MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
-  writes and llvm-mc, the reference here, does not; and the `.module` options
+  writes and llvm-mc, the reference here, does not; the `.module` options
   that would change which instructions are accepted (the ISA names, the
   application-specific extensions), where the ones that only describe the
-  floating-point unit are there
+  floating-point unit are there; the position-independent operators and the
+  `$gp` setup around them (`%got`, `%call16`, `%got_page`, `%gp_rel` and
+  their relatives, `.cpload`, `.cpsetup`, `.cprestore`, `.abicalls`), where
+  the thread-local operators — `%tlsgd`, `%tlsldm`, `%dtprel_hi`,
+  `%dtprel_lo`, `%gottprel`, `%tprel_hi` and `%tprel_lo`, which reach the GOT
+  through `$gp` the same way — are there; and the data directives that write
+  a thread-local offset (`.dtprelword`, `.tprelword`, `.dtpreldword`), which
+  a `.word` cannot spell, since both references refuse an access-model
+  operator in one. `.tpreldword` is refused by rsasm and would have no
+  reference to check against anyway: GNU as 2.47 aborts on it
 - ARM: `.arch`, `.cpu`, `.fpu` and `.arch_extension` say what the object was
   built for without changing which instructions this backend accepts, so
   `.arch armv4t` does not refuse an ARMv7 instruction as GNU as would. A
@@ -999,7 +1029,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,660 of 8,660 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,947 of 38,947 match across twenty-one target variants. For RISC-V
+  supports. 39,023 of 39,023 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -1036,9 +1066,11 @@ is what hid them from rsasm for as long as it did.
   `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
-  the x86, AArch64, PowerPC and RISC-V thread-local access models, which the
-  linker turns into local exec, ARM's and Thumb's, whose descriptor calls it
-  turns into initial exec, weak definitions a second object overrides, `.comm`
+  the x86, AArch64, PowerPC, RISC-V and SPARC thread-local access models,
+  which the linker turns into local exec, ARM's and Thumb's, whose descriptor
+  calls it turns into initial exec, the MIPS models that need no GOT
+  (`%tprel_hi`/`%tprel_lo` and `%dtprel_hi`/`%dtprel_lo`), weak definitions a
+  second object overrides, `.comm`
   symbols merged between objects with different sizes, `.bss`, and
   references into another object's sections. The targets whose linker
   relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked
@@ -1046,7 +1078,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 278 of 278 match across
+  addend a COFF relocation keeps in its field. 282 of 282 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global

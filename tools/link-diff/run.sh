@@ -44,28 +44,37 @@
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
 #   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
 #   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64, i386, AArch64, PowerPC and RISC-V rows, where the linker
-#   turns each of them into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`,
-#   `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
-#   `@TLSDESC`/`@TLSCALL`; AArch64's `:tlsgd:`, `:tlsldm:` with the
-#   `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
+#   in the x86-64, i386, AArch64, PowerPC, RISC-V and SPARC rows, where the
+#   linker turns each of them into local exec: `@TLSGD`, `@TLSLD` and
+#   `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the
+#   descriptor pair `@TLSDESC`/`@TLSCALL`; AArch64's `:tlsgd:`, `:tlsldm:`
+#   with the `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
 #   `:tlsdesc:` with the `.tlsdesccall`, `.tlsdescadd` and `.tlsdescldr`
 #   marks; and PowerPC's `@got@tlsgd` and `@got@tlsld` with the
 #   `bl __tls_get_addr(sym@tlsgd)` marker, `@dtprel`, `@got@tprel` with the
 #   `@tls` marker (and, in 64-bit code, their prefixed `@pcrel` forms), and
-#   `@tprel` and its halves. AArch64's `.xword %dtprel(sym)` is not linked:
+#   `@tprel` and its halves; and SPARC's `%tgd_hi22()`/`%tgd_lo10()` pair with
+#   the `%tgd_add()` and `%tgd_call()` marks, the same for `%tldm_*()` with
+#   the `%tldo_*()` offsets, `%tie_hi22()`/`%tie_lo10()` with the `%tie_ld()`
+#   and `%tie_add()` marks, and the `%tle_hix22()`/`%tle_lox10()` pair the
+#   others are rewritten into. AArch64's `.xword %dtprel(sym)` is not linked:
 #   GNU ld refuses its relocation in an allocated section, and the image is
 #   made of those. They are in the ARM and Thumb rows too: `(TLSGD)`,
 #   `(TLSLDM)` and `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's
 #   `(TLSDESC)` with the `(tlscall)` branch and the `.tlsdescseq` marks,
-#   which GNU ld rewrites into initial-exec loads. And RISC-V's `%tprel_hi`,
-#   `%tprel_lo` and the `%tprel_add` mark, `%tls_ie_pcrel_hi` and
-#   `%tls_gd_pcrel_hi` with the `%pcrel_lo` that completes each, and the
-#   `la.tls.ie` and `la.tls.gd` those two expand from. RISC-V's descriptor
-#   operators are not linked: GNU as spells the call through a descriptor
-#   `jalr rd, rs1, %tlsdesc_call(label)` and llvm-mc, which is this row's
-#   reference assembler, `jalr rd, 0(rs1), %tlsdesc_call(label)` and refuses
-#   the other, so no object here can hold a whole sequence.
+#   which GNU ld rewrites into initial-exec loads. The MIPS row has the two
+#   models that need no GOT, `%tprel_hi`/`%tprel_lo` and
+#   `%dtprel_hi`/`%dtprel_lo`; `%tlsgd`, `%tlsldm` and `%gottprel` are
+#   offsets from a `_gp` that the script here never defines, so GNU ld
+#   reports each of them as truncated, and `tools/mc-diff` compares those
+#   objects instead. The RISC-V rows have `%tprel_hi`, `%tprel_lo` and the
+#   `%tprel_add` mark, `%tls_ie_pcrel_hi` and `%tls_gd_pcrel_hi` with the
+#   `%pcrel_lo` that completes each, and the `la.tls.ie` and `la.tls.gd`
+#   those two expand from; their descriptor operators are not linked, since
+#   GNU as spells the call through a descriptor
+#   `jalr rd, rs1, %tlsdesc_call(label)` and llvm-mc, which is those rows'
+#   reference assembler, writes `jalr rd, 0(rs1), %tlsdesc_call(label)` and
+#   refuses the other, so no object here can hold a whole sequence.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot

@@ -816,6 +816,143 @@ fn unresolved_references_become_the_matching_r_sparc_relocations() {
     );
 }
 
+// ---- thread-local storage --------------------------------------------------
+
+/// A thread-local variable to hang an access model on, and the `.text` the
+/// access is assembled into.
+fn tls_source(body: &str) -> String {
+    format!(".section .tdata,\"awT\",%progbits\ntv: .long 1\n .text\n{body}")
+}
+
+/// The four access models, as `sparc64-elf-as -64 -Av9` and
+/// `llvm-mc -triple=sparcv9` both write them: an operator names one step of
+/// one model, the relocation says which step, and the field is left to the
+/// linker whichever instruction it lands in.
+#[test]
+fn thread_local_operators_relocate_a_step_of_an_access_model() {
+    let asm = assemble_for(
+        "sparcv9",
+        &tls_source(
+            " sethi %tle_hix22(tv), %l1\n xor %l1, %tle_lox10(tv), %l1\n\
+             sethi %tie_hi22(tv), %l1\n add %l1, %tie_lo10(tv), %l1\n\
+             ld [%l7 + %l1], %l1, %tie_ld(tv)\n ldx [%l7 + %l1], %l1, %tie_ldx(tv)\n\
+             add %g7, %l1, %l1, %tie_add(tv)\n\
+             sethi %tgd_hi22(tv), %l1\n add %l1, %tgd_lo10(tv), %l1\n\
+             add %l7, %l1, %o0, %tgd_add(tv)\n call __tls_get_addr, %tgd_call(tv)\n nop\n\
+             sethi %tldm_hi22(tv), %l1\n add %l1, %tldm_lo10(tv), %l1\n\
+             add %l7, %l1, %o0, %tldm_add(tv)\n call __tls_get_addr, %tldm_call(tv)\n nop\n\
+             sethi %tldo_hix22(tv), %l2\n xor %l2, %tldo_lox10(tv), %l2\n\
+             add %o0, %l2, %l2, %tldo_add(tv)",
+        ),
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let got: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (0, 72),  // R_SPARC_TLS_LE_HIX22
+            (4, 73),  // R_SPARC_TLS_LE_LOX10
+            (8, 67),  // R_SPARC_TLS_IE_HI22
+            (12, 68), // R_SPARC_TLS_IE_LO10
+            (16, 69), // R_SPARC_TLS_IE_LD
+            (20, 70), // R_SPARC_TLS_IE_LDX
+            (24, 71), // R_SPARC_TLS_IE_ADD
+            (28, 56), // R_SPARC_TLS_GD_HI22
+            (32, 57), // R_SPARC_TLS_GD_LO10
+            (36, 58), // R_SPARC_TLS_GD_ADD
+            (40, 59), // R_SPARC_TLS_GD_CALL
+            (48, 60), // R_SPARC_TLS_LDM_HI22
+            (52, 61), // R_SPARC_TLS_LDM_LO10
+            (56, 62), // R_SPARC_TLS_LDM_ADD
+            (60, 63), // R_SPARC_TLS_LDM_CALL
+            (68, 64), // R_SPARC_TLS_LDO_HIX22
+            (72, 65), // R_SPARC_TLS_LDO_LOX10
+            (76, 66), // R_SPARC_TLS_LDO_ADD
+        ]
+    );
+    // Every field is left as the instruction was written; the linker fills
+    // them in, and may rewrite the sequence into a cheaper model first.
+    let text = hex(&section(&asm, ".text"));
+    assert!(text.starts_with("23 00 00 00 a2 1c 60 00"), "{text}");
+}
+
+/// A mark covers no bytes and becomes the instruction's own relocation, so
+/// the `call` it goes on carries no `R_SPARC_WDISP30`: the linker finds
+/// `__tls_get_addr` by name, which is why the symbol is in the object
+/// although nothing relocates against it.
+#[test]
+fn a_thread_local_call_mark_stands_in_for_the_calls_displacement() {
+    let asm = assemble_for(
+        "sparcv9",
+        &tls_source(" call __tls_get_addr, %tgd_call(tv)\n nop"),
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let got: Vec<(u64, u32, String)> = asm
+        .relocs
+        .iter()
+        .map(|r| {
+            let name = r.symbol.map_or_else(String::new, |s| asm.display_name(s));
+            (r.offset, r.kind, name)
+        })
+        .collect();
+    assert_eq!(got, vec![(0, 59, "tv".to_string())]);
+    assert!(
+        asm.symbols
+            .iter()
+            .any(|(_, s)| asm.interner.get(s.name) == "__tls_get_addr"),
+        "the object should still name `__tls_get_addr`"
+    );
+}
+
+/// What GNU as refuses, and for the same reasons: an operator names a
+/// variable the linker places, a mark stands for the whole instruction, and a
+/// call mark goes on one call only.
+#[test]
+fn thread_local_operators_are_refused_where_they_cannot_mean_anything() {
+    for (src, needle) in [
+        (
+            "sethi %tle_hix22(4), %l1",
+            "needs a variable, not a number or a difference",
+        ),
+        (
+            ".text\nhere: nop\n sethi %tle_hix22(here), %l1",
+            "defined outside a thread-local section",
+        ),
+        (
+            "add %g7, 1, %l1, %tie_add(tv)",
+            "no immediate and no target of its own",
+        ),
+        (
+            "sethi %hi(tv), %l1, %tie_add(tv)",
+            "no immediate and no target of its own",
+        ),
+        ("call helper, %tgd_call(tv)", "goes only on `call"),
+        (
+            "add %l1, %tie_add(tv), %l2",
+            "marks the whole instruction; write it after the last operand",
+        ),
+        ("set %tle_lox10(tv), %l1", "`set` builds the whole value"),
+        (
+            "add %l1, %tie_add, %l2",
+            "takes its argument in parentheses",
+        ),
+    ] {
+        let e = errors_for("sparcv9", &tls_source(src));
+        assert!(
+            e.contains(needle),
+            "`{src}` should mention `{needle}`, got:\n{e}"
+        );
+    }
+}
+
 // ---- diagnostics -----------------------------------------------------------
 
 #[test]

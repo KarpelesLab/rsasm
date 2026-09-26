@@ -159,3 +159,68 @@ reader:
         addiu   $4, $4, %lo(bigger)
         jr      $31
         nop
+
+# Thread-local storage. Only the two models that need no GOT are linked
+# here: the link script this harness writes places no `.got` and defines no
+# `_gp`, so GNU ld reports every `%tlsgd`, `%tlsldm` and `%gottprel` as
+# "relocation truncated to fit" -- the offset is measured from a `_gp` that
+# is zero. Whole objects for those three are compared in
+# `tools/mc-diff/mips-relocs.txt` instead.
+#
+# `.tbss` is left out for the same kind of reason: this script lays the
+# NOBITS sections out in the order the objects name them, which puts `.bss`
+# between `.tdata` and `.tbss`, and the MIPS linker refuses a thread-local
+# segment with a non-thread-local section inside it.
+#
+# No operand here carries an addend: llvm-mc, the reference for MIPS,
+# drops the addend of a thread-local relocation, and under `REL` there is
+# nowhere but the field for it, so its image would differ from one GNU as
+# and rsasm both get right.
+=== thread-local variables across objects
+--- a.s
+        .text
+        .set    noreorder
+        .globl  _start
+_start:
+        # Local exec, off the thread pointer `rdhwr` reads.
+        rdhwr   $3, $29
+        lui     $4, %tprel_hi(tv)
+        addiu   $4, $4, %tprel_lo(tv)
+        lui     $5, %tprel_hi(tv2)
+        addiu   $5, $5, %tprel_lo(tv2)
+        lw      $6, %tprel_lo(tloc)($3)
+        # The offsets local dynamic adds to what `__tls_get_addr` returned,
+        # which a static link resolves without the call.
+        lui     $7, %dtprel_hi(tv2)
+        addiu   $7, $7, %dtprel_lo(tv2)
+        addiu   $8, $8, %dtprel_lo(tloc)
+        jr      $31
+        nop
+        .data
+        .word   0x11223344
+        .bss
+        .space  4
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .word   0x55667788
+tloc:   .word   99
+--- b.s
+        .section .tdata,"awT",@progbits
+        .globl  tv2
+tv2:    .word   2
+        .word   3
+        .text
+        .set    noreorder
+        .globl  helper
+helper:
+        rdhwr   $2, $29
+        lui     $4, %tprel_hi(tv)
+        addiu   $4, $4, %tprel_lo(tv)
+        lui     $5, %dtprel_hi(tv2)
+        addiu   $5, $5, %dtprel_lo(tv2)
+        jr      $31
+        nop
+        .data
+        .word   0x99aabbcc
+        .bss
+        .space  8

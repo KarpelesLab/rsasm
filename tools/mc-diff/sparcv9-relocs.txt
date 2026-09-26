@@ -29,6 +29,66 @@ back:
         fbe     back
         fbe     %fcc1, back
 
+# The thread-local access models, in the word size that has a `%tie_ldx()` to
+# go with `%tie_ld()`: a 64-bit GOT entry is loaded with `ldx`, and the mark
+# on it says so. What the operators are and why the `call` a `%tgd_call()`
+# marks carries no `R_SPARC_WDISP30` is spelled out in sparc-relocs.txt.
+=== thread-local local exec and initial exec
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .xword  0x1122334455667788
+tloc:   .xword  99
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .skip   16
+        .text
+        .globl  _start
+_start:
+        sethi   %tle_hix22(tv), %l1
+        xor     %l1, %tle_lox10(tv), %l1
+        add     %g7, %l1, %l1
+        sethi   %tle_hix22(tloc), %l2
+        xor     %l2, %tle_lox10(tloc), %l2
+        sethi   %tle_hix22(tb + 8), %l3
+        xor     %l3, %tle_lox10(tb + 8), %l3
+        sethi   %tie_hi22(tv), %l1
+        add     %l1, %tie_lo10(tv), %l1
+        ldx     [%l7 + %l1], %l1, %tie_ldx(tv)
+        add     %g7, %l1, %l1, %tie_add(tv)
+        sethi   %tie_hi22(tb), %l2
+        or      %l2, %tie_lo10(tb), %l2
+        lduw    [%l7 + %l2], %l2, %tie_ld(tb)
+        add     %g7, %l2, %l2, %tie_add(tb)
+        retl
+        nop
+
+=== thread-local general dynamic and local dynamic
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .xword  1
+tloc:   .xword  2
+        .text
+        .globl  _start
+_start:
+        sethi   %tgd_hi22(tv), %l1
+        add     %l1, %tgd_lo10(tv), %l1
+        add     %l7, %l1, %o0, %tgd_add(tv)
+        call    __tls_get_addr, %tgd_call(tv)
+        nop
+        sethi   %tldm_hi22(tloc), %l1
+        add     %l1, %tldm_lo10(tloc), %l1
+        add     %l7, %l1, %o0, %tldm_add(tloc)
+        call    __tls_get_addr, %tldm_call(tloc)
+        nop
+        sethi   %tldo_hix22(tloc), %l2
+        xor     %l2, %tldo_lox10(tloc), %l2
+        add     %o0, %l2, %l2, %tldo_add(tloc)
+        sethi   %tldo_hix22(tv + 8), %l3
+        xor     %l3, %tldo_lox10(tv + 8), %l3
+        add     %o0, %l3, %l3, %tldo_add(tv + 8)
+        retl
+        nop
+
 # rsasm follows GNU as for common blocks, and so parts from llvm-mc on
 # what these leave out: a `.comm` that names no alignment, which GNU as
 # aligns by its size and llvm-mc to 1; what `.lcomm` reserves, which

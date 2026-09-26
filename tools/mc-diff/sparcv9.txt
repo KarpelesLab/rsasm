@@ -129,3 +129,11 @@ stx %fsr, [%o0]
 ldx [%o0 + 8], %fsr
 stx %fsr, [%sp + 2047]
 std %fq, [%o0]
+
+# ---- the thread-local operators ---------------------------------------------
+# The V9 half of what tools/mc-diff/sparc.txt covers: a 64-bit GOT entry is
+# loaded with `ldx`, and `%tie_ldx()` is the mark that says so.
+ldx [%l7 + %l1], %l1, %tie_ldx(v)
+lduw [%l7 + %l1], %l1, %tie_ld(v)
+ldx [%l1 + %tle_lox10(v)], %l2
+stx %l2, [%l1 + %tldo_lox10(v)]

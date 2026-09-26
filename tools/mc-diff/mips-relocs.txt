@@ -242,3 +242,64 @@ f:      add.d   $f4, $f5, $f6
         .protected prot
         .internal intl
         .globl  gonly
+
+# The thread-local access models. GNU as and llvm-mc agree on the relocation
+# each operator writes -- R_MIPS_TLS_GD (42), TLS_LDM (43), TLS_DTPREL_HI16
+# (44), TLS_DTPREL_LO16 (45), TLS_GOTTPREL (46), TLS_TPREL_HI16 (49) and
+# TLS_TPREL_LO16 (50) -- on their going in any 16-bit field, an instruction's
+# own immediate or a memory operand's displacement, and on the target being
+# STT_TLS whatever `.type` said.
+#
+# They part over an addend. Under `REL` the addend lives in the field, and
+# GNU as writes it there exactly as it does for `%hi` and `%lo`: biased by
+# 0x8000 on a high half, plain on a low one. llvm-mc drops the addend of a
+# thread-local relocation instead, which loses it -- the linker has nowhere
+# else to read it from -- so rsasm follows GNU as and no case here carries
+# one. The n64 corpus, whose relocations are `RELA`, has the addend cases,
+# and there the two agree.
+#
+# `rdhwr $3, $29` reads the thread pointer and neither reference relocates
+# it: the offset added to it is what carries the relocation.
+=== the thread-local access models
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        addiu   $4, $gp, %tlsgd(tv)
+        addiu   $4, $gp, %tlsldm(tv)
+        lui     $5, %dtprel_hi(tv)
+        addiu   $5, $5, %dtprel_lo(tv)
+        lw      $6, %gottprel(tv)($gp)
+        rdhwr   $3, $29
+        lui     $7, %tprel_hi(tv)
+        addiu   $7, $7, %tprel_lo(tv)
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .word   0x11223344
+        .section .tbss,"awT",@nobits
+        .globl  tb
+tb:     .space  8
+
+=== thread-local variables by binding
+        .set    noreorder
+        .text
+        .globl  f, hid, bss
+        .hidden hid
+        .weak   wk
+f:
+        lui     $4, %tprel_hi(loc)
+        addiu   $4, $4, %tprel_lo(loc)
+        lui     $5, %dtprel_hi(hid)
+        addiu   $5, $5, %dtprel_lo(hid)
+        lw      $6, %gottprel(ext)($gp)
+        addiu   $7, $gp, %tlsgd(wk)
+        addiu   $8, $gp, %tlsldm(bss)
+        lw      $9, %tprel_lo(loc)($9)
+        sw      $10, %dtprel_lo(hid)($10)
+        ori     $11, $11, %tprel_lo(loc)
+        .section .tdata,"awT",@progbits
+loc:    .word   1
+hid:    .word   2
+wk:     .word   3
+        .section .tbss,"awT",@nobits
+bss:    .space  16

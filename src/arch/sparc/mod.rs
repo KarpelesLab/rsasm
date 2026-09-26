@@ -7,9 +7,10 @@
 //!
 //! The interesting parts are split up: [`reg`] for the register file,
 //! [`operand`] for the operand grammar (including SPARC's prefix `%hi()` /
-//! `%lo()`, which is not the generic `@` modifier), [`insn`] for the opcode
-//! table, [`encode`] for the three instruction formats, and [`synth`] for the
-//! synthetic instructions that most SPARC assembly is actually written in.
+//! `%lo()` and the thread-local operators, none of which is the generic `@`
+//! modifier), [`insn`] for the opcode table, [`encode`] for the three
+//! instruction formats, and [`synth`] for the synthetic instructions that
+//! most SPARC assembly is actually written in.
 
 pub mod encode;
 pub mod insn;
@@ -18,14 +19,15 @@ pub mod reg;
 pub mod reloc;
 pub mod synth;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, ModifierSymbols, Syntax};
 use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi};
-use crate::lexer::{Punct, TokKind};
-use crate::section::Variant;
+use crate::expr::{ExprKind, ExprRef};
+use crate::lexer::{Punct, TokKind, Token};
+use crate::section::{Fixup, Variant};
 use encode::{BranchKind, BranchSuffix};
 use insn::Form;
-use operand::OperandParser;
+use operand::{Imm, ImmPart, Operand, OperandParser};
 
 pub const NAMES: &[&str] = &["sparc", "sparcv9"];
 
@@ -126,6 +128,25 @@ impl Architecture for Sparc {
         }
     }
 
+    /// Every thread-local operator makes its target `STT_TLS`, the marks
+    /// included: GNU as sets the type from the relocation it wrote, whatever
+    /// the symbol was before. The two call marks also put `__tls_get_addr` in
+    /// the object even though nothing relocates against it, since they take
+    /// the place of the `call`'s own relocation and the linker finds the
+    /// function by name.
+    ///
+    /// These are the operators the operand parser wrapped the argument in;
+    /// SPARC has no `@` modifier of its own for the core to pass here.
+    fn modifier_symbols(&self, name: &str) -> ModifierSymbols {
+        let Some(op) = operand::tls_op(name) else {
+            return ModifierSymbols::default();
+        };
+        ModifierSymbols {
+            needs: matches!(op.name, "tgd_call" | "tldm_call").then_some(operand::TLS_GET_ADDR),
+            tls: true,
+        }
+    }
+
     /// llvm-mc's conventions, as for every SPARC encoding. A V9 frame starts
     /// with the CFA 2047 bytes above `%sp`, the stack bias.
     fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
@@ -180,8 +201,9 @@ impl Architecture for Sparc {
                 }
                 _ => BranchSuffix::default(),
             };
-            let ops = OperandParser { cx }.parse_list(&cur)?;
-            return match def.form {
+            let (body, mark) = tls_mark(cx, cur.rest())?;
+            let ops = OperandParser { cx }.parse_list(&Cursor::new(body))?;
+            let words = match def.form {
                 Form::Branch { cond, predicted } => {
                     let kind = BranchKind {
                         cond,
@@ -201,16 +223,103 @@ impl Architecture for Sparc {
                 Form::BranchReg(rcond) => encode::branch_reg(cx, &m, req.span, rcond, sfx, &ops),
                 form => encode::encode(cx, &m, req.span, form, &ops),
             };
+            return attach_mark(cx, words?, mark, &ops);
         }
 
         if synth::is_synthetic(&m) {
-            let ops = OperandParser { cx }.parse_list(&cur)?;
-            return synth::assemble(cx, &m, req.span, &ops);
+            let (body, mark) = tls_mark(cx, cur.rest())?;
+            let ops = OperandParser { cx }.parse_list(&Cursor::new(body))?;
+            let words = synth::assemble(cx, &m, req.span, &ops)?;
+            return attach_mark(cx, words, mark, &ops);
         }
 
         cx.error(req.mnemonic_span, format!("unknown instruction `{m}`"));
         None
     }
+}
+
+/// Splits the `, %tie_add(x)` an instruction may end with off its operands
+/// and parses it, answering with the tokens the operands are left in.
+fn tls_mark<'t>(cx: &mut AsmCtx<'_>, toks: &'t [Token]) -> Option<(&'t [Token], Option<Imm>)> {
+    let (body, mark) = operand::split_mark(cx, toks);
+    let Some((op, rest)) = mark else {
+        return Some((body, None));
+    };
+    let imm = OperandParser { cx }.mark(rest, op)?;
+    Some((body, Some(imm)))
+}
+
+/// Puts a thread-local mark on the instruction just assembled.
+///
+/// GNU as makes the operator the instruction's own relocation rather than a
+/// field's, so it refuses one on an instruction that has a field to relocate
+/// already: every immediate operand claims that one relocation, whether or
+/// not its value is known, and so does a branch or call target.
+/// `%tgd_call()` and `%tldm_call()` are the exception — they replace the
+/// `call`'s displacement, which is why they are allowed only on
+/// `call __tls_get_addr`, the one target whose address the linker can work
+/// out from the relocation alone.
+fn attach_mark(
+    cx: &mut AsmCtx<'_>,
+    mut words: Vec<Variant>,
+    mark: Option<Imm>,
+    ops: &[Operand],
+) -> Option<Vec<Variant>> {
+    let Some(mark) = mark else {
+        return Some(words);
+    };
+    let ImmPart::Tls(op) = mark.part else {
+        return Some(words);
+    };
+    let [v] = &mut words[..] else {
+        cx.error(
+            mark.span,
+            "this instruction cannot carry a thread-local mark",
+        );
+        return None;
+    };
+    let call = matches!(op.name, "tgd_call" | "tldm_call");
+    let replaces = v
+        .fixups
+        .first()
+        .filter(|f| call && v.fixups.len() == 1 && f.kind.reloc == reloc::WDISP30)
+        .is_some_and(|f| calls_tls_get_addr(cx, f.expr));
+    if call && !replaces {
+        cx.error(
+            mark.span,
+            format!(
+                "`%{}()` goes only on `call {}`, whose displacement it stands in for",
+                op.name,
+                operand::TLS_GET_ADDR
+            ),
+        );
+        return None;
+    }
+    if !call && (!v.fixups.is_empty() || ops.iter().any(Operand::has_immediate)) {
+        cx.error(
+            mark.span,
+            format!(
+                "`%{}()` becomes the instruction's own relocation, so it goes only on one \
+                 with no immediate and no target of its own",
+                op.name
+            ),
+        );
+        return None;
+    }
+    v.fixups.clear();
+    v.fixups.push(Fixup {
+        offset: 0,
+        expr: mark.expr,
+        kind: encode::tls_mark_fixup(op.reloc),
+        span: mark.span,
+    });
+    Some(words)
+}
+
+/// Whether a `call`'s target is exactly `__tls_get_addr`. GNU as takes no
+/// addend and no other name.
+fn calls_tls_get_addr(cx: &AsmCtx<'_>, e: ExprRef) -> bool {
+    matches!(cx.exprs.get(e).kind, ExprKind::Sym(n) if cx.name(n) == operand::TLS_GET_ADDR)
 }
 
 /// Consumes `,a`, `,pn` and `,pt` from the front of a branch's operands.
