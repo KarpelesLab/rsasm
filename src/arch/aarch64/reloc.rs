@@ -41,6 +41,7 @@ pub const MOVW_PREL_G2: u32 = 291;
 pub const MOVW_PREL_G2_NC: u32 = 292;
 pub const MOVW_PREL_G3: u32 = 293;
 pub const LDST128_ABS_LO12_NC: u32 = 299;
+pub const GOT_LD_PREL19: u32 = 309;
 pub const ADR_GOT_PAGE: u32 = 311;
 pub const LD64_GOT_LO12_NC: u32 = 312;
 

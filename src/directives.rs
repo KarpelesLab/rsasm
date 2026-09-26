@@ -987,12 +987,9 @@ impl Assembler {
         for sym in self.target().section_symbols(&text) {
             self.refer_to_symbol(sym, tok.span);
         }
-        let mut kind = if text.starts_with(".bss") || builtin_section(&text, ".tbss") {
-            SectionKind::Nobits
-        } else {
-            SectionKind::Progbits
-        };
-        let mut flags = default_flags_for(&text);
+        let builtin = builtin_section_kind(&text);
+        let (mut kind, mut flags) =
+            builtin.unwrap_or((SectionKind::Progbits, SectionFlags::default()));
         // `SHF_TLS` is ELF's alone, so a COFF or Mach-O section that happens
         // to be called `.tdata` is an ordinary one there.
         flags.tls &= self.options.format == crate::output::Format::Elf;
@@ -1030,9 +1027,21 @@ impl Assembler {
             return true;
         }
 
+        // GNU as opens `.text`, `.data` and `.bss` before it reads a line, so
+        // `.section` naming one of them describes a section that already
+        // exists, and the description is ignored as it is for any section
+        // named twice: `.section .data,"awT"` leaves `.data` the ordinary
+        // data section rather than making it thread-local.
+        let standing = matches!(text.as_str(), ".text" | ".data" | ".bss");
         if cur.eat_punct(Punct::Comma).is_some() {
             if let Some(s) = self.expect_string(cur, "of section flags") {
-                flags = parse_flags(&String::from_utf8_lossy(&s));
+                let written = parse_flags(&String::from_utf8_lossy(&s));
+                flags = match builtin {
+                    Some((_, b)) if !standing => builtin_section_flags(b, written),
+                    Some(_) => flags,
+                    None => written,
+                };
+                flags.tls &= self.options.format == crate::output::Format::Elf;
             }
             // `,@progbits` or `,%progbits`
             if cur.eat_punct(Punct::Comma).is_some() {
@@ -1044,7 +1053,9 @@ impl Assembler {
                 // holds bits.
                 if let TokKind::Int(_) = cur.peek().kind {
                     cur.advance();
-                } else if let Some((tn, _)) = self.expect_name(cur) {
+                } else if let Some((tn, _)) = self.expect_name(cur)
+                    && !standing
+                {
                     let t = self.interner.get(tn).to_ascii_lowercase();
                     kind = match t.as_str() {
                         "nobits" => SectionKind::Nobits,
@@ -1054,6 +1065,7 @@ impl Assembler {
                 }
                 if cur.eat_punct(Punct::Comma).is_some()
                     && let Some(e) = self.parse_expr(cur)
+                    && !standing
                 {
                     entsize = self
                         .eval_absolute(e, "section entry size")
@@ -1679,23 +1691,57 @@ fn builtin_section(name: &str, base: &str) -> bool {
     name == base || name.strip_prefix(base).is_some_and(|r| r.starts_with('.'))
 }
 
-fn default_flags_for(name: &str) -> SectionFlags {
-    if name.starts_with(".text") || name == ".init" || name == ".fini" {
-        SectionFlags::text()
-    } else if name.starts_with(".rodata") {
-        SectionFlags::rodata()
+/// What a section holds and how it is mapped, by name alone, for the names
+/// GNU as knows; `None` for a name the source invented, which starts with
+/// nothing.
+fn builtin_section_kind(name: &str) -> Option<(SectionKind, SectionFlags)> {
     // A thread-local section is written data that the linker copies into
     // each thread's block rather than mapping, so it carries `SHF_TLS` on
     // top of what `.data` and `.bss` carry.
-    } else if builtin_section(name, ".tdata") || builtin_section(name, ".tbss") {
-        SectionFlags {
-            tls: true,
-            ..SectionFlags::data()
+    let tls = SectionFlags {
+        tls: true,
+        ..SectionFlags::data()
+    };
+    Some(match name {
+        _ if builtin_section(name, ".text") || name == ".init" || name == ".fini" => {
+            (SectionKind::Progbits, SectionFlags::text())
         }
-    } else if name.starts_with(".data") || name.starts_with(".bss") {
-        SectionFlags::data()
+        _ if builtin_section(name, ".rodata") || name == ".rodata1" => {
+            (SectionKind::Progbits, SectionFlags::rodata())
+        }
+        _ if builtin_section(name, ".tdata") => (SectionKind::Progbits, tls),
+        _ if builtin_section(name, ".tbss") => (SectionKind::Nobits, tls),
+        _ if builtin_section(name, ".data") || name == ".data1" => {
+            (SectionKind::Progbits, SectionFlags::data())
+        }
+        _ if builtin_section(name, ".bss") => (SectionKind::Nobits, SectionFlags::data()),
+        _ => return None,
+    })
+}
+
+/// The flags a built-in section gets when `.section` writes some of its own.
+///
+/// GNU as adds the name's own flags to what was written where the two agree,
+/// so `.section .text.hot,"a"` is still executable and
+/// `.section .rodata.str1.1,"aMS"` is still read-only; where they do not, it
+/// warns and takes what was written, so `.section .init,"aw"` is a writable
+/// section that nothing executes. `M` and `S` describe the contents rather
+/// than the mapping and never count as a disagreement, nor do the flags
+/// rsasm has no bit for (`G`, `R` and `e`).
+fn builtin_section_flags(builtin: SectionFlags, written: SectionFlags) -> SectionFlags {
+    let disagrees = (written.alloc && !builtin.alloc)
+        || (written.write && !builtin.write)
+        || (written.exec && !builtin.exec)
+        || (written.tls && !builtin.tls);
+    if disagrees {
+        written
     } else {
-        SectionFlags::default()
+        SectionFlags {
+            merge: written.merge,
+            strings: written.strings,
+            group: written.group,
+            ..builtin
+        }
     }
 }
 

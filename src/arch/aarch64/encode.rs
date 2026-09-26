@@ -89,6 +89,15 @@ pub fn fixup_ld_lit() -> FixupKind {
         .scatter(scatter_imm19)
 }
 
+/// `ldr x0, :got:sym`: the symbol's GOT slot, reached from the instruction.
+/// Only the linker knows where that is, so a flat image refuses it.
+pub fn fixup_got_ld_lit() -> FixupKind {
+    fixup_ld_lit()
+        .with_reloc(reloc::GOT_LD_PREL19)
+        .with_class(RelocClass::Got)
+        .link(LinkValue::LinkerOnly("a GOT entry"))
+}
+
 /// `tbz` / `tbnz`: +/-32KB.
 pub fn fixup_b14() -> FixupKind {
     FixupKind::pcrel(4, 0)

@@ -232,3 +232,25 @@ f:
         add     x0, x0, :tlsdesc_lo12:v
         .tlsdesccall v
         blr     x1
+
+=== a GOT slot reached from a literal load
+# `ldr`, `ldrsw` and `prfm` share the literal-load encoding, and both
+# references read `:got:` there as they read `:gottprel:`, whatever the load
+# is as wide as. Left out, and in tools/xas-diff's corpus: `:got:` on `cbz`,
+# `cbnz`, `tbz` and `tbnz`, where llvm-mc ignores the operator and writes the
+# branch's own relocation.
+        .text
+        .globl  f
+f:
+        ldr     x0, :got:v
+        ldr     w1, :got:v
+        ldr     d2, :got:v
+        ldrsw   x3, :got:v
+        prfm    pldl1keep, :got:v
+        ldr     x4, :got:v+8
+        ldrsw   x5, :gottprel:v
+        prfm    pldl1keep, :gottprel:v
+        ldrsw   x6, lit
+        prfm    pldl2strm, lit
+        prfm    #7, lit
+lit:    .word   0

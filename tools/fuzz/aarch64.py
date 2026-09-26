@@ -181,10 +181,6 @@ def interesting(text, word=None):
     if sum(1 for a in atoms if a.kind[0] in ("zlist", "vlist")) > 1:
         return False
     kinds = {a.kind[0] for a in atoms}
-    # `ldr x0, #0x10` and friends are PC-relative: the offset printed is not
-    # something to assemble back.
-    if mn in ("ldr", "ldrsw", "prfm") and "open" not in kinds:
-        return False
     return (word is not None and (word >> 25) & 0xf == 0b0010) or \
         bool(kinds & {"v", "vidx", "vidxa", "s", "z", "zidx", "p", "pm", "pz", "vlist",
                          "vlistidx", "zlist", "plist", "fimm"})

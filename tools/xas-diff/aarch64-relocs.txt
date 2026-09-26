@@ -303,6 +303,102 @@ f:
 	tbz	x2, #1, :tlsdesc:v
 	tbnz	w3, #5, :gottprel:v
 
+=== ldrsw and prfm from a literal, and the operators they take there
+# `ldr`, `ldrsw` and `prfm` share the literal-load encoding, so all three
+# read a label, a number as an offset from the instruction, and the operators
+# a literal load takes; `prfm` writes its hint where the others write a
+# register, as a name or as a number.
+	.text
+f:
+	ldrsw	x0, lbl
+	prfm	pldl1keep, lbl
+	prfm	pstl2strm, lbl
+	prfm	#3, lbl
+	ldrsw	x1, #8
+	prfm	pldl1keep, #-4
+	ldrsw	x2, :gottprel:v
+	prfm	pldl1keep, :gottprel:v
+	ldrsw	x3, :tlsdesc:v
+	prfm	pldl3keep, :tlsdesc:v
+	ldrsw	x4, :gottprel:8
+	prfm	pldl1strm, :tlsdesc:-8
+lbl:	.word	0
+
+=== :got: names a GOT slot in a literal field
+# GNU as reads `:got:` with the parser it reads `:tlsdesc:` and `:gottprel:`
+# with, so it reaches a literal load of any width, `ldrsw`, `prfm` and the
+# four compare-and-branch instructions, all with the same 19-bit relocation;
+# llvm-mc agrees but for the branches, where it ignores the operator and
+# writes their own. A number under it is an offset, as under the
+# thread-local operators.
+	.text
+f:
+	ldr	x0, :got:v
+	ldr	w1, :got:v
+	ldr	d2, :got:v
+	ldrsw	x3, :got:v
+	prfm	pldl1keep, :got:v
+	ldr	x4, :got:v+8
+	cbz	x5, :got:v
+	cbnz	w6, :got:v
+	tbz	x7, #1, :got:v
+	tbnz	w8, #5, :got:v
+	ldr	x9, :got:8
+	cbz	x10, :got:-4
+
+=== :got_lo12: on an access of any width
+# A GOT slot is 64 bits wide, but GNU as writes its relocation for whatever
+# reads part of it, a byte load, a 128-bit one, a store and a prefetch
+# included, as it does for `:gottprel_lo12:`; llvm-mc refuses everything but
+# the 64-bit load here, and takes them all for Darwin's `@GOTPAGEOFF`.
+	.text
+f:
+	adrp	x0, :got:v
+	ldr	x1, [x0, :got_lo12:v]
+	ldr	w2, [x0, :got_lo12:v]
+	ldrb	w3, [x0, :got_lo12:v]
+	ldrh	w4, [x0, :got_lo12:v]
+	ldrsw	x5, [x0, :got_lo12:v]
+	ldr	q6, [x0, :got_lo12:v]
+	str	x7, [x0, :got_lo12:v]
+	prfm	pldl1keep, [x0, :got_lo12:v]
+
+=== a difference of two labels on a PC-relative target
+# GNU as folds one as it reads the line, so the field holds the number it
+# comes to, taken as the offset a number written there would be, and an
+# expression no relocation could carry assembles at all. A difference it
+# cannot fold until the sections are sized is an address by then, relocated
+# against no symbol; and one whose subtrahend is in the field's own section
+# is the minuend, PC-relative, with the distance from the field as the
+# addend. llvm-mc folds none of them, refuses every one on `adr`, and
+# relocates the rest against no symbol.
+	.text
+f:
+a:	nop
+b:	nop
+	adr	x0, b - a
+	adr	x1, (b - a) * 2
+	adr	x2, -(b - a)
+	b	b - a
+	bl	b - a
+	b.eq	b - a
+	cbz	x3, b - a
+	tbz	x4, #1, b - a
+	ldr	x5, b - a
+	adr	x6, d - c
+	adr	x7, c - a
+	ldr	x8, c - a
+	.section	.other,"ax",@progbits
+c:	nop
+d:	nop
+
+=== refused: a difference whose subtrahend is in another section
+	.text
+a:	nop
+	adr	x0, a - c
+	.section	.other,"ax",@progbits
+c:	nop
+
 === refused: movk with a signed local-exec group
 	.text
 	movk	x0, :tprel_g1:v
@@ -423,6 +519,40 @@ loc:	nop
 	.text
 	nop
 	.tlsdesccall	v
+# GNU as opens `.text`, `.data` and `.bss` before it reads a line, so a
+# `.section` naming one of them describes a section that already exists and
+# the description is ignored: `.section .data,"awT"` leaves `.data` the
+# ordinary data section. For a name it knows but has not opened, it adds the
+# name's own flags to what was written where the two agree, and where they
+# do not it takes what was written; `M` and `S` describe the contents rather
+# than the mapping and never disagree. A name it does not know, `.textfoo`
+# among them, starts with no flags of its own.
+=== the flags a built-in section name carries
+	.section	.data,"awT"
+	.byte	1
+	.section	.text,"awT"
+	nop
+	.section	.bss,"awT",@nobits
+	.space	4
+	.section	.text.hot,"a"
+	nop
+	.section	.tdata.x,"aw"
+	.byte	2
+	.section	.tbss.x,"aw",@nobits
+	.space	4
+	.section	.rodata.str1.1,"aMS",@progbits,1
+	.asciz	"a"
+	.section	.init,"aw"
+	.byte	3
+	.section	.rodata.x,"ax"
+	nop
+	.section	.data.rel.ro,"a"
+	.byte	4
+	.section	.textfoo,"aw"
+	.byte	5
+	.section	.bssfoo,"aw"
+	.byte	6
+
 # GNU as aligns a common block that names no alignment, or 0, to its size
 # rounded up to a power of two, at most 16, on every ELF target; llvm-mc
 # aligns it to 1.
