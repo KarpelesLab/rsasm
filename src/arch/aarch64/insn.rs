@@ -123,6 +123,22 @@ impl Insn<'_, '_> {
         op.expr(cx)
     }
 
+    /// A PC-relative target with no relocation operator on it, with any
+    /// difference of two labels folded into the number it is.
+    ///
+    /// GNU as folds such a difference as it reads the line, and what is left
+    /// decides the field: a number goes in as the offset a number written
+    /// there would be, where a label is measured from the instruction. So
+    /// `adr x0, b - a` points four bytes past itself when the two labels are
+    /// four apart, and `b (b - a) * 2`, which no relocation could carry,
+    /// assembles at all. Under a relocation operator nothing is folded: the
+    /// operator names an access only the linker makes, and GNU as refuses a
+    /// difference there.
+    fn pcrel_expr(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<ExprRef> {
+        let e = self.expr(cx, i)?;
+        Some(crate::arch::fold_differences(cx, e))
+    }
+
     /// A constant operand with a range check.
     fn imm(&self, cx: &mut AsmCtx<'_>, i: usize, lo: i64, hi: i64, what: &str) -> Option<i64> {
         let e = self.expr(cx, i)?;
@@ -1589,7 +1605,7 @@ fn ccmp(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 fn branch(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[1]).then_some(())?;
-    let e = i.expr(cx, 0)?;
+    let e = i.pcrel_expr(cx, 0)?;
     let (base, kind) = if i.mnemonic == "bl" {
         (0x9400_0000, encode::fixup_call())
     } else {
@@ -1600,7 +1616,7 @@ fn branch(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 
 fn branch_cond(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, cond: u8) -> Option<Vec<Variant>> {
     i.arity(cx, &[1]).then_some(())?;
-    let e = i.expr(cx, 0)?;
+    let e = i.pcrel_expr(cx, 0)?;
     pcrel(
         cx,
         0x5400_0000 | field(cond as u32, 0, 4),
@@ -1619,10 +1635,10 @@ fn cbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         0x3500_0000
     };
     let w = field(rt.sf(), 31, 1) | base | field(rt.num as u32, 0, 5);
-    if let Some((e, kind)) = tls_literal(cx, &i.ops[1], encode::fixup_b19())? {
+    if let Some((e, kind)) = literal_operator(cx, &i.ops[1], encode::fixup_b19())? {
         return pcrel(cx, w, e, kind, i.ops[1].span);
     }
-    let e = i.expr(cx, 1)?;
+    let e = i.pcrel_expr(cx, 1)?;
     pcrel(cx, w, e, encode::fixup_b19(), i.ops[1].span)
 }
 
@@ -1638,45 +1654,50 @@ fn tbz(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     };
     // The bit number is split: its top bit doubles as the register-width bit.
     let w = field(bit >> 5, 31, 1) | base | field(bit & 31, 19, 5) | field(rt.num as u32, 0, 5);
-    if let Some((e, kind)) = tls_literal(cx, &i.ops[2], encode::fixup_b14())? {
+    if let Some((e, kind)) = literal_operator(cx, &i.ops[2], encode::fixup_b14())? {
         return pcrel(cx, w, e, kind, i.ops[2].span);
     }
-    let e = i.expr(cx, 2)?;
+    let e = i.pcrel_expr(cx, 2)?;
     pcrel(cx, w, e, encode::fixup_b14(), i.ops[2].span)
 }
 
-/// `ldr x0, :gottprel:v` and `ldr x0, :tlsdesc:v`: a thread-local operator
-/// in a PC-relative literal field, with the load's relocation. `None` when
-/// the operand is something else.
+/// `ldr x0, :got:v`, `ldr x0, :gottprel:v` and `ldr x0, :tlsdesc:v`: a
+/// relocation operator in a PC-relative literal field, with the relocation
+/// that names the GOT slot or the thread-local access. `None` when the
+/// operand is something else.
 ///
 /// A plain number under the operator is an offset from the instruction, as
 /// it would be without one, and gets the instruction's own field, `plain`:
 /// GNU as folds it before it looks at the operator.
 ///
 /// GNU as reads the target of `cbz`, `cbnz`, `tbz` and `tbnz` with the parser
-/// it reads a literal load's with, so those take the two operators as well
-/// and get the load's relocation, although what a linker writes for it
-/// covers `tbz`'s bit number; llvm-mc ignores the operator on all four and
-/// writes their plain branch relocation. rsasm follows GNU as.
-fn tls_literal(
+/// it reads a literal load's with, so those take the operators as well and
+/// get the load's relocation, although what a linker writes for it covers
+/// `tbz`'s bit number; llvm-mc ignores the operator on all four and writes
+/// their plain branch relocation. rsasm follows GNU as.
+fn literal_operator(
     cx: &mut AsmCtx<'_>,
     op: &Operand<'_>,
     plain: crate::section::FixupKind,
 ) -> Option<Option<(ExprRef, crate::section::FixupKind)>> {
-    let OperandKind::Reloc(RelocOp::Tls(t), e) = op.kind else {
-        return Some(None);
+    let (e, reloc) = match op.kind {
+        OperandKind::Reloc(RelocOp::Got, e) => (e, encode::fixup_got_ld_lit()),
+        OperandKind::Reloc(RelocOp::Tls(t), e) => {
+            if t.literal == 0 {
+                cx.error(
+                    op.span,
+                    format!("`{}` is not valid on a literal load", t.op),
+                );
+                return None;
+            }
+            (e, encode::fixup_tls(t.literal))
+        }
+        _ => return Some(None),
     };
-    if t.literal == 0 {
-        cx.error(
-            op.span,
-            format!("`{}` is not valid on a literal load", t.op),
-        );
-        return None;
-    }
     if !names_symbol(cx, e) {
         return Some(Some((e, plain)));
     }
-    Some(Some((e, encode::fixup_tls(t.literal))))
+    Some(Some((e, reloc)))
 }
 
 fn branch_reg(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
@@ -1723,7 +1744,7 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             }
             // As in a literal load, GNU as takes a plain number under the
             // operator as the offset `adr` would without one; see
-            // `tls_literal`. On `adrp` it refuses one.
+            // `literal_operator`. On `adrp` it refuses one.
             if i.mnemonic == "adr" && !names_symbol(cx, *e) {
                 (*e, encode::fixup_adr())
             } else {
@@ -1741,7 +1762,7 @@ fn adr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             };
             (e, kind)
         }
-        _ => (target.expr(cx)?, encode::fixup_adr()),
+        _ => (i.pcrel_expr(cx, 1)?, encode::fixup_adr()),
     };
     let base = if i.mnemonic == "adrp" {
         0x9000_0000
@@ -1859,7 +1880,8 @@ fn ldst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     if let Some(OperandKind::Literal(e)) = i.op(1).map(|o| &o.kind) {
         return pool_load(cx, i, *e);
     }
-    if i.mnemonic == "ldr" && i.op(1).is_some_and(|o| o.mem().is_none()) {
+    if matches!(i.mnemonic, "ldr" | "ldrsw" | "prfm") && i.op(1).is_some_and(|o| o.mem().is_none())
+    {
         return ldst_literal(cx, i);
     }
     let prefetch = i.mnemonic.starts_with("prf");
@@ -1952,13 +1974,13 @@ fn ldst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
                         return None;
                     }
                 },
-                RelocOp::GotLo12 if form.scale == 3 && !form.v => encode::fixup_got_lo12(3),
-                // Darwin loads a 32-bit slot too.
-                RelocOp::GotLo12
-                    if form.scale == 2 && !form.v && cx.find_modifier_for(*e).is_some() =>
-                {
-                    encode::fixup_got_lo12(2)
-                }
+                // A GOT slot is 64 bits wide, but GNU as writes the 64-bit
+                // slot's relocation whatever the access reads of it, as it
+                // does for `:gottprel_lo12:`, and so does llvm-mc for
+                // Darwin's `@GOTPAGEOFF`; only llvm-mc's ELF refuses an
+                // access that is not the 64-bit load. The field is still the
+                // access's own, so it keeps the access's scale.
+                RelocOp::GotLo12 => encode::fixup_got_lo12(form.scale),
                 _ => {
                     cx.error(
                         mem.span,
@@ -2005,28 +2027,43 @@ fn ldst(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
 }
 
 /// `ldr x0, label`: a PC-relative load from a literal pool.
+///
+/// `ldrsw` and `prfm` share the encoding, which is why they reach here: the
+/// two-bit `opc` picks between a 32-bit load, a 64-bit one, a sign-extending
+/// word load and a prefetch, and the prefetch's `Rt` is its hint rather than
+/// a register.
 fn ldst_literal(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    let rt = i.any_reg(cx, 0)?;
-    let (opc, v) = match rt.class {
-        RegClass::W => (0, false),
-        RegClass::X => (1, false),
-        RegClass::S => (0, true),
-        RegClass::D => (1, true),
-        RegClass::Q => (2, true),
-        _ => {
-            cx.error(
-                i.ops[0].span,
-                "this register cannot be loaded from a literal",
-            );
-            return None;
-        }
+    let (opc, v, rt_num) = if i.mnemonic == "prfm" {
+        (3, false, prefetch_hint(cx, i)?)
+    } else {
+        let rt = i.any_reg(cx, 0)?;
+        let (opc, v) = match (i.mnemonic, rt.class) {
+            ("ldrsw", RegClass::X) => (2, false),
+            ("ldrsw", _) => {
+                cx.error(i.ops[0].span, "`ldrsw` writes a 64-bit register");
+                return None;
+            }
+            (_, RegClass::W) => (0, false),
+            (_, RegClass::X) => (1, false),
+            (_, RegClass::S) => (0, true),
+            (_, RegClass::D) => (1, true),
+            (_, RegClass::Q) => (2, true),
+            _ => {
+                cx.error(
+                    i.ops[0].span,
+                    "this register cannot be loaded from a literal",
+                );
+                return None;
+            }
+        };
+        (opc, v, rt.num)
     };
     let w =
-        field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt.num as u32, 0, 5);
-    if let Some((e, kind)) = tls_literal(cx, &i.ops[1], encode::fixup_ld_lit())? {
+        field(opc, 30, 2) | 0x1800_0000 | field(u32::from(v), 26, 1) | field(rt_num as u32, 0, 5);
+    if let Some((e, kind)) = literal_operator(cx, &i.ops[1], encode::fixup_ld_lit())? {
         return pcrel(cx, w, e, kind, i.ops[1].span);
     }
-    let e = i.expr(cx, 1)?;
+    let e = i.pcrel_expr(cx, 1)?;
     pcrel(cx, w, e, encode::fixup_ld_lit(), i.ops[1].span)
 }
 

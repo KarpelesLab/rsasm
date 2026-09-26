@@ -97,6 +97,60 @@ fn sections_carry_the_right_types_and_flags() {
 }
 
 #[test]
+fn built_in_section_names_carry_their_own_flags() {
+    // Every expectation is `x86_64-elf-as --64`'s for the same source. GNU as
+    // opens `.text`, `.data` and `.bss` before it reads a line, so a
+    // `.section` naming one of them describes a section that already exists
+    // and the description is ignored. For a name it knows but has not opened,
+    // it adds the name's own flags to what was written where the two agree,
+    // and takes what was written where they do not; `M` and `S` describe the
+    // contents rather than the mapping and never disagree. A name it does not
+    // know starts with no flags of its own, so `.textfoo` is neither
+    // allocated nor executable and `.bssfoo` holds bits.
+    let b = elf(concat!(
+        ".section .data,\"awT\"\n.byte 1\n",
+        ".section .bss,\"awT\",@nobits\n.space 4\n",
+        ".section .text,\"aw\"\n.byte 1\n",
+        ".section .text.hot,\"a\"\n.byte 1\n",
+        ".section .rodata.str1.1,\"aMS\",@progbits,1\n.asciz \"a\"\n",
+        ".section .tdata.x,\"aw\"\n.byte 1\n",
+        ".section .init,\"aw\"\n.byte 1\n",
+        ".section .rodata.x,\"ax\"\n.byte 1\n",
+        ".section .textfoo\n.byte 1\n",
+        ".section .bssfoo\n.byte 1\n",
+    ));
+    let secs = sections_of(&b);
+    let flags = |n: &str| {
+        secs.iter()
+            .find(|s| s.0 == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+            .2
+    };
+    let kind = |n: &str| {
+        secs.iter()
+            .find(|s| s.0 == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+            .1
+    };
+    // SHF_WRITE = 1, SHF_ALLOC = 2, SHF_EXECINSTR = 4, SHF_MERGE = 0x10,
+    // SHF_STRINGS = 0x20, SHF_TLS = 0x400.
+    assert_eq!(flags(".data"), 3, "the T on .data is ignored");
+    assert_eq!((kind(".bss"), flags(".bss")), (8, 3));
+    assert_eq!(flags(".text"), 6, "the w on .text is ignored");
+    assert_eq!(flags(".text.hot"), 6, "executable by name");
+    assert_eq!(flags(".rodata.str1.1"), 0x32);
+    assert_eq!(flags(".tdata.x"), 0x403, "thread-local by name");
+    assert_eq!(flags(".init"), 3, "w disagrees with x, so w alone stands");
+    assert_eq!(
+        flags(".rodata.x"),
+        6,
+        "x disagrees with w, so x alone stands"
+    );
+    assert_eq!((kind(".textfoo"), flags(".textfoo")), (1, 0));
+    assert_eq!((kind(".bssfoo"), flags(".bssfoo")), (1, 0));
+}
+
+#[test]
 fn a_difference_from_a_label_in_the_same_section_is_pc_relative() {
     // GNU as: `x + 0`, `x + 4`, `x + 4` and `.text + a`, all R_X86_64_PC32
     // (type 2), with zeroed fields.

@@ -22,10 +22,19 @@ impl Assembler {
         // Renesas's newer assemblers dot their directives (`.DB`, `.CSEG`).
         // Those are the vendor table's words, and take priority over a GNU as
         // directive of the same name, which would read their arguments wrongly.
+        //
+        // `.section` is the one word where that goes the other way. Neither
+        // Motorola reference reads a dotted directive at all — GNU as `--mri`
+        // calls it an unknown operator and vasm an unknown mnemonic — so the
+        // dot can only be GNU as's own spelling, whose flag string and type
+        // (`.section .tbss,"awT",@nobits`) the vendor `SECTION` would refuse.
         if matches!(self.options.dialect, Dialect::Motorola | Dialect::Renesas)
             && let Some(bare) = text.strip_prefix('.')
             && let Some(alias) = crate::dialect::lookup(self.options.dialect, bare)
-            && !matches!(alias, crate::dialect::Alias::Gas(_))
+            && !matches!(
+                alias,
+                crate::dialect::Alias::Gas(_) | crate::dialect::Alias::MotorolaSection
+            )
         {
             self.run_alias(stmt, alias);
             return;
@@ -136,6 +145,29 @@ impl Assembler {
             ".uaword" if self.arch.aligns_data() => self.dir_data(&mut cur, 2, span, false, &text),
             ".ualong" if self.arch.aligns_data() => self.dir_data(&mut cur, 4, span, false, &text),
             ".uaquad" if self.arch.aligns_data() => self.dir_data(&mut cur, 8, span, false, &text),
+            // The Motorola data directives, which GNU as's own table gives
+            // every target: `.dc` writes values, `.dcb` repeats one and `.ds`
+            // reserves room, with a `.b`, `.w` or `.l` suffix for the width
+            // and a word where there is none. They are `cons` and `s_space`
+            // under another name, so `.dc.w` aligns exactly where `.short`
+            // does and the other two align nothing. The undotted spellings
+            // the Motorola dialect reads are in [`crate::dialect`], which
+            // aligns them the way Devpac and GNU as `--mri` do; a dotted one
+            // in that dialect still goes there. The float suffixes
+            // (`.dc.s`, `.ds.x`) are left unknown, since no data directive
+            // here writes a float.
+            ".dc" | ".dc.b" | ".dc.w" | ".dc.l" => {
+                let w = motorola_width(&text);
+                self.dir_data(&mut cur, w, span, w > 1, &text)
+            }
+            ".ds" | ".ds.b" | ".ds.w" | ".ds.l" => {
+                self.alias_space(&mut cur, motorola_width(&text), span);
+                true
+            }
+            ".dcb" | ".dcb.b" | ".dcb.w" | ".dcb.l" => {
+                self.alias_fill(&mut cur, motorola_width(&text), span);
+                true
+            }
             ".ascii" => self.dir_ascii(&mut cur, false, span),
             ".asciz" | ".string" | ".asciiz" => self.dir_ascii(&mut cur, true, span),
             ".sleb128" => self.dir_leb(&mut cur, true, span),
@@ -308,6 +340,25 @@ impl Assembler {
                     ),
                 )
                 .with_help("to define a symbol, write `.set name, value`"),
+            );
+            return;
+        }
+        // A GNU as directive in the first column of Motorola source is a
+        // label, so the word after it becomes the statement and the message
+        // names that word rather than the line. GNU as `--mri` and vasm read
+        // the same line the same way, so the cure is to indent it or to ask
+        // for GNU syntax, and saying so beats leaving the reader to guess.
+        if self.options.dialect == Dialect::Motorola
+            && let Some(crate::parser::LabelDef::Named(label, _)) = stmt.labels.first()
+            && let first = self.interner.get(*label).to_string()
+            && first.starts_with('.')
+        {
+            self.diags.emit(
+                crate::diag::Diagnostic::error(span, format!("unknown directive `{text}`"))
+                    .with_help(format!(
+                        "`{first}` in the first column is a label in Motorola syntax; \
+                         indent it, or assemble with `-d gas`"
+                    )),
             );
             return;
         }
@@ -987,12 +1038,9 @@ impl Assembler {
         for sym in self.target().section_symbols(&text) {
             self.refer_to_symbol(sym, tok.span);
         }
-        let mut kind = if text.starts_with(".bss") || builtin_section(&text, ".tbss") {
-            SectionKind::Nobits
-        } else {
-            SectionKind::Progbits
-        };
-        let mut flags = default_flags_for(&text);
+        let builtin = builtin_section_kind(&text);
+        let (mut kind, mut flags) =
+            builtin.unwrap_or((SectionKind::Progbits, SectionFlags::default()));
         // `SHF_TLS` is ELF's alone, so a COFF or Mach-O section that happens
         // to be called `.tdata` is an ordinary one there.
         flags.tls &= self.options.format == crate::output::Format::Elf;
@@ -1030,9 +1078,21 @@ impl Assembler {
             return true;
         }
 
+        // GNU as opens `.text`, `.data` and `.bss` before it reads a line, so
+        // `.section` naming one of them describes a section that already
+        // exists, and the description is ignored as it is for any section
+        // named twice: `.section .data,"awT"` leaves `.data` the ordinary
+        // data section rather than making it thread-local.
+        let standing = matches!(text.as_str(), ".text" | ".data" | ".bss");
         if cur.eat_punct(Punct::Comma).is_some() {
             if let Some(s) = self.expect_string(cur, "of section flags") {
-                flags = parse_flags(&String::from_utf8_lossy(&s));
+                let written = parse_flags(&String::from_utf8_lossy(&s));
+                flags = match builtin {
+                    Some((_, b)) if !standing => builtin_section_flags(b, written),
+                    Some(_) => flags,
+                    None => written,
+                };
+                flags.tls &= self.options.format == crate::output::Format::Elf;
             }
             // `,@progbits` or `,%progbits`
             if cur.eat_punct(Punct::Comma).is_some() {
@@ -1044,7 +1104,9 @@ impl Assembler {
                 // holds bits.
                 if let TokKind::Int(_) = cur.peek().kind {
                     cur.advance();
-                } else if let Some((tn, _)) = self.expect_name(cur) {
+                } else if let Some((tn, _)) = self.expect_name(cur)
+                    && !standing
+                {
                     let t = self.interner.get(tn).to_ascii_lowercase();
                     kind = match t.as_str() {
                         "nobits" => SectionKind::Nobits,
@@ -1054,6 +1116,7 @@ impl Assembler {
                 }
                 if cur.eat_punct(Punct::Comma).is_some()
                     && let Some(e) = self.parse_expr(cur)
+                    && !standing
                 {
                     entsize = self
                         .eval_absolute(e, "section entry size")
@@ -1679,23 +1742,66 @@ fn builtin_section(name: &str, base: &str) -> bool {
     name == base || name.strip_prefix(base).is_some_and(|r| r.starts_with('.'))
 }
 
-fn default_flags_for(name: &str) -> SectionFlags {
-    if name.starts_with(".text") || name == ".init" || name == ".fini" {
-        SectionFlags::text()
-    } else if name.starts_with(".rodata") {
-        SectionFlags::rodata()
+/// What a section holds and how it is mapped, by name alone, for the names
+/// GNU as knows; `None` for a name the source invented, which starts with
+/// nothing.
+fn builtin_section_kind(name: &str) -> Option<(SectionKind, SectionFlags)> {
     // A thread-local section is written data that the linker copies into
     // each thread's block rather than mapping, so it carries `SHF_TLS` on
     // top of what `.data` and `.bss` carry.
-    } else if builtin_section(name, ".tdata") || builtin_section(name, ".tbss") {
-        SectionFlags {
-            tls: true,
-            ..SectionFlags::data()
+    let tls = SectionFlags {
+        tls: true,
+        ..SectionFlags::data()
+    };
+    Some(match name {
+        _ if builtin_section(name, ".text") || name == ".init" || name == ".fini" => {
+            (SectionKind::Progbits, SectionFlags::text())
         }
-    } else if name.starts_with(".data") || name.starts_with(".bss") {
-        SectionFlags::data()
+        _ if builtin_section(name, ".rodata") || name == ".rodata1" => {
+            (SectionKind::Progbits, SectionFlags::rodata())
+        }
+        _ if builtin_section(name, ".tdata") => (SectionKind::Progbits, tls),
+        _ if builtin_section(name, ".tbss") => (SectionKind::Nobits, tls),
+        _ if builtin_section(name, ".data") || name == ".data1" => {
+            (SectionKind::Progbits, SectionFlags::data())
+        }
+        _ if builtin_section(name, ".bss") => (SectionKind::Nobits, SectionFlags::data()),
+        _ => return None,
+    })
+}
+
+/// The flags a built-in section gets when `.section` writes some of its own.
+///
+/// GNU as adds the name's own flags to what was written where the two agree,
+/// so `.section .text.hot,"a"` is still executable and
+/// `.section .rodata.str1.1,"aMS"` is still read-only; where they do not, it
+/// warns and takes what was written, so `.section .init,"aw"` is a writable
+/// section that nothing executes. `M` and `S` describe the contents rather
+/// than the mapping and never count as a disagreement, nor do the flags
+/// rsasm has no bit for (`G`, `R` and `e`).
+fn builtin_section_flags(builtin: SectionFlags, written: SectionFlags) -> SectionFlags {
+    let disagrees = (written.alloc && !builtin.alloc)
+        || (written.write && !builtin.write)
+        || (written.exec && !builtin.exec)
+        || (written.tls && !builtin.tls);
+    if disagrees {
+        written
     } else {
-        SectionFlags::default()
+        SectionFlags {
+            merge: written.merge,
+            strings: written.strings,
+            group: written.group,
+            ..builtin
+        }
+    }
+}
+
+/// The width a `.dc`, `.dcb` or `.ds` suffix names, a word where it has none.
+fn motorola_width(directive: &str) -> u8 {
+    match directive.rsplit_once('.') {
+        Some((_, "b")) => 1,
+        Some((_, "l")) => 4,
+        _ => 2,
     }
 }
 

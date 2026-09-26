@@ -57,13 +57,13 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17091 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21814 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21821 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3190 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 567 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 848 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 340 |
-| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3747 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3755 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 531 |
@@ -335,15 +335,17 @@ form by form and in random whole programs as well.
   accepted
 - thread-local storage on the other targets: the symbols and sections are
   right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
-  MIPS, RISC-V, SPARC and SuperH read the access-model operands; m68k refuses
-  its `@TLSGD`, `@TLSLDM`, `@TLSLDO`, `@TLSIE` and `@TLSLE` rather than
-  assemble them as something else. SPARC's data operators — `%r_disp32()`,
-  `%r_plt32()` and the thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`,
-  which GNU as reads in `.word` and `.xword` — are not there either; llvm-mc,
-  which is what the SPARC harnesses compare against, has none of them.
-  Mach-O's `@TLVP` and PE's thread-local sections are their formats' own idea
-  of the same thing, and are not there either, so an AArch64 thread-local
-  operator in either format is refused as llvm-mc refuses it
+  MIPS, RISC-V, SPARC and SuperH read the access-model operands; m68k is the
+  one left, and there a thread-local `@` suffix on an instruction operand
+  (`move.l x@TLSGD(%a0),%d0`) is dropped and the plain `R_68K_32` written
+  where GNU as writes `R_68K_TLS_GD32`; in a data directive it is refused, as
+  it should be. SPARC's data operators — `%r_disp32()`, `%r_plt32()` and the
+  thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`, which GNU as reads in
+  `.word` and `.xword` — are not there either; llvm-mc, which is what the
+  SPARC harnesses compare against, has none of them. Mach-O's `@TLVP` and PE's
+  thread-local sections are their formats' own idea of the same thing, and
+  are not there either, so an AArch64 thread-local operator in either format
+  is refused as llvm-mc refuses it
 - MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
   writes and llvm-mc, the reference here, does not; the `.module` options
   that would change which instructions are accepted (the ISA names, the
@@ -560,11 +562,19 @@ $ rsasm -a m68k -f bin --hex intena.s
 ```
 
 Motorola covers vasm, Devpac and ASM-One source and was checked against both
-vasm and GNU as `--mri`. Three rules in it catch people out:
+vasm and GNU as `--mri`. Four rules in it catch people out:
 
 - **A word in the first column is a label**, with or without a colon, so
   instructions have to be indented. `rts` written in column 0 assembles to no
-  code at all — in both reference assemblers, not just here.
+  code at all — in both reference assemblers, not just here — and so does a
+  dotted directive: `.section` in column 0 is a label, and the word after it
+  is what the line is read as.
+- **`.section` is GNU as's directive, `section` the Motorola one.** Neither
+  reference reads a dotted directive at all, so the dot can only be GNU as's
+  spelling: `section name[,type]` names a code, data or bss section, and
+  `.section .tbss,"awT",@nobits` takes GNU as's flag string and type. A `#`
+  where a line begins is a comment, as `*` is, which is what GNU as `--mri`
+  reads; vasm calls it an error.
 - **Word and long data, and instructions, are aligned to an even address.**
   vasm on its own defaults leaves a `dc.w` after a `dc.b` at an odd address;
   Devpac, GNU as and vasm's `-devpac` mode align it, and a 68000 faults on the
@@ -1029,7 +1039,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,660 of 8,660 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 39,023 of 39,023 match across twenty-one target variants. For RISC-V
+  supports. 39,024 of 39,024 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -1045,7 +1055,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,598 of 25,598 match across fifty-seven
+  from checksum-pinned sources. 25,612 of 25,612 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the

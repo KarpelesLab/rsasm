@@ -721,6 +721,95 @@ fn movw_groups_of_a_constant_are_taken_here() {
     assert!(relocs(src).is_empty());
 }
 
+/// `ldrsw` and `prfm` share the literal-load encoding with `ldr`, so both
+/// read a label or an offset from a literal field; `prfm` puts its hint where
+/// the others put a register.
+#[test]
+fn ldrsw_and_prfm_load_from_a_literal() {
+    let src = "f:\n ldrsw x0, lbl\n prfm pldl1keep, lbl\n prfm pstl2strm, lbl\n \
+               prfm 3, lbl\n ldrsw x1, 8\n prfm pldl1keep, -4\nlbl: .word 0\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "c0 00 00 98 a0 00 00 d8 93 00 00 d8 63 00 00 d8 \
+         41 00 00 98 e0 ff ff d8 00 00 00 00"
+    );
+    assert!(relocs(src).is_empty());
+    rejects(
+        "ldrsw w0, lbl\nlbl: .word 0\n",
+        &["`ldrsw` writes a 64-bit register"],
+    );
+}
+
+/// `:got:` names the symbol's GOT slot in a literal field, whatever reads it.
+/// GNU as reads the target of `cbz`, `cbnz`, `tbz` and `tbnz` with the same
+/// parser, so those take it too and get the load's relocation; llvm-mc writes
+/// their own there.
+#[test]
+fn got_in_a_literal_field() {
+    let src = "f:\n ldr x0, :got:var\n ldr w1, :got:var\n ldrsw x2, :got:var\n \
+               prfm pldl1keep, :got:var\n cbz x3, :got:var\n tbnz w4, 5, :got:var\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "00 00 00 58 01 00 00 18 02 00 00 98 00 00 00 d8 03 00 00 b4 04 00 28 37"
+    );
+    assert_eq!(relocs(src), [309; 6]); // GOT_LD_PREL19
+    // A number under it is the offset the instruction would take without it.
+    assert_eq!(
+        hex(&text_for(ARCH, "f:\n ldr x0, :got:8\n cbz x1, :got:-4\n")),
+        "40 00 00 58 e1 ff ff b4"
+    );
+}
+
+/// A GOT slot is 64 bits wide, but both references write its relocation for
+/// whatever reads part of it, as they do for `:gottprel_lo12:`.
+#[test]
+fn got_lo12_takes_an_access_of_any_width() {
+    let src = "f:\n ldr x0, [x0, :got_lo12:var]\n ldr w1, [x0, :got_lo12:var]\n \
+               ldrb w2, [x0, :got_lo12:var]\n ldr q3, [x0, :got_lo12:var]\n \
+               str x4, [x0, :got_lo12:var]\n prfm pldl1keep, [x0, :got_lo12:var]\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "00 00 40 f9 01 00 40 b9 02 00 40 39 03 00 c0 3d 04 00 00 f9 00 00 80 f9"
+    );
+    assert_eq!(relocs(src), [312; 6]); // LD64_GOT_LO12_NC
+}
+
+/// GNU as folds the difference of two labels as it reads the line, so what a
+/// PC-relative field holds is the number it comes to, taken as the offset a
+/// number written there would be. An expression no relocation could carry
+/// assembles once it is folded.
+#[test]
+fn a_difference_of_two_labels_is_a_pc_relative_offset() {
+    let src = "a: nop\nb: nop\n adr x0, b - a\n adr x1, (b - a) * 2\n adr x2, -(b - a)\n \
+               b b - a\n bl b - a\n b.eq b - a\n cbz x3, b - a\n tbz x4, 1, b - a\n \
+               ldr x5, b - a\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "1f 20 03 d5 1f 20 03 d5 20 00 00 10 41 00 00 10 e2 ff ff 10 01 00 00 14 \
+         01 00 00 94 20 00 00 54 23 00 00 b4 24 00 08 36 25 00 00 58"
+    );
+    assert!(relocs(src).is_empty());
+}
+
+/// A difference GNU as cannot fold until the sections are sized is an address
+/// by then, and is relocated against no symbol; one whose subtrahend is in the
+/// field's own section is the minuend, PC-relative, with the distance from the
+/// field as the addend. One with the subtrahend elsewhere has neither form.
+#[test]
+fn a_difference_the_assembler_cannot_fold_is_relocated() {
+    let src = " adr x0, b - a\n adr x1, c - a\na: nop\nb: nop\n \
+               .section .other,\"ax\",@progbits\nc: nop\n";
+    assert_eq!(
+        hex(&text_for(ARCH, src)),
+        "00 00 00 10 01 00 00 10 1f 20 03 d5 1f 20 03 d5"
+    );
+    assert_eq!(relocs(src), [274, 274]); // ADR_PREL_LO21
+    rejects(
+        "a: nop\n adr x0, a - c\n .section .other,\"ax\",@progbits\nc: nop\n",
+        &["difference of two symbols in different sections"],
+    );
+}
+
 #[test]
 fn elf_machine_and_data_relocations() {
     let a = rsasm::arch::lookup(ARCH).expect("backend present");

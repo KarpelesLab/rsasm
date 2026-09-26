@@ -84,9 +84,27 @@ data: .word 1,2,3
  movew %d0,%d1
 === comments and statement separators
 # a hash comment in the first column
+* a star comment in the first column
+   * a star comment after the whitespace that starts a line
  movew #1,%d0 | a trailing comment
  movew #2,%d1 ; movew #3,%d2
  /* a block comment */ nop
+=== the Motorola data directives in GNU syntax
+ .dc.b 1,2
+ .dc.w 0x0304
+ .dc.l 0x05060708
+ .dc 0x090a
+ .dcb.b 3,0x11
+ .even
+ .dcb.w 2,0x1213
+ .dcb.l 1,0x14151617
+ .dcb 2,0x1819
+ .ds.b 3
+ .ds.w 1
+ .ds.l 1
+ .ds 1
+ .even
+ rts
 === a function with a frame
 f: linkw %fp,#-8
  moveml %d2-%d3/%a2,%sp@-
