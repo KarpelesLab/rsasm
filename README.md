@@ -318,7 +318,11 @@ form by form and in random whole programs as well.
   right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
   MIPS and SuperH read the access-model operands; the rest refuse theirs
   (RISC-V's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives)
-  rather than assemble them as something else. Mach-O's `@TLVP` and PE's
+  rather than assemble them as something else — except on m68k, where a
+  thread-local `@` suffix on an instruction operand (`move.l x@TLSGD(%a0),%d0`)
+  is dropped and the plain `R_68K_32` written where GNU as writes
+  `R_68K_TLS_GD32`; in a data directive it is refused, as it should be.
+  Mach-O's `@TLVP` and PE's
   thread-local sections are their formats' own idea of the same thing, and
   are not there either, so an AArch64 thread-local operator in either format
   is refused as llvm-mc refuses it
