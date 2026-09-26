@@ -44,8 +44,8 @@
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
 #   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
 #   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64, i386, AArch64 and PowerPC rows, where the linker turns
-#   each of them into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`,
+#   in the x86-64, i386, AArch64, PowerPC and RISC-V rows, where the linker
+#   turns each of them into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`,
 #   `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
 #   `@TLSDESC`/`@TLSCALL`; AArch64's `:tlsgd:`, `:tlsldm:` with the
 #   `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
@@ -58,7 +58,14 @@
 #   made of those. They are in the ARM and Thumb rows too: `(TLSGD)`,
 #   `(TLSLDM)` and `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's
 #   `(TLSDESC)` with the `(tlscall)` branch and the `.tlsdescseq` marks,
-#   which GNU ld rewrites into initial-exec loads.
+#   which GNU ld rewrites into initial-exec loads. And RISC-V's `%tprel_hi`,
+#   `%tprel_lo` and the `%tprel_add` mark, `%tls_ie_pcrel_hi` and
+#   `%tls_gd_pcrel_hi` with the `%pcrel_lo` that completes each, and the
+#   `la.tls.ie` and `la.tls.gd` those two expand from. RISC-V's descriptor
+#   operators are not linked: GNU as spells the call through a descriptor
+#   `jalr rd, rs1, %tlsdesc_call(label)` and llvm-mc, which is this row's
+#   reference assembler, `jalr rd, 0(rs1), %tlsdesc_call(label)` and refuses
+#   the other, so no object here can hold a whole sequence.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot
@@ -87,7 +94,12 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # `.text` differently for that reason alone.
 #
 # RISC-V is linked both ways: without relaxation, and with it, which is
-# where a `call` pair that is really one instruction gets shortened.
+# where a `call` pair that is really one instruction gets shortened. Its
+# reference is asked for `.riscv.attributes` (`-riscv-add-build-attributes`),
+# which rsasm writes into every object and llvm-mc only on request: the
+# section is not part of the image, but it takes up room in front of the
+# `.got` that the script's catch-all puts it in, and would move every GOT
+# slot a thread-local sequence reads.
 #
 # There is no MIPS64 row: the MIPS GNU ld among the oracles emulates only
 # o32. There is no Z80 row: rsasm writes no ELF for the 8-bit targets.
@@ -104,8 +116,8 @@ i386|i386|i386|x86_64-elf-as|--32|x86_64-elf-ld|-m elf_i386|0x8048000|
 aarch64|aarch64|aarch64|aarch64-elf-as||aarch64-elf-ld||0x400000|
 arm|arm|arm|arm-none-eabi-as|-march=armv7-a|arm-none-eabi-ld||0x8000|
 thumb|thumb|thumb|arm-none-eabi-as|-march=armv7-a -mthumb|arm-none-eabi-ld||0x8000|
-riscv32|riscv|riscv32|mc:riscv32|-mattr=+m,+a,+f,+d,+c|riscv64-elf-ld|-m elf32lriscv --no-relax|0x10000|-m elf32lriscv --relax
-riscv64|riscv|riscv64|mc:riscv64|-mattr=+m,+a,+f,+d,+c|riscv64-elf-ld|-m elf64lriscv --no-relax|0x10000|-m elf64lriscv --relax
+riscv32|riscv|riscv32|mc:riscv32|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes|riscv64-elf-ld|-m elf32lriscv --no-relax|0x10000|-m elf32lriscv --relax
+riscv64|riscv|riscv64|mc:riscv64|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes|riscv64-elf-ld|-m elf64lriscv --no-relax|0x10000|-m elf64lriscv --relax
 powerpc|powerpc|powerpc|mc:powerpc||powerpc64-linux-gnu-ld|-m elf32ppc|0x10000000|
 powerpc64|powerpc64|powerpc64|mc:powerpc64||powerpc64-linux-gnu-ld|-m elf64ppc --no-toc-optimize|0x10000000|
 powerpc64le|powerpc64|powerpc64le|mc:powerpc64le||powerpc64-linux-gnu-ld|-m elf64lppc --no-toc-optimize|0x10000000|

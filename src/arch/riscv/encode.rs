@@ -8,6 +8,7 @@
 
 use super::reloc;
 use crate::expr::ExprRef;
+use crate::reloc::RelocClass;
 use crate::section::{Fixup, FixupKind, LinkValue, RelocSymbol, Variant};
 use crate::source::Span;
 
@@ -216,9 +217,94 @@ pub fn kind_got_hi20() -> FixupKind {
         .linker_only()
 }
 
-/// The load from the GOT slot that [`kind_got_hi20`] addressed.
+/// The load from the GOT slot that [`kind_got_hi20`] addressed, and the
+/// second half of a thread-local pair, which reaches a slot the linker lays
+/// out in the same way.
 pub fn kind_got_lo12() -> FixupKind {
     kind_pair_lo12(false).linker_only()
+}
+
+// ---- thread-local access models -------------------------------------------
+
+/// The 20-bit half of a thread-local sequence: `%tprel_hi`, the `auipc` of
+/// `%tls_ie_pcrel_hi`, `%tls_gd_pcrel_hi` and `%tlsdesc_hi`.
+///
+/// Nothing here computes one. The value is an offset into a thread's block,
+/// or the address of a GOT slot or descriptor holding one, which only the
+/// linker lays out, and it may rewrite the whole sequence into another model;
+/// so even a variable defined in this file is relocated. The relocation names
+/// the variable, which the core does for a thread-local target of its own
+/// accord.
+pub fn kind_tls_hi20(reloc: u32) -> FixupKind {
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .with_class(RelocClass::ThreadLocal)
+        .scatter(hi20)
+        .linker_only()
+}
+
+/// `%tprel_lo(sym)`, the low twelve bits of the same offset, in an I- or
+/// S-type field.
+pub fn kind_tprel_lo12(store: bool) -> FixupKind {
+    let (reloc, f): (u32, fn(u64, i64) -> u64) = if store {
+        (reloc::TPREL_LO12_S, lo12_s)
+    } else {
+        (reloc::TPREL_LO12_I, lo12_i)
+    };
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .with_class(RelocClass::ThreadLocal)
+        .scatter(f)
+        .linker_only()
+}
+
+/// `add rd, rs1, tp, %tprel_add(sym)`: the mark that tells the linker which
+/// add of the thread pointer belongs to a local-exec sequence, so that it can
+/// delete the whole sequence when it relaxes one.
+///
+/// The instruction has no field for it, and the relocation covers the four
+/// bytes of the `add` without changing them. It still names the variable
+/// rather than a label, and GNU as refuses one that is not thread-local, so
+/// the width is the instruction's rather than zero: a fixup of no width is a
+/// mark that makes no claim about what it names.
+pub fn kind_tprel_add() -> FixupKind {
+    FixupKind::data(4)
+        .with_reloc(reloc::TPREL_ADD)
+        .with_class(RelocClass::ThreadLocal)
+        .scatter(keep_word)
+        .linker_only()
+}
+
+/// `%tlsdesc_load_lo(label)` and `%tlsdesc_add_lo(label)`, the twelve-bit
+/// halves of a descriptor sequence.
+///
+/// Like `%pcrel_lo`, each names the label on the `auipc` that carries
+/// `%tlsdesc_hi`, which the linker looks up to find the descriptor; the
+/// variable itself is named only by that `auipc`. Naming a label rather than
+/// a variable is why the class is the plain one: a thread-local field is one
+/// the core checks names a thread-local variable, and GNU as makes no such
+/// check here.
+pub fn kind_tlsdesc_lo12(reloc: u32) -> FixupKind {
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .scatter(lo12_i)
+        .with_reloc_symbol(RelocSymbol::Symbol)
+        .linker_only()
+}
+
+/// `jalr rd, rs1, %tlsdesc_call(label)`, which marks the call through the
+/// descriptor. The instruction has no field for it, so the mark covers no
+/// bytes; it names the `auipc`'s label like the two above.
+pub fn kind_tlsdesc_call() -> FixupKind {
+    FixupKind::data(0)
+        .with_reloc(reloc::TLSDESC_CALL)
+        .with_class(RelocClass::ThreadLocal)
+        .with_reloc_symbol(RelocSymbol::Symbol)
+        .linker_only()
+}
+
+fn keep_word(w: u64, _: i64) -> u64 {
+    w
 }
 
 /// `%lo(sym)`, which takes the low 12 bits of an absolute address and so has

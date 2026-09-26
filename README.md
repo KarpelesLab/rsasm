@@ -59,7 +59,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17091 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21814 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3190 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 541 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 567 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 802 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 310 |
@@ -136,9 +136,17 @@ form by form and in random whole programs as well.
   pointer-sized data word; and the markers that cover no field, `add rD, rA,
   sym@tls` (and `@tls@pcrel`) on the instructions that take it and the
   `(sym@tlsgd)` or `(sym@tlsld)` argument of `bl __tls_get_addr`, which comes
-  out as a relocation ahead of the call's own. On every target a
-  thread-local model on a symbol defined outside a thread-local section is
-  refused, as GNU as refuses it
+  out as a relocation ahead of the call's own. RISC-V has the four models the
+  psABI names, in RV32 and RV64: local exec (`%tprel_hi`, `%tprel_lo` and the
+  `%tprel_add` that marks the `add` of the thread pointer), initial exec
+  (`%tls_ie_pcrel_hi`), general dynamic (`%tls_gd_pcrel_hi`) and descriptors
+  (`%tlsdesc_hi`, `%tlsdesc_load_lo`, `%tlsdesc_add_lo` and the
+  `%tlsdesc_call` mark on the `jalr`), each `auipc` form completed by the
+  same `%pcrel_lo(label)` an ordinary PC-relative pair takes, with
+  `la.tls.ie` and `la.tls.gd` expanding to such a pair; there is no
+  thread-local modifier in a RISC-V data word, since GNU as has none. On
+  every target a thread-local model on a symbol defined outside a
+  thread-local section is refused, as GNU as refuses it
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -302,17 +310,16 @@ form by form and in random whole programs as well.
   relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
 - RISC-V: linker relaxation (`.option relax` is accepted, but objects come out
   as llvm-mc writes them without it, with no `R_RISCV_RELAX` or
-  `R_RISCV_ALIGN`), and the TLS forms `la.tls.ie`, `la.tls.gd` and the
-  `%tls_*` and `%got_pcrel_hi` modifiers; `.attribute arch` writes the ISA
-  string as the source gave it, where GNU as reads it and writes back what it
+  `R_RISCV_ALIGN`), and the `%got_pcrel_hi` modifier; `.attribute arch` writes
+  the ISA string as the source gave it, where GNU as reads it and writes back what it
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
 - thread-local storage on the other targets: the symbols and sections are
-  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC
-  and SuperH read the access-model operands; the rest refuse theirs (RISC-V's
-  `%tprel_hi`, MIPS's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives)
-  rather than assemble them as something else. Mach-O's `@TLVP` and PE's
+  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
+  RISC-V and SuperH read the access-model operands; the rest refuse theirs
+  (MIPS's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives) rather than
+  assemble them as something else. Mach-O's `@TLVP` and PE's
   thread-local sections are their formats' own idea of the same thing, and
   are not there either, so an AArch64 thread-local operator in either format
   is refused as llvm-mc refuses it
@@ -992,7 +999,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,660 of 8,660 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,921 of 38,921 match across twenty-one target variants. For RISC-V
+  supports. 38,947 of 38,947 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -1029,9 +1036,9 @@ is what hid them from rsasm for as long as it did.
   `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
-  the x86, AArch64 and PowerPC thread-local access models, which the linker
-  turns into local exec, ARM's and Thumb's, whose descriptor calls it turns
-  into initial exec, weak definitions a second object overrides, `.comm`
+  the x86, AArch64, PowerPC and RISC-V thread-local access models, which the
+  linker turns into local exec, ARM's and Thumb's, whose descriptor calls it
+  turns into initial exec, weak definitions a second object overrides, `.comm`
   symbols merged between objects with different sizes, `.bss`, and
   references into another object's sections. The targets whose linker
   relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked
@@ -1039,7 +1046,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 274 of 274 match across
+  addend a COFF relocation keeps in its field. 278 of 278 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global

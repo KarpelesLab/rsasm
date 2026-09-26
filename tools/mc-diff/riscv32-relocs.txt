@@ -249,3 +249,49 @@ f:      nop
         .globl  gonly
         .type   .Ltyped, %function
         .hidden .Lhid
+
+=== thread-local access models
+# The same relocations as on RV64, in 32-bit fields; see the RV64 corpus for
+# what is left out of this one and why. What differs is the load in an
+# initial-exec pair, which reads a 32-bit slot.
+        .section .tdata,"awT",@progbits
+        .p2align 2
+tv:     .word   0
+        .globl  tg
+tg:     .word   0
+        .section .tbss,"awT",@nobits
+tb:     .space  4
+        .text
+        .globl  f
+f:
+        lui     a0, %tprel_hi(tv)
+        add     a0, a0, tp, %tprel_add(tv)
+        addi    a0, a0, %tprel_lo(tv)
+        lui     a1, %tprel_hi(tg+4)
+        add     a1, a1, tp, %tprel_add(tg+4)
+        lw      a2, %tprel_lo(tg+4)(a1)
+        sw      a2, %tprel_lo(tg+4)(a1)
+        lui     a3, %tprel_hi(ext)
+        add     a3, a3, tp, %tprel_add(ext)
+        addi    a3, a3, %tprel_lo(ext)
+        lui     a4, %tprel_hi(tb)
+        addi    a4, a4, %tprel_lo(tb)
+ie:     auipc   a5, %tls_ie_pcrel_hi(tv)
+        lw      a5, %pcrel_lo(ie)(a5)
+gd:     auipc   a6, %tls_gd_pcrel_hi(ext)
+        addi    a6, a6, %pcrel_lo(gd)
+de:     auipc   a7, %tlsdesc_hi(tg)
+        lw      t1, %tlsdesc_load_lo(de)(a7)
+        addi    a7, a7, %tlsdesc_add_lo(de)
+
+=== la.tls.ie and la.tls.gd expand to an auipc pair
+        .section .tdata,"awT",@progbits
+tv:     .word   0
+        .text
+        la.tls.ie a0, tv
+        la.tls.gd a1, tv
+        la.tls.ie a2, ext
+        la.tls.gd a3, ext+4
+        .option norelax
+        la.tls.ie a4, tv
+        la.tls.gd a5, tv

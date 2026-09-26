@@ -423,6 +423,16 @@ const GOT_HI20: u32 = 20;
 const PCREL_HI20: u32 = 23;
 const PCREL_LO12_I: u32 = 24;
 const PCREL_LO12_S: u32 = 25;
+const TLS_GOT_HI20: u32 = 21;
+const TLS_GD_HI20: u32 = 22;
+const TPREL_HI20: u32 = 29;
+const TPREL_LO12_I: u32 = 30;
+const TPREL_LO12_S: u32 = 31;
+const TPREL_ADD: u32 = 32;
+const TLSDESC_HI20: u32 = 62;
+const TLSDESC_LOAD_LO12: u32 = 63;
+const TLSDESC_ADD_LO12: u32 = 64;
+const TLSDESC_CALL: u32 = 65;
 
 /// Both halves of each pair are relocated, and the low half names a label at
 /// its `auipc`, as the psABI requires: lld looks the `auipc` up by that
@@ -514,6 +524,146 @@ fn pair_labels_reach_the_symbol_table() {
     let asm = assemble_for("riscv64", "la a0, ext\n");
     let b = rsasm::output::elf::build(&asm).expect("ELF output");
     assert!(b.windows(7).any(|w| w == b".Ltmp0\0"));
+}
+
+/// The source every thread-local test below shares: a variable in `.tdata`,
+/// the four access models written out, and the two pseudo-instructions that
+/// expand to one of them.
+const TLS64: &str = "\
+        .section .tdata,\"awT\",@progbits\n\
+        .globl tv\n\
+tv:     .dword 0\n\
+        .text\n\
+        lui a0, %tprel_hi(tv)\n\
+        add a0, a0, tp, %tprel_add(tv)\n\
+        addi a0, a0, %tprel_lo(tv)\n\
+        sd a1, %tprel_lo(tv)(a0)\n\
+1:      auipc a2, %tls_ie_pcrel_hi(ext)\n\
+        ld a2, %pcrel_lo(1b)(a2)\n\
+2:      auipc a3, %tls_gd_pcrel_hi(ext)\n\
+        addi a3, a3, %pcrel_lo(2b)\n\
+3:      auipc a4, %tlsdesc_hi(ext)\n\
+        ld a5, %tlsdesc_load_lo(3b)(a4)\n\
+        addi a4, a4, %tlsdesc_add_lo(3b)\n\
+        jalr t0, a5, %tlsdesc_call(3b)\n\
+        la.tls.ie s1, tv\n\
+        la.tls.gd s2, ext\n";
+
+/// Every field a thread-local model covers is left to the linker, even for a
+/// variable defined here: the value is an offset into a thread's block, or
+/// the address of a slot or a descriptor the linker lays out, and the whole
+/// sequence may be rewritten into another model. The `add` of the thread
+/// pointer keeps its full width, though `add a0, a0, tp` on its own has a
+/// two-byte form, and the marks on it and on the `jalr` fill nothing in.
+///
+/// Bytes and relocations are `riscv64-elf-as -mno-relax`'s; llvm-mc writes
+/// the same for every form it takes (see tools/mc-diff/riscv64-relocs.txt).
+#[test]
+fn thread_local_access_models() {
+    enc64(
+        TLS64,
+        "37 05 00 00 33 05 45 00 13 05 05 00 23 30 b5 00 17 06 00 00 03 36 06 00 \
+         97 06 00 00 93 86 06 00 17 07 00 00 83 37 07 00 13 07 07 00 e7 82 07 00 \
+         97 04 00 00 83 b4 04 00 17 09 00 00 13 09 09 00",
+    );
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", TLS64)),
+        vec![
+            rel(0x00, TPREL_HI20, "tv", 0),
+            rel(0x04, TPREL_ADD, "tv", 0),
+            rel(0x08, TPREL_LO12_I, "tv", 0),
+            rel(0x0c, TPREL_LO12_S, "tv", 0),
+            rel(0x10, TLS_GOT_HI20, "ext", 0),
+            rel(0x14, PCREL_LO12_I, "@0x10", 0),
+            rel(0x18, TLS_GD_HI20, "ext", 0),
+            rel(0x1c, PCREL_LO12_I, "@0x18", 0),
+            // The three halves of a descriptor name the `auipc`'s label, as
+            // `%pcrel_lo` does; only the `auipc` names the variable.
+            rel(0x20, TLSDESC_HI20, "ext", 0),
+            rel(0x24, TLSDESC_LOAD_LO12, "@0x20", 0),
+            rel(0x28, TLSDESC_ADD_LO12, "@0x20", 0),
+            rel(0x2c, TLSDESC_CALL, "@0x20", 0),
+            rel(0x30, TLS_GOT_HI20, "tv", 0),
+            rel(0x34, PCREL_LO12_I, "@0x30", 0),
+            rel(0x38, TLS_GD_HI20, "ext", 0),
+            rel(0x3c, PCREL_LO12_I, "@0x38", 0),
+        ]
+    );
+}
+
+/// On RV32 an initial-exec pair reads a 32-bit slot, so `la.tls.ie` ends in
+/// `lw` rather than `ld`; nothing else about the models changes with the word
+/// size. `riscv64-elf-as -march=rv32gc -mno-relax`'s bytes and relocations.
+#[test]
+fn thread_local_models_on_rv32() {
+    let src = "\
+        .section .tdata,\"awT\",@progbits\n\
+        .globl tv\n\
+tv:     .word 0\n\
+        .text\n\
+        la.tls.ie a0, tv\n\
+        la.tls.gd a1, ext\n\
+        lui a2, %tprel_hi(tv)\n\
+        add a2, a2, tp, %tprel_add(tv)\n\
+        lw a3, %tprel_lo(tv)(a2)\n";
+    enc32(
+        src,
+        "17 05 00 00 03 25 05 00 97 05 00 00 93 85 05 00 37 06 00 00 33 06 46 00 \
+         83 26 06 00",
+    );
+    assert_eq!(
+        relocs_of(&assemble_for("riscv32", src)),
+        vec![
+            rel(0x00, TLS_GOT_HI20, "tv", 0),
+            rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            rel(0x08, TLS_GD_HI20, "ext", 0),
+            rel(0x0c, PCREL_LO12_I, "@0x8", 0),
+            rel(0x10, TPREL_HI20, "tv", 0),
+            rel(0x14, TPREL_ADD, "tv", 0),
+            rel(0x18, TPREL_LO12_I, "tv", 0),
+        ]
+    );
+}
+
+/// What GNU as refuses, and rsasm with it: a model that names something no
+/// linker could give a thread-local offset, a mark written on an instruction
+/// that is not the one it marks, a descriptor half in a store, and an operand
+/// `la.tls.*` cannot take. A thread's block belongs to a runtime, so a flat
+/// binary has none of it either.
+#[test]
+fn thread_local_forms_that_are_refused() {
+    let head = ".section .tdata,\"awT\",@progbits\ntv: .dword 0\n.text\n";
+    let cases: &[(&str, &str)] = &[
+        ("lui a0, %tprel_hi(4)", "not a number"),
+        (
+            ".data\nd: .word 0\n.text\nlui a0, %tprel_hi(d)",
+            "outside a thread-local section",
+        ),
+        (
+            "f: nop\nlui a0, %tprel_hi(f)",
+            "outside a thread-local section",
+        ),
+        ("addi a0, a0, %tprel_add(tv)", "marks an `add`"),
+        ("1: addi a0, a0, %tlsdesc_call(1b)", "third operand"),
+        ("1: jalr a0, %tlsdesc_call(1b)", "third operand"),
+        (
+            "1: auipc a0, %tlsdesc_hi(tv)\nsd a1, %tlsdesc_load_lo(1b)(a0)",
+            "not a store",
+        ),
+        ("la.tls.ie a0, 4", "needs a symbol"),
+        ("la.tls.gd a0, %hi(tv)", "relocation modifier"),
+        ("addw a0, a0, tp, %tprel_add(tv)", "3 operand"),
+        (".dword tv@tprel", "tprel"),
+    ];
+    for (src, needle) in cases {
+        rejects("riscv64", &format!("{head}{src}\n"), needle);
+    }
+    let asm = assemble_flat_for("riscv64", &format!("{head}lui a0, %tprel_hi(tv)\n"), 0);
+    let e = asm.diags.render(&asm.sm, false);
+    assert!(
+        e.contains("linker"),
+        "a flat image has no thread block:\n{e}"
+    );
 }
 
 /// An address that is a plain number is loaded as `li` would load it, even
@@ -675,7 +825,10 @@ fn branches_out_of_range_are_reported() {
 
 #[test]
 fn operand_shape_errors() {
-    rejects("riscv64", "add a0, a1", "3 operand");
+    // `add` is the one R-type that takes a fourth operand, the `%tprel_add`
+    // mark, so its count is written as a choice.
+    rejects("riscv64", "add a0, a1", "3 or 4 operand");
+    rejects("riscv64", "sub a0, a1", "3 operand");
     rejects("riscv64", "add a0, a1, fa2", "integer register");
     rejects("riscv64", "fadd.s fa0, fa1, a2", "floating-point register");
     // `lw a0, a1` is not here: like llvm-mc, that loads from a symbol `a1`.
