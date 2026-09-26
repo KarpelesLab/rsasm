@@ -126,6 +126,76 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+# The thread-local access models. `%tle_hix22()` and its relatives are not
+# modifiers on a field: each names one step of one model, the relocation says
+# which step, and the field is left to the linker, the only thing that knows
+# where a variable sits in a thread's block and the only thing that may
+# rewrite the sequence into a cheaper model. Eight of them fill no field at
+# all -- `%tie_ld()`, `%tie_ldx()`, `%tie_add()`, the three `_add` marks and
+# the two `_call` marks -- and are written after the last operand, where they
+# become the instruction's own relocation. That is why the `call` a
+# `%tgd_call()` marks carries no `R_SPARC_WDISP30`: the mark takes its place,
+# and the linker works the displacement out from the name of the function the
+# sequence calls. Both references agree on every relocation below, and on
+# making each variable `STT_TLS`; they part over an undefined symbol that only
+# a `%tgd_call()` or `%tldm_call()` names, which GNU as makes thread-local and
+# llvm-mc leaves alone, so nothing here spells one.
+=== thread-local local exec and initial exec
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .long   0x11223344
+tloc:   .long   99
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .skip   8
+        .text
+        .globl  _start
+_start:
+        sethi   %tle_hix22(tv), %l1
+        xor     %l1, %tle_lox10(tv), %l1
+        add     %g7, %l1, %l1
+        sethi   %tle_hix22(tloc), %l2
+        xor     %l2, %tle_lox10(tloc), %l2
+        sethi   %tle_hix22(tb + 4), %l3
+        xor     %l3, %tle_lox10(tb + 4), %l3
+        sethi   %tie_hi22(tv), %l1
+        add     %l1, %tie_lo10(tv), %l1
+        ld      [%l7 + %l1], %l1, %tie_ld(tv)
+        add     %g7, %l1, %l1, %tie_add(tv)
+        sethi   %tie_hi22(tb), %l2
+        or      %l2, %tie_lo10(tb), %l2
+        ld      [%l7 + %l2], %l2, %tie_ld(tb)
+        add     %g7, %l2, %l2, %tie_add(tb)
+        retl
+        nop
+
+=== thread-local general dynamic and local dynamic
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .long   1
+tloc:   .long   2
+        .text
+        .globl  _start
+_start:
+        sethi   %tgd_hi22(tv), %l1
+        add     %l1, %tgd_lo10(tv), %l1
+        add     %l7, %l1, %o0, %tgd_add(tv)
+        call    __tls_get_addr, %tgd_call(tv)
+        nop
+        sethi   %tldm_hi22(tloc), %l1
+        add     %l1, %tldm_lo10(tloc), %l1
+        add     %l7, %l1, %o0, %tldm_add(tloc)
+        call    __tls_get_addr, %tldm_call(tloc)
+        nop
+        sethi   %tldo_hix22(tloc), %l2
+        xor     %l2, %tldo_lox10(tloc), %l2
+        add     %o0, %l2, %l2, %tldo_add(tloc)
+        sethi   %tldo_hix22(tv + 4), %l3
+        xor     %l3, %tldo_lox10(tv + 4), %l3
+        add     %o0, %l3, %l3, %tldo_add(tv + 4)
+        retl
+        nop
+
 # rsasm follows GNU as for common blocks, and so parts from llvm-mc on
 # what these leave out: a `.comm` that names no alignment, which GNU as
 # aligns by its size and llvm-mc to 1; what `.lcomm` reserves, which

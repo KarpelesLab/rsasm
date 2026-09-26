@@ -143,3 +143,70 @@ reader:
         or      %o0, %lo(bigger), %o0
         retl
         nop
+
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        ! General dynamic, %l7 holding the GOT pointer: the GOT offset in two
+        ! halves, the add that makes the argument, and the call the linker
+        ! turns into the local-exec addition once it finds the variable in the
+        ! executable. The mark on the call takes the place of its own
+        ! displacement, which is why nothing here relocates __tls_get_addr.
+        sethi   %tgd_hi22(tv), %l1
+        add     %l1, %tgd_lo10(tv), %l1
+        add     %l7, %l1, %o0, %tgd_add(tv)
+        call    __tls_get_addr, %tgd_call(tv)
+        nop
+        ! Local dynamic: one call for the module, then an offset per variable.
+        sethi   %tldm_hi22(tloc), %l1
+        add     %l1, %tldm_lo10(tloc), %l1
+        add     %l7, %l1, %o0, %tldm_add(tloc)
+        call    __tls_get_addr, %tldm_call(tloc)
+        nop
+        sethi   %tldo_hix22(tloc), %l2
+        xor     %l2, %tldo_lox10(tloc), %l2
+        add     %o0, %l2, %l2, %tldo_add(tloc)
+        sethi   %tldo_hix22(tv2), %l3
+        xor     %l3, %tldo_lox10(tv2), %l3
+        add     %o0, %l3, %l3, %tldo_add(tv2)
+        ! Initial exec: a GOT entry holding the offset, loaded and added to
+        ! the thread pointer, which is %g7.
+        sethi   %tie_hi22(tv2), %l1
+        add     %l1, %tie_lo10(tv2), %l1
+        ld      [%l7 + %l1], %l1, %tie_ld(tv2)
+        add     %g7, %l1, %l1, %tie_add(tv2)
+        sethi   %tie_hi22(tb), %l2
+        or      %l2, %tie_lo10(tb), %l2
+        ld      [%l7 + %l2], %l2, %tie_ld(tb)
+        add     %g7, %l2, %l2, %tie_add(tb)
+        ! Local exec, the model every other one is rewritten into here.
+        sethi   %tle_hix22(tv3), %l1
+        xor     %l1, %tle_lox10(tv3), %l1
+        add     %g7, %l1, %l1
+        sethi   %tle_hix22(tb + 4), %l2
+        xor     %l2, %tle_lox10(tb + 4), %l2
+        ld      [%g7 + %l2], %l2
+        retl
+        nop
+        .section .tdata,"awT",%progbits
+        .globl  tv
+tv:     .word   0x11223344
+tloc:   .word   99
+--- b.s
+        .section .tdata,"awT",%progbits
+        .globl  tv2, tv3
+tv2:    .word   2
+tv3:    .word   3
+        .section .tbss,"awT",%nobits
+        .globl  tb
+tb:     .skip   16
+        .text
+        .globl  helper
+helper:
+        sethi   %tle_hix22(tv), %l1
+        xor     %l1, %tle_lox10(tv), %l1
+        add     %g7, %l1, %l1
+        retl
+        nop
