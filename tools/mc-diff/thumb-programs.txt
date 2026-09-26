@@ -81,3 +81,27 @@ back:   .word   0x12345678
         .p2align 2, 0
 fwd:    bx      lr
         nop
+=== a coprocessor transfer that names its label
+        @ The PC is rounded down to a word, as it is for the loads above.
+back:   .word   0x12345678
+        vldr    s0, back
+        vldr    d1, back
+        ldc     p1, c2, back
+        stc     p1, c3, back
+        ldc2    p1, c4, back
+        nop
+        .p2align 2, 0
+        vldr    s5, fwd
+        nop
+        .p2align 2, 0
+fwd:    bx      lr
+        nop
+=== a coprocessor transfer of coprocessor 9
+        @ GNU as reads any pre-indexed T32 transfer of coprocessor 9 as the
+        @ half-precision `vldr`, whose offset counts halfwords, and writes
+        @ half the field the architecture asks for; llvm-mc counts words,
+        @ and so does rsasm. See the ARM backend's module documentation.
+back:   .word   0
+        ldc     p9, c1, back
+        ldc     p9, c1, [r0, #8]
+        stc2l   p9, c1, back

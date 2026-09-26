@@ -11,6 +11,16 @@
 //! sorted narrow Thumb first, then wide Thumb, then A32, and the first that
 //! fits wins — which is what picks a Thumb instruction's width, and what
 //! `.n` and `.w` narrow the choice of.
+//!
+//! A walk may also leave a fixup behind, so that an operand only layout can
+//! work out still reaches its field. One operand in the table needs that:
+//! the address of a coprocessor transfer, where `vldr sd, label`,
+//! `vstr sd, label`, `ldc p1, c2, label` and their relatives name a label
+//! instead of a base register. It is the only one GNU as reads as an
+//! address — `parse_address_main` makes a bare one PC-relative for the
+//! loads, the stores, the preloads and these, and for nothing else — so
+//! every other operand here is still read as the constant it is, which the
+//! walk needs while it is choosing a form.
 
 use super::insn::{AL, Width};
 use super::operand::{Index, MemOffset, Operand, OperandKind, Shift, ShiftAmt, VecKind, VecReg};
@@ -18,7 +28,9 @@ use super::reg::{self, Reg};
 use super::table::{self, Field, Form, Op, Set};
 use super::{Insn, THUMB_BITS};
 use crate::arch::AsmCtx;
-use crate::section::Variant;
+use crate::expr::ExprRef;
+use crate::section::{Fixup, FixupKind, LinkValue, Variant};
+use crate::source::Span;
 
 /// The forms of a mnemonic, following the spellings GNU as shares.
 pub fn forms(name: &str) -> Option<&'static [Form]> {
@@ -47,7 +59,7 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, at: u16) -> Option<Vec<Vari
             continue;
         }
         match encode(cx, ins, form, false) {
-            Ok(word) => return Some(emit(form, word)),
+            Ok((word, fixups)) => return Some(emit(form, word, fixups)),
             Err(used) => {
                 if best.is_none_or(|(_, n)| used > n) {
                     best = Some((form, used));
@@ -84,7 +96,7 @@ fn wanted(set: Set, thumb: bool, width: Width) -> bool {
     }
 }
 
-fn emit(form: &Form, word: u32) -> Vec<Variant> {
+fn emit(form: &Form, word: u32, fixups: Vec<Fixup>) -> Vec<Variant> {
     let bytes = match form.set {
         Set::T16 => (word as u16).to_le_bytes().to_vec(),
         // A 32-bit Thumb instruction is two little-endian halfwords, the
@@ -96,7 +108,7 @@ fn emit(form: &Form, word: u32) -> Vec<Variant> {
         }
         Set::Arm => word.to_le_bytes().to_vec(),
     };
-    vec![Variant::new(bytes)]
+    vec![Variant { bytes, fixups }]
 }
 
 /// Puts `value` into `field`, whose pieces run from the value's low bits up.
@@ -141,6 +153,10 @@ struct Walk<'a, 'b, 'c> {
     /// Whether a NEON form's registers are quadword, once one of them has
     /// said so.
     quad: Option<bool>,
+    /// What layout has to fill in once the addresses are known, which for
+    /// these forms is the offset of a coprocessor transfer that names a
+    /// label.
+    fixups: Vec<Fixup>,
     /// Whether to report the first thing that does not fit.
     report: bool,
     failed: bool,
@@ -336,7 +352,12 @@ impl Walk<'_, '_, '_> {
 
 /// Fits the written operands to `form`, returning the encoded word or how
 /// many of them were read before it stopped fitting.
-fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Result<u32, usize> {
+fn encode(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    form: &Form,
+    report: bool,
+) -> Result<(u32, Vec<Fixup>), usize> {
     let mut w = Walk {
         cx,
         ins,
@@ -346,6 +367,7 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
         implied: None,
         vec: None,
         quad: None,
+        fixups: Vec::new(),
         regs: form.regs,
         shift: None,
         lsb: 0,
@@ -397,7 +419,7 @@ fn encode(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, form: &Form, report: bool) -> Res
         Some(())
     })();
     match ok {
-        Some(()) => Ok(w.word),
+        Some(()) => Ok((w.word, w.fixups)),
         None => Err(w.at),
     }
 }
@@ -632,7 +654,7 @@ fn step(w: &mut Walk<'_, '_, '_>, form: &Form, op: Op) -> Option<()> {
         }
         Op::IdxMem(base, index, shift) => table_branch(w, base, index, shift)?,
         Op::OffMem(base, field, scale) => offset_mem(w, base, field, scale)?,
-        Op::CoprocMem => coproc_mem(w)?,
+        Op::CoprocMem => coproc_mem(w, form.set == Set::T32)?,
         Op::Vfp(kind, field) => {
             w.vec_register(kind, field)?;
         }
@@ -879,13 +901,54 @@ fn offset_mem(w: &mut Walk<'_, '_, '_>, base: u8, field: Field, scale: u8) -> Op
     Some(())
 }
 
+/// A coprocessor transfer that names a label: `vldr sd, label`,
+/// `ldc p1, c2, label` and the rest of the group.
+///
+/// GNU as's `parse_address_main` turns the bare address into `[pc, #label -
+/// PC]`, and `encode_arm_cp_address` then encodes it as any other
+/// PC-relative coprocessor transfer: P and U set, the PC as the base, and
+/// eight bits counting words, so the label is 1020 bytes away at most. That
+/// is the literal pool's own encoding, which [`super::vfp`] writes for
+/// `vldr sd, =value` and whose fields these share; in Thumb the PC is
+/// rounded down to a word first, as it is for every Thumb load.
+///
+/// Neither reference relocates the field, so what resolves is what GNU as
+/// resolves: a label in the fixup's own section, weak ones aside.
+fn pcrel_coproc(w: &mut Walk<'_, '_, '_>, thumb: bool, e: ExprRef, span: Span) -> Option<()> {
+    if let Some(msg) = super::encode::pcrel_number(w.cx, e) {
+        return w.fail(|| msg);
+    }
+    w.word |= (1 << 24) | (1 << 23) | (u32::from(reg::PC) << 16);
+    let kind = if thumb {
+        FixupKind::pcrel(4, 4)
+            .with_pc_align(4)
+            .scatter(super::vfp::scatter_thumb)
+    } else {
+        FixupKind::pcrel(4, 8).scatter(super::vfp::scatter_arm)
+    }
+    .with_field(0, 4)
+    .with_limits(-1020, 1020)
+    .link(LinkValue::Interwork(super::IW_STRONG_ONLY));
+    w.fixups.push(Fixup {
+        offset: 0,
+        expr: e,
+        kind,
+        span,
+    });
+    w.take();
+    Some(())
+}
+
 /// `ldc` and `stc`'s addressing: `[rn, #±imm8*4]` with or without writeback,
-/// `[rn], #±imm8*4`, and the unindexed `[rn], {imm8}` that hands the byte to
-/// the coprocessor.
-fn coproc_mem(w: &mut Walk<'_, '_, '_>) -> Option<()> {
+/// `[rn], #±imm8*4`, the unindexed `[rn], {imm8}` that hands the byte to
+/// the coprocessor, and a bare label.
+fn coproc_mem(w: &mut Walk<'_, '_, '_>, thumb: bool) -> Option<()> {
     let Some(op) = w.op().cloned() else {
         return w.fail(|| "expected a memory operand".into());
     };
+    if let OperandKind::Imm(e) = op.kind {
+        return pcrel_coproc(w, thumb, e, op.span);
+    }
     let OperandKind::Mem(mem) = op.kind else {
         let what = op.describe();
         return w.fail(|| format!("expected a memory operand, found {what}"));
@@ -1497,6 +1560,16 @@ fn vfp_mem(w: &mut Walk<'_, '_, '_>, thumb: bool) -> Option<()> {
     let Some(op) = w.op().cloned() else {
         return w.fail(|| "expected a memory operand".into());
     };
+    // `do_neon_ldr_str`: a store through the PC is deprecated in A32 and
+    // UNPREDICTABLE in T32, and a label is a PC-relative address however it
+    // was written.
+    let store_through_pc = thumb && w.word & (1 << 20) == 0;
+    if let OperandKind::Imm(e) = op.kind {
+        if store_through_pc {
+            return w.fail(|| "a store cannot address through `pc` here".into());
+        }
+        return pcrel_coproc(w, thumb, e, op.span);
+    }
     let OperandKind::Mem(mem) = op.kind else {
         let what = op.describe();
         return w.fail(|| format!("expected a memory operand, found {what}"));
@@ -1504,9 +1577,7 @@ fn vfp_mem(w: &mut Walk<'_, '_, '_>, thumb: bool) -> Option<()> {
     if mem.index != Index::Offset {
         return w.fail(|| "this instruction does not write its base register back".into());
     }
-    // `do_neon_ldr_str`: a store through the PC is deprecated in A32 and
-    // UNPREDICTABLE in T32.
-    if thumb && mem.base == reg::PC && w.word & (1 << 20) == 0 {
+    if store_through_pc && mem.base == reg::PC {
         return w.fail(|| "a store cannot address through `pc` here".into());
     }
     let off = match mem.offset {

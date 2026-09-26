@@ -7,10 +7,10 @@ are eight bytes wide), `.ltorg` and `.pool` at every point one can stand,
 data between and after the code, labels on it, `.arm`/`.thumb`/`.code 16`
 switches, `.thumb_func`, section and subsection switches, `.macro` and
 `.rept` bodies that load and flush, `adr`, `adrl`, the PC-relative loads
-that name a label instead of a pool entry, `it` blocks and branches
-that relax. It is assembled by `arm-none-eabi-as` with the flags
-`tools/xas-diff/run.sh` uses for its `arm` and `thumb` keys, and by rsasm,
-and the two objects are compared whole with `tools/mc-diff/canon.sh --full`:
+and coprocessor transfers that name a label instead of a pool entry, `it`
+blocks and branches that relax. It is assembled by `arm-none-eabi-as` with
+the flags `tools/xas-diff/run.sh` uses for its `arm` and `thumb` keys, and
+by rsasm, and the two objects are compared whole with `tools/mc-diff/canon.sh --full`:
 every allocated section's header and bytes, `e_flags`, every symbol -- the
 mapping symbols among them -- and every relocation.
 
@@ -355,6 +355,30 @@ class Program:
         self.used.append(v)
         return f"vldr{suffix} s{rng.randrange(32)}, ={v}"
 
+    def coproc_transfer(self, target, addend):
+        """`vldr sd, label` and `ldc p1, c2, label`, the coprocessor
+        transfers a bare address writes.
+
+        Their offset counts words in eight bits, so they reach a quarter of
+        what `ldr` does, and a label off a word boundary is refused rather
+        than widened. Only a Thumb `vstr` through the PC is refused outright;
+        `stc` takes one."""
+        rng = self.rng
+        r = rng.random()
+        if r < 0.35:
+            return f"vldr s{rng.randrange(32)}, {target}{addend}"
+        if r < 0.5:
+            return f"vldr d{rng.randrange(32)}, {target}{addend}"
+        if r < 0.6:
+            return f"vstr s{rng.randrange(32)}, {target}{addend}"
+        kind = rng.choice(["ldc", "ldcl", "ldc2", "ldc2l",
+                           "stc", "stcl", "stc2", "stc2l"])
+        # Not coprocessor 9: GNU as reads any pre-indexed T32 transfer of it
+        # as the half-precision `vldr`, whose offset counts halfwords, and
+        # halves the field. See the ARM backend's module documentation.
+        cp = rng.choice([n for n in range(16) if n != 9])
+        return f"{kind} p{cp}, c{rng.randrange(16)}, {target}{addend}"
+
     def pcrel_load(self, target):
         """`ldr rt, label`, the load a bare address writes.
 
@@ -365,6 +389,8 @@ class Program:
         state, so they are here to be refused as often as not."""
         rng = self.rng
         addend = rng.choice(["", "", "", "", " + 4", " - 4", " + 2"])
+        if rng.random() < 0.25:
+            return self.coproc_transfer(target, addend)
         r = rng.random()
         if r < 0.6:
             return f"ldr {self.reg()}, {target}{addend}"

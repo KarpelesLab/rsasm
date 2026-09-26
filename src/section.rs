@@ -222,6 +222,17 @@ pub struct FixupKind {
     pub object_reloc: bool,
     /// What the value is, beyond the target itself; see [`LinkValue`].
     pub link: LinkValue,
+    /// Resolve the expression with every symbol in it taken to be zero, so
+    /// that the field holds the addend alone, less the PC where the fixup is
+    /// PC-relative.
+    ///
+    /// That is what a REL relocation would have left behind, and GNU as's
+    /// ARM port writes it where it resolves a fixup it has no relocation for
+    /// against a symbol whose value it will not use: a Thumb `adr` of a weak
+    /// symbol keeps the addend and drops the symbol, which its own comment
+    /// calls "probably wrong due to symbol preemption". Nothing else wants
+    /// it.
+    pub without_symbol: bool,
     /// For a PC-relative field, the PC it is measured from, `here + adjust`,
     /// is first rounded down to a multiple of this. `1` means no rounding.
     ///
@@ -311,6 +322,7 @@ impl FixupKind {
             always_reloc: false,
             object_reloc: false,
             link: LinkValue::Plain,
+            without_symbol: false,
             pc_align: 1,
             relax_difference: false,
             accepts: None,
@@ -411,6 +423,13 @@ impl FixupKind {
     /// Sets what the value is computed as; see [`LinkValue`].
     pub fn link(mut self, link: LinkValue) -> FixupKind {
         self.link = link;
+        self
+    }
+
+    /// Leaves the target out of the value; see
+    /// [`FixupKind::without_symbol`].
+    pub fn without_symbol(mut self) -> FixupKind {
+        self.without_symbol = true;
         self
     }
 
