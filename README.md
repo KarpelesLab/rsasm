@@ -61,7 +61,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3190 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 541 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 802 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 848 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 310 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3755 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
@@ -136,7 +136,13 @@ form by form and in random whole programs as well.
   pointer-sized data word; and the markers that cover no field, `add rD, rA,
   sym@tls` (and `@tls@pcrel`) on the instructions that take it and the
   `(sym@tlsgd)` or `(sym@tlsld)` argument of `bl __tls_get_addr`, which comes
-  out as a relocation ahead of the call's own. On every target a
+  out as a relocation ahead of the call's own. MIPS reads the seven operators
+  GNU as has, in o32 and n64 alike and in any 16-bit field: `%tlsgd` and
+  `%tlsldm` for the GOT entries `__tls_get_addr` is given, `%gottprel` for
+  the one initial exec reads, `%dtprel_hi`/`%dtprel_lo` for an offset within
+  a module's block and `%tprel_hi`/`%tprel_lo` for one from the thread
+  pointer; an n64 `r_info` holds one of them and leaves its other two types
+  `R_MIPS_NONE`, which is what both references compose. On every target a
   thread-local model on a symbol defined outside a thread-local section is
   refused, as GNU as refuses it
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
@@ -309,18 +315,27 @@ form by form and in random whole programs as well.
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
 - thread-local storage on the other targets: the symbols and sections are
-  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC
-  and SuperH read the access-model operands; the rest refuse theirs (RISC-V's
-  `%tprel_hi`, MIPS's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives)
+  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
+  MIPS and SuperH read the access-model operands; the rest refuse theirs
+  (RISC-V's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives)
   rather than assemble them as something else. Mach-O's `@TLVP` and PE's
   thread-local sections are their formats' own idea of the same thing, and
   are not there either, so an AArch64 thread-local operator in either format
   is refused as llvm-mc refuses it
 - MIPS: the `.gnu.attributes` recording the floating-point ABI that GNU as
-  writes and llvm-mc, the reference here, does not; and the `.module` options
+  writes and llvm-mc, the reference here, does not; the `.module` options
   that would change which instructions are accepted (the ISA names, the
   application-specific extensions), where the ones that only describe the
-  floating-point unit are there
+  floating-point unit are there; the position-independent operators and the
+  `$gp` setup around them (`%got`, `%call16`, `%got_page`, `%gp_rel` and
+  their relatives, `.cpload`, `.cpsetup`, `.cprestore`, `.abicalls`), where
+  the thread-local operators — `%tlsgd`, `%tlsldm`, `%dtprel_hi`,
+  `%dtprel_lo`, `%gottprel`, `%tprel_hi` and `%tprel_lo`, which reach the GOT
+  through `$gp` the same way — are there; and the data directives that write
+  a thread-local offset (`.dtprelword`, `.tprelword`, `.dtpreldword`), which
+  a `.word` cannot spell, since both references refuse an access-model
+  operator in one. `.tpreldword` is refused by rsasm and would have no
+  reference to check against anyway: GNU as 2.47 aborts on it
 - ARM: `.arch`, `.cpu`, `.fpu` and `.arch_extension` say what the object was
   built for without changing which instructions this backend accepts, so
   `.arch armv4t` does not refuse an ARMv7 instruction as GNU as would. A
@@ -1039,7 +1054,9 @@ is what hid them from rsasm for as long as it did.
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
   the x86, AArch64 and PowerPC thread-local access models, which the linker
   turns into local exec, ARM's and Thumb's, whose descriptor calls it turns
-  into initial exec, weak definitions a second object overrides, `.comm`
+  into initial exec, the MIPS models that need no GOT
+  (`%tprel_hi`/`%tprel_lo` and `%dtprel_hi`/`%dtprel_lo`), weak definitions a
+  second object overrides, `.comm`
   symbols merged between objects with different sizes, `.bss`, and
   references into another object's sections. The targets whose linker
   relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked

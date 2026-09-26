@@ -186,3 +186,74 @@ f:      add.d   $f4, $f5, $f6
         .globl  gonly
         .type   .Ltyped, @function
         .hidden .Lhid
+
+# The thread-local access models. Both references write the same relocation
+# for each operator as they do for o32 -- R_MIPS_TLS_GD (42), TLS_LDM (43),
+# TLS_DTPREL_HI16 (44), TLS_DTPREL_LO16 (45), TLS_GOTTPREL (46),
+# TLS_TPREL_HI16 (49) and TLS_TPREL_LO16 (50) -- and leave the other two
+# types of an n64 `r_info` R_MIPS_NONE: a thread-local access composes
+# nothing, where `.gpword` in the same object would pair GPREL32 with
+# R_MIPS_64.
+#
+# These relocations are `RELA` here, so the addend is the entry's and the
+# field stays zero, and the two references agree on it. Under `REL` they do
+# not; see the note in tools/mc-diff/mips-relocs.txt.
+#
+# `rdhwr $3, $29` reads the thread pointer and neither reference relocates
+# it: the offset added to it is what carries the relocation.
+=== the thread-local access models
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        daddiu  $4, $gp, %tlsgd(tv)
+        daddiu  $4, $gp, %tlsldm(tv)
+        lui     $5, %dtprel_hi(tv)
+        daddiu  $5, $5, %dtprel_lo(tv)
+        ld      $6, %gottprel(tv)($gp)
+        rdhwr   $3, $29
+        lui     $7, %tprel_hi(tv)
+        daddiu  $7, $7, %tprel_lo(tv)
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .quad   0x1122334455667788
+        .section .tbss,"awT",@nobits
+        .globl  tb
+tb:     .space  8
+
+=== a thread-local access with an addend
+        .set    noreorder
+        .text
+        .globl  f, tv
+f:
+        lui     $5, %dtprel_hi(tv+8)
+        daddiu  $5, $5, %dtprel_lo(tv+8)
+        ld      $6, %gottprel(ext)($gp)
+        lui     $7, %tprel_hi(tv+0x8000)
+        daddiu  $7, $7, %tprel_lo(tv+0x8000)
+        .section .tdata,"awT",@progbits
+tv:     .quad   0x1122334455667788
+
+=== thread-local variables by binding
+        .set    noreorder
+        .text
+        .globl  f, hid, bss
+        .hidden hid
+        .weak   wk
+f:
+        lui     $4, %tprel_hi(loc)
+        daddiu  $4, $4, %tprel_lo(loc)
+        lui     $5, %dtprel_hi(hid)
+        daddiu  $5, $5, %dtprel_lo(hid)
+        ld      $6, %gottprel(ext)($gp)
+        daddiu  $7, $gp, %tlsgd(wk)
+        daddiu  $8, $gp, %tlsldm(bss)
+        ld      $9, %tprel_lo(loc)($9)
+        sd      $10, %dtprel_lo(hid)($10)
+        ori     $11, $11, %tprel_lo(loc)
+        .section .tdata,"awT",@progbits
+loc:    .quad   1
+hid:    .quad   2
+wk:     .quad   3
+        .section .tbss,"awT",@nobits
+bss:    .space  16

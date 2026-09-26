@@ -58,7 +58,12 @@
 #   made of those. They are in the ARM and Thumb rows too: `(TLSGD)`,
 #   `(TLSLDM)` and `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's
 #   `(TLSDESC)` with the `(tlscall)` branch and the `.tlsdescseq` marks,
-#   which GNU ld rewrites into initial-exec loads.
+#   which GNU ld rewrites into initial-exec loads. The MIPS row has the two
+#   models that need no GOT, `%tprel_hi`/`%tprel_lo` and
+#   `%dtprel_hi`/`%dtprel_lo`; `%tlsgd`, `%tlsldm` and `%gottprel` are
+#   offsets from a `_gp` that the script here never defines, so GNU ld
+#   reports each of them as truncated, and `tools/mc-diff` compares those
+#   objects instead.
 # * A difference of two symbols in different sections is only in the corpora
 #   of the targets that have a single relocation for it. RX and RL78 spell it
 #   as a stack of `R_*_SYM`, `R_*_OPsub` and a store, which one fixup cannot
