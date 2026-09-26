@@ -1007,7 +1007,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,660 of 8,660 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 38,924 of 38,924 match across twenty-one target variants. For RISC-V
+  supports. 38,970 of 38,970 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -1056,7 +1056,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 274 of 274 match across
+  addend a COFF relocation keeps in its field. 276 of 276 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
