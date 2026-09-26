@@ -904,10 +904,85 @@ fn motorola_syntax_aligns_code_and_gnu_syntax_does_not() {
 
 #[test]
 fn gnu_comments_and_separators() {
+    // GNU as for m68k comments a whole line with `#` or `*`, the two
+    // characters of its `line_comment_chars`, and the rest of one with `|`.
     gas(
-        "# a hash comment in the first column\n movew #1,%d0 | a trailing comment\n \
+        "# a hash comment in the first column\n* a star comment in the first column\n   \
+         * a star comment after the whitespace that starts a line\n \
+         movew #1,%d0 | a trailing comment\n \
          movew #2,%d1 ; movew #3,%d2\n /* a block comment */ nop\n",
         "30 3c 00 01 32 3c 00 02 34 3c 00 03 4e 71",
+    );
+}
+
+#[test]
+fn motorola_comments_start_with_a_star_or_a_hash() {
+    // GNU as `--mri` keeps both line comment characters; vasm reads only the
+    // star and calls a leading `#` an error, so this follows GNU as.
+    mot(
+        "* a star comment in the first column\n   * a star comment after whitespace\n\
+         # a hash comment in the first column\n   # a hash comment after whitespace\n \
+         move.w #1,d0 ; a trailing comment\n nop\n",
+        "30 3c 00 01 4e 71",
+    );
+}
+
+#[test]
+fn a_dotted_section_is_gnu_as_directive_in_either_dialect() {
+    // No Motorola reference reads a dotted directive — GNU as `--mri` calls
+    // `.section` an unknown operator and vasm an unknown mnemonic — so the
+    // dot can only be GNU as's spelling, and means the same in both dialects.
+    // `m68k-elf-as` puts the `.space` in a `.tbss` of type NOBITS with
+    // `SHF_WRITE|SHF_ALLOC|SHF_TLS`, aligned to 1.
+    for dialect in [Gas, Motorola] {
+        let asm = assemble_dialect(
+            "m68k",
+            dialect,
+            " .section .tbss,\"awT\",@nobits\nx: .space 4\n",
+        );
+        assert!(
+            !asm.diags.has_errors(),
+            "{}",
+            asm.diags.render(&asm.sm, false)
+        );
+        let sec = asm
+            .sections
+            .iter()
+            .find(|s| asm.interner.get(s.name) == ".tbss")
+            .expect("no `.tbss` section");
+        assert_eq!(sec.kind, rsasm::section::SectionKind::Nobits);
+        assert!(sec.flags.write && sec.flags.alloc && sec.flags.tls);
+        assert!(!sec.flags.exec);
+        assert_eq!(sec.align, 1);
+        assert_eq!(sec.size, 4);
+    }
+}
+
+#[test]
+fn a_first_column_gnu_directive_in_motorola_syntax_says_it_is_a_label() {
+    // Both Motorola references read the first column as a label field and
+    // then complain about the word after it, which is what rsasm does; the
+    // help says so, since the message on its own is a puzzle.
+    let e = errors_dialect(
+        "m68k",
+        Motorola,
+        ".section .tbss,\"awT\",@nobits\nx: ds.b 4\n",
+    );
+    assert!(e.contains("unknown directive `.tbss`"), "{e}");
+    assert!(e.contains("is a label in Motorola syntax"), "{e}");
+}
+
+#[test]
+fn the_motorola_data_directives_in_gnu_syntax() {
+    // `m68k-elf-as`, which has `.dc`, `.dcb` and `.ds` on every target and
+    // `.even` on the 680x0: none of them aligns, and a suffixless one is a
+    // word wide.
+    gas(
+        " .dc.b 1,2\n .dc.w 0x0304\n .dc.l 0x05060708\n .dc 0x090a\n .dcb.b 3,0x11\n \
+         .even\n .dcb.w 2,0x1213\n .dcb.l 1,0x14151617\n .dcb 2,0x1819\n \
+         .ds.b 3\n .ds.w 1\n .ds.l 1\n .ds 1\n .even\n rts\n",
+        "01 02 03 04 05 06 07 08 09 0a 11 11 11 00 12 13 12 13 14 15 16 17 18 19 18 19 \
+         00 00 00 00 00 00 00 00 00 00 00 00 4e 75",
     );
 }
 

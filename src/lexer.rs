@@ -242,11 +242,16 @@ impl LexConfig {
                 equates: &[],
                 mnemonic: None,
             },
-            // Checked against vasm and GNU as --mri, which agree on every rule.
+            // Checked against vasm and GNU as --mri, which agree on every rule
+            // but one: a `#` where a line begins is a comment to GNU as, whose
+            // m68k port lists `#` and `*` as its line comment characters in
+            // either mode, and an error to vasm. Nothing else can start a
+            // Motorola line with a `#`, since the immediate prefix belongs to
+            // an operand, so the reading that assembles more source wins.
             Dialect::Motorola => LexConfig {
                 dialect: d,
                 line_comment: vec![";"],
-                line_start_comment: vec!["*"],
+                line_start_comment: vec!["*", "#"],
                 block_comment: false,
                 stmt_sep: vec![],
                 radix_suffix: false,

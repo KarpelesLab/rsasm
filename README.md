@@ -63,7 +63,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 848 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 340 |
-| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3747 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3755 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 531 |
@@ -329,10 +329,14 @@ form by form and in random whole programs as well.
   right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
   MIPS, SPARC and SuperH read the access-model operands; the rest refuse
   theirs (RISC-V's `%tprel_hi` and its relatives) rather than assemble them
-  as something else. SPARC's data operators — `%r_disp32()`, `%r_plt32()` and
-  the thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`, which GNU as reads
-  in `.word` and `.xword` — are not there either; llvm-mc, which is what the
-  SPARC harnesses compare against, has none of them. Mach-O's `@TLVP` and PE's
+  as something else — except on m68k, where a thread-local `@` suffix on an
+  instruction operand (`move.l x@TLSGD(%a0),%d0`) is dropped and the plain
+  `R_68K_32` written where GNU as writes `R_68K_TLS_GD32`; in a data
+  directive it is refused, as it should be. SPARC's data operators —
+  `%r_disp32()`, `%r_plt32()` and the thread-local
+  `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`, which GNU as reads in `.word` and
+  `.xword` — are not there either; llvm-mc, which is what the SPARC harnesses
+  compare against, has none of them. Mach-O's `@TLVP` and PE's
   thread-local sections are their formats' own idea of the same thing, and
   are not there either, so an AArch64 thread-local operator in either format
   is refused as llvm-mc refuses it
@@ -552,11 +556,19 @@ $ rsasm -a m68k -f bin --hex intena.s
 ```
 
 Motorola covers vasm, Devpac and ASM-One source and was checked against both
-vasm and GNU as `--mri`. Three rules in it catch people out:
+vasm and GNU as `--mri`. Four rules in it catch people out:
 
 - **A word in the first column is a label**, with or without a colon, so
   instructions have to be indented. `rts` written in column 0 assembles to no
-  code at all — in both reference assemblers, not just here.
+  code at all — in both reference assemblers, not just here — and so does a
+  dotted directive: `.section` in column 0 is a label, and the word after it
+  is what the line is read as.
+- **`.section` is GNU as's directive, `section` the Motorola one.** Neither
+  reference reads a dotted directive at all, so the dot can only be GNU as's
+  spelling: `section name[,type]` names a code, data or bss section, and
+  `.section .tbss,"awT",@nobits` takes GNU as's flag string and type. A `#`
+  where a line begins is a comment, as `*` is, which is what GNU as `--mri`
+  reads; vasm calls it an error.
 - **Word and long data, and instructions, are aligned to an even address.**
   vasm on its own defaults leaves a `dc.w` after a `dc.b` at an odd address;
   Devpac, GNU as and vasm's `-devpac` mode align it, and a 68000 faults on the

@@ -22,10 +22,19 @@ impl Assembler {
         // Renesas's newer assemblers dot their directives (`.DB`, `.CSEG`).
         // Those are the vendor table's words, and take priority over a GNU as
         // directive of the same name, which would read their arguments wrongly.
+        //
+        // `.section` is the one word where that goes the other way. Neither
+        // Motorola reference reads a dotted directive at all — GNU as `--mri`
+        // calls it an unknown operator and vasm an unknown mnemonic — so the
+        // dot can only be GNU as's own spelling, whose flag string and type
+        // (`.section .tbss,"awT",@nobits`) the vendor `SECTION` would refuse.
         if matches!(self.options.dialect, Dialect::Motorola | Dialect::Renesas)
             && let Some(bare) = text.strip_prefix('.')
             && let Some(alias) = crate::dialect::lookup(self.options.dialect, bare)
-            && !matches!(alias, crate::dialect::Alias::Gas(_))
+            && !matches!(
+                alias,
+                crate::dialect::Alias::Gas(_) | crate::dialect::Alias::MotorolaSection
+            )
         {
             self.run_alias(stmt, alias);
             return;
@@ -136,6 +145,29 @@ impl Assembler {
             ".uaword" if self.arch.aligns_data() => self.dir_data(&mut cur, 2, span, false, &text),
             ".ualong" if self.arch.aligns_data() => self.dir_data(&mut cur, 4, span, false, &text),
             ".uaquad" if self.arch.aligns_data() => self.dir_data(&mut cur, 8, span, false, &text),
+            // The Motorola data directives, which GNU as's own table gives
+            // every target: `.dc` writes values, `.dcb` repeats one and `.ds`
+            // reserves room, with a `.b`, `.w` or `.l` suffix for the width
+            // and a word where there is none. They are `cons` and `s_space`
+            // under another name, so `.dc.w` aligns exactly where `.short`
+            // does and the other two align nothing. The undotted spellings
+            // the Motorola dialect reads are in [`crate::dialect`], which
+            // aligns them the way Devpac and GNU as `--mri` do; a dotted one
+            // in that dialect still goes there. The float suffixes
+            // (`.dc.s`, `.ds.x`) are left unknown, since no data directive
+            // here writes a float.
+            ".dc" | ".dc.b" | ".dc.w" | ".dc.l" => {
+                let w = motorola_width(&text);
+                self.dir_data(&mut cur, w, span, w > 1, &text)
+            }
+            ".ds" | ".ds.b" | ".ds.w" | ".ds.l" => {
+                self.alias_space(&mut cur, motorola_width(&text), span);
+                true
+            }
+            ".dcb" | ".dcb.b" | ".dcb.w" | ".dcb.l" => {
+                self.alias_fill(&mut cur, motorola_width(&text), span);
+                true
+            }
             ".ascii" => self.dir_ascii(&mut cur, false, span),
             ".asciz" | ".string" | ".asciiz" => self.dir_ascii(&mut cur, true, span),
             ".sleb128" => self.dir_leb(&mut cur, true, span),
@@ -308,6 +340,25 @@ impl Assembler {
                     ),
                 )
                 .with_help("to define a symbol, write `.set name, value`"),
+            );
+            return;
+        }
+        // A GNU as directive in the first column of Motorola source is a
+        // label, so the word after it becomes the statement and the message
+        // names that word rather than the line. GNU as `--mri` and vasm read
+        // the same line the same way, so the cure is to indent it or to ask
+        // for GNU syntax, and saying so beats leaving the reader to guess.
+        if self.options.dialect == Dialect::Motorola
+            && let Some(crate::parser::LabelDef::Named(label, _)) = stmt.labels.first()
+            && let first = self.interner.get(*label).to_string()
+            && first.starts_with('.')
+        {
+            self.diags.emit(
+                crate::diag::Diagnostic::error(span, format!("unknown directive `{text}`"))
+                    .with_help(format!(
+                        "`{first}` in the first column is a label in Motorola syntax; \
+                         indent it, or assemble with `-d gas`"
+                    )),
             );
             return;
         }
@@ -1742,6 +1793,15 @@ fn builtin_section_flags(builtin: SectionFlags, written: SectionFlags) -> Sectio
             group: written.group,
             ..builtin
         }
+    }
+}
+
+/// The width a `.dc`, `.dcb` or `.ds` suffix names, a word where it has none.
+fn motorola_width(directive: &str) -> u8 {
+    match directive.rsplit_once('.') {
+        Some((_, "b")) => 1,
+        Some((_, "l")) => 4,
+        _ => 2,
     }
 }
 
