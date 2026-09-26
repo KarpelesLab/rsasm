@@ -1636,7 +1636,7 @@ fn preload(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
             FixupKind::pcrel(4, 4)
                 .with_pc_align(4)
                 .with_limits(-4095, 4095)
-                .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
                 .scatter(scatter_literal32),
             ins.ops[0].span,
         )]);
@@ -1755,17 +1755,22 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     } else {
         super::IW_THUMB_ADR
     };
+    // A width the source fixed is left as written, so what the target turns
+    // out to be only decides whether GNU as can resolve it at all.
     let relaxed = low(rd) && ins.width == Width::Any;
     let mut out = Vec::new();
     if low(rd) && want_narrow(ins) {
-        let mut kind = FixupKind::pcrel(2, 4)
+        let class = if relaxed {
+            super::IW_THUMB_ADR16
+        } else {
+            super::IW_STRONG_ONLY
+        };
+        let kind = FixupKind::pcrel(2, 4)
             .with_pc_align(4)
             .with_field(12, 4)
             .with_limits(0, 1020)
+            .link(LinkValue::Interwork(class))
             .scatter(scatter_adr16);
-        if relaxed {
-            kind = kind.link(LinkValue::Interwork(super::IW_THUMB_ADR16));
-        }
         out.push(fixed(
             (0xa000u16 | ((rd as u16) << 8)).to_le_bytes().to_vec(),
             e,
@@ -1774,10 +1779,12 @@ fn adr(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         ));
     }
     if want_wide(ins) {
-        let mut kind = adr32_kind();
-        if relaxed {
-            kind = kind.link(LinkValue::Interwork(wide_class));
-        }
+        let class = if relaxed {
+            wide_class
+        } else {
+            super::IW_THUMB_ADR32
+        };
+        let kind = adr32_kind().link(LinkValue::Interwork(class));
         out.push(fixed(wide_bytes(0xf20f, (rd as u16) << 8), e, kind, span));
     }
     if out.is_empty() {
@@ -1860,7 +1867,7 @@ fn pcrel_load(
         let widens = if relaxed {
             super::IW_THUMB_LDR16
         } else {
-            super::IW_PCREL_LOAD
+            super::IW_STRONG_ONLY
         };
         let kind = FixupKind::pcrel(2, 4)
             .with_pc_align(4)
@@ -1889,7 +1896,7 @@ fn pcrel_load(
                     .with_pc_align(4)
                     .with_field(0, 4)
                     .with_limits(-1020, 1020)
-                    .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                    .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
                     .scatter(scatter_literal_dual),
             )
         } else {
@@ -1899,7 +1906,7 @@ fn pcrel_load(
                 FixupKind::pcrel(4, 4)
                     .with_pc_align(4)
                     .with_limits(-4095, 4095)
-                    .link(LinkValue::Interwork(super::IW_PCREL_LOAD))
+                    .link(LinkValue::Interwork(super::IW_STRONG_ONLY))
                     .scatter(scatter_literal32),
             )
         };

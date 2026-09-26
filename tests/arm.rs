@@ -1391,6 +1391,82 @@ fn a_thumb_load_that_names_a_label_picks_its_width() {
     );
 }
 
+/// A coprocessor transfer takes a bare label too, and the table-driven
+/// encoder leaves a fixup for it. `encode_arm_cp_address` reads the operand
+/// as any other PC-relative transfer of the group: P and U set, the PC as
+/// the base, and eight bits counting words, so it reaches 1020 bytes either
+/// way -- a quarter of what `ldr` does. That is the encoding of a `vldr` of
+/// a literal pool entry, with the offset naming the label instead.
+#[test]
+fn a_coprocessor_transfer_that_names_its_label() {
+    enc(
+        "back: .word 0x12345678\nvldr s0, back\nvldr d1, back\nvstr s2, back\n\
+         vstr d3, back\nldc p1, c2, back\nldcl p1, c3, back\nldc2 p1, c4, back\n\
+         ldc2l p1, c5, back\nstc p1, c6, back\nstcl p1, c7, back\nstc2 p1, c8, back\n\
+         stc2l p1, c9, back\nvldreq s4, back\nvldr s5, fwd\nvldr s6, . + 8\nfwd: bx lr\n",
+        "78 56 34 12 03 0a 1f ed 04 1b 1f ed 05 1a 0f ed 06 3b 0f ed 07 21 1f ed \
+         08 31 5f ed 09 41 1f fd 0a 51 5f fd 0b 61 0f ed 0c 71 4f ed 0d 81 0f fd \
+         0e 91 4f fd 0f 2a 1f 0d 00 2a df ed 00 3a 9f ed 1e ff 2f e1",
+    );
+    // In Thumb the PC is rounded down to a word, as it is for every Thumb
+    // load. Only `vstr` is refused there: `do_neon_ldr_str` calls a store
+    // through the PC UNPREDICTABLE, while `stc` takes one.
+    tenc(
+        "back: .word 0x12345678\nvldr s0, back\nvldr d1, back\nldc p1, c2, back\n\
+         ldcl p1, c3, back\nldc2 p1, c4, back\nldc2l p1, c5, back\nstc p1, c6, back\n\
+         stcl p1, c7, back\nstc2 p1, c8, back\nstc2l p1, c9, back\nnop\n\
+         vldr s5, fwd\nnop\nfwd: bx lr\n",
+        "78 56 34 12 1f ed 02 0a 1f ed 03 1b 1f ed 04 21 5f ed 05 31 1f fd 06 41 \
+         5f fd 07 51 0f ed 08 61 4f ed 09 71 0f fd 0a 81 4f fd 0b 91 00 bf \
+         df ed 01 2a 00 bf 70 47",
+    );
+    assert!(
+        errors_for("thumb", "back: .word 0\nvstr s0, back")
+            .contains("a store cannot address through `pc` here")
+    );
+    // The offset counts words in eight bits, and the label has to be one the
+    // assembler can place: the field has no relocation, and a plain number
+    // leaves the PC-relative reference with nothing to subtract from.
+    assert!(
+        hex(&text_for("arm", "vldr s0, fwd\n.space 1024\nfwd: bx lr\n")).starts_with("ff 0a 9f ed")
+    );
+    assert!(errors_for("arm", "vldr s0, fwd\n.space 1028\nfwd: bx lr\n").contains("1020"));
+    assert!(errors_for("arm", "back: .word 0\nldc p1, c2, back + 2").contains("multiple of 4"));
+    assert!(errors_for("thumb", "back: .word 0\nvldr s0, back + 2").contains("4-byte boundary"));
+    assert!(errors_for("arm", "ldc p1, c2, 0x100").contains("names a label"));
+    assert!(errors_for("thumb", "vldr s0, ext").contains("no relocation exists"));
+    assert!(errors_for("arm", ".weak w\nw: .word 0\nvldr s0, w").contains("no relocation exists"));
+}
+
+/// `adr` of a weak symbol is the one PC-relative reference of this family
+/// GNU as writes rather than refuses, and only in Thumb. `relax_adr` widens
+/// it, since another object could replace the definition; then
+/// `arm_force_relocation` resolves the wide form anyway, without the target,
+/// so the field holds the addend less the PC. Only the form GNU as relaxed
+/// takes the Thumb bit -- a `.w` the source wrote is left as it stands.
+///
+/// In ARM state `md_apply_fix` stops at "symbol w is weak and may be
+/// overridden later" instead, which is the field's lack of a relocation
+/// here.
+#[test]
+fn adr_of_a_weak_symbol() {
+    tenc(
+        ".weak w\n.weak wf\nadr r0, w\nadr r1, w + 1\nadr r2, wf\nadr.w r3, wf\n\
+         adr r8, wf\n.p2align 2, 0\nw: .word 0\n.thumb_func\nwf: bx lr\n",
+        "af f2 04 00 af f2 07 01 af f2 0b 02 af f2 10 03 af f2 14 08 \
+         00 00 00 00 70 47 00 bf",
+    );
+    // A 16-bit `adr` the source asked for has nowhere to put such a value:
+    // GNU as answers "address calculation needs a strongly defined nearby
+    // symbol".
+    assert!(
+        errors_for("thumb", ".weak w\nadr.n r0, w\n.p2align 2, 0\nw: .word 0")
+            .contains("no relocation exists")
+    );
+    assert!(errors_for("arm", ".weak w\nw: .word 0\nadr r0, w").contains("no relocation exists"));
+    assert!(errors_for("arm", ".weak w\nw: .word 0\nadrl r0, w").contains("no relocation exists"));
+}
+
 /// What makes two literals one entry is what the source wrote, not what its
 /// value is as an `i64`: GNU as compares `X_unsigned` as well, which every
 /// integer has unless it was negated, a subtraction among the ways to negate

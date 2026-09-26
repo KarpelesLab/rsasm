@@ -78,3 +78,16 @@ back:   .word   0x12345678
         ldr     r0, fwd
         pld     back
 fwd:    bx      lr
+=== a coprocessor transfer that names its label
+        @ The offset counts words in eight bits, so it reaches a quarter of
+        @ what `ldr` does. llvm-mc writes the same bytes as GNU as for a
+        @ label in the section.
+back:   .word   0x12345678
+        vldr    s0, back
+        vldr    d1, back
+        vstr    s2, back
+        ldc     p1, c2, back
+        stc     p1, c3, back
+        ldc2    p1, c4, back
+        vldr    s5, fwd
+fwd:    bx      lr

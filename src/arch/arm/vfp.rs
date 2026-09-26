@@ -12,6 +12,10 @@
 //!
 //! The load itself is a coprocessor load from the PC, reaching 1020 bytes
 //! either way in steps of four, which is a quarter of what `ldr` reaches.
+//! `vldr sN, label` is that same load with the offset naming the label
+//! instead of a pool entry, so [`super::generic`] writes it through the two
+//! scatter functions here; the two spellings never meet, since only an
+//! `=expr` is a literal operand.
 
 use super::generic::{cmode_for_move, invert_size};
 use super::insn::AL;
@@ -102,7 +106,7 @@ fn vfp_reg(n: u8, single: bool) -> u32 {
 /// bits counting words, and the U bit at 23 that an offset of zero leaves
 /// alone -- GNU as assembles the load with U set and `md_apply_fix` only
 /// clears it for an offset it writes.
-fn scatter_arm(w: u64, v: i64) -> u64 {
+pub(super) fn scatter_arm(w: u64, v: i64) -> u64 {
     if v == 0 {
         return w & !0xff;
     }
@@ -112,7 +116,7 @@ fn scatter_arm(w: u64, v: i64) -> u64 {
 
 /// The same field in T32, where the halfword holding the U bit comes first
 /// in memory and so lies in the low half of the word the fixup sees.
-fn scatter_thumb(w: u64, v: i64) -> u64 {
+pub(super) fn scatter_thumb(w: u64, v: i64) -> u64 {
     if v == 0 {
         return w & !0x00ff_0000;
     }
