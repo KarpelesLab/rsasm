@@ -1648,11 +1648,15 @@ impl Assembler {
         if kind.pcrel {
             // An absolute target is no closer, on targets where a number is
             // an address: where the field ends up is the linker's decision,
-            // so `call 0x1000` needs a relocation too.
+            // so `call 0x1000` needs a relocation too. A difference is left
+            // to `relocations_for`, which folds or relocates the ones GNU as
+            // does and refuses the rest, rather than being measured from the
+            // field as if the subtrahend were not there.
             if self.options.relocatable
                 && match v.plus {
                     Some(p) => {
-                        self.symbol_section(p) != Some(section)
+                        v.minus.is_some()
+                            || self.symbol_section(p) != Some(section)
                             || self.defers_to_linker(e, p, kind, section, fi)
                     }
                     None => {
@@ -2119,16 +2123,39 @@ impl Assembler {
             v.minus = None;
             kind.reloc = add;
         }
+        // Two labels in one section are a fixed distance apart whatever a
+        // linker does with the section, so GNU as folds the difference once
+        // the sections are sized. In a PC-relative field that fold comes too
+        // late for the number to be the offset a number written there would
+        // be — the backend decides that while it reads the line, see
+        // `arch::fold_differences` — so what is left is an address, relocated
+        // against no symbol.
+        if let (Some(p), Some(m)) = (v.plus, v.minus)
+            && kind.pcrel
+            && self.symbol_section(p).is_some()
+            && self.symbol_section(p) == self.symbol_section(m)
+            && let (Some(pa), Some(ma)) = (self.symbol_addr(p), self.symbol_addr(m))
+        {
+            v.addend += pa - ma;
+            v.plus = None;
+            v.minus = None;
+        }
         if let Some(minus) = v.minus {
             // `sym - label`, with the label in the fixup's own section, is
             // `sym` relative to the field plus a known distance, which a
             // plain data field can carry as a PC-relative relocation. This is
             // how `.long target - .` jump tables and unwind data are written.
+            // A field that is PC-relative already measures from the same
+            // place, so it needs no counterpart, only the distance: GNU as
+            // writes `adr x0, there - here` as an ordinary `adr` relocation
+            // on `there` with `here`'s distance from the field as its addend.
             let here = self.section(section).addr as i64 + at as i64;
-            let pcrel = if !kind.pcrel && self.symbol_section(minus) == Some(section) {
-                self.frag_arch(si, fi).0.pcrel_reloc(kind.reloc, kind.size)
-            } else {
+            let pcrel = if self.symbol_section(minus) != Some(section) {
                 None
+            } else if kind.pcrel {
+                Some(kind.reloc)
+            } else {
+                self.frag_arch(si, fi).0.pcrel_reloc(kind.reloc, kind.size)
             };
             let (Some(r), Some(label)) = (pcrel, self.symbol_addr(minus)) else {
                 // A field whose relocation has no PC-relative counterpart —
