@@ -62,7 +62,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 541 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 802 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 310 |
+| SPARC V8 / V9, with the thread-local access models | `sparc` `sparcv9` | llvm-mc | 340 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3747 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
@@ -136,7 +136,18 @@ form by form and in random whole programs as well.
   pointer-sized data word; and the markers that cover no field, `add rD, rA,
   sym@tls` (and `@tls@pcrel`) on the instructions that take it and the
   `(sym@tlsgd)` or `(sym@tlsld)` argument of `bl __tls_get_addr`, which comes
-  out as a relocation ahead of the call's own. On every target a
+  out as a relocation ahead of the call's own. SPARC reads the eighteen
+  operators its GNU as reads, the same in V8 and V9: the local-exec halves
+  `%tle_hix22()` and `%tle_lox10()`, initial exec's `%tie_hi22()` and
+  `%tie_lo10()`, general dynamic's `%tgd_hi22()` and `%tgd_lo10()`, and local
+  dynamic's `%tldm_hi22()`, `%tldm_lo10()`, `%tldo_hix22()` and
+  `%tldo_lox10()`, each of which names a step of a model rather than a part of
+  a value and so goes in whichever field the instruction has; and the eight
+  that fill no field at all and are written after the last operand —
+  `%tie_ld()`, `%tie_ldx()`, `%tie_add()`, `%tgd_add()`, `%tldm_add()`,
+  `%tldo_add()`, and `%tgd_call()` and `%tldm_call()`, which take the place of
+  the displacement of the `call __tls_get_addr` they mark instead of sitting
+  beside it, since the linker finds the function by name. On every target a
   thread-local model on a symbol defined outside a thread-local section is
   refused, as GNU as refuses it
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
@@ -309,10 +320,14 @@ form by form and in random whole programs as well.
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
 - thread-local storage on the other targets: the symbols and sections are
-  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC
-  and SuperH read the access-model operands; the rest refuse theirs (RISC-V's
-  `%tprel_hi`, MIPS's `%tprel_hi`, SPARC's `%tle_hix22` and their relatives)
-  rather than assemble them as something else. Mach-O's `@TLVP` and PE's
+  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
+  SPARC and SuperH read the access-model operands; the rest refuse theirs
+  (RISC-V's `%tprel_hi`, MIPS's `%tprel_hi` and their relatives) rather than
+  assemble them as something else. SPARC's data operators — `%r_disp32()`,
+  `%r_plt32()` and the thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`,
+  which GNU as reads in `.word` and `.xword` — are not there either; llvm-mc,
+  which is what the SPARC harnesses compare against, has none of them.
+  Mach-O's `@TLVP` and PE's
   thread-local sections are their formats' own idea of the same thing, and
   are not there either, so an AArch64 thread-local operator in either format
   is refused as llvm-mc refuses it
@@ -1029,9 +1044,9 @@ is what hid them from rsasm for as long as it did.
   `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
   where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
-  the x86, AArch64 and PowerPC thread-local access models, which the linker
-  turns into local exec, ARM's and Thumb's, whose descriptor calls it turns
-  into initial exec, weak definitions a second object overrides, `.comm`
+  the x86, AArch64, PowerPC and SPARC thread-local access models, which the
+  linker turns into local exec, ARM's and Thumb's, whose descriptor calls it
+  turns into initial exec, weak definitions a second object overrides, `.comm`
   symbols merged between objects with different sizes, `.bss`, and
   references into another object's sections. The targets whose linker
   relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked

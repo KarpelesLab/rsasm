@@ -6,6 +6,7 @@
 //! %g1                 a register
 //! 42                  an expression
 //! %hi(sym) %lo(sym)   the two halves of a 32-bit constant
+//! %tle_hix22(sym)     a step of a thread-local access model
 //! [%g1 + %g2]         a memory address
 //! [%g1 - 8]  [%g1]    ... with an immediate, or none at all
 //! %o7 + 8             the same address unbracketed, which is how `jmpl`,
@@ -16,13 +17,87 @@
 //! modifier the shared expression parser understands: the sigil comes first
 //! and the argument is parenthesised, so it has to be recognised here, before
 //! the expression parser gets a chance to read `%` as a remainder operator.
+//! Every operator is looked up before a register is, since `%tle_hix22`
+//! otherwise reads as a register name nothing defines.
 
 use super::reg::{self, Reg, RegClass};
+use super::reloc;
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
 use crate::expr::{ExprKind, ExprRef, UnOp};
-use crate::lexer::{Punct, TokKind};
+use crate::lexer::{Punct, TokKind, Token};
 use crate::source::Span;
+
+/// One step of a thread-local access model, as SPARC spells it: `%tle_hix22`
+/// and its relatives.
+///
+/// These are not modifiers on a field so much as names for a step of a
+/// sequence. The relocation says which step of which model, and the linker —
+/// the only thing that knows where a variable sits in a thread's block, and
+/// the only thing that may rewrite a sequence into a cheaper model — writes
+/// whatever field there is. Eight of them fill no field at all and mark the
+/// instruction they are written after; see [`TlsOp::mark`].
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct TlsOp {
+    /// How it is written, without the `%` and the argument.
+    pub name: &'static str,
+    /// The relocation it asks for.
+    pub reloc: u32,
+    /// Whether it marks the whole instruction rather than filling a field in
+    /// it, which is what decides where it is written.
+    pub mark: bool,
+}
+
+const fn field(name: &'static str, reloc: u32) -> TlsOp {
+    TlsOp {
+        name,
+        reloc,
+        mark: false,
+    }
+}
+
+const fn mark(name: &'static str, reloc: u32) -> TlsOp {
+    TlsOp {
+        name,
+        reloc,
+        mark: true,
+    }
+}
+
+/// Every thread-local operator `sparc64-elf-as` reads, in the four models:
+/// local exec, initial exec, general dynamic and local dynamic. llvm-mc reads
+/// the same eighteen names and writes the same relocations for them.
+const TLS_OPS: &[TlsOp] = &[
+    field("tle_hix22", reloc::TLS_LE_HIX22),
+    field("tle_lox10", reloc::TLS_LE_LOX10),
+    field("tie_hi22", reloc::TLS_IE_HI22),
+    field("tie_lo10", reloc::TLS_IE_LO10),
+    mark("tie_ld", reloc::TLS_IE_LD),
+    mark("tie_ldx", reloc::TLS_IE_LDX),
+    mark("tie_add", reloc::TLS_IE_ADD),
+    field("tgd_hi22", reloc::TLS_GD_HI22),
+    field("tgd_lo10", reloc::TLS_GD_LO10),
+    mark("tgd_add", reloc::TLS_GD_ADD),
+    mark("tgd_call", reloc::TLS_GD_CALL),
+    field("tldm_hi22", reloc::TLS_LDM_HI22),
+    field("tldm_lo10", reloc::TLS_LDM_LO10),
+    mark("tldm_add", reloc::TLS_LDM_ADD),
+    mark("tldm_call", reloc::TLS_LDM_CALL),
+    field("tldo_hix22", reloc::TLS_LDO_HIX22),
+    field("tldo_lox10", reloc::TLS_LDO_LOX10),
+    mark("tldo_add", reloc::TLS_LDO_ADD),
+];
+
+/// The thread-local operator `name` spells, written without its `%`.
+pub fn tls_op(name: &str) -> Option<TlsOp> {
+    TLS_OPS.iter().copied().find(|o| o.name == name)
+}
+
+/// The function the dynamic models call, which `%tgd_call()` and
+/// `%tldm_call()` mark. The mark takes the place of the `call`'s own
+/// displacement, so the linker has only the name to work that displacement
+/// out from, and GNU as accordingly takes the mark on no other target.
+pub const TLS_GET_ADDR: &str = "__tls_get_addr";
 
 /// Which part of a value an immediate refers to.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -33,6 +108,21 @@ pub enum ImmPart {
     Hi,
     /// `%lo(x)`: bits 9-0, which always fit a 13-bit signed field.
     Lo,
+    /// A step of a thread-local access model, whose field is the linker's
+    /// whichever instruction it lands in.
+    Tls(TlsOp),
+}
+
+impl ImmPart {
+    /// The operator as it is written, for a diagnostic that has to name it.
+    pub fn spelling(self) -> String {
+        match self {
+            ImmPart::Whole => String::new(),
+            ImmPart::Hi => "`%hi()`".into(),
+            ImmPart::Lo => "`%lo()`".into(),
+            ImmPart::Tls(op) => format!("`%{}()`", op.name),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -117,6 +207,16 @@ impl Operand {
         }
     }
 
+    /// Whether the operand puts an immediate in the instruction's one
+    /// relocatable field, which is what keeps a thread-local mark off it.
+    pub fn has_immediate(&self) -> bool {
+        match self.kind {
+            OperandKind::Imm(_) => true,
+            OperandKind::Mem(a) | OperandKind::Addr(a) => matches!(a.offset, Offset::Imm(_)),
+            OperandKind::Reg(_) => false,
+        }
+    }
+
     /// True for `%icc` / `%xcc` / `%fccN`, which is how a V9 predicted branch
     /// or conditional move says which condition-code bank it tests.
     pub fn is_cc(&self) -> bool {
@@ -128,12 +228,51 @@ impl Operand {
             OperandKind::Reg(r) => format!("register `{}`", reg::name_of(r)),
             OperandKind::Imm(i) => match i.part {
                 ImmPart::Whole => "an immediate".into(),
-                ImmPart::Hi => "a `%hi()` immediate".into(),
-                ImmPart::Lo => "a `%lo()` immediate".into(),
+                part => format!("a {} immediate", part.spelling()),
             },
             OperandKind::Mem(_) => "a memory operand".into(),
             OperandKind::Addr(_) => "an address".into(),
         }
+    }
+}
+
+/// Splits a trailing `, %tie_add(x)` off an instruction's operands.
+///
+/// A marker is not an operand: it says what the whole instruction is for, and
+/// GNU as reads it after the last one, so it has to come off before the
+/// operands are split on commas. Answers with the tokens before the comma and
+/// the tokens of the operator itself, or the whole list where there is no
+/// marker.
+pub fn split_mark<'t>(
+    cx: &AsmCtx<'_>,
+    toks: &'t [Token],
+) -> (&'t [Token], Option<(TlsOp, &'t [Token])>) {
+    let mut depth = 0i32;
+    let mut last = None;
+    for (i, t) in toks.iter().enumerate() {
+        match t.kind {
+            TokKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
+            TokKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => depth -= 1,
+            TokKind::Punct(Punct::Comma) if depth <= 0 => last = Some(i),
+            _ => {}
+        }
+    }
+    let Some(i) = last else {
+        return (toks, None);
+    };
+    let rest = &toks[i + 1..];
+    let (Some(pct), Some(word), Some(paren)) = (rest.first(), rest.get(1), rest.get(2)) else {
+        return (toks, None);
+    };
+    let TokKind::Ident(n) = word.kind else {
+        return (toks, None);
+    };
+    if !pct.is_punct(Punct::Percent) || word.preceded_by_space || !paren.is_punct(Punct::LParen) {
+        return (toks, None);
+    }
+    match tls_op(&cx.interner.get(n).to_ascii_lowercase()).filter(|o| o.mark) {
+        Some(op) => (&toks[..i], Some((op, rest))),
+        None => (toks, None),
     }
 }
 
@@ -351,34 +490,62 @@ impl OperandParser<'_, '_> {
         self.sigil_word(cur).is_some() && self.peek_part(cur).is_none()
     }
 
-    /// `%hi(` or `%lo(`, which only count as modifiers when the parenthesis
-    /// is actually there.
+    /// `%hi(`, `%lo(` or a thread-local operator, which only count as
+    /// operators when the parenthesis is actually there.
     fn peek_part(&self, cur: &Cursor<'_>) -> Option<ImmPart> {
-        let part = match self.sigil_word(cur)?.as_str() {
+        let word = self.sigil_word(cur)?;
+        let part = match word.as_str() {
             "hi" => ImmPart::Hi,
             "lo" => ImmPart::Lo,
-            _ => return None,
+            name => ImmPart::Tls(tls_op(name)?),
         };
         cur.nth(2).is_punct(Punct::LParen).then_some(part)
     }
 
+    /// `%hi(x)` and the rest, from the `%` through the closing parenthesis.
+    ///
+    /// A thread-local operator becomes an [`ExprKind::Modifier`] around its
+    /// argument as well as an [`ImmPart`], which is how the rest of the
+    /// assembler learns what the operator implies about the symbol: that it
+    /// is thread-local, and for the two call markers that the object refers
+    /// to `__tls_get_addr`.
     fn modifier(&mut self, cur: &mut Cursor<'_>, part: ImmPart) -> Option<Imm> {
         let start = cur.peek().span;
         cur.advance(); // `%`
-        cur.advance(); // `hi` / `lo`
+        cur.advance(); // the operator's name
         cur.advance(); // `(`
-        let e = self.expr(cur)?;
+        let mut e = self.expr(cur)?;
         let close = cur.peek();
         if cur.eat_punct(Punct::RParen).is_none() {
-            self.cx
-                .error(close.span, "expected `)` to close `%hi(` or `%lo(`");
+            self.cx.error(
+                close.span,
+                format!("expected `)` after the argument of {}", part.spelling()),
+            );
             return None;
+        }
+        let span = start.to(close.span);
+        if let ImmPart::Tls(op) = part {
+            let name = self.cx.interner.intern(op.name);
+            e = self.cx.exprs.alloc(ExprKind::Modifier(name, e), span);
         }
         Some(Imm {
             part,
             expr: e,
-            span: start.to(close.span),
+            span,
         })
+    }
+
+    /// The `%tie_add(x)` an instruction ends with, given the tokens
+    /// [`split_mark`] set aside for it.
+    pub fn mark(&mut self, toks: &[Token], op: TlsOp) -> Option<Imm> {
+        let mut cur = Cursor::new(toks);
+        let imm = self.modifier(&mut cur, ImmPart::Tls(op))?;
+        if !cur.at_end() {
+            self.cx
+                .error(cur.peek().span, "unexpected token after operand");
+            return None;
+        }
+        Some(imm)
     }
 
     fn register(&mut self, cur: &mut Cursor<'_>) -> Option<Reg> {
@@ -391,13 +558,17 @@ impl OperandParser<'_, '_> {
         };
         cur.advance();
         let text = self.cx.interner.get(n).to_ascii_lowercase();
-        match reg::lookup(&text) {
-            Some(r) => Some(r),
-            None => {
-                self.cx
-                    .error(pct.span.to(tok.span), format!("unknown register `%{text}`"));
-                None
-            }
+        if let Some(r) = reg::lookup(&text) {
+            return Some(r);
         }
+        // `%hi` and the thread-local operators are only operators when a `(`
+        // follows, so one written without its argument reaches this far.
+        let msg = if text == "hi" || text == "lo" || tls_op(&text).is_some() {
+            format!("`%{text}` takes its argument in parentheses: `%{text}(sym)`")
+        } else {
+            format!("unknown register `%{text}`")
+        };
+        self.cx.error(pct.span.to(tok.span), msg);
+        None
     }
 }

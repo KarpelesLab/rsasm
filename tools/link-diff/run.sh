@@ -44,8 +44,8 @@
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
 #   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
 #   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64, i386, AArch64 and PowerPC rows, where the linker turns
-#   each of them into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`,
+#   in the x86-64, i386, AArch64, PowerPC and SPARC rows, where the linker
+#   turns each of them into local exec: `@TLSGD`, `@TLSLD` and `@TLSLDM`,
 #   `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the descriptor pair
 #   `@TLSDESC`/`@TLSCALL`; AArch64's `:tlsgd:`, `:tlsldm:` with the
 #   `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
@@ -53,7 +53,11 @@
 #   marks; and PowerPC's `@got@tlsgd` and `@got@tlsld` with the
 #   `bl __tls_get_addr(sym@tlsgd)` marker, `@dtprel`, `@got@tprel` with the
 #   `@tls` marker (and, in 64-bit code, their prefixed `@pcrel` forms), and
-#   `@tprel` and its halves. AArch64's `.xword %dtprel(sym)` is not linked:
+#   `@tprel` and its halves; and SPARC's `%tgd_hi22()`/`%tgd_lo10()` pair with
+#   the `%tgd_add()` and `%tgd_call()` marks, the same for `%tldm_*()` with
+#   the `%tldo_*()` offsets, `%tie_hi22()`/`%tie_lo10()` with the `%tie_ld()`
+#   and `%tie_add()` marks, and the `%tle_hix22()`/`%tle_lox10()` pair the
+#   others are rewritten into. AArch64's `.xword %dtprel(sym)` is not linked:
 #   GNU ld refuses its relocation in an allocated section, and the image is
 #   made of those. They are in the ARM and Thumb rows too: `(TLSGD)`,
 #   `(TLSLDM)` and `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's

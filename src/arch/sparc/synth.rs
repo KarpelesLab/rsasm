@@ -316,10 +316,18 @@ fn set(cx: &mut AsmCtx<'_>, ops: &[Operand]) -> Option<Vec<Variant>> {
         cx.error(ops[0].span, "`set` takes a constant or a symbol");
         return None;
     };
+    // `set` builds the halves itself, so an operator naming one of them has
+    // nothing to say here. Both references let the `sethi` and `or` keep
+    // their own `%hi()`/`%lo()` relocations and drop whatever the operand
+    // asked for, which for a thread-local operator silently assembles an
+    // ordinary address; refusing is the only answer that cannot be wrong.
     if imm.part != ImmPart::Whole {
         cx.error(
             imm.span,
-            "`set` builds the whole value; drop the `%hi()`/`%lo()`",
+            format!(
+                "`set` builds the whole value; drop the {}",
+                imm.part.spelling()
+            ),
         );
         return None;
     }
