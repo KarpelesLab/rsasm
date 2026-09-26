@@ -92,6 +92,8 @@ enum P {
     JumpFar,
     Li,
     LoadAddress(Addr),
+    /// `la.tls.ie` and, with the flag set, `la.tls.gd`.
+    LoadTls(bool),
     /// `fmv`, `fneg` and `fabs`, all of which are a sign-injection with the
     /// source used twice.
     FloatSign(u32),
@@ -165,6 +167,8 @@ fn classify(name: &str) -> Option<P> {
         "la" => P::LoadAddress(Addr::La),
         "lla" => P::LoadAddress(Addr::Lla),
         "lga" => P::LoadAddress(Addr::Lga),
+        "la.tls.ie" => P::LoadTls(false),
+        "la.tls.gd" => P::LoadTls(true),
         "fmv.s" => P::FloatSign(FSGNJ_S),
         "fneg.s" => P::FloatSign(FSGNJN_S),
         "fabs.s" => P::FloatSign(FSGNJX_S),
@@ -400,6 +404,38 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
                     encode::kind_pair_lo12(false),
                 );
             }
+        }
+        P::LoadTls(general) => {
+            ops.arity(a.cx, name, &[2])?;
+            let rd = ops.xreg(a.cx, 0)?;
+            let target = ops.imm(a.cx, 1)?;
+            a.no_modifier(&target, "a thread-local variable")?;
+            if a.cx.constant(target.expr).is_some() {
+                a.error(
+                    target.span,
+                    format!("`{name}` needs a symbol, not a number"),
+                );
+                return None;
+            }
+            let auipc = encode::rd(AUIPC, rd.bits());
+            // Initial exec loads the offset out of the slot the `auipc`
+            // addressed; general dynamic hands the address of the descriptor
+            // pair to `__tls_get_addr`, so it only adds the low half on.
+            let (second, hi) = if general {
+                (ADDI, super::reloc::TLS_GD_HI20)
+            } else if a.rv64() {
+                (LD, super::reloc::TLS_GOT_HI20)
+            } else {
+                (LW, super::reloc::TLS_GOT_HI20)
+            };
+            let second = encode::rs1(encode::rd(second, rd.bits()), rd.bits());
+            a.auipc_split(
+                auipc,
+                second,
+                &target,
+                encode::kind_tls_hi20(hi),
+                encode::kind_got_lo12(),
+            );
         }
         P::FloatSign(base) => {
             ops.arity(a.cx, name, &[2])?;

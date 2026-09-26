@@ -17,12 +17,28 @@ use crate::lexer::{Punct, TokKind, Token};
 use crate::source::Span;
 
 /// A `%`-prefixed relocation modifier.
+///
+/// The thread-local ones name the four access models the psABI has: local
+/// exec (`%tprel_hi`, `%tprel_lo`, and the `%tprel_add` that marks the add of
+/// the thread pointer), initial exec (`%tls_ie_pcrel_hi`), general dynamic
+/// (`%tls_gd_pcrel_hi`) and the descriptor sequence (`%tlsdesc_hi` and the
+/// three that complete it). The two `pcrel_hi` ones take the same
+/// `%pcrel_lo(label)` as an ordinary PC-relative pair does.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Modifier {
     Hi,
     Lo,
     PcrelHi,
     PcrelLo,
+    TprelHi,
+    TprelLo,
+    TprelAdd,
+    TlsIePcrelHi,
+    TlsGdPcrelHi,
+    TlsdescHi,
+    TlsdescLoadLo,
+    TlsdescAddLo,
+    TlsdescCall,
 }
 
 impl Modifier {
@@ -32,6 +48,15 @@ impl Modifier {
             "lo" => Modifier::Lo,
             "pcrel_hi" => Modifier::PcrelHi,
             "pcrel_lo" => Modifier::PcrelLo,
+            "tprel_hi" => Modifier::TprelHi,
+            "tprel_lo" => Modifier::TprelLo,
+            "tprel_add" => Modifier::TprelAdd,
+            "tls_ie_pcrel_hi" => Modifier::TlsIePcrelHi,
+            "tls_gd_pcrel_hi" => Modifier::TlsGdPcrelHi,
+            "tlsdesc_hi" => Modifier::TlsdescHi,
+            "tlsdesc_load_lo" => Modifier::TlsdescLoadLo,
+            "tlsdesc_add_lo" => Modifier::TlsdescAddLo,
+            "tlsdesc_call" => Modifier::TlsdescCall,
             _ => return None,
         })
     }

@@ -350,3 +350,19 @@ rdcycle a0
 rdtime a0
 rdinstret a0
 csrr a0, satp
+
+# ---- thread-local access models ----
+# The relocation each carries is in tools/mc-diff/riscv64-relocs.txt; what
+# these check is the encoding, and that the `add` of the thread pointer keeps
+# its full width, since `add a0, a0, tp` on its own has a two-byte form.
+lui a0, %tprel_hi(sym)
+add a0, a0, tp, %tprel_add(sym)
+addi a0, a0, %tprel_lo(sym)
+lw a0, %tprel_lo(sym)(a1)
+sw a0, %tprel_lo(sym)(a1)
+auipc a0, %tls_ie_pcrel_hi(sym)
+auipc a0, %tls_gd_pcrel_hi(sym)
+auipc a0, %tlsdesc_hi(sym)
+addi a0, a0, %tlsdesc_add_lo(sym)
+la.tls.ie a0, sym
+la.tls.gd a0, sym

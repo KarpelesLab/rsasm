@@ -6,15 +6,25 @@ pub const BRANCH: u32 = 16;
 pub const JAL: u32 = 17;
 pub const CALL_PLT: u32 = 19;
 pub const GOT_HI20: u32 = 20;
+pub const TLS_GOT_HI20: u32 = 21;
+pub const TLS_GD_HI20: u32 = 22;
 pub const PCREL_HI20: u32 = 23;
 pub const PCREL_LO12_I: u32 = 24;
 pub const PCREL_LO12_S: u32 = 25;
 pub const HI20: u32 = 26;
 pub const LO12_I: u32 = 27;
 pub const LO12_S: u32 = 28;
+pub const TPREL_HI20: u32 = 29;
+pub const TPREL_LO12_I: u32 = 30;
+pub const TPREL_LO12_S: u32 = 31;
+pub const TPREL_ADD: u32 = 32;
 pub const RVC_BRANCH: u32 = 44;
 pub const RVC_JUMP: u32 = 45;
 pub const PCREL32: u32 = 57;
+pub const TLSDESC_HI20: u32 = 62;
+pub const TLSDESC_LOAD_LO12: u32 = 63;
+pub const TLSDESC_ADD_LO12: u32 = 64;
+pub const TLSDESC_CALL: u32 = 65;
 
 /// `R_RISCV_ADD8` to `R_RISCV_ADD64`, and the matching `SUB`s: a field that
 /// holds one symbol minus another, in two relocations at the same offset.

@@ -350,3 +350,67 @@ f:      nop
         .globl  gonly
         .type   .Ltyped, %function
         .hidden .Lhid
+
+=== thread-local access models
+# Only the linker computes any of these: the value is an offset into a
+# thread's block, or the address of a GOT slot or a descriptor holding one,
+# and the linker may rewrite a whole sequence into another model. So each is
+# relocated whatever it refers to, by name even for a variable in this file,
+# and an undefined target becomes `STT_TLS`.
+#
+# Left out, and against GNU as alone, whom rsasm follows where the two part
+# ways: `%tprel_hi` on `auipc`, and `%tls_ie_pcrel_hi`, `%tls_gd_pcrel_hi`
+# and `%tlsdesc_hi` on `lui`, which GNU as takes on either instruction and
+# llvm-mc pairs each with one of the two; `%tprel_add` on an
+# `add` whose second source is not `tp`, which llvm-mc refuses; and
+# `jalr rd, rs1, %tlsdesc_call(label)`, which is GNU as's spelling of the
+# call through a descriptor where llvm-mc writes `jalr rd, 0(rs1), ...` and
+# refuses this one. Left out of both: `%tprel_hi` of a number or of a
+# variable outside a thread-local section, which llvm-mc relocates and GNU
+# as and rsasm refuse; `.word sym@tprel` and `.word %tprel_hi(sym)`, which
+# GNU as refuses and llvm-mc quietly writes as a plain `R_RISCV_64`; and
+# `.tls_common`, which is a GNU as directive llvm-mc has no name for.
+        .section .tdata,"awT",@progbits
+        .p2align 3
+tv:     .dword  0
+        .globl  tg
+tg:     .dword  0
+        .section .tbss,"awT",@nobits
+tb:     .space  8
+        .text
+        .globl  f
+f:
+        lui     a0, %tprel_hi(tv)
+        add     a0, a0, tp, %tprel_add(tv)
+        addi    a0, a0, %tprel_lo(tv)
+        lui     a1, %tprel_hi(tg+8)
+        add     a1, a1, tp, %tprel_add(tg+8)
+        ld      a2, %tprel_lo(tg+8)(a1)
+        sd      a2, %tprel_lo(tg+8)(a1)
+        lui     a3, %tprel_hi(ext)
+        add     a3, a3, tp, %tprel_add(ext)
+        addi    a3, a3, %tprel_lo(ext)
+        lui     a4, %tprel_hi(tb)
+        addi    a4, a4, %tprel_lo(tb)
+ie:     auipc   a5, %tls_ie_pcrel_hi(tv)
+        ld      a5, %pcrel_lo(ie)(a5)
+gd:     auipc   a6, %tls_gd_pcrel_hi(ext)
+        addi    a6, a6, %pcrel_lo(gd)
+de:     auipc   a7, %tlsdesc_hi(tg)
+        ld      t1, %tlsdesc_load_lo(de)(a7)
+        addi    a7, a7, %tlsdesc_add_lo(de)
+
+=== la.tls.ie and la.tls.gd expand to an auipc pair
+# The expansion does not change with relaxation: `.option norelax` only stops
+# GNU as pairing each relocation with an `R_RISCV_RELAX`, which llvm-mc
+# without `+relax` never writes and rsasm does not write either.
+        .section .tdata,"awT",@progbits
+tv:     .dword  0
+        .text
+        la.tls.ie a0, tv
+        la.tls.gd a1, tv
+        la.tls.ie a2, ext
+        la.tls.gd a3, ext+4
+        .option norelax
+        la.tls.ie a4, tv
+        la.tls.gd a5, tv

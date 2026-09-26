@@ -139,6 +139,41 @@ impl<'c, 'a> Asm<'c, 'a> {
         let kind = match imm.modifier {
             Some(Modifier::Lo) => encode::kind_abs_lo12(store),
             Some(Modifier::PcrelLo) => encode::kind_lo12(store),
+            Some(Modifier::TprelLo) => encode::kind_tprel_lo12(store),
+            // A descriptor is loaded and added through I-type instructions,
+            // and GNU as reads neither half of one in a store.
+            Some(m @ (Modifier::TlsdescLoadLo | Modifier::TlsdescAddLo)) if store => {
+                self.error(
+                    imm.span,
+                    format!("{} belongs in a load or an add, not a store", name(m)),
+                );
+                return None;
+            }
+            Some(Modifier::TlsdescLoadLo) => {
+                encode::kind_tlsdesc_lo12(super::reloc::TLSDESC_LOAD_LO12)
+            }
+            Some(Modifier::TlsdescAddLo) => {
+                encode::kind_tlsdesc_lo12(super::reloc::TLSDESC_ADD_LO12)
+            }
+            // Neither mark fills anything in, so neither is an immediate the
+            // instruction it was written on can hold.
+            Some(m @ Modifier::TprelAdd) => {
+                self.error(
+                    imm.span,
+                    format!("{} marks an `add` of the thread pointer", name(m)),
+                );
+                return None;
+            }
+            Some(m @ Modifier::TlsdescCall) => {
+                self.error(
+                    imm.span,
+                    format!(
+                        "{} marks the `jalr` of a descriptor, as its third operand",
+                        name(m)
+                    ),
+                );
+                return None;
+            }
             Some(m) => {
                 self.error(imm.span, format!("{} does not fit a 12-bit field", name(m)));
                 return None;
@@ -171,6 +206,14 @@ impl<'c, 'a> Asm<'c, 'a> {
         let kind = match imm.modifier {
             Some(Modifier::Hi) => encode::kind_hi20(false),
             Some(Modifier::PcrelHi) => encode::kind_hi20(true),
+            // GNU as reads every thread-local high half in either `lui` or
+            // `auipc`, though only one of the two makes an address the rest
+            // of the sequence can use; llvm-mc pairs each with its own
+            // instruction and refuses the other.
+            Some(Modifier::TprelHi) => encode::kind_tls_hi20(super::reloc::TPREL_HI20),
+            Some(Modifier::TlsIePcrelHi) => encode::kind_tls_hi20(super::reloc::TLS_GOT_HI20),
+            Some(Modifier::TlsGdPcrelHi) => encode::kind_tls_hi20(super::reloc::TLS_GD_HI20),
+            Some(Modifier::TlsdescHi) => encode::kind_tls_hi20(super::reloc::TLSDESC_HI20),
             Some(m) => {
                 self.error(
                     imm.span,
@@ -414,6 +457,10 @@ impl<'c, 'a> Asm<'c, 'a> {
             Kind::Jal => &[1, 2],
             Kind::Jalr => &[1, 2, 3],
             Kind::F4 => &[4],
+            // `add rd, rs1, tp, %tprel_add(sym)` carries the mark that ties
+            // the add of the thread pointer to the rest of a local-exec
+            // sequence. Only `add` takes it, as in GNU as.
+            Kind::R if name == "add" => &[3, 4],
             _ => &[3],
         };
         if !want.contains(&count) {
@@ -439,6 +486,22 @@ impl<'c, 'a> Asm<'c, 'a> {
                     encode::rs1(encode::rd(base, rd.bits()), rs1.bits()),
                     rs2.bits(),
                 );
+                if count == 4 {
+                    let mark = ops.imm(self.cx, 3)?;
+                    if mark.modifier != Some(Modifier::TprelAdd) {
+                        self.error(mark.span, "expected `%tprel_add(symbol)`");
+                        return None;
+                    }
+                    // The mark keeps the instruction at full width: `add a0,
+                    // a0, tp` has a two-byte form, and a relocation on it
+                    // would have nothing to name.
+                    self.emit_fixed(Insn::full(w).with_fix(
+                        mark.expr,
+                        encode::kind_tprel_add(),
+                        mark.span,
+                    ));
+                    return Some(());
+                }
                 self.emit(w);
             }
             Kind::I => {
@@ -659,6 +722,20 @@ impl<'c, 'a> Asm<'c, 'a> {
                 let rd = ops.xreg(self.cx, 0)?;
                 let rs1 = ops.xreg(self.cx, 1)?;
                 let off = ops.imm(self.cx, 2)?;
+                // `jalr rd, rs1, %tlsdesc_call(label)` is the call through a
+                // descriptor, and this spelling is the only one GNU as reads
+                // it in. The mark sits where the displacement would, but it
+                // fills nothing in: it only tells the linker which `jalr`
+                // ends the sequence.
+                if off.modifier == Some(Modifier::TlsdescCall) {
+                    let w = encode::rs1(encode::rd(base, rd.bits()), rs1.bits());
+                    self.emit_fixed(Insn::full(w).with_fix(
+                        off.expr,
+                        encode::kind_tlsdesc_call(),
+                        off.span,
+                    ));
+                    return Some(());
+                }
                 (
                     rd,
                     Mem {
@@ -733,5 +810,14 @@ fn name(m: Modifier) -> &'static str {
         Modifier::Lo => "`%lo`",
         Modifier::PcrelHi => "`%pcrel_hi`",
         Modifier::PcrelLo => "`%pcrel_lo`",
+        Modifier::TprelHi => "`%tprel_hi`",
+        Modifier::TprelLo => "`%tprel_lo`",
+        Modifier::TprelAdd => "`%tprel_add`",
+        Modifier::TlsIePcrelHi => "`%tls_ie_pcrel_hi`",
+        Modifier::TlsGdPcrelHi => "`%tls_gd_pcrel_hi`",
+        Modifier::TlsdescHi => "`%tlsdesc_hi`",
+        Modifier::TlsdescLoadLo => "`%tlsdesc_load_lo`",
+        Modifier::TlsdescAddLo => "`%tlsdesc_add_lo`",
+        Modifier::TlsdescCall => "`%tlsdesc_call`",
     }
 }

@@ -115,3 +115,61 @@ _start:
 reader:
         la      a0, bigger
         ret
+
+=== thread-local variables across objects
+# This corpus is linked as RV32 and as RV64, so every access is written in a
+# 32-bit instruction; `la.tls.ie` is the one that widens with the word size,
+# and it reads the slot the hand-written pair above it does. The descriptor
+# operators are not here: llvm-mc, this row's reference, spells the call
+# through a descriptor differently from GNU as (see run.sh).
+--- a.s
+        .text
+        .globl  _start
+_start:
+        # Local exec: the high half, the marked add of the thread pointer,
+        # and the low half in an add, a load and a store.
+        lui     a0, %tprel_hi(tv)
+        add     a0, a0, tp, %tprel_add(tv)
+        addi    a0, a0, %tprel_lo(tv)
+        lui     a1, %tprel_hi(tb)
+        add     a1, a1, tp, %tprel_add(tb)
+        lw      a2, %tprel_lo(tb)(a1)
+        sw      a2, %tprel_lo(tb+8)(a1)
+        # Initial exec, written out and through the pseudo-instruction; the
+        # linker turns both into local exec.
+1:      auipc   a3, %tls_ie_pcrel_hi(tv2)
+        lw      a3, %pcrel_lo(1b)(a3)
+        add     a3, a3, tp
+        la.tls.ie a4, tb
+        add     a4, a4, tp
+        # General dynamic, which a static link also turns into local exec.
+2:      auipc   a5, %tls_gd_pcrel_hi(tv)
+        addi    a5, a5, %pcrel_lo(2b)
+        call    __tls_get_addr
+        la.tls.gd a0, tv2
+        call    __tls_get_addr
+        ret
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .word   0x11223344
+tloc:   .word   99
+--- b.s
+        .section .tdata,"awT",@progbits
+        .globl  tv2
+tv2:    .word   2
+        .section .tbss,"awT",@nobits
+        .globl  tb
+tb:     .space  16
+        .text
+        .globl  helper, __tls_get_addr
+helper:
+        lui     a0, %tprel_hi(tv)
+        add     a0, a0, tp, %tprel_add(tv)
+        addi    a0, a0, %tprel_lo(tv)
+3:      auipc   a1, %tls_ie_pcrel_hi(tv)
+        lw      a1, %pcrel_lo(3b)(a1)
+        la.tls.gd a2, tb
+        call    __tls_get_addr
+        ret
+__tls_get_addr:
+        ret
