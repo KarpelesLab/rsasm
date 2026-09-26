@@ -118,7 +118,32 @@ fn imm16_fixup(modifier: RelocMod) -> FixupKind {
         // A bare immediate must actually fit; it gets the same relocation as
         // `%lo` because both name the low half of an address.
         RelocMod::None => base.with_field(16, 1).with_reloc(reloc::LO16),
+        RelocMod::TlsGd => tls_fixup(reloc::TLS_GD, false),
+        RelocMod::TlsLdm => tls_fixup(reloc::TLS_LDM, false),
+        RelocMod::DtprelHi => tls_fixup(reloc::TLS_DTPREL_HI16, true),
+        RelocMod::DtprelLo => tls_fixup(reloc::TLS_DTPREL_LO16, false),
+        RelocMod::Gottprel => tls_fixup(reloc::TLS_GOTTPREL, false),
+        RelocMod::TprelHi => tls_fixup(reloc::TLS_TPREL_HI16, true),
+        RelocMod::TprelLo => tls_fixup(reloc::TLS_TPREL_LO16, false),
     }
+}
+
+/// The field of a thread-local operator, given the relocation both references
+/// write for it and whether it is the high half of an offset.
+///
+/// Nothing here computes one: the value is an offset into a thread's block,
+/// or the offset of a GOT entry holding one, and the linker lays both out —
+/// so even a variable defined in this file is relocated, and a flat image
+/// has no answer at all. What the field does hold under `REL` is the addend,
+/// which GNU as writes the same way as for `%hi` and `%lo`: biased by 0x8000
+/// on a high half, plain on a low one. llvm-mc drops the addend of a
+/// thread-local relocation instead (see `tools/mc-diff/mips-relocs.txt`).
+fn tls_fixup(reloc: u32, high: bool) -> FixupKind {
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .with_class(crate::reloc::RelocClass::ThreadLocal)
+        .linker_only()
+        .scatter(if high { field_hi16 } else { field_imm16 })
 }
 
 // ---- the word builder -----------------------------------------------------
@@ -211,6 +236,10 @@ pub fn place_imm16(
             Some(n) => w.push(word | imm(n)),
             None => w.push_fixup(word, v.expr, imm16_fixup(RelocMod::Lo), v.span),
         },
+        // A thread-local operator always relocates, even where the operand
+        // looks like a number: the layout pass is what refuses `%tprel_lo(4)`,
+        // and it only sees a fixup.
+        m => w.push_fixup(word, v.expr, imm16_fixup(m), v.span),
     }
     Some(())
 }
@@ -691,6 +720,15 @@ pub fn encode(
                 _ => 0,
             };
             w.push(base | rt(t.num) | rd(d.num) | sel);
+        }
+        Form::RtHwr => {
+            a.arity(cx, 2)?;
+            let t = a.gpr(cx, 0)?;
+            // The second operand numbers a hardware register, not one of the
+            // integer file, so `.reginfo` does not count it: llvm-mc's mask
+            // for `rdhwr $3, $29` names $3 alone.
+            let h = a.gpr_unused(cx, 1)?;
+            w.push(base | rt(t.num) | rd(h.num));
         }
     }
     Some(w.finish())

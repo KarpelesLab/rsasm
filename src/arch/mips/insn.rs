@@ -86,6 +86,10 @@ pub enum Form {
     FdFsCc,
     /// `op rt, rd` / `op rt, rd, sel` — coprocessor-0 moves.
     RtRdSel,
+    /// `rdhwr rt, $n` — a read of hardware register `n`, which is not one of
+    /// the integer registers even though it is written like one, and so is
+    /// not counted in the object's register masks.
+    RtHwr,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -153,6 +157,8 @@ const fn op(o: u32) -> u32 {
 
 /// SPECIAL2, which holds the MIPS32 multiply-accumulate group.
 const SPECIAL2: u32 = op(0x1c);
+/// SPECIAL3, added in MIPS32r2, which holds `rdhwr`.
+const SPECIAL3: u32 = op(0x1f);
 /// REGIMM, where the `rt` field selects the instruction.
 const REGIMM: u32 = op(0x01);
 const COP0: u32 = op(0x10);
@@ -336,6 +342,13 @@ static TABLE: &[Def] = &[
     // The COP0 `rs` field selects the direction: 0 moves from, 4 moves to.
     d("mfc0",   Form::RtRdSel, COP0),
     d("mtc0",   Form::RtRdSel, COP0 | (4 << 21)),
+
+    // ---- hardware registers -----------------------------------------------
+    // `rdhwr` reads a register the kernel lets user code see; `$29` is the
+    // thread pointer, which is how a local-exec thread-local access starts.
+    // Neither reference relocates it: the offset added to it is what carries
+    // the relocation.
+    d("rdhwr",  Form::RtHwr, SPECIAL3 | 0x3b),
 
     // ---- coprocessor 1 moves and branches ---------------------------------
     // Same layout on COP1, plus 1 and 5 for the doubleword pair.
@@ -529,6 +542,7 @@ mod tests {
             Form::RdRsCc => 0x03fc_f800,
             Form::FdFsCc => 0x001c_ffc0,
             Form::RtRdSel => 0x001f_f807,
+            Form::RtHwr => 0x001f_f800,
         }
     }
 
