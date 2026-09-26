@@ -751,6 +751,7 @@ impl AsmCtx<'_> {
 /// error. AArch64 folds a PC-relative target the same way, which decides
 /// what the field holds: `adr x0, b - a` is the number `b - a`, taken as the
 /// offset a number written there would be.
+#[cfg(any(feature = "x86", feature = "aarch64"))]
 pub(crate) fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
     use crate::expr::{BinOp, ExprKind};
     let node = cx.exprs.get(e).clone();
@@ -784,6 +785,7 @@ pub(crate) fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
 
 /// Where a label an expression names was defined, or where `.` is, with the
 /// order it was defined in; see [`AsmCtx::fixed_label_distance`].
+#[cfg(any(feature = "x86", feature = "aarch64"))]
 fn expr_label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(SectionId, u32, u32)> {
     use crate::expr::ExprKind;
     let node = cx.exprs.get(e);
