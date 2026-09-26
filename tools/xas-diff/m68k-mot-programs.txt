@@ -248,3 +248,10 @@ far rts
  fmovem.l (sp)+,fpcr/fpsr/fpiar
  fmovem.x (sp)+,fp0-fp7
  rte
+=== comments in every place a line can start one
+* a star comment in the first column
+   * a star comment after the whitespace that starts a line
+# a hash comment in the first column
+   # a hash comment after the whitespace that starts a line
+ move.w #1,d0 ; a trailing comment
+ nop

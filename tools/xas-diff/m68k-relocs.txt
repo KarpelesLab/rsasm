@@ -139,6 +139,68 @@ hid:    .long   0
         .section custom,"a"
         .byte   7
 
+# The dotted `.section` is GNU as's own, whatever dialect the source is read
+# in: the Motorola `SECTION` a bare word introduces takes none of these.
+=== thread-local sections, with a flag string and without
+        .section .tdata,"awT",@progbits
+a:      .long   1
+        .section .tbss,"awT",@nobits
+b:      .space  8
+        .section .tdata,"awT",%progbits
+c:      .long   2
+        .section ".tbss","awT",%nobits
+d:      .space  4
+        .section .tdata
+e:      .long   3
+        .section .tbss
+f:      .space  4
+        .globl  a, b, c, d, e, f
+        .text
+        .long   a, b, c, d, e, f
+=== the shapes of a .section argument list
+        .section .text.q,"ax",@progbits
+        nop
+        .section "quoted","a",@progbits
+        .long   1
+        .section .numbered,"a",@1
+        .long   2
+        .section .merged,"aM",@progbits,4
+        .long   3
+        .section .strings,"aMS",@progbits,1
+        .asciz  "hi"
+        .section .plain
+        .long   5
+=== a section stack around a thread-local section
+        .text
+        nop
+        .pushsection .tdata,"awT",@progbits
+        .long   1
+        .popsection
+        nop
+        .section .tbss,"awT",@nobits
+        .space  4
+        .previous
+        nop
+=== refused: a .section with no name
+        .section
+=== refused: a .section flag string that is not a string
+        .section .foo,a,@progbits
+
+# `.even` is the 680x0 port's `.align 2`, and pads with zeros wherever it
+# stands. The `.dc`, `.dcb` and `.ds` in the same syntax are in
+# `m68k-programs.txt`, which compares the bytes of one section.
+=== even pads with zeros, in code as in data
+        .text
+        .byte   1
+        .even
+        nop
+        .data
+        .byte   2
+        .even
+        .byte   3
+        .even
+        .byte   4
+
 === FPU and MMU operands referring to symbols
         .text
         .globl  glob

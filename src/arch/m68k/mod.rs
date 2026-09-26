@@ -377,13 +377,29 @@ impl Architecture for M68k {
         2
     }
 
-    /// GNU as for m68k comments with `|`, and with `#` only at the start of a
-    /// line, since `#` marks an immediate. `;` still separates statements.
+    /// GNU as for m68k comments with `|`, and with `#` or `*` only at the
+    /// start of a line — its `line_comment_chars` — since `#` marks an
+    /// immediate and `*` multiplies. `;` still separates statements.
     fn comments(&self) -> CommentSyntax {
         CommentSyntax {
             anywhere: &["|"],
-            line_start: &["#"],
+            line_start: &["#", "*"],
         }
+    }
+
+    /// `.even` is the 680x0 port's `.align 2`, kept for the Sun assembler.
+    /// GNU as's `s_even` pads with zeros wherever it stands, code included.
+    fn directive(
+        &self,
+        cx: &mut AsmCtx<'_>,
+        name: &str,
+        _cur: &mut crate::cursor::Cursor<'_>,
+    ) -> bool {
+        if name != ".even" {
+            return false;
+        }
+        cx.requests.push(crate::arch::Request::AlignZero(2));
+        true
     }
 
     fn data_reloc(&self, size: u8, pcrel: bool) -> Option<u32> {

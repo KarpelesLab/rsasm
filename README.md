@@ -63,7 +63,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 802 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 310 |
-| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3747 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3755 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 531 |
@@ -523,11 +523,19 @@ $ rsasm -a m68k -f bin --hex intena.s
 ```
 
 Motorola covers vasm, Devpac and ASM-One source and was checked against both
-vasm and GNU as `--mri`. Three rules in it catch people out:
+vasm and GNU as `--mri`. Four rules in it catch people out:
 
 - **A word in the first column is a label**, with or without a colon, so
   instructions have to be indented. `rts` written in column 0 assembles to no
-  code at all — in both reference assemblers, not just here.
+  code at all — in both reference assemblers, not just here — and so does a
+  dotted directive: `.section` in column 0 is a label, and the word after it
+  is what the line is read as.
+- **`.section` is GNU as's directive, `section` the Motorola one.** Neither
+  reference reads a dotted directive at all, so the dot can only be GNU as's
+  spelling: `section name[,type]` names a code, data or bss section, and
+  `.section .tbss,"awT",@nobits` takes GNU as's flag string and type. A `#`
+  where a line begins is a comment, as `*` is, which is what GNU as `--mri`
+  reads; vasm calls it an error.
 - **Word and long data, and instructions, are aligned to an even address.**
   vasm on its own defaults leaves a `dc.w` after a `dc.b` at an odd address;
   Devpac, GNU as and vasm's `-devpac` mode align it, and a 68000 faults on the

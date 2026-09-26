@@ -626,7 +626,7 @@ impl Assembler {
         ));
     }
 
-    fn alias_fill(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
+    pub(crate) fn alias_fill(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
         self.motorola_align(width, span);
         let Some(count_e) = self.parse_expr(cur) else {
             return;
