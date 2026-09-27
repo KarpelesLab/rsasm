@@ -1059,7 +1059,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,637 of 25,637 match across fifty-seven
+  from checksum-pinned sources. 25,644 of 25,644 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -1092,7 +1092,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 282 of 282 match across
+  addend a COFF relocation keeps in its field. 283 of 283 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
