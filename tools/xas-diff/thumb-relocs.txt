@@ -1015,3 +1015,9 @@ f:      nop
 === refused: an addend after a suffix on a branch target
         .syntax unified
         bl      tv(tlscall) + 4
+=== refused: a suffix the backend does not know, on a branch target
+        .syntax unified
+        bl      sym(FOOBAR)
+=== refused: a suffix the backend does not know, in data
+        .syntax unified
+        .word   sym(FOOBAR)

@@ -56,21 +56,21 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17091 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21821 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3218 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 567 |
-| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 848 |
-| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 340 |
-| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3762 |
-| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
-| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17095 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21825 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3222 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 571 |
+| PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 854 |
+| SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 344 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3764 |
+| SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1285 |
+| Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 647 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 531 |
-| TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 5556 |
-| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 561 |
+| TI MSP430 and MSP430X | `msp430` `msp430x` `msp430xv2` | GNU as | 5560 |
+| NEC/Renesas V850 and RH850, GNU and CC-RH syntax | `v850` `rh850` | GNU as | 565 |
 | NEC 78K0, in CA78K0 syntax | `78k0` | AS | 1276 |
-| Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1938 |
+| Microchip AVR, every core GNU as knows | `avr` `avr1`–`avr6` `avrxmega2`–`avrxmega7` `avrtiny` | GNU as | 1940 |
 | Zilog Z80, with the undocumented `IXH`/`IXL` forms, Zilog and GNU syntax | `z80` | GNU as, vasm | 2572 |
 | MOS 6502, in ca65 syntax | `6502` | ca65, vasm | 551 |
 | Intel 8080, in Intel mnemonics | `i8080` | AS | 278 |
@@ -165,6 +165,10 @@ form by form and in random whole programs as well.
   beside it, since the linker finds the function by name. On every target a
   thread-local model on a symbol defined outside a thread-local section is
   refused, as GNU as refuses it
+- a relocation modifier the target has no relocation for is refused, in an
+  instruction operand as well as in a data directive, rather than relocated
+  as if it were not written: `movl x@FOOBAR(%rip), %eax` is an error, where
+  writing the plain `R_X86_64_PC32` would have been a different program
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
   `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
@@ -281,7 +285,9 @@ form by form and in random whole programs as well.
 - x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
   `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
   instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
-  and SGX, VMX, SVM, MPX and VIA PadLock
+  SGX, VMX, SVM, MPX and VIA PadLock; and `@SIZE` on x86-64, which GNU as
+  writes as `R_X86_64_SIZE32` or `R_X86_64_SIZE64` and rsasm refuses (i386's
+  `R_386_SIZE32` is there)
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
@@ -381,8 +387,10 @@ form by form and in random whole programs as well.
   (`.fopt id=`); vasm's `MACHINE`, `FPU` and `CHIP` directives (use `.arch`);
   vasm's sized `fbcc.w`, which GNU as does not take either (`fbcc` is 16
   bits, `fbcc.l` 32); CPU32's `tbl*` table lookups, for which no reference
-  here has an encoding; the position-independent operand suffixes `@GOT`,
-  `@GOTPC`, `@PLT` and `@PLTPC`, where the five thread-local ones are read;
+  here has an encoding; the position-independent operand suffixes, which are
+  refused where the five thread-local ones are read -- for a `%a0`-relative
+  operand GNU as writes `R_68K_GOT32O` for `x@GOT`, `R_68K_PLT32O` for
+  `x@PLT`, `R_68K_PLT32` for `x@PLTPC` and `R_68K_GOT32` for `x@GOTPC`;
   and a `:b` or `:s` displacement size, which GNU as puts in a brief
   extension word and widens to a word in a `d(An)`. On ColdFire, an
   instruction as written that the core dropped is refused where GNU as
@@ -402,7 +410,11 @@ form by form and in random whole programs as well.
 Anything that produces incorrect output rather than an error is listed here,
 separately:
 
-- Nothing is known to be, at the moment.
+- **i386 `@SIZE` of a symbol this file already sized.** `.long loc@SIZE`,
+  where `loc` is defined here and given a `.size`, leaves `R_386_SIZE32`
+  against the symbol's section, where GNU as folds the reference to the size
+  itself and writes no relocation. Against an undefined symbol, which is what
+  the modifier is for, the two agree.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the

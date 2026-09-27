@@ -26,7 +26,8 @@
 # by `=== <name>` lines. One containing `relocs` holds snippets in the same
 # format that are compared as whole objects: every allocated section's header
 # and bytes, the global and undefined symbols, and the relocations, as
-# tools/mc-diff/canon.sh prints them. That part needs llvm-readobj and
+# tools/mc-diff/canon.sh prints them; a snippet there named `refused: ...`
+# matches when both assemblers reject it. That part needs llvm-readobj and
 # llvm-objcopy, and is skipped without. Any other corpus holds one
 # instruction per line.
 set -u
@@ -113,17 +114,23 @@ compare_object() { # name, source
     r="RSASM-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
   fi
   rm -rf "$d"
-  if [ "$g" = "$r" ]; then
+  if [ "${name#refused: }" != "$name" ]; then
+    # Both have to refuse it; matching output would mean neither did.
+    if [ "${g#GAS-ERROR}" != "$g" ] && [ "${r#RSASM-ERROR}" != "$r" ]; then
+      pass=$((pass + 1))
+      return
+    fi
+  elif [ "$g" = "$r" ]; then
     pass=$((pass + 1))
-  else
-    fail=$((fail + 1))
-    echo "### [$arch] $name (object)"
-    printf '%s\n' "$src" | sed 's/^/    /'
-    echo "  gas:"
-    printf '%s\n' "$g" | sed 's/^/    /'
-    echo "  rsasm:"
-    printf '%s\n' "$r" | sed 's/^/    /'
+    return
   fi
+  fail=$((fail + 1))
+  echo "### [$arch] $name (object)"
+  printf '%s\n' "$src" | sed 's/^/    /'
+  echo "  gas:"
+  printf '%s\n' "$g" | sed 's/^/    /'
+  echo "  rsasm:"
+  printf '%s\n' "$r" | sed 's/^/    /'
 }
 
 run_lines() {

@@ -151,6 +151,10 @@ impl Abi {
     /// The relocation an i386 `@` modifier names for a 32-bit field, where
     /// every one of them is: `@GOTOFF`, the TLS models, `@SIZE`. `@PLT` and
     /// `@GOT` are shared with x86-64 and handled by their own methods.
+    ///
+    /// `@SIZE` is relocated whatever the symbol is, where GNU as folds it to
+    /// the size a `.size` in this file already gave; see the README's
+    /// "Known wrong".
     pub fn i386_modifier(name: &str) -> Option<u32> {
         Some(match name {
             "plt" => i386::PLT32,
@@ -176,6 +180,13 @@ impl Abi {
     /// foo@TLSGD` is an error there rather than something to widen. The four
     /// modifiers with no x86-64 relocation at all — `@TLSLDM`, `@NTPOFF`,
     /// `@GOTNTPOFF` and `@INDNTPOFF` — are i386's alone.
+    ///
+    /// The modifiers this backend has no x86-64 number for are refused rather
+    /// than relocated as a plain reference: `@GOTOFF`, `@GOTPLT`, `@PLTOFF`
+    /// and `@DTPMOD`, which GNU as refuses too in the fields tried here, and
+    /// `@SIZE`, which it does assemble — `R_X86_64_SIZE32` in a four-byte
+    /// field and `R_X86_64_SIZE64` in an eight-byte one, where the size is
+    /// not already known.
     pub fn x86_64_tls_modifier(name: &str, size: u8) -> Option<u32> {
         Some(match (name, size) {
             ("tlsgd", 4) => x86_64::TLSGD,

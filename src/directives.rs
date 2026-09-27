@@ -693,21 +693,7 @@ impl Assembler {
                 }
                 None => {
                     let espan = self.exprs.span(e);
-                    // Spelled the way the target writes it: `lo8(x)` on AVR,
-                    // `x@got` everywhere else.
-                    let written = if self.arch.expr_modifiers().contains(&name.as_str()) {
-                        format!("`{name}()`")
-                    } else if self
-                        .arch
-                        .percent_modifiers(".xword")
-                        .contains(&name.as_str())
-                    {
-                        format!("`%{name}()`")
-                    } else if self.arch.data_paren_modifiers().contains(&name.as_str()) {
-                        format!("`({name})`")
-                    } else {
-                        format!("`@{name}`")
-                    };
+                    let written = crate::arch::written_modifier(&*self.arch, &name);
                     self.diags.error(
                         espan,
                         format!(

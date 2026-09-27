@@ -683,3 +683,13 @@ lo8:    nop
         .hidden .Lhid
         .data
 wdef:   .word   wref
+
+# A modifier no backend knows is refused rather than relocated as if it
+# were not there: GNU as calls it junk after the expression.
+=== refused: a modifier the backend does not know, in an operand
+        .text
+        ldi     r16, x@foobar
+
+=== refused: a modifier the backend does not know, in data
+        .data
+        .word   x@foobar

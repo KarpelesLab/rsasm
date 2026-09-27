@@ -424,9 +424,17 @@ impl Architecture for M68k {
     /// What an instruction operand takes: any of the five models, in whatever
     /// width the field the operand was encoded into has, which is GNU as's
     /// `get_reloc_code (n, pcrel, pic_reloc)` over the fixups `md_assemble`
-    /// makes.
-    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
-        reloc::tls(name, kind.size)
+    /// makes. Anything else is refused, the position-independent suffixes
+    /// included; see [`reloc`].
+    fn fixup_modifier_reloc(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> crate::arch::FixupModifier {
+        match reloc::tls(name, kind.size) {
+            Some(r) => crate::arch::FixupModifier::Reloc(r),
+            None => crate::arch::FixupModifier::Unknown,
+        }
     }
 
     /// A thread-local model names a variable, which GNU as marks `STT_TLS`

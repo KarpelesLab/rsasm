@@ -13,8 +13,9 @@
 # optionally tools/mc-diff/<arch>-programs.txt, multi-line snippets separated
 # by `=== <name>` lines. Snippets in tools/mc-diff/<arch>-relocs.txt are
 # compared as whole objects: sections, symbols and relocations, as canon.sh
-# prints them. Lines in tools/mc-diff/<arch>-*-words.txt are one instruction
-# of a fixed width each, and are assembled a few hundred at a time.
+# prints them; one named `refused: ...` matches when both assemblers reject
+# it. Lines in tools/mc-diff/<arch>-*-words.txt are one instruction of a
+# fixed width each, and are assembled a few hundred at a time.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -136,17 +137,23 @@ compare_object() { # arch, rsasm_arch, triple, flags, header, name, source
     r="RSASM-ERROR: $(head -3 "$d/err" | tr '\n' ' ')"
   fi
   rm -rf "$d"
-  if [ "$m" = "$r" ]; then
+  if [ "${name#refused: }" != "$name" ]; then
+    # Both have to refuse it; matching output would mean neither did.
+    if [ "${m#MC-ERROR}" != "$m" ] && [ "${r#RSASM-ERROR}" != "$r" ]; then
+      pass=$((pass + 1))
+      return
+    fi
+  elif [ "$m" = "$r" ]; then
     pass=$((pass + 1))
-  else
-    fail=$((fail + 1))
-    echo "### [$arch] $name (object)"
-    printf '%s\n' "$src" | sed 's/^/    /'
-    echo "  llvm-mc:"
-    printf '%s\n' "$m" | sed 's/^/    /'
-    echo "  rsasm:"
-    printf '%s\n' "$r" | sed 's/^/    /'
+    return
   fi
+  fail=$((fail + 1))
+  echo "### [$arch] $name (object)"
+  printf '%s\n' "$src" | sed 's/^/    /'
+  echo "  llvm-mc:"
+  printf '%s\n' "$m" | sed 's/^/    /'
+  echo "  rsasm:"
+  printf '%s\n' "$r" | sed 's/^/    /'
 }
 
 # Compares a batch of one-instruction lines at once. A fixed-width

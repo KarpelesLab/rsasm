@@ -1255,3 +1255,9 @@ fn:     bx      lr
 === refused: an FDPIC suffix outside an FDPIC object
         .syntax unified
         .word   tv(TLSGD_FDPIC)
+=== refused: a suffix the backend does not know, on a branch target
+        .syntax unified
+        bl      sym(FOOBAR)
+=== refused: a suffix the backend does not know, in data
+        .syntax unified
+        .word   sym(FOOBAR)

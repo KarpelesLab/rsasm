@@ -349,6 +349,53 @@ fn an_unknown_relocation_modifier_in_data_is_an_error() {
 }
 
 #[test]
+fn an_unknown_relocation_modifier_in_an_operand_is_an_error() {
+    // The instruction path used to fall back to the fixup's own relocation,
+    // so `movl x@FOOBAR(%rip), %eax` quietly became an ordinary reference to
+    // `x`; GNU as calls it junk after the expression.
+    let e = errors("movl x@FOOBAR(%rip), %eax\n");
+    assert!(
+        e.contains("`@foobar` is not a relocation modifier the `x86-64` backend supports"),
+        "{e}"
+    );
+    // A modifier the target does know still picks its relocation.
+    let asm = assemble("movl x@GOTPCREL(%rip), %eax\n");
+    assert!(!asm.diags.has_errors());
+    assert_eq!(asm.relocs[0].kind, 41, "R_X86_64_GOTPCRELX");
+}
+
+#[test]
+fn an_unknown_relocation_modifier_is_an_error_on_every_target() {
+    // Every backend refuses one, whether it has modifiers of its own, reads
+    // them while encoding (PowerPC, SPARC) or has none at all (m68k).
+    for (arch, src) in [
+        #[cfg(feature = "aarch64")]
+        ("aarch64", "bl x@FOOBAR\n"),
+        #[cfg(feature = "riscv")]
+        ("riscv64", "call x@foobar\n"),
+        #[cfg(feature = "mips")]
+        ("mips", "j x@foobar\n"),
+        #[cfg(feature = "sparc")]
+        ("sparc", "call x@foobar\n"),
+        #[cfg(feature = "powerpc")]
+        ("powerpc", "addi 3, 3, x@foobar\n"),
+        #[cfg(feature = "m68k")]
+        ("m68k", "move.l x@FOOBAR(%a0), %d0\n"),
+        #[cfg(feature = "v850")]
+        ("v850", "jr x@foobar\n"),
+        #[cfg(feature = "rx")]
+        ("rx", "bsr x@foobar\n"),
+        #[cfg(feature = "avr")]
+        ("avr51", "ldi r16, x@foobar\n"),
+        #[cfg(feature = "msp430")]
+        ("msp430", "mov #x@foobar, r5\n"),
+    ] {
+        let e = errors_for(arch, src);
+        assert!(!e.is_empty(), "{arch} accepted `{src}`");
+    }
+}
+
+#[test]
 fn flat_output_sizes_see_real_addresses() {
     // During layout a flat image's labels used to sit at their offset within
     // the section rather than at base + offset, so this went negative.

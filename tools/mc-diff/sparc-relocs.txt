@@ -217,3 +217,13 @@ _start:
         .globl  gonly
         .type   .Ltyped, #function
         .hidden .Lhid
+
+# A modifier no backend knows is refused rather than relocated as if it
+# were not there: llvm-mc calls it an invalid variant.
+=== refused: a modifier the backend does not know, in an operand
+        .text
+        call    x@foobar
+
+=== refused: a modifier the backend does not know, in data
+        .data
+        .word   x@foobar

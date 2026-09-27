@@ -391,20 +391,28 @@ impl Architecture for Arm {
     /// the operand the same way and then ignores the suffix, so it keeps its
     /// own relocation. The zero-width fixup `.tlsdescseq` makes already
     /// carries the relocation for its instruction set.
-    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+    fn fixup_modifier_reloc(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> crate::arch::FixupModifier {
+        use crate::arch::FixupModifier;
         match name {
-            "plt" if kind.pcrel => return Some(kind.reloc),
+            "plt" if kind.pcrel => return FixupModifier::Reloc(kind.reloc),
             "tlscall" if kind.pcrel => {
-                return Some(match kind.reloc {
+                return FixupModifier::Reloc(match kind.reloc {
                     reloc::CALL | reloc::JUMP24 => reloc::TLS_CALL,
                     reloc::THM_CALL => reloc::THM_TLS_CALL,
                     other => other,
                 });
             }
-            "tlsdescseq" if kind.size == 0 => return Some(kind.reloc),
+            "tlsdescseq" if kind.size == 0 => return FixupModifier::Reloc(kind.reloc),
             _ => {}
         }
-        reloc::modifier(name, kind.size, kind.pcrel)
+        match reloc::modifier(name, kind.size, kind.pcrel) {
+            Some(r) => FixupModifier::Reloc(r),
+            None => FixupModifier::Unknown,
+        }
     }
 
     /// Every thread-local suffix makes its symbol `STT_TLS`, which GNU as's

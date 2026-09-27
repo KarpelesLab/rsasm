@@ -410,3 +410,13 @@ other:  rts
         .hidden .Lhid
         .data
 wdef:   .long   wref
+
+# A modifier no backend knows is refused rather than relocated as if it
+# were not there: GNU as calls it junk after the expression.
+=== refused: a modifier the backend does not know, in an operand
+        .text
+        move.l  x@FOOBAR(%a0), %d0
+
+=== refused: a modifier the backend does not know, in data
+        .data
+        .long   x@FOOBAR

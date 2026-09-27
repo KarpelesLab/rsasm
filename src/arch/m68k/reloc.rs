@@ -1,4 +1,11 @@
 //! ELF relocation numbers for `EM_68K`, as `m68k-elf-objdump -r` names them.
+//!
+//! The widths here and the thread-local models are all this backend writes:
+//! the position-independent suffixes are not assembled yet, and are refused
+//! rather than relocated as a plain reference would be. For a `%a0`-relative
+//! operand GNU as writes `R_68K_GOT32O` for `x@GOT` and `R_68K_PLT32O` for
+//! `x@PLT`, `R_68K_PLT32` for `x@PLTPC` and `R_68K_GOT32` for `x@GOTPC`; it
+//! reads none of the four in a data directive.
 
 pub const R_68K_32: u32 = 1;
 pub const R_68K_16: u32 = 2;

@@ -1724,3 +1724,13 @@ b:      call    #a
         .text
 	jmp $-1020 { jmp $-1022
 
+
+# A modifier no backend knows is refused rather than relocated as if it
+# were not there: GNU as calls it junk after the expression.
+=== refused: a modifier the backend does not know, in an operand
+        .text
+        mov     #x@foobar, r5
+
+=== refused: a modifier the backend does not know, in data
+        .data
+        .word   x@foobar

@@ -187,26 +187,26 @@ impl Architecture for X86 {
         }
     }
 
-    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
+    fn fixup_modifier_reloc(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> crate::arch::FixupModifier {
+        use crate::arch::FixupModifier;
         let abi = reloc::Abi::for_object_bits(self.bits);
-        if abi == reloc::Abi::I386 {
-            // The encoder marks the `@GOT` loads the linker may relax.
-            if name == "got" && kind.reloc == reloc::Abi::I386_GOT32X {
-                return Some(kind.reloc);
-            }
-            // A modifier with no relocation at this width is an error, not a
-            // plain reference to the symbol.
-            return Some(
-                self.modifier_reloc(name, kind.size, kind.pcrel)
-                    .unwrap_or(0),
-            );
+        // The encoder marks the `@GOT` loads the linker may relax on i386,
+        // and the `@GOTPCREL` ones on x86-64, where the number also says
+        // whether the instruction carries a REX prefix.
+        if abi == reloc::Abi::I386 && name == "got" && kind.reloc == reloc::Abi::I386_GOT32X {
+            return FixupModifier::Reloc(kind.reloc);
         }
-        // The same on x86-64, where the encoder marks the `@GOTPCREL` loads
-        // with the relaxable number and whether they carry a REX prefix.
         if name == "gotpcrel" && reloc::Abi::is_gotpcrelx(kind.reloc) {
-            return Some(kind.reloc);
+            return FixupModifier::Reloc(kind.reloc);
         }
-        self.modifier_reloc(name, kind.size, kind.pcrel)
+        match self.modifier_reloc(name, kind.size, kind.pcrel) {
+            Some(r) => FixupModifier::Reloc(r),
+            None => FixupModifier::Unknown,
+        }
     }
 
     /// `@PLT` is `L + A - P`, and in a static image the PLT entry `L` is the
