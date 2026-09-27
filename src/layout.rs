@@ -1517,15 +1517,20 @@ impl Assembler {
         let m = self.find_modifier(e)?;
         let name = self.interner.get(m);
         let arch = self.frag_arch(section.0 as usize, fi).0;
-        // Spelled the way the target writes it: `sym(GOT)` on ARM, `sym@GOT`
-        // everywhere else.
-        let written = if arch.data_paren_modifiers().contains(&name) {
-            format!("`({name})`")
-        } else {
-            format!("`@{name}`")
-        };
-        matches!(arch.flat_modifier(name), FlatModifier::LinkerOnly).then(|| {
-            format!("{written} names something only a linker creates; a flat binary has none")
+        if !matches!(arch.flat_modifier(name), FlatModifier::LinkerOnly) {
+            return None;
+        }
+        let written = crate::arch::written_modifier(arch, name);
+        // A name the backend has no relocation for names nothing at all, so
+        // it is refused here for the reason an object refuses it rather than
+        // for the linker a flat image lacks.
+        Some(match arch.fixup_modifier_reloc(name, kind) {
+            crate::arch::FixupModifier::Unknown => format!(
+                "{written} is not a relocation modifier the `{}` backend supports on \
+                 this operand",
+                arch.name()
+            ),
+            _ => format!("{written} names something only a linker creates; a flat binary has none"),
         })
     }
 
@@ -2257,14 +2262,34 @@ impl Assembler {
                     .and_then(|m| crate::coff::modifier_class(self.interner.get(m)))
             })
             .flatten();
-        let reloc = self
-            .find_modifier(e)
-            .filter(|_| coff_class.is_none())
-            .and_then(|m| {
+        // A modifier the backend has no relocation for is refused, as it is
+        // in a data directive: leaving the plain relocation behind would turn
+        // `movl x@FOOBAR(%rip), %eax` into an ordinary reference to `x`,
+        // which is a different program, and GNU as refuses the junk after the
+        // expression rather than assembling it.
+        let reloc = match self.find_modifier(e).filter(|_| coff_class.is_none()) {
+            Some(m) => {
                 let name = self.interner.get(m).to_string();
-                self.frag_arch(si, fi).0.fixup_modifier_reloc(&name, kind)
-            })
-            .unwrap_or(kind.reloc);
+                let arch = self.frag_arch(si, fi).0;
+                match arch.fixup_modifier_reloc(&name, kind) {
+                    crate::arch::FixupModifier::Reloc(r) => r,
+                    crate::arch::FixupModifier::Encoded => kind.reloc,
+                    crate::arch::FixupModifier::Unknown => {
+                        let written = crate::arch::written_modifier(arch, &name);
+                        self.diags.error(
+                            span,
+                            format!(
+                                "{written} is not a relocation modifier the `{}` backend \
+                                 supports on this operand",
+                                arch.name()
+                            ),
+                        );
+                        return Vec::new();
+                    }
+                }
+            }
+            None => kind.reloc,
+        };
         let place = if self.relocs_by_fragment.contains(&section) {
             at - self.sections[si].frags[fi].offset
         } else {

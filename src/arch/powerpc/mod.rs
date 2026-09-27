@@ -156,8 +156,12 @@ impl Architecture for PowerPc {
     /// the whole chain of modifiers and the form of the field; the core,
     /// which sees only the last modifier of a chain, would read the `@tprel`
     /// of `paddi 3, 13, x@tprel, 0` as the eight-byte data relocation.
-    fn fixup_modifier_reloc(&self, _name: &str, _kind: &crate::section::FixupKind) -> Option<u32> {
-        None
+    fn fixup_modifier_reloc(
+        &self,
+        _name: &str,
+        _kind: &crate::section::FixupKind,
+    ) -> crate::arch::FixupModifier {
+        crate::arch::FixupModifier::Encoded
     }
 
     /// Every thread-local modifier makes its target `STT_TLS`, in both

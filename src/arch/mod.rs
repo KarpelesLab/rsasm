@@ -169,6 +169,40 @@ pub enum FlatModifier {
     },
 }
 
+/// What a relocation modifier means for an instruction's fixup; see
+/// [`Architecture::fixup_modifier_reloc`].
+#[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
+pub enum FixupModifier {
+    /// The relocation the modifier selects.
+    Reloc(u32),
+    /// The backend read the modifier as it encoded the instruction, so the
+    /// fixup already carries the relocation it chose: PowerPC picks one from
+    /// the whole chain of modifiers and the shape of the field, and SPARC's
+    /// thread-local operators are operand syntax of their own.
+    Encoded,
+    /// Not a modifier this backend has a relocation for on this field, which
+    /// is refused rather than relocated as if the modifier were not there.
+    Unknown,
+}
+
+/// A relocation modifier spelled the way this target's GNU as writes it, for
+/// a diagnostic that names it back: `lo8()` on AVR, `%dtprel()` on AArch64,
+/// `(GOT)` on ARM, and `x@got` everywhere else. The directive a
+/// [`Architecture::percent_modifiers`] spelling belongs to is one that reads
+/// them all, since the name is what is being described rather than the field.
+pub(crate) fn written_modifier(arch: &dyn Architecture, name: &str) -> String {
+    if arch.expr_modifiers().contains(&name) {
+        format!("`{name}()`")
+    } else if arch.percent_modifiers(".xword").contains(&name) {
+        format!("`%{name}()`")
+    } else if arch.data_paren_modifiers().contains(&name) {
+        format!("`({name})`")
+    } else {
+        format!("`@{name}`")
+    }
+}
+
 /// Something a backend asks the core to do to the section, which it cannot do
 /// itself because sections belong to the core. Queued on
 /// [`AsmCtx::requests`] and carried out once the statement is assembled.
@@ -977,9 +1011,17 @@ pub trait Architecture {
     /// The relocation a modifier selects for an instruction's fixup, which
     /// can depend on more than its size: i386 marks a `@GOT` load the linker
     /// may rewrite with a relocation of its own. The backend says so in the
-    /// fixup it built. Defaults to [`Architecture::modifier_reloc`].
-    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> Option<u32> {
-        self.modifier_reloc(name, kind.size, kind.pcrel)
+    /// fixup it built. Defaults to [`Architecture::modifier_reloc`], with a
+    /// name it does not know refused: a modifier that selected nothing used
+    /// to leave the plain relocation behind, so `movl x@FOOBAR(%rip), %eax`
+    /// quietly became an ordinary reference to `x`, which is a different
+    /// program. A backend that reads its modifiers earlier answers
+    /// [`FixupModifier::Encoded`] instead.
+    fn fixup_modifier_reloc(&self, name: &str, kind: &crate::section::FixupKind) -> FixupModifier {
+        match self.modifier_reloc(name, kind.size, kind.pcrel) {
+            Some(r) => FixupModifier::Reloc(r),
+            None => FixupModifier::Unknown,
+        }
     }
 
     /// The format-neutral class a source-level `@` modifier gives the

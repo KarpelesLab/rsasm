@@ -248,3 +248,13 @@ hid:    .word   2
 wk:     .word   3
         .section .tbss,"awT",@nobits
 bss:    .space  16
+
+# A modifier no backend knows is refused rather than relocated as if it
+# were not there: llvm-mc calls it an invalid variant.
+=== refused: a modifier the backend does not know, in an operand
+        .text
+        j       x@foobar
+
+=== refused: a modifier the backend does not know, in data
+        .data
+        .word   x@foobar

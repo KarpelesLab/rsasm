@@ -174,3 +174,10 @@ hid:    .long   0
         .hidden .Lhid
         .data
 wdef:   .long   wref
+
+# A modifier no backend knows is refused rather than relocated as if it
+# were not there: GNU as calls it junk at the end of the line. SuperH
+# instructions carry no relocation of their own, so this is the data form.
+=== refused: a modifier the backend does not know
+        .data
+        .long   x@foobar

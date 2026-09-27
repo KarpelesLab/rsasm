@@ -147,6 +147,22 @@ impl Architecture for Sparc {
         }
     }
 
+    /// A thread-local operator is operand syntax, read and encoded with the
+    /// instruction, so the relocation on the fixup is already the right one;
+    /// the wrapper the operand parser left on the expression is only there to
+    /// carry what the operator implies about the symbol. Nothing else is a
+    /// modifier here, so a `sym@anything` the core found is refused.
+    fn fixup_modifier_reloc(
+        &self,
+        name: &str,
+        _kind: &crate::section::FixupKind,
+    ) -> crate::arch::FixupModifier {
+        match operand::tls_op(name) {
+            Some(_) => crate::arch::FixupModifier::Encoded,
+            None => crate::arch::FixupModifier::Unknown,
+        }
+    }
+
     /// llvm-mc's conventions, as for every SPARC encoding. A V9 frame starts
     /// with the CFA 2047 bytes above `%sp`, the stack bias.
     fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
