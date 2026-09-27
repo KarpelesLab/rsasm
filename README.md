@@ -63,7 +63,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9533 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 848 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 340 |
-| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3755 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3762 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1283 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 645 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 531 |
@@ -334,14 +334,14 @@ form by form and in random whole programs as well.
   expanded, and neither it nor `.option arch` changes which instructions are
   accepted
 - thread-local storage on the other targets: the symbols and sections are
-  right everywhere, but only x86-64, i386, AArch64, ARM and Thumb, PowerPC,
-  MIPS, RISC-V, SPARC and SuperH read the access-model operands; m68k is the
-  one left, and there a thread-local `@` suffix on an instruction operand
-  (`move.l x@TLSGD(%a0),%d0`) is dropped and the plain `R_68K_32` written
-  where GNU as writes `R_68K_TLS_GD32`; in a data directive it is refused, as
-  it should be. SPARC's data operators — `%r_disp32()`, `%r_plt32()` and the
-  thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`, which GNU as reads in
-  `.word` and `.xword` — are not there either; llvm-mc, which is what the
+  right everywhere, and every target with a thread-local model reads the
+  access-model operands. m68k reads its five `@` suffixes in an instruction
+  operand and `@TLSLDO` in data, but takes the data one in any four-byte
+  directive, where GNU as points only `.long` at the `m68k_elf_cons` that
+  reads it and leaves `.int`, `.4byte` and `.dc.l` to the plain `cons`, which
+  calls the `@` junk. SPARC's data operators — `%r_disp32()`, `%r_plt32()`
+  and the thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`, which GNU as
+  reads in `.word` and `.xword` — are not there either; llvm-mc, which is what the
   SPARC harnesses compare against, has none of them. Mach-O's `@TLVP` and PE's
   thread-local sections are their formats' own idea of the same thing, and
   are not there either, so an AArch64 thread-local operator in either format
@@ -380,10 +380,14 @@ form by form and in random whole programs as well.
   `za0`-`za7` and `zd0`-`zd7`, and FPU coprocessor numbers other than 1
   (`.fopt id=`); vasm's `MACHINE`, `FPU` and `CHIP` directives (use `.arch`);
   vasm's sized `fbcc.w`, which GNU as does not take either (`fbcc` is 16
-  bits, `fbcc.l` 32); and CPU32's `tbl*` table lookups, for which no reference
-  here has an encoding. On ColdFire, an instruction as written that the core
-  dropped is refused where GNU as substitutes one it kept (`addil #5,%a0@`,
-  which GNU as writes as `addql`), since rsasm substitutes nothing
+  bits, `fbcc.l` 32); CPU32's `tbl*` table lookups, for which no reference
+  here has an encoding; the position-independent operand suffixes `@GOT`,
+  `@GOTPC`, `@PLT` and `@PLTPC`, where the five thread-local ones are read;
+  and a `:b` or `:s` displacement size, which GNU as puts in a brief
+  extension word and widens to a word in a `d(An)`. On ColdFire, an
+  instruction as written that the core dropped is refused where GNU as
+  substitutes one it kept (`addil #5,%a0@`, which GNU as writes as `addql`),
+  since rsasm substitutes nothing
 - Z80: the `DD CB d op,r` forms that also write a register, which vasm
   refuses; and in the GNU dialect, GNU as's `db`/`dw`/`ds` pseudo-ops (use
   `.byte`, `.word` and `.space`, or the 8-bit dialect)
