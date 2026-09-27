@@ -1906,6 +1906,7 @@ impl Assembler {
             bit_dot: self.arch.bit_addressing(),
             strings: Some(&self.pool),
             paren_modifiers: suffixes,
+            upper_modifiers: self.arch.uppercase_modifiers(),
         };
         p.parse(cur)
     }
@@ -2198,6 +2199,7 @@ impl Assembler {
         } = self;
         let dialect = options.dialect;
         let bit_dot = arch.bit_addressing();
+        let upper_modifiers = arch.uppercase_modifiers();
         let mut cx = AsmCtx {
             interner,
             exprs,
@@ -2208,6 +2210,7 @@ impl Assembler {
             dialect,
             format: options.format,
             bit_dot,
+            upper_modifiers,
             sections,
             section: *cur,
             relaxable: false,

@@ -350,6 +350,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let (toks, width) = self.strip_width(toks);
+        self.suffix_at_end(&toks)?;
         let mut cur = Cursor::new(&toks);
         let e = self.cx.expr_parser().parse(&mut cur)?;
         if !cur.is_empty() {
@@ -358,6 +359,31 @@ impl Parser<'_, '_> {
             return None;
         }
         Some(Value { e, width, span })
+    }
+
+    /// Checks that a relocation suffix is the last thing the operand writes.
+    ///
+    /// GNU as takes the suffix off the end of an operand's text before it
+    /// parses what is left, so `8+x@TLSGD` is the model applied to `x+8`
+    /// while `x@TLSGD+8` is a syntax error. A data directive is the other way
+    /// round: `m68k_elf_cons` reads the suffix after the expression and folds
+    /// a constant behind it into the addend, so `.long x@TLSLDO+8` works.
+    fn suffix_at_end(&mut self, toks: &[Token]) -> Option<()> {
+        let n = toks.len();
+        let ats = toks.iter().filter(|t| t.is_punct(Punct::At)).count();
+        if ats == 0
+            || (ats == 1
+                && n >= 3
+                && toks[n - 2].is_punct(Punct::At)
+                && matches!(toks[n - 1].kind, TokKind::Ident(_)))
+        {
+            return Some(());
+        }
+        self.cx.error(
+            span_of(toks),
+            "a relocation suffix goes at the end of an operand, as in `x@TLSGD(%a0)`",
+        );
+        None
     }
 
     /// Removes a trailing width: a separate `.w` token (after a number or a
@@ -525,6 +551,7 @@ impl Parser<'_, '_> {
             if let Some(f) = float::parse(text, self.cx.dialect) {
                 return Some(Mode::FImm(f, span));
             }
+            self.suffix_at_end(rest)?;
             let mut cur = Cursor::new(rest);
             let e = self.cx.expr_parser().parse(&mut cur)?;
             if !cur.is_empty() {
