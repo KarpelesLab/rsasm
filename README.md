@@ -56,7 +56,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17095 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21825 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3222 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 571 |
@@ -107,6 +107,13 @@ form by form and in random whole programs as well.
   of the instruction forms a linker may rewrite into a direct reference takes
   the relaxable relocation GNU as gives it — `R_386_GOT32X`, or
   `R_X86_64_GOTPCRELX` and its REX form
+- `x@SIZE` on x86, the size of a symbol rather than its address:
+  `R_386_SIZE32`, `R_X86_64_SIZE32` and, in an eight-byte field,
+  `R_X86_64_SIZE64`. A symbol the file defines and does not export has a size
+  nothing can change afterwards, so GNU as works it out and writes the number
+  with no relocation at all; that is what rsasm does, down to the `.size`
+  given after the reference and the one a `.set` alias carries from the
+  symbol it names
 - thread-local storage: a symbol defined in a section carrying `SHF_TLS` is
   `STT_TLS` whatever a `.type` said, on every target; `.tdata` and `.tbss`
   are such sections whether the flag string or the built-in name says so, and
@@ -285,9 +292,7 @@ form by form and in random whole programs as well.
 - x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
   `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
   instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
-  SGX, VMX, SVM, MPX and VIA PadLock; and `@SIZE` on x86-64, which GNU as
-  writes as `R_X86_64_SIZE32` or `R_X86_64_SIZE64` and rsasm refuses (i386's
-  `R_386_SIZE32` is there)
+  SGX, VMX, SVM, MPX and VIA PadLock
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
@@ -407,14 +412,8 @@ form by form and in random whole programs as well.
 
 **Known wrong**
 
-Anything that produces incorrect output rather than an error is listed here,
-separately:
-
-- **i386 `@SIZE` of a symbol this file already sized.** `.long loc@SIZE`,
-  where `loc` is defined here and given a `.size`, leaves `R_386_SIZE32`
-  against the symbol's section, where GNU as folds the reference to the size
-  itself and writes no relocation. Against an undefined symbol, which is what
-  the modifier is for, the two agree.
+Anything that produces incorrect output rather than an error would be listed
+here, separately. Nothing is at the moment.
 
 Where the references themselves disagree, rsasm follows the one whose harness
 checks the target (see [Verification](#verification)) and says so in the
@@ -1053,7 +1052,7 @@ and a loader may do with the object, and leaving them out of the comparison
 is what hid them from rsasm for as long as it did.
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
-  16-bit mode, in AT&T and Intel syntax. 8,664 of 8,664 match.
+  16-bit mode, in AT&T and Intel syntax. 8,675 of 8,675 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
   supports. 39,049 of 39,049 match across twenty-one target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
@@ -1104,7 +1103,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 283 of 283 match across
+  addend a COFF relocation keeps in its field. 285 of 285 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global

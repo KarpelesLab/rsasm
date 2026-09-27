@@ -127,6 +127,10 @@ impl Architecture for X86 {
             // The TLS descriptor call is marked rather than filled in, so its
             // fixup is zero bytes wide; see `Abi::tlsdesc_call`.
             "tlscall" => (size == 0).then(|| abi.tlsdesc_call()),
+            // `@SIZE` is the one modifier both ABIs spell the same way and
+            // number differently, and the only one i386 shares with x86-64
+            // outside the GOT and PLT.
+            "size" => abi.size(size),
             // Every other i386 modifier names a 32-bit relocation.
             _ if abi == reloc::Abi::I386 => match name {
                 "gotpc" => abi.gotpc(size),
@@ -203,10 +207,24 @@ impl Architecture for X86 {
         if name == "gotpcrel" && reloc::Abi::is_gotpcrelx(kind.reloc) {
             return FixupModifier::Reloc(kind.reloc);
         }
+        // A size is unsigned, and no psABI has a sign-extending form of
+        // `@SIZE`, so a 64-bit-mode displacement or a 64-bit operation's
+        // immediate cannot carry one; GNU as refuses that pair. The same
+        // field written with a 32-bit address size is zero-extended and takes
+        // it: `movl x@SIZE(%eax), %ecx` assembles where `movl x@SIZE(%rax),
+        // %ecx` does not.
+        if name == "size" && abi.is_abs32_signed(kind.reloc) {
+            return FixupModifier::Unknown;
+        }
         match self.modifier_reloc(name, kind.size, kind.pcrel) {
             Some(r) => FixupModifier::Reloc(r),
             None => FixupModifier::Unknown,
         }
+    }
+
+    /// `@SIZE` is x86's size modifier, in both psABIs and both syntaxes.
+    fn modifier_is_size(&self, name: &str) -> bool {
+        name == "size"
     }
 
     /// `@PLT` is `L + A - P`, and in a static image the PLT entry `L` is the
@@ -701,14 +719,21 @@ fn assemble_inner(
     // (64-bit immediate) form, since the address is unknown and might not fit
     // 32 bits; GNU as uses the sign-extending 32-bit form. This shows only in
     // the NASM dialect and only for a still-symbolic immediate.
-    if cx.dialect == crate::lexer::Dialect::Nasm
-        && bits == 64
+    //
+    // GNU as reaches for the same form for `movq $x@SIZE, %rax` in either
+    // dialect: a size is unsigned, and the 32-bit form's relocation
+    // sign-extends, so only the 64-bit immediate can hold one. `addq
+    // $x@SIZE, %rax` has no such form to fall back on and is refused.
+    if bits == 64
         && (mnemonic == "mov" || mnemonic == "movq")
         && let [dst, src] = ops.as_slice()
         && let (OperandKind::Reg(r), OperandKind::Imm(e)) = (&dst.kind, &src.kind)
         && r.is_gpr()
         && r.size == 8
-        && cx.constant(*e).is_none()
+        && (cx
+            .find_modifier_for(*e)
+            .is_some_and(|m| cx.name(m) == "size")
+            || cx.dialect == crate::lexer::Dialect::Nasm && cx.constant(*e).is_none())
         && let Some(pos) = matches.iter().position(|d| d.flags & insn::IMM64 != 0)
     {
         matches.swap(0, pos);

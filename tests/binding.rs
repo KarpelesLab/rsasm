@@ -99,6 +99,83 @@ other:  ret
 
 #[cfg(feature = "x86")]
 #[test]
+fn x86_folds_the_size_of_a_symbol_the_file_settles_as_gnu_as_does() {
+    // `@SIZE` of a symbol this file defines and does not export is a number
+    // nothing can change afterwards, so it goes in the field with no
+    // relocation: a weak definition and a `.size` given later count, and an
+    // alias carries the size of the symbol it names -- a snapshot where that
+    // symbol is already defined, so `alias` here, made before `loc` was,
+    // carries nothing because it adds an offset. A global symbol, an
+    // undefined one and an eight-byte field are left to the linker.
+    let asm = assemble_for(
+        "x86-64",
+        "        .globl  glob
+        .weak   weaksz
+        .set    alias, loc + 4
+        .long   loc@SIZE, alias@SIZE, weaksz@SIZE, late@SIZE
+        .long   loc@SIZE + 8, glob@SIZE, ext@SIZE, ext@SIZE + 8
+        .quad   ext@SIZE
+        .data
+loc:    .space  24
+        .size   loc, 24
+weaksz: .space  9
+        .size   weaksz, 9
+late:   .space  3
+glob:   .space  1
+        .size   glob, 1
+        .size   late, 9
+",
+    );
+    assert_eq!(
+        relocs(&asm),
+        vec![
+            reloc(0x14, 32, "glob", 0),
+            reloc(0x18, 32, "ext", 0),
+            reloc(0x1c, 32, "ext", 8),
+            reloc(0x20, 33, "ext", 0),
+        ]
+    );
+    assert_eq!(
+        hex(&section(&asm, ".text")),
+        "18 00 00 00 00 00 00 00 09 00 00 00 09 00 00 00 20 00 00 00 00 00 00 00 00 00 00 00 \
+         00 00 00 00 00 00 00 00 00 00 00 00"
+    );
+}
+
+#[cfg(feature = "x86")]
+#[test]
+fn i386_keeps_a_size_addend_in_the_field_as_gnu_as_does() {
+    // i386 is REL, so what the expression adds to `@SIZE` stays in the field
+    // for the linker to add the size to; a `.lcomm` block's size is settled
+    // here, and only `R_386_SIZE32` exists, so the field is four bytes.
+    let asm = assemble_for(
+        "i386",
+        "        .globl  glob
+        .lcomm  lc, 17
+        .long   ext@SIZE, ext@SIZE + 8, ext@SIZE - 4
+        .long   glob@SIZE, lc@SIZE
+        .data
+glob:   .space  1
+        .size   glob, 1
+",
+    );
+    assert_eq!(
+        relocs(&asm),
+        vec![
+            reloc(0, 38, "ext", 0),
+            reloc(4, 38, "ext", 8),
+            reloc(8, 38, "ext", -4),
+            reloc(12, 38, "glob", 0),
+        ]
+    );
+    assert_eq!(
+        hex(&section(&asm, ".text")),
+        "00 00 00 00 08 00 00 00 fc ff ff ff 00 00 00 00 11 00 00 00"
+    );
+}
+
+#[cfg(feature = "x86")]
+#[test]
 fn each_value_of_a_data_directive_has_its_own_location() {
     let asm = assemble_for("x86-64", ".data\n.long 0\n.long ., ., .\n.quad . - 8, .\n");
     assert_eq!(

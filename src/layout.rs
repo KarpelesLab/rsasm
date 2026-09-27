@@ -1320,6 +1320,28 @@ impl Assembler {
             | LinkValue::PairedLow
             | LinkValue::LinkerOnly(_) => {}
         }
+        // A size modifier is either a number the file settles or a reference
+        // only the linker can resolve; what the symbol itself stands for is
+        // never the answer, so one that does not fold is left to a
+        // relocation even where the expression has a value of its own. A
+        // size the file settles is a number whatever the output format: an
+        // object writes it in place of a relocation, and a flat image can
+        // write it too, where the modifiers a linker has to answer cannot be
+        // written at all.
+        if let Some((name, operand)) = self.size_modifier(e, section, fi) {
+            // Only where the field could have carried the relocation. GNU as
+            // decides that from the field alone, so `.byte sized@SIZE` and
+            // `movl sized@SIZE(%rax), %ecx` are refused although the number
+            // was there to write; leaving them unfolded is what refuses them.
+            let arch = self.frag_arch(section.0 as usize, fi).0;
+            if matches!(
+                arch.fixup_modifier_reloc(self.interner.get(name), kind),
+                crate::arch::FixupModifier::Unknown
+            ) {
+                return None;
+            }
+            return self.folded_symbol_size(e, operand);
+        }
         // A modifier on a plain reference (`.long foo@PLT`) only picks the
         // relocation in an object; in a flat image it decides the value. One
         // that takes part of the value (AVR's `lo8()`) does so as the field
@@ -1817,6 +1839,10 @@ impl Assembler {
                     }
                     match self.fixup_value(e, &kind, id, fi, at) {
                         Some(v) => {
+                            if let Some(msg) = self.size_modifier_overflow(e, &kind, id, fi, v) {
+                                self.diags.error(span, msg);
+                                continue;
+                            }
                             if !kind.fits(v as i128) {
                                 self.diags.error(span, range_message(&kind, v));
                                 continue;
@@ -2476,6 +2502,175 @@ impl Assembler {
             ExprKind::Binary(_, a, b) => self.find_modifier(*a).or_else(|| self.find_modifier(*b)),
             _ => None,
         }
+    }
+
+    /// The first `@`-modifier in an expression together with what it is
+    /// written on. The operand matters to a modifier that reads something
+    /// stated about the symbol rather than its value, since evaluating the
+    /// whole expression has by then replaced a `.set` alias with what it
+    /// stands for.
+    fn modifier_operand(&self, e: ExprRef) -> Option<(Name, ExprRef)> {
+        match &self.exprs.get(e).kind {
+            ExprKind::Modifier(n, inner) => Some((*n, *inner)),
+            ExprKind::Unary(_, a) => self.modifier_operand(*a),
+            ExprKind::Binary(_, a, b) => self
+                .modifier_operand(*a)
+                .or_else(|| self.modifier_operand(*b)),
+            _ => None,
+        }
+    }
+
+    /// The symbol an expression names outright, rather than the one it works
+    /// out to.
+    fn named_symbol(&self, e: ExprRef) -> Option<SymbolId> {
+        match &self.exprs.get(e).kind {
+            ExprKind::Sym(n) => self.symbols.lookup(*n),
+            ExprKind::SymId(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Where an expression names the symbol it is written around, which is
+    /// what a `.set` alias copies its size from: `sym`, `sym + 4` and
+    /// `4 + sym` all name `sym`, while a difference of two symbols names
+    /// neither. That is the symbol the source mentions, not the one the
+    /// expression works out to, so an alias of an alias copies from the
+    /// alias.
+    pub(crate) fn head_symbol(&self, e: ExprRef) -> Option<ExprRef> {
+        match &self.exprs.get(e).kind {
+            ExprKind::Sym(_) | ExprKind::SymId(_) => Some(e),
+            ExprKind::Binary(expr::BinOp::Add, a, b) => {
+                self.head_symbol(*a).xor(self.head_symbol(*b))
+            }
+            ExprKind::Binary(expr::BinOp::Sub, a, b) => self
+                .head_symbol(*b)
+                .is_none()
+                .then(|| self.head_symbol(*a))
+                .flatten(),
+            _ => None,
+        }
+    }
+
+    /// The size the file gives a symbol: the block a `.comm` or `.lcomm`
+    /// reserved for it, what `.size` said, or the size of the symbol a
+    /// `.set` made it an alias of before that symbol was defined.
+    /// Not API.
+    #[doc(hidden)]
+    pub fn symbol_size(&self, id: SymbolId) -> Option<i64> {
+        let mut id = id;
+        // One hop is all `dir_set` ever records, since it follows a source
+        // only while that source is undefined and defining it ends the
+        // chain; the loop is there so nothing can spin on a chain anyway.
+        for _ in 0..64 {
+            let sym = self.symbols.get(id);
+            if let SymbolValue::Common { size, .. } = sym.value {
+                return Some(size as i64);
+            }
+            if let Some(e) = sym.size {
+                return self.eval_const(e);
+            }
+            id = sym.size_from?;
+        }
+        None
+    }
+
+    /// True when the active backend reads a size modifier in this
+    /// expression, which is what keeps the constant folds in front of the
+    /// fixup from swallowing one.
+    pub(crate) fn names_size_modifier(&self, e: ExprRef) -> bool {
+        self.find_modifier(e)
+            .is_some_and(|m| self.arch.modifier_is_size(self.interner.get(m)))
+    }
+
+    /// A size modifier written in this expression — x86's `@SIZE`, so far the
+    /// only one — as its name and what it is written on.
+    fn size_modifier(&self, e: ExprRef, section: SectionId, fi: usize) -> Option<(Name, ExprRef)> {
+        let (name, operand) = self.modifier_operand(e)?;
+        self.frag_arch(section.0 as usize, fi)
+            .0
+            .modifier_is_size(self.interner.get(name))
+            .then_some((name, operand))
+    }
+
+    /// What a size modifier — x86's `@SIZE`, so far the only one — comes to
+    /// where the file settles it, and `None` where the linker has to.
+    ///
+    /// GNU as works out the size of a symbol the file both defines and keeps
+    /// to itself, and writes the number into the field with no relocation at
+    /// all: nothing after this can change it. A symbol the file exports may
+    /// be replaced at link time by a definition of another size, so that one
+    /// is relocated however plainly sized it looks here. A weak definition is
+    /// not, which is GNU as reading `STB_GLOBAL` rather than asking what a
+    /// linker may preempt. An undefined symbol has no size here at all, and
+    /// one `.set` to a number is no longer a symbol to ask: GNU as calls
+    /// `n@SIZE` an invalid expression after `.set n, 7`, and refusing it
+    /// falls out of leaving it to a relocation that nothing can name.
+    ///
+    /// Which symbol's size is read is the one the modifier is written on,
+    /// not the one the expression works out to: GNU as copies a symbol's size
+    /// onto a `.set` alias of it, so after `.set a, sym + 4` the size
+    /// `a@SIZE` reads is `sym`'s, with the 4 no part of it -- see
+    /// [`Assembler::dir_set`], which does the copying. What the expression adds
+    /// around the modifier is part of it, in the field under a REL psABI and
+    /// in the addend under a RELA one -- except that a folded reference has
+    /// no relocation to carry an addend, so both end up in the field.
+    fn folded_symbol_size(&mut self, e: ExprRef, operand: ExprRef) -> Option<i64> {
+        let target = self.named_symbol(operand)?;
+        match self.symbols.get(target).value {
+            SymbolValue::Label { .. } | SymbolValue::Common { .. } => {}
+            SymbolValue::Expr(x) => {
+                self.eval_ref(x).ok()?.plus?;
+            }
+            SymbolValue::Undefined => return None,
+        }
+        if self.symbols.get(target).binding == Binding::Global {
+            return None;
+        }
+        let size = self.symbol_size(target).unwrap_or(0);
+        // The addend is what the expression adds around the modifier, which
+        // is the difference between the whole expression and its operand.
+        let whole = self.eval(e).ok()?;
+        let inner = self.eval(operand).ok()?;
+        if whole.plus != inner.plus || whole.minus.is_some() || inner.minus.is_some() {
+            return None;
+        }
+        let value = size.wrapping_add(whole.addend.wrapping_sub(inner.addend));
+        // `st_size` is as wide as the object's words, so on a 32-bit object
+        // the size, and with it the sum, is a 32-bit quantity that simply
+        // wraps. A 64-bit object holds the size in full, and there GNU as
+        // refuses a sum the field cannot take; see
+        // [`Assembler::size_modifier_overflow`].
+        Some(match crate::output::elf::is_elf64(self.target()) {
+            true => value,
+            false => value as u32 as i64,
+        })
+    }
+
+    /// Why a folded size does not fit its field, if it does not. A size is
+    /// unsigned, so a four-byte field holds 0 to 0xffffffff where the same
+    /// field would take a negative `.long`; GNU as refuses the rest --
+    /// "symbol size computation overflow" -- rather than wrap it. Only on a
+    /// 64-bit object: a 32-bit one has nowhere to keep a size the field
+    /// could not hold, so there the sum wraps instead.
+    fn size_modifier_overflow(
+        &self,
+        e: ExprRef,
+        kind: &FixupKind,
+        section: SectionId,
+        fi: usize,
+        v: i64,
+    ) -> Option<String> {
+        self.size_modifier(e, section, fi)?;
+        if kind.size >= 8
+            || (0..=0xffff_ffff).contains(&v)
+            || !crate::output::elf::is_elf64(self.target())
+        {
+            return None;
+        }
+        Some(format!(
+            "a symbol's size is unsigned, and {v} does not fit in a {}-byte field",
+            kind.size
+        ))
     }
 
     /// The first `@`-modifier in an expression together with the ones it is

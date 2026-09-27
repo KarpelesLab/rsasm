@@ -49,6 +49,8 @@ mod x86_64 {
     pub const TPOFF32: u32 = 23;
     pub const GOTPC32_TLSDESC: u32 = 34;
     pub const TLSDESC_CALL: u32 = 35;
+    pub const SIZE32: u32 = 32;
+    pub const SIZE64: u32 = 33;
 }
 
 mod i386 {
@@ -148,13 +150,30 @@ impl Abi {
         }
     }
 
+    /// `@SIZE`: the size of the symbol rather than its address. x86-64 has a
+    /// number for a four-byte field and one for an eight-byte field, i386
+    /// only the four-byte one, and neither psABI has a smaller one, which is
+    /// why GNU as refuses `.byte foo@SIZE` and a 16-bit immediate.
+    pub fn size(self, n: u8) -> Option<u32> {
+        Some(match (self, n) {
+            (Abi::X86_64, 4) => x86_64::SIZE32,
+            (Abi::X86_64, 8) => x86_64::SIZE64,
+            (Abi::I386, 4) => i386::SIZE32,
+            _ => return None,
+        })
+    }
+
+    /// True for `R_X86_64_32S`, the relocation a 32-bit field the CPU
+    /// sign-extends asks for. `@SIZE` has no signed form, and GNU as refuses
+    /// the pair — "relocated field and relocation type differ in signedness"
+    /// — rather than range-check a size as if it could be negative.
+    pub fn is_abs32_signed(self, reloc: u32) -> bool {
+        self == Abi::X86_64 && reloc == x86_64::ABS32S
+    }
+
     /// The relocation an i386 `@` modifier names for a 32-bit field, where
-    /// every one of them is: `@GOTOFF`, the TLS models, `@SIZE`. `@PLT` and
-    /// `@GOT` are shared with x86-64 and handled by their own methods.
-    ///
-    /// `@SIZE` is relocated whatever the symbol is, where GNU as folds it to
-    /// the size a `.size` in this file already gave; see the README's
-    /// "Known wrong".
+    /// every one of them is: `@GOTOFF` and the TLS models. `@PLT`, `@GOT`
+    /// and `@SIZE` are shared with x86-64 and handled by their own methods.
     pub fn i386_modifier(name: &str) -> Option<u32> {
         Some(match name {
             "plt" => i386::PLT32,
@@ -169,7 +188,6 @@ impl Abi {
             "indntpoff" => i386::TLS_IE,
             "gottpoff" => i386::TLS_IE_32,
             "tlsdesc" => i386::TLS_GOTDESC,
-            "size" => i386::SIZE32,
             _ => return None,
         })
     }
@@ -183,10 +201,7 @@ impl Abi {
     ///
     /// The modifiers this backend has no x86-64 number for are refused rather
     /// than relocated as a plain reference: `@GOTOFF`, `@GOTPLT`, `@PLTOFF`
-    /// and `@DTPMOD`, which GNU as refuses too in the fields tried here, and
-    /// `@SIZE`, which it does assemble — `R_X86_64_SIZE32` in a four-byte
-    /// field and `R_X86_64_SIZE64` in an eight-byte one, where the size is
-    /// not already known.
+    /// and `@DTPMOD`, which GNU as refuses too in the fields tried here.
     pub fn x86_64_tls_modifier(name: &str, size: u8) -> Option<u32> {
         Some(match (name, size) {
             ("tlsgd", 4) => x86_64::TLSGD,

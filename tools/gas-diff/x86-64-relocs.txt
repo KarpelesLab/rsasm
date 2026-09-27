@@ -269,3 +269,92 @@ wdef:   .quad   wref
 === refused: a modifier the backend does not know, in data
         .data
         .long   x@FOOBAR
+
+# `@SIZE` is the size of the symbol rather than its address, and GNU as
+# settles it here for a symbol the file defines and does not export, since
+# nothing can change it after that: the number goes straight into the field
+# with no relocation at all. A `.size` given after the reference still
+# counts, a `.set` alias carries the size of the symbol it names without the
+# offset it adds -- an alias of a symbol not yet defined carries only the
+# plain equate's, since an offset is what settles the equate into a number --
+# and a weak definition is settled like a local one: the test is
+# `STB_GLOBAL`, not what a linker may preempt. llvm-mc relocates
+# every one of these instead, against the section for a local symbol, so
+# they have no mc-diff row.
+=== @SIZE of a symbol this file settles
+        .set    fwd, late
+        .set    fwdoff, late + 1
+        .data
+loc:    .space  24
+        .size   loc, 24
+fn:     .space  7
+        .type   fn, %function
+        .size   fn, . - fn
+        .weak   weaksz
+weaksz: .space  9
+        .size   weaksz, 9
+late:   .space  3
+        .lcomm  lc, 17
+        .local  lcm
+        .comm   lcm, 12, 4
+        .set    alias, loc
+        .set    aliasoff, loc + 4
+        .text
+        .long   loc@SIZE, fn@SIZE, weaksz@SIZE, late@SIZE
+        .long   lc@SIZE, lcm@SIZE, alias@SIZE, aliasoff@SIZE
+        .long   fwd@SIZE, fwdoff@SIZE
+        .long   loc@SIZE + 8, loc@SIZE - 1
+        .quad   loc@SIZE, loc@SIZE + 8
+        movl    $loc@SIZE, %eax
+        movq    $loc@SIZE, %rax
+        movl    loc@SIZE(%eax), %ecx
+        .size   late, 9
+
+# The other half, which the linker settles: a symbol this file exports may
+# be replaced by a definition of another size, a common block is one such,
+# and an undefined symbol has no size here at all. The field is left zero
+# and the addend goes in the relocation entry, this being RELA; i386 keeps
+# it in the field instead. `movq $und@SIZE, %rax` takes the `movabs` form,
+# since the immediate of the shorter one is sign-extended and a size is not.
+=== @SIZE the linker settles
+        .globl  glob, gfunc
+        .comm   cm, 40, 8
+        .weak   wund
+        .text
+        .long   und@SIZE, und@SIZE + 8
+        .quad   und@SIZE, und@SIZE + 9
+        .long   glob@SIZE, gfunc@SIZE, cm@SIZE, wund@SIZE
+        movl    $und@SIZE, %eax
+        movq    $und@SIZE, %rax
+        movl    und@SIZE(%eax), %ecx
+        leal    und@SIZE(%eax), %ebx
+        addl    $und@SIZE, %eax
+        cmpl    $und@SIZE, %eax
+        .data
+glob:   .space  16
+        .size   glob, 16
+        .type   gfunc, %function
+gfunc:  .space  4
+        .size   gfunc, 4
+
+# No psABI has a size relocation narrower than four bytes, and none has a
+# sign-extending one, so a byte or word field and a 64-bit-mode displacement
+# or immediate are refused whether or not the size was there to write. A
+# size is also something the file states about a symbol, so `@SIZE` needs
+# one: GNU as calls it an invalid expression otherwise.
+=== refused: @SIZE in a two-byte field
+        .data
+        .word   und@SIZE
+
+=== refused: @SIZE in a sign-extended displacement
+        .text
+        movl    und@SIZE(%rax), %ecx
+
+=== refused: @SIZE in a sign-extended immediate
+        .text
+        addq    $und@SIZE, %rax
+
+=== refused: @SIZE of a symbol set to a number
+        .set    n, 7
+        .data
+        .long   n@SIZE

@@ -1062,6 +1062,17 @@ pub trait Architecture {
         FlatModifier::LinkerOnly
     }
 
+    /// True for a modifier whose value is the target's size rather than its
+    /// address: x86's `@SIZE`, which is so far the only one.
+    ///
+    /// A size is a number the assembler can often settle itself, and GNU as
+    /// does whenever the file both defines the symbol and keeps it to itself.
+    /// Saying so here is what lets the core work that out and write the
+    /// number, so a backend leaving this false always relocates.
+    fn modifier_is_size(&self, _name: &str) -> bool {
+        false
+    }
+
     /// Relocation modifiers this target's GNU as writes around the whole of
     /// a data directive's value as a call, `.word pm(main)`, rather than as
     /// the `main@pm` suffix the GNU syntax otherwise uses. Only AVR has them.

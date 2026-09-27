@@ -721,6 +721,11 @@ OUT_OF_RANGE = {
     "i32s": [0x80000000, 0xFFFFFFFF, 0x100000000], "i64": [0x10000000000000000],
 }
 SYMS = ["sym", "sym+4", "sym-1", "sym+0x1000"]
+# `@SIZE` reaches an immediate and a displacement, and the two references
+# never read it the same way; see the `size-modifier` rule below. It appears
+# only in 64-bit mode because llvm-mc 22 crashes on one in an i386 object,
+# whatever the symbol, and would take its whole batch with it.
+SIZE_SYMS = ["sym@SIZE", "sym@SIZE+4"]
 
 
 def num(rng, v):
@@ -768,10 +773,13 @@ class Gen:
         name = self.choice(pool)
         return Opnd("reg", name=name, size=size, cls=f"r{size}")
 
+    def syms(self):
+        return self.choice(SYMS + (SIZE_SYMS if self.mode == 64 else []))
+
     def disp(self, width):
         r = self.rng.random()
         if r < 0.15:
-            return self.choice(SYMS)
+            return self.syms()
         if width == 8:
             return num(self.rng, self.choice([0, 1, 4, 0x7F, -0x80, -8, 0x10]))
         if width == 16:
@@ -831,7 +839,7 @@ class Gen:
     def imm(self, kind):
         vals = IMM[kind]
         if kind in ("i16", "i32", "i32s", "i64") and self.rng.random() < 0.12:
-            return Opnd("imm", value=self.choice(SYMS), width=kind)
+            return Opnd("imm", value=self.syms(), width=kind)
         return Opnd("imm", value=self.choice(vals), width=kind)
 
     def operand(self, kind, form):
@@ -1382,6 +1390,15 @@ def addr32_reloc(g, m, ctx):
                               for a, b in diff)
 
 
+def size_modifier(g, m, ctx):
+    """`@SIZE`, which the references never read the same way. gas settles the size of
+    a symbol the file defines and does not export, and refuses the modifier on a
+    field with no unsigned relocation -- a 64-bit-mode displacement, a sign-extended
+    immediate -- reaching for `movabs` where a `mov` has one; llvm-mc relocates
+    every one of them, with `R_X86_64_SIZE32` on the sign-extended fields too."""
+    return "@SIZE" in " ".join(ctx["lines"])
+
+
 def disp16_wrap(g, m, ctx):
     """A 16-bit address with displacement 0xffff: gas wraps it to -1 and uses disp8,
     llvm-mc keeps disp16."""
@@ -1508,6 +1525,7 @@ KNOWN_SPLITS = [
     ("xchg-order", xchg_order, None),
     ("addr32-reloc", addr32_reloc, None),
     ("disp16-wrap", disp16_wrap, None),
+    ("size-modifier", size_modifier, "gas"),
     ("symbolic-accumulator", symbolic_accumulator, None),
     ("vex-commute", vex_commute, "gas"),
     ("mc-lone-zeroing", mc_lone_zeroing, "gas"),

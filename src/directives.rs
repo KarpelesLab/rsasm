@@ -711,11 +711,17 @@ impl Assembler {
         // and change bytes that were already emitted.
         // In a Mach-O object a difference of labels already a fixed distance
         // apart is a value too; see `Assembler::macho_fixed_difference`.
+        // A size is something the file states about a symbol, so a value the
+        // expression works out to on its own is not one to read a size from:
+        // GNU as calls `5@SIZE`, and `n@SIZE` after `.set n, 7`, invalid
+        // expressions. Leaving them to the fixup, which has no symbol to
+        // name, is what refuses them.
         if let Some(v) = self
             .eval_ref(e)
             .ok()
             .and_then(|v| v.as_abs())
             .or_else(|| self.macho_fixed_difference(e))
+            .filter(|_| !self.names_size_modifier(e))
         {
             if !kind.fits(v as i128) {
                 let espan = self.exprs.span(e);
@@ -1212,6 +1218,36 @@ impl Assembler {
                     .with_note(prev, "previous definition is here"),
             );
             return true;
+        }
+        // GNU as copies the symbol's size onto an alias of it, so a `.size`
+        // given before the `.set` is the alias's size too and `@SIZE` of the
+        // alias reads it. What is copied is a snapshot, taken whatever offset
+        // the alias adds: a `.size` on the source after this point does not
+        // reach the alias. A source still undefined here has no size to
+        // snapshot, and there GNU as leaves the alias pointing at it, so the
+        // alias ends up with whatever the source is given later -- but only
+        // where the alias adds nothing, since an offset is what makes GNU as
+        // settle the equate into a number instead.
+        let head = match self
+            .head_symbol(e)
+            .map(|h| (self.exprs.get(h).kind.clone(), h))
+        {
+            Some((crate::expr::ExprKind::Sym(n), h)) => {
+                let hspan = self.exprs.span(h);
+                Some(self.symbols.intern(n, hspan))
+            }
+            Some((crate::expr::ExprKind::SymId(s), _)) => Some(s),
+            _ => None,
+        };
+        if let Some(src) = head.filter(|s| *s != id) {
+            let from = self.symbols.get(src);
+            let (size, defined) = (from.size, from.is_defined());
+            let plain = self
+                .eval_ref(e)
+                .is_ok_and(|v| v.plus == Some(src) && v.minus.is_none() && v.addend == 0);
+            let sym = self.symbols.get_mut(id);
+            sym.size = if defined { size } else { None };
+            sym.size_from = (!defined && plain).then_some(src);
         }
         let sym = self.symbols.get_mut(id);
         sym.value = SymbolValue::Expr(e);
