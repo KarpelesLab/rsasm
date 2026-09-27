@@ -61,6 +61,10 @@ pub struct Symbol {
     pub ty: SymType,
     pub visibility: Visibility,
     pub size: Option<ExprRef>,
+    /// The symbol this one takes its size from, for a `.set` alias made
+    /// before the symbol it names was defined; see
+    /// [`Assembler::symbol_size`](crate::assembler::Assembler).
+    pub(crate) size_from: Option<SymbolId>,
     /// Where the symbol was defined; dummy while only referenced.
     pub def_span: Span,
     /// First place the symbol was mentioned, for "undefined symbol" errors.
@@ -162,6 +166,7 @@ impl SymbolTable {
             ty: SymType::NoType,
             visibility: Visibility::Default,
             size: None,
+            size_from: None,
             def_span: Span::DUMMY,
             first_use: span,
             local_number: None,
@@ -190,6 +195,7 @@ impl SymbolTable {
             ty: SymType::Section,
             visibility: Visibility::Default,
             size: None,
+            size_from: None,
             def_span: Span::DUMMY,
             first_use: Span::DUMMY,
             local_number: None,
@@ -266,6 +272,7 @@ impl SymbolTable {
             ty: SymType::NoType,
             visibility: Visibility::Default,
             size: None,
+            size_from: None,
             def_span: Span::DUMMY,
             first_use: span,
             local_number: Some(n),

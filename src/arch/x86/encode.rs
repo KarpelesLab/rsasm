@@ -756,7 +756,14 @@ pub fn encode(
     }
     for (e, width) in imm.into_iter().chain(roles.imm2) {
         let offset = bytes.len() as u32;
-        let folded = cx.constant(e);
+        // A size is something the file states about a symbol, so an
+        // immediate that works out to a number is not one to read a size
+        // from: GNU as calls `$5@SIZE`, and `$n@SIZE` after `.set n, 7`,
+        // invalid immediate expressions. Leaving them to the fixup, which
+        // has no symbol to name, is what refuses them.
+        let folded = cx
+            .constant(e)
+            .filter(|_| modifier(cx, e).as_deref() != Some("size"));
         match folded {
             Some(v) => bytes.extend_from_slice(&v.to_le_bytes()[..width as usize]),
             None => {

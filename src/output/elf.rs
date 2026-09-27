@@ -722,10 +722,7 @@ fn collect_symbols(
             Visibility::Hidden => 2,
             Visibility::Protected => 3,
         };
-        let size = match &sym.value {
-            SymbolValue::Common { size, .. } => *size,
-            _ => sym.size.and_then(|e| asm.eval_const(e)).unwrap_or(0) as u64,
-        };
+        let size = asm.symbol_size(id).unwrap_or(0) as u64;
 
         // A section symbol is named by its section, not by a string of its own.
         let name = if sym.ty == SymType::Section {

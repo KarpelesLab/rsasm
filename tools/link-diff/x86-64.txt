@@ -292,3 +292,41 @@ _start:
         .globl  reader
 reader:
         ret
+
+# `@SIZE` of a symbol another object defines: GNU ld writes the size the
+# definition ends up with, plus the addend, so a wrong relocation type or a
+# lost addend shows in the linked bytes. The sizes of `loc` and of the
+# common block are settled in the object already and reach the image as
+# plain numbers.
+=== the size of a symbol in another object
+--- a.s
+        .data
+loc:    .space  24
+        .size   loc, 24
+        .globl  sizes
+sizes:  .long   target@SIZE
+        .long   target@SIZE + 8
+        .quad   target@SIZE
+        .long   bssvar@SIZE
+        .long   com1@SIZE
+        .long   loc@SIZE
+        .text
+        .globl  _start
+_start: movl    $target@SIZE, %eax
+        movq    $target@SIZE, %rcx
+        ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        nop
+        .size   target, . - target
+        .comm   com1, 40, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+        .data
+        .long   com1@SIZE

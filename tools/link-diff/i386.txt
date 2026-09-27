@@ -227,3 +227,39 @@ _start:
         .globl  reader
 reader:
         ret
+
+# `@SIZE` of a symbol another object defines. i386 is REL, so the addend
+# rides in the field and the linker adds the size to what it finds there;
+# the sizes of `loc` and of the common block are settled in the object
+# already and reach the image as plain numbers.
+=== the size of a symbol in another object
+--- a.s
+        .data
+loc:    .space  24
+        .size   loc, 24
+        .globl  sizes
+sizes:  .long   target@SIZE
+        .long   target@SIZE + 8
+        .long   bssvar@SIZE
+        .long   com1@SIZE
+        .long   loc@SIZE
+        .text
+        .globl  _start
+_start: movl    $target@SIZE, %eax
+        pushl   $target@SIZE
+        ret
+--- b.s
+        .text
+        .globl  target
+        .type   target, @function
+target: nop
+        nop
+        .size   target, . - target
+        .comm   com1, 40, 8
+        .bss
+        .globl  bssvar
+        .type   bssvar, @object
+bssvar: .space  16
+        .size   bssvar, 16
+        .data
+        .long   com1@SIZE
