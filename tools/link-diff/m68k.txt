@@ -145,3 +145,51 @@ _start:
         .globl  reader
 reader:
         rts
+
+# The five thread-local access models, resolved by a static link. GNU ld
+# gives the two dynamic ones a pair of GOT slots each and leaves the sequence
+# as written, since nothing here calls through a PLT, and works out the
+# offsets of the other three itself. `_start` reads, in order: general
+# dynamic, with %a5 holding the GOT pointer and the call that reads the
+# slots; local dynamic, one call for the module and then an offset per
+# variable from the address it returns; initial exec, a GOT slot holding the
+# offset from the thread pointer; and local exec, which the linker resolves
+# outright. The two `.tdata` and the `.tbss` have to end up adjacent, which
+# is why nothing else with contents follows them.
+=== thread-local variables across objects
+--- a.s
+        .text
+        .globl  _start
+_start:
+        lea     tv@TLSGD(%a5),%a0
+        jsr     __tls_get_addr
+        lea     tloc@TLSLDM(%a5),%a0
+        jsr     __tls_get_addr
+        lea     tloc@TLSLDO(%a0),%a1
+        lea     tv2@TLSLDO(%a0),%a2
+        move.l  tv2@TLSIE(%a5),%d0
+        move.l  tb@TLSIE(%a5),%d1
+        move.l  #tv3@TLSLE,%d2
+        move.l  #tb@TLSLE,%d3
+        lea     tv@TLSLE(%a5),%a3
+        rts
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .long   0x11223344
+tloc:   .long   99
+--- b.s
+        .text
+        .globl  helper, __tls_get_addr
+helper:
+        move.l  #tv@TLSLE,%d0
+        .long   tv@TLSLDO
+        rts
+__tls_get_addr:
+        rts
+        .section .tdata,"awT",@progbits
+        .globl  tv2, tv3
+tv2:    .long   2
+tv3:    .long   3
+        .section .tbss,"awT",@nobits
+        .globl  tb
+tb:     .space  16

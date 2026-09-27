@@ -720,6 +720,9 @@ pub struct ExprParser<'a> {
     /// does not allow one, so that a `(` after a symbol stays whatever else
     /// it was; see [`ExprParser::paren_modifier`].
     pub paren_modifiers: &'static [&'static str],
+    /// Whether an `@` modifier is spelled in upper case and nothing else; see
+    /// [`crate::arch::Architecture::uppercase_modifiers`].
+    pub upper_modifiers: bool,
 }
 
 impl<'a> ExprParser<'a> {
@@ -816,7 +819,21 @@ impl<'a> ExprParser<'a> {
             let name = match tok.kind {
                 TokKind::Ident(n) => {
                     cur.advance();
-                    self.interner.intern_lower(&self.interner_get(n))
+                    let text = self.interner_get(n);
+                    // Where the target spells its modifiers in upper case,
+                    // any other spelling is not one; see
+                    // `Architecture::uppercase_modifiers`.
+                    if self.upper_modifiers && text != text.to_ascii_uppercase() {
+                        self.diags.error(
+                            at.span.to(tok.span),
+                            format!(
+                                "`@{text}` is not a relocation modifier; this target \
+                                 spells them in upper case"
+                            ),
+                        );
+                        break;
+                    }
+                    self.interner.intern_lower(&text)
                 }
                 _ => {
                     self.diags
@@ -1280,6 +1297,7 @@ mod tests {
                 bit_dot: false,
                 strings: None,
                 paren_modifiers: &[],
+                upper_modifiers: false,
             };
             p.parse(&mut cur)
         };

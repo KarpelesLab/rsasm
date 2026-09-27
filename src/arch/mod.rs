@@ -598,6 +598,9 @@ pub struct AsmCtx<'a> {
     /// [`Architecture::bit_addressing`] for the active backend, which decides
     /// whether `P1.3` in an expression is a bit address.
     pub bit_dot: bool,
+    /// [`Architecture::uppercase_modifiers`] for the active backend, which
+    /// decides whether `x@tlsgd` names a relocation modifier at all.
+    pub upper_modifiers: bool,
     /// Read-only: what has been emitted so far, for
     /// [`AsmCtx::fixed_distance`].
     pub sections: &'a [crate::section::Section],
@@ -663,6 +666,7 @@ impl AsmCtx<'_> {
             bit_dot: self.bit_dot,
             strings: Some(self.pool),
             paren_modifiers: &[],
+            upper_modifiers: self.upper_modifiers,
         }
     }
 
@@ -998,6 +1002,15 @@ pub trait Architecture {
     /// `foo@PLT`. `None` means the modifier is not recognised.
     fn modifier_reloc(&self, _name: &str, _size: u8, _pcrel: bool) -> Option<u32> {
         None
+    }
+
+    /// Whether a source-level `@` modifier is spelled in upper case and
+    /// nothing else. Every GNU as port but one matches the suffix without
+    /// regard to case; the m68k's compares it with `strncmp`, so `x@tlsgd`
+    /// there is not a modifier at all but a `@` left in the expression, which
+    /// is a syntax error.
+    fn uppercase_modifiers(&self) -> bool {
+        false
     }
 
     /// What a relocation modifier implies about the symbols of the object,

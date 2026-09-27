@@ -406,6 +406,48 @@ impl Architecture for M68k {
         reloc::data(size, pcrel)
     }
 
+    /// GNU as compares an `@` suffix with `strncmp` in both `m68k_ip`'s lexer
+    /// and `m68k_elf_suffix`, so `x@tlsgd` is a syntax error and only
+    /// `x@TLSGD` names a model.
+    fn uppercase_modifiers(&self) -> bool {
+        true
+    }
+
+    /// What a data directive takes. `m68k_elf_cons` reads one suffix,
+    /// `@TLSLDO`, and refuses a relocation wider than the value, so the
+    /// four-byte `R_68K_TLS_LDO32` fits only a `.long`. The other four models
+    /// are the operand parser's alone and have no spelling here at all.
+    fn modifier_reloc(&self, name: &str, size: u8, _pcrel: bool) -> Option<u32> {
+        (name == "tlsldo" && size == 4).then_some(reloc::R_68K_TLS_LDO32)
+    }
+
+    /// What an instruction operand takes: any of the five models, in whatever
+    /// width the field the operand was encoded into has, which is GNU as's
+    /// `get_reloc_code (n, pcrel, pic_reloc)` over the fixups `md_assemble`
+    /// makes. Anything else is refused, the position-independent suffixes
+    /// included; see [`reloc`].
+    fn fixup_modifier_reloc(
+        &self,
+        name: &str,
+        kind: &crate::section::FixupKind,
+    ) -> crate::arch::FixupModifier {
+        match reloc::tls(name, kind.size) {
+            Some(r) => crate::arch::FixupModifier::Reloc(r),
+            None => crate::arch::FixupModifier::Unknown,
+        }
+    }
+
+    /// A thread-local model names a variable, which GNU as marks `STT_TLS`
+    /// and relocates by name. None of them needs a symbol of its own: the
+    /// m68k psABI reaches the GOT through a register the code already holds,
+    /// so nothing here implies `_GLOBAL_OFFSET_TABLE_`.
+    fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
+        crate::arch::ModifierSymbols {
+            tls: reloc::is_tls(name),
+            ..crate::arch::ModifierSymbols::default()
+        }
+    }
+
     /// GNU as's conventions, as for every m68k encoding: code counted in
     /// words, and a frame that starts with the return address just above the
     /// stack pointer.

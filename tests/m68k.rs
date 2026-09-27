@@ -518,6 +518,144 @@ fn pc_relative_relocations_carry_the_distance_to_their_base_in_the_addend() {
     );
 }
 
+/// A thread-local variable to hang an access model on, and the statements
+/// that reach it.
+fn tls_source(body: &str) -> String {
+    format!(" .section .tdata,\"awT\",@progbits\ntv: .long 1\n .text\n{body}")
+}
+
+/// `(offset, type, symbol name)` for every relocation, in order.
+fn named_relocs(src: &str) -> Vec<(u64, u32, String)> {
+    let asm = assemble_dialect("m68k", Gas, src);
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    asm.relocs
+        .iter()
+        .map(|r| {
+            let name = r.symbol.map_or_else(String::new, |s| asm.display_name(s));
+            (r.offset, r.kind, name)
+        })
+        .collect()
+}
+
+/// The five thread-local access models `m68k-elf-as` reads as an `@` suffix
+/// on an operand. Which relocation one takes is decided by the width of the
+/// field the operand was encoded into rather than by the model: GNU as picks
+/// it in `get_reloc_code (n, pcrel, pic_reloc)` once the operand is laid out,
+/// and has all three widths for every model.
+#[test]
+fn thread_local_suffixes_relocate_the_field_the_operand_landed_in() {
+    let src = tls_source(
+        " move.l tv@TLSGD(%a0),%d0\n move.l tv@TLSLDM:w(%a0),%d0\n\
+         move.b #tv@TLSLDO,%d0\n move.l tv@TLSIE,%d0\n\
+         move.w #tv@TLSLE,%d0\n move.l tv@TLSGD(%pc),%d0\n",
+    );
+    let tv = "tv".to_string();
+    assert_eq!(
+        named_relocs(&src),
+        vec![
+            (0x04, 25, tv.clone()), // R_68K_TLS_GD32, a 68020 base displacement
+            (0x0a, 29, tv.clone()), // R_68K_TLS_LDM16, the `d(An)` displacement
+            (0x0f, 33, tv.clone()), // R_68K_TLS_LDO8, the low byte of a `.b` immediate
+            (0x12, 34, tv.clone()), // R_68K_TLS_IE32, an absolute address
+            (0x18, 38, tv.clone()), // R_68K_TLS_LE16, a word immediate
+            (0x1e, 25, tv),         // R_68K_TLS_GD32, PC-relative and never relaxed
+        ]
+    );
+    // The bytes are the ones the operands would have without the suffix: only
+    // the relocation says what the linker has to work out.
+    assert_eq!(
+        obj("m68k", Gas, &src),
+        "20 30 01 70 00 00 00 00 20 28 00 00 10 3c 00 00 \
+         20 39 00 00 00 00 30 3c 00 00 20 3b 01 70 00 00 00 00"
+    );
+}
+
+/// `m68k_elf_cons` reads one suffix, `@TLSLDO`, and folds a constant written
+/// after it into the addend. The relocation is `RELA`, so the field is left
+/// at zero.
+#[test]
+fn a_thread_local_offset_in_data_folds_its_constant_into_the_addend() {
+    const LDO32: u32 = 31;
+    assert_eq!(
+        relocs(
+            "m68k",
+            Gas,
+            " .section .tdata,\"awT\",@progbits\ntv: .long 1\n .data\n\
+             .long tv@TLSLDO\n .long tv@TLSLDO+8\n .long 4+tv@TLSLDO\n",
+        ),
+        vec![(0, LDO32, 0), (4, LDO32, 8), (8, LDO32, 4)]
+    );
+    let asm = assemble_dialect(
+        "m68k",
+        Gas,
+        " .section .tdata,\"awT\",@progbits\ntv: .long 1\n .data\n .long tv@TLSLDO+8\n",
+    );
+    assert_eq!(hex(&section(&asm, ".data")), "00 00 00 00");
+}
+
+/// A model names a variable the linker places, so the target is `STT_TLS` and
+/// the relocation names it rather than its section, which is what an m68k
+/// object does for everything else.
+#[test]
+fn a_thread_local_target_is_named_and_typed_as_one() {
+    let asm = assemble_dialect("m68k", Gas, &tls_source(" move.l ext@TLSIE,%d0\n"));
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    assert_eq!(
+        named_relocs(&tls_source(" move.l ext@TLSIE,%d0\n")),
+        vec![(2, 34, "ext".to_string())]
+    );
+    let ext = asm
+        .symbols
+        .iter()
+        .find(|(_, s)| asm.interner.get(s.name) == "ext")
+        .expect("no `ext` symbol");
+    assert_eq!(ext.1.ty, rsasm::symbol::SymType::Tls);
+}
+
+/// What `m68k-elf-as` refuses, and for its own reasons: its lexer takes the
+/// suffix off the end of an operand's text before parsing what is left, and
+/// compares it with `strncmp`; `m68k_elf_cons` knows one suffix and refuses a
+/// relocation wider than the value.
+#[test]
+fn thread_local_suffixes_are_refused_where_the_reference_refuses_them() {
+    for (src, needle) in [
+        (
+            " move.l tv@tlsgd(%a0),%d0",
+            "is not a relocation modifier; this target spells them in upper case",
+        ),
+        (
+            " move.l tv@TLSGD+8(%a0),%d0",
+            "goes at the end of an operand",
+        ),
+        (" move.l #tv@TLSGD+8,%d0", "goes at the end of an operand"),
+        (" .data\n .long tv@TLSGD", "in a 4-byte data field"),
+        (" .data\n .word tv@TLSLDO", "in a 2-byte data field"),
+        (" .data\n .byte tv@TLSLDO", "in a 1-byte data field"),
+    ] {
+        let e = errors_dialect("m68k", Gas, &tls_source(src));
+        assert!(
+            e.contains(needle),
+            "`{src}` should mention `{needle}`, got:\n{e}"
+        );
+    }
+    // And what the core refuses on every target: a model on something that is
+    // not a thread-local variable.
+    let e = errors_dialect(
+        "m68k",
+        Gas,
+        " .data\nd: .long 0\n .text\n move.l d@TLSIE(%a0),%d0\n",
+    );
+    assert!(e.contains("defined outside a thread-local section"), "{e}");
+}
+
 // ---- the 68000 and 68010 ------------------------------------------------------
 
 #[test]

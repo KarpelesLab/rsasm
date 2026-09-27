@@ -186,6 +186,86 @@ f:      .space  4
 === refused: a .section flag string that is not a string
         .section .foo,a,@progbits
 
+# The five thread-local access models GNU as reads as a suffix on an operand,
+# `enum pic_relocation` in `m68k-parse.h`. Which relocation each takes is
+# decided by the width of the field the operand was encoded into, and all
+# three widths exist for every model: the 32-bit base displacement of a
+# 68020 operand, the 16-bit displacement of `d(An)` and a `:w` immediate, and
+# the byte in a brief extension word or a `.b` immediate.
+=== thread-local access models in instruction operands
+        .section .tdata,"awT",@progbits
+tl:     .long   1
+        .globl  gtl
+gtl:    .long   2
+        .section .tbss,"awT",@nobits
+btl:    .space  4
+        .text
+        move.l  tl@TLSGD(%a0),%d0
+        move.l  gtl@TLSLDM(%a0),%d0
+        move.l  btl@TLSLDO(%a0),%d0
+        move.l  ext@TLSIE(%a0),%d0
+        move.l  tl@TLSLE(%a0),%d0
+        move.l  tl@TLSGD:w(%a0),%d0
+        move.l  tl@TLSGD:l(%a0),%d0
+        move.l  tl@TLSGD.w(%a0),%d0
+        move.l  tl@TLSGD(%a0,%d1.w),%d0
+        move.l  tl@TLSIE:w(%a0,%d1.w),%d0
+        move.l  tl@TLSGD,%d0
+        move.l  tl@TLSLDM:w,%d0
+        move.l  #tl@TLSGD,%d0
+        move.w  #tl@TLSIE,%d0
+        move.b  #tl@TLSLE,%d0
+        move.l  tl@TLSGD(%pc),%d0
+        move.l  tl@TLSIE:w(%pc),%d0
+        move.l  tl@TLSLE(%pc,%d1.w),%d0
+        lea     gtl@TLSLE(%a0),%a1
+        lea     (btl@TLSLDO,%a0),%a2
+        move.l  ([tl@TLSGD,%a0],gtl@TLSLE),%d0
+        move.l  ([%a0],btl@TLSLDO),%d1
+        jsr     ext@TLSGD
+        bsr     ext@TLSLDM
+        move.l  8+tl@TLSLDO,%d0
+
+# `m68k_elf_cons` reads one suffix, `@TLSLDO`, and only where the relocation
+# fits the value: the model's own relocation is the four-byte one, so a
+# `.long` takes it and nothing narrower does. A constant written after the
+# suffix is folded into the addend, which an operand does not allow.
+=== a thread-local offset in data
+        .section .tdata,"awT",@progbits
+tl:     .long   1
+        .data
+        .long   tl@TLSLDO
+        .long   tl@TLSLDO+8
+        .long   tl@TLSLDO-4
+        .long   4+tl@TLSLDO
+        .long   ext@TLSLDO
+        .long   tl@TLSLDO, tl@TLSLDO
+=== refused: a thread-local model in data other than @TLSLDO
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .data
+        .long   x@TLSGD
+=== refused: @TLSLDO in a field narrower than a long
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .data
+        .word   x@TLSLDO
+=== refused: a thread-local suffix spelled in lower case
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .text
+        move.l  x@tlsgd(%a0),%d0
+=== refused: a thread-local suffix before the end of an operand
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .text
+        move.l  x@TLSGD+8(%a0),%d0
+=== refused: a thread-local model on a symbol outside a thread-local section
+        .data
+d:      .long   0
+        .text
+        move.l  d@TLSIE(%a0),%d0
+
 # `.even` is the 680x0 port's `.align 2`, and pads with zeros wherever it
 # stands. The `.dc`, `.dcb` and `.ds` in the same syntax are in
 # `m68k-programs.txt`, which compares the bytes of one section.

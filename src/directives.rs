@@ -401,6 +401,7 @@ impl Assembler {
         } = self;
         let dialect = options.dialect;
         let bit_dot = arch.bit_addressing();
+        let upper_modifiers = arch.uppercase_modifiers();
         let mut cx = crate::arch::AsmCtx {
             interner,
             exprs,
@@ -411,6 +412,7 @@ impl Assembler {
             dialect,
             format: options.format,
             bit_dot,
+            upper_modifiers,
             sections,
             section: *section,
             relaxable: false,
