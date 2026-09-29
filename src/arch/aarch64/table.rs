@@ -12,8 +12,9 @@
 //!
 //! The general-purpose groups here are the ones shaped the same way: the
 //! load/store exclusives, the acquire/release accesses and the atomics, one
-//! form per operation, ordering and access size, and the
-//! pointer-authentication instructions that name a register. The rest of the general-purpose instruction
+//! form per operation, ordering and access size, the
+//! pointer-authentication instructions that name a register, and memory
+//! tagging. The rest of the general-purpose instruction
 //! set, whose interest is in its aliases, is written out in [`super::insn`].
 //!
 //! This module is the other half: an operand grammar covering what those

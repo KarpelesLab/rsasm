@@ -20,8 +20,9 @@ MATTR = ",".join([
     "+v9.5a", "+sve2", "+sve2p1", "+sve2-aes", "+sve2-sha3", "+sve2-sm4",
     "+sve2-bitperm", "+sve-aes2", "+sve-b16b16", "+sve-bfscale",
     "+sve-f16f32mm", "+crypto", "+dotprod", "+i8mm", "+fullfp16", "+bf16",
-    "+lse", "+lse128", "+lsui", "+rcpc", "+rand", "+pauth", "+fp16fml",
-    "+flagm", "+sb", "+ssbs", "+predres", "+ls64", "+f64mm", "+f32mm",
+    "+lse", "+lse128", "+lsui", "+rcpc", "+rand", "+mte", "+pauth",
+    "+fp16fml", "+flagm", "+sb", "+ssbs", "+predres", "+ls64", "+f64mm",
+    "+f32mm",
     "+jsconv", "+complxnum", "+rcpc3", "+cssc", "+the", "+d128", "+lut",
     "+faminmax", "+fp8", "+fp8fma", "+fp8dot2", "+fp8dot4", "+sme", "+sme2",
     "+sme2p1",
@@ -66,6 +67,11 @@ GP_GROUPS = re.compile(r"""
     # references, and `insn.rs` has them with the rest of the hints.
   | pac (i|d) z? (a|b) | aut (i|d) z? (a|b) | pacga | xpac (i|d)
   | b l? r (aa|ab) z? | e? ret (aa|ab) | ldra (a|b)
+    # Memory tagging: the tag arithmetic, the tagged stores and the loads and
+    # stores of a tag on its own. `subp` and `subps` are not the handwritten
+    # `sub` and `subs`, and `cmpp` is the alias of `subps xzr, ...`.
+  | irg | addg | subg | gmi | subp s? | cmpp
+  | st z? 2? g m? | stgp | ldg m?
 """, re.X)
 
 

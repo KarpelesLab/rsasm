@@ -29,8 +29,8 @@ and checked against it.
   `table_names.rs` and the corpora `tools/mc-diff/aarch64-simd-words.txt` and
   `aarch64-sve-words.txt`, as below. The general-purpose groups that are
   families of the same shape -- named by `GP_GROUPS` in `a64.py`, and today
-  the load/store exclusives, the acquire/release accesses, the atomics and
-  pointer authentication -- are measured
+  the load/store exclusives, the acquire/release accesses, the atomics,
+  pointer authentication and memory tagging -- are measured
   the same way and go to `aarch64-gp-words.txt`.
 - `aarch64-sys.py` does the same for the system instructions against the
   other reference: the names come from binutils' `aarch64-sys-regs.def` and
