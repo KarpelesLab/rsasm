@@ -60,6 +60,12 @@ GP_GROUPS = re.compile(r"""
   | rcw s? (cas|clr|set|swp) p? (a|l|al)?
     # FEAT_LRCPC's acquiring load and FEAT_LRCPC3's ordered pair.
   | ldapr [bh]? | ldiapp | stilp
+    # The pointer-authentication instructions that name a register. The
+    # spellings with a fixed modifier -- `paciasp`, `paciaz`, `pacia1716`,
+    # `xpaclri` -- are `hint` encodings and separate mnemonics to both
+    # references, and `insn.rs` has them with the rest of the hints.
+  | pac (i|d) z? (a|b) | aut (i|d) z? (a|b) | pacga | xpac (i|d)
+  | b l? r (aa|ab) z? | e? ret (aa|ab) | ldra (a|b)
 """, re.X)
 
 

@@ -12,7 +12,8 @@
 //!
 //! The general-purpose groups here are the ones shaped the same way: the
 //! load/store exclusives, the acquire/release accesses and the atomics, one
-//! form per operation, ordering and access size. The rest of the general-purpose instruction
+//! form per operation, ordering and access size, and the
+//! pointer-authentication instructions that name a register. The rest of the general-purpose instruction
 //! set, whose interest is in its aliases, is written out in [`super::insn`].
 //!
 //! This module is the other half: an operand grammar covering what those
@@ -178,7 +179,9 @@ pub enum Enc {
         max: i64,
     },
     /// The value itself, bit `.0` to word bit `.1`; one value bit may go to
-    /// several word bits.
+    /// several word bits. The lowest bit placed says what the value counts
+    /// in: `ldraa x0, [x1, #8]` reaches word bits 12-20 and 22 from its own
+    /// bits 3-12, so its offset is a multiple of eight.
     Scatter {
         min: i64,
         max: i64,
@@ -984,6 +987,12 @@ fn apply(enc: Enc, v: Option<Val>, word: u32) -> Result<u32, String> {
         Enc::Scatter { min, max, bits } => {
             let v = int(v)?;
             range(v, min, max)?;
+            let step = 1i64 << bits.first().map_or(0, |b| b.0);
+            if (v - min).rem_euclid(step) != 0 {
+                return Err(format!(
+                    "must be a multiple of {step} from {min}, but is {v}"
+                ));
+            }
             Ok(set_bits(word, bits, v as u64))
         }
         Enc::Affine {
