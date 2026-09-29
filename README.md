@@ -1193,7 +1193,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 289 of 289 match across
+  addend a COFF relocation keeps in its field. 290 of 290 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
