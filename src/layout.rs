@@ -2370,14 +2370,18 @@ impl Assembler {
         };
         let mut addend = v.addend - bias;
         let mut reloc = reloc;
-        // A GOT, PLT or `..sym` modifier in NASM source always names the
-        // symbol, since that is what the linker looks up.
-        let names_symbol = self.find_modifier(e).is_some_and(|m| {
-            matches!(
-                self.interner.get(m),
-                "got" | "gotpcrel" | "plt" | "sym" | "gotoff" | "gotpc"
-            )
-        });
+        // A modifier that asks the linker for an entry of the target's own
+        // names it rather than its section, since that is what the linker
+        // looks up. In NASM source every GOT, PLT or `..sym` modifier does;
+        // elsewhere the backend says which of its own do.
+        let names_symbol = effects.is_some_and(|x| x.names_target)
+            || (self.options.dialect == crate::lexer::Dialect::Nasm
+                && self.find_modifier(e).is_some_and(|m| {
+                    matches!(
+                        self.interner.get(m),
+                        "got" | "gotpcrel" | "plt" | "sym" | "gotoff" | "gotpc"
+                    )
+                }));
         let symbol = target.map(|t| {
             self.relocation_symbol(t, kind, si, fi, names_symbol, &mut addend, &mut reloc)
         });
@@ -2431,20 +2435,22 @@ impl Assembler {
         let binding = self.symbols.get(target).binding;
         let arch = self.frag_arch(si, fi).0;
         // A target may need the linker to see the symbol itself: an ARM
-        // function, whose instruction set a linker reads from it, and a
+        // function, whose instruction set a linker reads from it, a
         // thread-local variable, whose section symbol is not itself
-        // thread-local and so cannot stand in for it.
+        // thread-local and so cannot stand in for it, and one a modifier
+        // asks the linker for an entry of, which no section symbol and
+        // offset can name; see `ModifierSymbols::names_target`.
         let sym = self.symbols.get(target);
-        let keep =
-            arch.keeps_reloc_symbol(sym.target_flags, sym.ty) || self.is_thread_local(target);
+        let keep = arch.keeps_reloc_symbol(sym.target_flags, sym.ty)
+            || self.is_thread_local(target)
+            || names_symbol;
         // NASM's rule holds for its COFF objects too. Otherwise COFF keeps
         // the local symbols the source named, and llvm-mc relocates against
         // them by name; only the assembler's own labels, which never reach
         // the symbol table, go through their section.
         let by_section = !keep
             && if self.options.dialect == crate::lexer::Dialect::Nasm {
-                !names_symbol
-                    && (binding == Binding::Local || self.symbols.get(target).is_defined())
+                binding == Binding::Local || self.symbols.get(target).is_defined()
             } else if self.options.format.is_coff() {
                 !crate::coff::keeps_symbol(self, target)
             } else {

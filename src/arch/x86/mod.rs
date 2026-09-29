@@ -188,6 +188,7 @@ impl Architecture for X86 {
         crate::arch::ModifierSymbols {
             needs: got.then_some("_GLOBAL_OFFSET_TABLE_"),
             tls,
+            ..crate::arch::ModifierSymbols::default()
         }
     }
 

@@ -934,6 +934,12 @@ pub struct ModifierSymbols {
     pub needs: Option<&'static str>,
     /// The target is a thread-local variable.
     pub tls: bool,
+    /// The relocation names the target itself on a target that would
+    /// otherwise relocate it against its section; see
+    /// [`Architecture::relocates_globals_by_section`]. What a GOT or PLT
+    /// modifier asks for is an entry of that symbol's own, which a section
+    /// symbol and an offset cannot ask the linker for.
+    pub names_target: bool,
 }
 
 /// How `.lcomm` reserves an object in `.bss`; see
@@ -1001,6 +1007,25 @@ pub trait Architecture {
     /// Relocation type selected by a source-level `@` modifier such as
     /// `foo@PLT`. `None` means the modifier is not recognised.
     fn modifier_reloc(&self, _name: &str, _size: u8, _pcrel: bool) -> Option<u32> {
+        None
+    }
+
+    /// The data directives whose values carry a relocation modifier at all,
+    /// spelled as the source spells them: with the dot for one of GNU as's
+    /// own, without for one a dialect reads (`dc.l`).
+    ///
+    /// `None`, the default, is every data directive, which is how GNU as
+    /// reads most targets: one `cons` serves `.long`, `.int`, `.4byte` and
+    /// `.dc.l` alike, and whatever the target's `TC_CONS_FIX_NEW` reads it
+    /// reads in all of them. m68k is the exception. Its `md_pseudo_table`
+    /// replaces the `long` entry with an `m68k_elf_cons` of its own and
+    /// leaves the other spellings to the plain `cons`, which has no `@` in
+    /// its grammar, so `.int x@TLSLDO` is junk after the expression where
+    /// `.long x@TLSLDO` is a thread-local offset.
+    ///
+    /// [`Architecture::modifier_reloc`] then says which relocation a value in
+    /// one of the directives named here takes.
+    fn directive_modifiers(&self) -> Option<&'static [&'static str]> {
         None
     }
 

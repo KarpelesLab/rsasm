@@ -42,10 +42,12 @@
 #   `_GLOBAL_OFFSET_TABLE_`), ARM (`sym(GOT)`, `sym(GOTOFF)`,
 #   `sym(GOT_PREL)`, `sym(PLT)`, `_GLOBAL_OFFSET_TABLE_` and the
 #   `:lower16:`/`:upper16:` halves), AArch64 (`:got:`, `:got_lo12:`, and
-#   `:abs_g0_nc:` and its relatives) and PowerPC (`@plt`, `@local`, `@got`,
-#   `@toc` and the halves of a 64-bit address). The thread-local models are
-#   in the x86-64, i386, AArch64, PowerPC, RISC-V and SPARC rows, where the
-#   linker turns each of them into local exec: `@TLSGD`, `@TLSLD` and
+#   `:abs_g0_nc:` and its relatives), PowerPC (`@plt`, `@local`, `@got`,
+#   `@toc` and the halves of a 64-bit address) and m68k (`@GOT`, `@GOTPC`,
+#   `@PLTPC` and `_GLOBAL_OFFSET_TABLE_`, but not `@PLT`, whose
+#   `R_68K_PLTOFF32` fails a BFD assertion in GNU ld 2.47). The thread-local
+#   models are in the x86-64, i386, AArch64, PowerPC, RISC-V and SPARC rows,
+#   where the linker turns each of them into local exec: `@TLSGD`, `@TLSLD` and
 #   `@TLSLDM`, `@DTPOFF`, `@GOTTPOFF`, `@TPOFF` and `@NTPOFF`, and the
 #   descriptor pair `@TLSDESC`/`@TLSCALL`; AArch64's `:tlsgd:`, `:tlsldm:`
 #   with the `:dtprel_*:` offsets, `:gottprel:`, the `:tprel_*:` offsets, and
