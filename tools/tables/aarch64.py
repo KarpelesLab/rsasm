@@ -2092,6 +2092,12 @@ def write_corpus(forms, directory):
               "# GNU as takes the zero register in either half of the 128-bit value a\n"
               "# FEAT_THE `rcw<op>p` names (`rcwswpp xzr, x1, [x2]`) and llvm-mc does\n"
               "# not; rsasm follows llvm-mc, as it does for every AArch64 encoding.\n"
+              "#\n"
+              "# The other way round, GNU as assembles two things with a warning that\n"
+              "# llvm-mc refuses outright, and rsasm assembles them too: a\n"
+              "# store-exclusive whose status register is also one of its sources\n"
+              "# (`stxr w0, x0, [x1]`), and an `ldraa` or `ldrab` that writes back the\n"
+              "# register it loads into. Neither is a line this corpus can hold.\n"
               "#\n",
     }
     for name, lines in files.items():

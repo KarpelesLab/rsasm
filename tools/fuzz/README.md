@@ -321,9 +321,10 @@ that refuses one line of a batch is run again without it. The classes are
 and `gas-only` (the references disagree and rsasm follows that one), and
 `neither`. The AArch64 corpora follow llvm-mc, except that rsasm refuses the
 out-of-range immediates llvm-mc truncates (`ext v0.8b, v1.8b, v2.8b, #8`),
-as GNU as does, and that it assembles a store-exclusive whose status
-register is also one of its sources (`stxr w0, x0, [x1]`), which llvm-mc
-refuses and GNU as warns about. `--source gnu` takes the cases from GNU
+as GNU as does, and that it assembles what is unpredictable rather than
+unencodable -- a store-exclusive whose status register is also one of its
+sources (`stxr w0, x0, [x1]`), an `ldraa` that writes back the register it
+loads into -- which llvm-mc refuses and GNU as warns about. `--source gnu` takes the cases from GNU
 objdump's disassembly instead, which is how the spellings GNU as source is
 written in get tried. Lines for what the backend leaves out are dropped rather than
 counted: SME's ZA array and lookup tables, predicates as counters, and the

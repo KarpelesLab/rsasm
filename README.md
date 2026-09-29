@@ -1200,11 +1200,12 @@ llvm-mc reads — an unpredicated `and z0.s, z0.s, z1.s`, whose element size is
 always `.d`, and an immediate outside the element's signed range, such as
 `mov z0.h, #-65408` — and takes the ones only GNU as reads: `fcmp s0, 0` for
 `#0.0`, and a register list `{z0.h - z1.s}` of two element sizes is refused
-as llvm-mc refuses it. A store-exclusive whose status register is also one
-of its sources (`stxr w0, x0, [x1]`) goes the other way: it is unpredictable
-rather than unencodable, so GNU as warns and assembles it and rsasm does
-too, where llvm-mc refuses it. `smstart`, `smstop` and `zero {za}` are
-handwritten.
+as llvm-mc refuses it. Two of the new groups' forms go the other way and
+are unpredictable rather than unencodable, so GNU as warns and assembles
+them and rsasm does too, where llvm-mc refuses them: a store-exclusive whose
+status register is also one of its sources (`stxr w0, x0, [x1]`), and an
+`ldraa` that writes back the register it loads into. `smstart`, `smstop`
+and `zero {za}` are handwritten.
 
 The system instructions are generated the same way from the other reference:
 `tools/tables/aarch64-sys.py` takes the names from binutils' own tables —
