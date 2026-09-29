@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Shared pieces for the AArch64 table generator: running llvm-mc, and the
-operand grammar that both the sweep and the fitter speak.
+"""Shared pieces for the AArch64 table generator: running llvm-mc, the
+operand grammar that both the sweep and the fitter speak, and which
+general-purpose mnemonics the table is responsible for.
 
 Nothing here knows an encoding. Instruction words come from llvm-mc, either by
 disassembling random words (which is how the forms are discovered) or by
@@ -27,6 +28,27 @@ MATTR = ",".join([
 ])
 
 TRIPLE = "aarch64"
+
+# The general-purpose groups the encoding table covers, which it takes whole
+# rather than only where a SIMD mnemonic shares them. Every one of them is a
+# family of near-identical forms that differ in an ordering suffix or an
+# access size, which is what the table is for; the rest of the
+# general-purpose instruction set is written out in `insn.rs`, and a mnemonic
+# named here must not be there as well, or both encoders would claim it.
+#
+# `re.X` ignores the spaces, so each alternative reads as its pieces.
+GP_GROUPS = re.compile(r"""
+    # The load/store exclusives and the acquire/release accesses of baseline
+    # ARMv8-A: `ldxr`, `stlxrh`, `ldaxp`, `ldar`, `stllrb`. `clrex` has no
+    # operand to vary and is written out with the other barriers.
+    ld a? xr [bh]? | ld a? xp | st l? xr [bh]? | st l? xp
+  | ld l? ar [bh]? | st ll? r [bh]?
+""", re.X)
+
+
+def gp_group(mnemonic):
+    """True for a mnemonic the table owns although no SIMD form shares it."""
+    return GP_GROUPS.fullmatch(mnemonic) is not None
 
 
 def _mc(args, text):

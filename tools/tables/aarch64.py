@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Derives rsasm's AArch64 SIMD/SVE encoding table from llvm-mc.
 
+It also covers the general-purpose groups named in `a64.GP_GROUPS`, which are
+families of near-identical forms of the same kind and are taken whole rather
+than only where a SIMD mnemonic shares them.
+
 Three phases, none of which contains an encoding written by hand:
 
   discover  random instruction words are disassembled by llvm-mc; each
@@ -38,11 +42,12 @@ import re
 import subprocess
 import sys
 import tempfile
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import a64
-from a64 import Atom, assemble, disassemble, parse_line, render
+from a64 import Atom, assemble, disassemble, gp_group, parse_line, render
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -564,7 +569,7 @@ def bits_from_probes(accepted, b0, base_word, value_of, top, partial=False):
 
 
 def grow(accepted, model, b0, step, lo_limit=None, hi_limit=None, most=None, printed=(),
-         skip=()):
+         skip=(), holes=()):
     """The run of values around `b0` that llvm-mc encodes as the model says,
     no more than `most` of them.
 
@@ -576,9 +581,13 @@ def grow(accepted, model, b0, step, lo_limit=None, hi_limit=None, most=None, pri
     `#1`..`#32` for `scvtf`.
 
     A value in `skip` belongs to a form tried before this one, and neither
-    ends the run nor counts against it."""
+    ends the run nor counts against it. A value in `holes` is one llvm-mc
+    refused for a reason outside this operand, and does not end the run
+    either."""
     def agrees(v):
-        return v in accepted and (v in skip or model(v) == accepted[v])
+        if v not in accepted:
+            return v in holes
+        return v in skip or model(v) == accepted[v]
     lo = hi = b0
     v = b0 + step
     while (hi_limit is None or v <= hi_limit) and agrees(v):
@@ -613,13 +622,14 @@ def grow(accepted, model, b0, step, lo_limit=None, hi_limit=None, most=None, pri
 
 
 def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, printed=(),
-               forbidden=0):
+               forbidden=0, holes=()):
     """How one number reaches the word, as (encoding, values), or None.
 
     Every model that fits is measured by how many of the values llvm-mc took
     it explains, and the best wins; `values` lists them for a transform, whose
     domain is not a range. `claimed` holds values an earlier form of the same
-    shape encodes, which are no evidence against this one."""
+    shape encodes, which are no evidence against this one, and `holes` values
+    llvm-mc refused for a reason outside this operand."""
     claimed = claimed or set()
     everything = accepted
     if claimed:
@@ -657,7 +667,8 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
             n = nbits(bits)
             model = scatter_model(bits, base_word, b0)
             lo, hi = grow(ranged_all, model, b0, 1, 0 if reg else None,
-                          (1 << n) - 1, most=1 << n, printed=printed, skip=claimed)
+                          (1 << n) - 1, most=1 << n, printed=printed, skip=claimed,
+                          holes=holes)
             if kind in ("cond", "pat", "prf"):
                 # Only a name reaches the field, so its width is the range.
                 lo, hi = 0, (1 << n) - 1
@@ -684,7 +695,8 @@ def fit_number(atom, vi, b0, base_word, accepted, esize_hint, claimed=None, prin
                         break
                     model = affine_model(base_word, b0, lsb, width, sign, step)
                     lo, hi = grow(ranged_all, model, b0, step, 0 if reg else None,
-                                  None, most=1 << width, printed=printed, skip=claimed)
+                                  None, most=1 << width, printed=printed, skip=claimed,
+                                  holes=holes)
                     count = (hi - lo) // step + 1
                     if count >= 3 and (step == 1 or count >= 8) and \
                             mostly_printed(lo, hi, step):
@@ -828,6 +840,22 @@ def baseline_of(atoms):
     return out
 
 
+def baseline_spread(atoms):
+    """A baseline naming a different register in each operand of a class, for
+    the forms llvm-mc refuses to see one register twice in: `stxr w0, x0,
+    [x0]` is unpredictable where `stxr w0, x1, [x2]` is not. Tried after the
+    zeroed baseline, so it changes nothing for a form that takes that one."""
+    out, next_ = [], collections.Counter()
+    for a in atoms:
+        vals = list(a.vals)
+        if a.kind[0] in REG_KINDS:
+            top = 16 if a.kind[0] in ("p", "pm", "pz", "plist") else 32
+            vals = [next_[a.kind[0]] % top] + [0] * (len(vals) - 1)
+            next_[a.kind[0]] += 1
+        out.append(a.with_vals(vals, sp=False))
+    return out
+
+
 def _set_bits(word, bits, x):
     for vb, wb in bits:
         word = (word & ~(1 << wb)) | (((x >> vb) & 1) << wb)
@@ -965,7 +993,8 @@ def fit_form(mn, samples, rng, earlier=()):
 
     # A baseline the assembler accepts: registers zeroed, everything else as
     # one of the samples had it.
-    tries = [baseline_of(a) for _, a in samples] + [list(a) for _, a in samples]
+    tries = [baseline_of(a) for _, a in samples] + \
+        [baseline_spread(a) for _, a in samples] + [list(a) for _, a in samples]
     words = assemble([render(mn, t) for t in tries])
     base_atoms = base_word = None
     for t, w in zip(tries, words):
@@ -1063,6 +1092,19 @@ def fit_form(mn, samples, rng, earlier=()):
         canonical[s].update(v for v in todo if printed_back.get(accepted[s][v]) == v)
         return canonical[s]
 
+    def holes_for(s):
+        """The values of one number that llvm-mc refused for a reason outside
+        the operand itself: a general-purpose register another operand of the
+        baseline already names. llvm-mc refuses `stxr w0, x0, [x1]`, whose
+        status register is also its source, where GNU as warns and assembles
+        it, and every A64 register field is the same five bits wide, so such
+        a refusal says nothing about the range."""
+        ai, vi = s
+        if vi or base_atoms[ai].kind[0] != "g":
+            return ()
+        return {base_atoms[o[0]].vals[0] for o in slot_ids
+                if o != s and o[1] == 0 and base_atoms[o[0]].kind[0] == "g"}
+
     fits = {}
     for s in slot_ids:
         ai, vi = s
@@ -1071,7 +1113,7 @@ def fit_form(mn, samples, rng, earlier=()):
         reg_like = is_reg_slot(base_atoms[ai], vi)
         printed = () if reg_like or base_atoms[ai].kind[0] == "fimm" else canon(s)
         r = fit_number(base_atoms[ai], vi, b0, base_word, accepted[s], esize_hint, claimed,
-                       printed)
+                       printed, holes=holes_for(s))
         # A range that stops where the probing stopped may go further.
         for _ in range(8):
             rng_ = r and enc_range(r[0])
@@ -1091,7 +1133,7 @@ def fit_form(mn, samples, rng, earlier=()):
                     accepted[s2][v] = w
             printed = canon(s)
             r2 = fit_number(base_atoms[ai], vi, b0, base_word, accepted[s], esize_hint,
-                            claimed, printed)
+                            claimed, printed, holes=holes_for(s))
             if r2 == r:
                 break
             r = r2
@@ -1113,7 +1155,8 @@ def fit_form(mn, samples, rng, earlier=()):
             ai, vi = s
             b0 = base_atoms[ai].vals[vi]
             fits[s] = fit_number(base_atoms[ai], vi, b0, base_word, accepted[s], esize_hint,
-                                 claimed_for(s), canonical[s], forbidden)
+                                 claimed_for(s), canonical[s], forbidden,
+                                 holes=holes_for(s))
 
     slots = []
     for s in slot_ids:
@@ -1283,6 +1326,14 @@ def apply_values(atoms, slots, vals, sp_at_31):
     return out
 
 
+def shares_a_register(slots, vals):
+    """True if two general-purpose register operands hold the same number,
+    which llvm-mc refuses in a store-exclusive and GNU as only warns about."""
+    regs = [v for sl, v in zip(slots, vals)
+            if sl.get("kind") == "g" and sl["slot"][1] == 0]
+    return len(set(regs)) != len(regs)
+
+
 def check_form(mn, atoms, slots, base, sp_at_31, rng, rounds=10, earlier=()):
     """Assembles random operand values and compares with the fitted form.
     Returns the lines checked, or raises Fail. Values a form fitted before
@@ -1297,12 +1348,19 @@ def check_form(mn, atoms, slots, base, sp_at_31, rng, rounds=10, earlier=()):
     cases = [v for v in cases if not claimed(v)]
     lines = [render(mn, apply_values(atoms, slots, v, sp_at_31)) for v in cases]
     got = assemble(lines)
+    checked = []
     for vals, line, w in zip(cases, lines, got):
         want = encode_form(slots, base, vals)
+        if w is None and shares_a_register(slots, vals):
+            # `stxr w0, x0, [x1]`, whose status register is also its source:
+            # llvm-mc refuses it and GNU as assembles it with a warning, so
+            # the line is no evidence about the fit either way.
+            continue
         if w != want:
             raise Fail("%s: llvm-mc says %s, the fit says %08x" %
                        (line.replace("\t", " "), "no" if w is None else "%08x" % w, want))
-    return list(zip(lines, got))
+        checked.append((line, w))
+    return checked
 
 
 # ---------------------------------------------------------------------------
@@ -1419,7 +1477,9 @@ def enc_rust(enc):
 
 
 HEADER = """\
-//! The AArch64 SIMD, floating-point and SVE encoding table.
+//! The AArch64 SIMD, floating-point and SVE encoding table, and the
+//! general-purpose groups that are families of the same kind: the load/store
+//! exclusives and the acquire/release accesses.
 //!
 //! Generated by `tools/tables/aarch64.py` from llvm-mc; do not edit. Each
 //! row is one instruction form: a mnemonic, the operands it takes, and the
@@ -1797,8 +1857,9 @@ def main():
                 break
         simd = {k[0] for k, (samples, _) in groups.items()
                 if {t[0] for t in k[1]} & SIMD_KINDS or any(sve_space(w) for w, _ in samples)}
-        groups = {k: v for k, v in groups.items() if k[0] in simd}
-        print("of mnemonics with a SIMD form: %d forms" % len(groups))
+        groups = {k: v for k, v in groups.items() if k[0] in simd or gp_group(k[0])}
+        print("of mnemonics with a SIMD form, and the general-purpose groups: %d forms"
+              % len(groups))
         groups = {k: v[0] for k, v in groups.items()}
     if args.groups and not os.path.exists(args.groups):
         with open(args.groups, "wb") as fh:
@@ -1812,7 +1873,10 @@ def main():
         groups = {k: v for k, v in groups.items() if pat.search(k[0])}
     print("%d candidate forms" % len(groups))
 
-    jobs = [(k, v, args.seed + i) for i, (k, v) in enumerate(sorted(groups.items()))]
+    # A shape's seed comes from its name, not from where it lands in the
+    # sorted list, so that adding a group of forms leaves the rest of the
+    # table exactly as it was.
+    jobs = [(k, v, args.seed + zlib.crc32(repr(k).encode())) for k, v in sorted(groups.items())]
     forms, failures = [], []
     for rs in pool.imap(fit_job, jobs, chunksize=4):
         for r in rs:
@@ -1868,7 +1932,8 @@ def compare(written):
     for name, committed in (("table_data.rs", os.path.join(ROOT, "src", "arch", "aarch64")),
                             ("table_names.rs", os.path.join(ROOT, "src", "arch", "aarch64")),
                             ("aarch64-simd-words.txt", os.path.join(ROOT, "tools", "mc-diff")),
-                            ("aarch64-sve-words.txt", os.path.join(ROOT, "tools", "mc-diff"))):
+                            ("aarch64-sve-words.txt", os.path.join(ROOT, "tools", "mc-diff")),
+                            ("aarch64-gp-words.txt", os.path.join(ROOT, "tools", "mc-diff"))):
         want = os.path.join(written, name)
         have = os.path.join(committed, name)
         if not os.path.exists(have) or open(have).read() != open(want).read():
@@ -1964,8 +2029,9 @@ def resolve(forms):
 
 
 def write_corpus(forms, directory):
-    """Three lines of each form, split into the SVE forms and the rest."""
-    files = {"sve": set(), "simd": set()}
+    """Three lines of each form, split into the SVE forms, the
+    general-purpose groups and the rest."""
+    files = {"sve": set(), "simd": set(), "gp": set()}
     for f in forms:
         # A `movprfx` must be followed by the instruction it prefixes, which
         # a corpus of lone lines cannot give it; aarch64-programs.txt has one.
@@ -1974,10 +2040,17 @@ def write_corpus(forms, directory):
         for line, _ in f["lines"][:3]:
             line = line.replace("\t", " ").strip()
             sve = re.search(r"\b[zp]\d+\b|\b[zp]\d+[./]", line)
-            files["sve" if sve else "simd"].add(line)
+            name = "gp" if gp_group(f["mn"]) else "sve" if sve else "simd"
+            files[name].add(line)
     about = {
         "simd": "AdvSIMD (NEON), floating point and the cryptographic extensions",
         "sve": "SVE and SVE2",
+        "gp": "general-purpose groups",
+    }
+    # A second paragraph, where the name alone does not say what is in the file.
+    note = {
+        "gp": "The groups the table covers whole because no SIMD mnemonic shares\n"
+              "# them: the load/store exclusives and the acquire/release accesses.\n#\n",
     }
     for name, lines in files.items():
         path = os.path.join(directory, "aarch64-%s-words.txt" % name)
@@ -1986,10 +2059,10 @@ def write_corpus(forms, directory):
 # AArch64 %s: every form of every instruction, at the ends of each operand's
 # range and somewhere inside it.
 #
-# Generated by tools/tables/aarch64.py, which took each line from a run of
+# %sGenerated by tools/tables/aarch64.py, which took each line from a run of
 # llvm-mc while measuring the encoding table; regenerate rather than edit. One
 # instruction per line, compared a batch at a time by run.sh.
-""" % about[name])
+""" % (about[name], note.get(name, "")))
             for l in sorted(lines):
                 fh.write(l + "\n")
         print("wrote %d lines to %s" % (len(lines), path))

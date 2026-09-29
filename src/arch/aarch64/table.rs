@@ -1,4 +1,5 @@
-//! The table-driven half of the backend: SIMD, floating point and SVE.
+//! The table-driven half of the backend: SIMD, floating point, SVE, and the
+//! general-purpose groups built the same way.
 //!
 //! These instruction sets are thousands of forms that differ in a handful of
 //! opcode bits and in which lane arrangement or element size each register
@@ -8,6 +9,11 @@
 //! operand changed at a time to measure where that operand's bits go, and
 //! writes the result to [`table_data`]: for each form, the operands it takes
 //! and the opcode left when all of them are zero.
+//!
+//! The general-purpose groups here are the ones shaped the same way: the
+//! load/store exclusives and the acquire/release accesses, one form per
+//! ordering and access size. The rest of the general-purpose instruction
+//! set, whose interest is in its aliases, is written out in [`super::insn`].
 //!
 //! This module is the other half: an operand grammar covering what those
 //! forms are written with (`v0.4s`, `d3`, `v1.s[2]`, `z0.d`, `p1/z`,
@@ -130,13 +136,11 @@ pub enum Kind {
     Shift(u8),
     /// `mul vl`, after an SVE offset.
     MulVl,
-    /// `[`, `]` and `]!` of an address. Nothing in the table writes back —
-    /// the loads and stores that do are the handwritten ones — but the
-    /// grammar reads `]!`, so that it is an operand a form does not take
-    /// rather than a syntax error.
+    /// `[`, `]` and `]!` of an address: the last is the pre-index writeback
+    /// of `stlr w0, [x1, #-4]!`, whose offset is the one value the form
+    /// takes.
     Open,
     Close,
-    #[allow(dead_code)]
     CloseWb,
     /// An index extend with no amount: `uxtw`.
     Ext(u8),
