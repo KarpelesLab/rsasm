@@ -10,11 +10,18 @@
 #   tools/macho-diff/run.sh arm64        # just one
 #
 # Corpora live in tools/macho-diff/<arch>.txt, one statement per line, each
-# assembled as a file of its own, and tools/macho-diff/<arch>-programs.txt,
-# multi-line snippets separated by `=== <name>` lines. A line in the first can
-# hold several statements separated by `;`, which becomes a new line before
-# either assembler sees it (Darwin's arm64 assembly comments with `;`). The
-# machine's llvm-mc corpora in tools/mc-diff run as well, in the same way.
+# assembled as a file of its own, and in tools/macho-diff/<arch>-programs.txt
+# and <arch>-dwarf.txt, multi-line snippets separated by `=== <name>` lines. A
+# line in the first can hold several statements separated by `;`, which becomes
+# a new line before either assembler sees it (Darwin's arm64 assembly comments
+# with `;`). The machine's llvm-mc corpora in tools/mc-diff run as well, in the
+# same way.
+#
+# The DWARF corpora are here rather than in tools/dwarf-diff because llvm-mc is
+# the reference for a whole Mach-O object, so the debugging sections are
+# compared along with the segment, the symbol table and the relocations that
+# reach into them. A case named `=== <name> | -g` (or `| --gdwarf-<n>`) is
+# assembled with that flag, as tools/dwarf-diff spells it.
 #
 # Matching objects are also compared byte for byte, and the count printed;
 # set MACHO_DIFF_BYTES=1 to list the ones that only match canonically.
@@ -48,21 +55,33 @@ case "$(llvm-mc --version)" in
 esac
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --bin rsasm || exit 1
 rsasm="$root/target/debug/rsasm"
+# What `-g` names as the producer of the unit: llvm-mc reads this, and rsasm
+# reads it for exactly this comparison.
+export DEBUG_PRODUCER=reference
 
 pass=0
 fail=0
 identical=0
 
-compare() { # arch, rsasm target, triple, flags, name, source
-  local arch=$1 target=$2 triple=$3 flags=$4 name=$5 src=$6 m r d
+compare() { # arch, rsasm target, triple, flags, name, source, case flag
+  local arch=$1 target=$2 triple=$3 flags=$4 name=$5 src=$6 flag=${7-} m r d mcflag
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
-  if llvm-mc -triple="$triple" $flags -filetype=obj -o "$d/m.o" "$d/in.s" 2> "$d/merr"; then
+  case "$flag" in
+    "") mcflag= ;;
+    -g) mcflag=-g ;;
+    --gdwarf-*) mcflag="-g -dwarf-version=${flag#--gdwarf-}" ;;
+    *) echo "unknown flag in [$arch] $name: $flag" >&2; exit 1 ;;
+  esac
+  # Both assemblers run in the scratch directory and name the source the same
+  # way, since `-g` puts the file's name and the directory in the unit.
+  if (cd "$d" && llvm-mc -triple="$triple" $flags $mcflag -filetype=obj -o m.o in.s) 2> "$d/merr"
+  then
     m=$("$here/canon.sh" "$d/m.o")
   else
     m="refused"
   fi
-  if "$rsasm" -a "$target" -o "$d/r.o" "$d/in.s" 2> "$d/rerr"; then
+  if (cd "$d" && "$rsasm" -a "$target" $flag -o r.o in.s) 2> "$d/rerr"; then
     r=$("$here/canon.sh" "$d/r.o")
   else
     r="refused"
@@ -88,20 +107,26 @@ compare() { # arch, rsasm target, triple, flags, name, source
   rm -rf "$d"
 }
 
-# Runs `compare` over each `=== name` snippet of a file.
+# Runs `compare` over each `=== name` snippet of a file, leaving whatever
+# comes before the first one to be a comment. `=== name | -g` (or
+# `| --gdwarf-<n>`) assembles that one with the flag, as tools/dwarf-diff has
+# it.
 snippets() { # file, arch, rsasm target, triple, flags
-  local file=$1 snippet="" name="" line
+  local file=$1 snippet="" name="" flag="" line
   shift
   while IFS= read -r line; do
     case "$line" in
+      "==="*" | "*)
+        [ -n "$name" ] && compare "$@" "$name" "$snippet" "$flag"
+        snippet=""; name="${line#=== }"; flag="${name##* | }"; name="${name% | *}" ;;
       "==="*)
-        [ -n "$snippet" ] && compare "$@" "$name" "$snippet"
-        snippet=""; name="${line#=== }" ;;
+        [ -n "$name" ] && compare "$@" "$name" "$snippet" "$flag"
+        snippet=""; name="${line#=== }"; flag="" ;;
       *) snippet="$snippet$line
 " ;;
     esac
   done < "$file"
-  [ -n "$snippet" ] && compare "$@" "$name" "$snippet"
+  [ -n "$name" ] && compare "$@" "$name" "$snippet" "$flag"
   return 0
 }
 
@@ -121,6 +146,7 @@ run_arch() { # arch, rsasm target, triple, mc-diff corpus, llvm-mc flags
   set -- "$1" "$2" "$3" "${5-}"
   [ -f "$here/$arch.txt" ] && lines "$here/$arch.txt" "$@"
   [ -f "$here/$arch-programs.txt" ] && snippets "$here/$arch-programs.txt" "$@"
+  [ -f "$here/$arch-dwarf.txt" ] && snippets "$here/$arch-dwarf.txt" "$@"
   own=$((pass + fail - before))
   # The ELF corpus for the same machine, which is written for llvm-mc too:
   # every instruction in it has to come out the same in a Mach-O object, and

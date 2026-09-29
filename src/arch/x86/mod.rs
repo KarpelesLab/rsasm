@@ -238,15 +238,25 @@ impl Architecture for X86 {
         }
     }
 
-    /// GNU as's conventions, as for every x86 encoding. The object's class
+    /// GNU as's conventions, as for every x86 encoding, except in a Mach-O
+    /// object, which GNU as does not write at all. The object's class
     /// decides, not a `.code32` in a 64-bit file.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    ///
+    /// Three constants move with the format. In a PE object GNU as numbers
+    /// the return address column 32 rather than 16 on x86-64
+    /// (`x86_dwarf2_return_column` under `OBJ_COFF` and `TE_PE`); llvm-mc,
+    /// which writes the Mach-O objects, keeps the psABI's 16 and encodes an
+    /// FDE's address as a pointer-sized distance (`DW_EH_PE_pcrel`) rather
+    /// than the four-byte one GNU as writes.
+    fn dwarf(&self, _state: &ArchState, format: crate::output::Format) -> DwarfTarget {
+        let macho = format == crate::output::Format::MachO;
+        let ra64 = if format.is_coff() { 32 } else { 16 };
         let cfi = match self.bits {
             64 => CfiTarget {
                 data_align: -8,
-                ra_column: 16,
-                initial: vec![cfi::Insn::DefCfa(7, 8), cfi::Insn::Offset(16, -8)],
-                fde_encoding: 0x1b,
+                ra_column: ra64,
+                initial: vec![cfi::Insn::DefCfa(7, 8), cfi::Insn::Offset(ra64, -8)],
+                fde_encoding: if macho { 0x10 } else { 0x1b },
                 eh_frame_align: 8,
                 cie_version: 1,
             },
@@ -259,9 +269,10 @@ impl Architecture for X86 {
                 cie_version: 1,
             },
         };
+        let flavor = if macho { Flavor::Llvm } else { Flavor::Gnu };
         DwarfTarget {
             cfi: Some(cfi),
-            ..DwarfTarget::lines_only(Flavor::Gnu, 1)
+            ..DwarfTarget::lines_only(flavor, 1)
         }
     }
 

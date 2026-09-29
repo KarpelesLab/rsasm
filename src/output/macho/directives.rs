@@ -101,6 +101,24 @@ impl Assembler {
     /// a Mach-O object. Returns whether it was one.
     pub(crate) fn macho_directive(&mut self, text: &str, cur: &mut Cursor<'_>, span: Span) -> bool {
         match text {
+            // An arm64 frame is described twice in a Mach-O object: in
+            // `__TEXT,__eh_frame` and again as a compact unwind word in
+            // `__LD,__compact_unwind`, which rsasm does not write. Half a
+            // description is worse than none, since the linker reads the
+            // compact one first.
+            _ if text.starts_with(".cfi_")
+                && matches!(super::Cpu::for_arch(self.target()), Some(super::Cpu::Arm64)) =>
+            {
+                self.diags.error(
+                    span,
+                    format!(
+                        "`{text}` needs the compact unwind information llvm-mc writes beside \
+                         `__eh_frame` on arm64, which rsasm does not write into Mach-O objects yet"
+                    ),
+                );
+                cur.set_pos(cur.all().len());
+                true
+            }
             ".section" => self.macho_dir_section(cur, span),
             ".zerofill" => self.macho_dir_zerofill(cur, span),
             ".lcomm" => self.macho_dir_lcomm(cur, span),

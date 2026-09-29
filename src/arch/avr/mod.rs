@@ -218,7 +218,7 @@ impl Architecture for Avr {
     /// register 32), or three on a core with a 22-bit program counter, and
     /// the return address just above it (`tc_cfi_frame_initial_instructions`);
     /// the stack post-decrements, so the data alignment is -1.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         let pc_bytes = if matches!(self.mcu.mach, 6 | 106 | 107) {
             3
         } else {

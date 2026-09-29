@@ -166,7 +166,7 @@ impl Architecture for Sparc {
 
     /// llvm-mc's conventions, as for every SPARC encoding. A V9 frame starts
     /// with the CFA 2047 bytes above `%sp`, the stack bias.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         DwarfTarget {
             cfi: Some(CfiTarget {
                 data_align: if self.v9 { -8 } else { -4 },

@@ -187,13 +187,17 @@ impl Architecture for AArch64 {
 
     /// llvm-mc's conventions, as for every AArch64 encoding: code and
     /// addresses counted in bytes, where GNU as counts instructions.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    ///
+    /// A PE object has no `DW_EH_PE_pcrel` FDE address: llvm-mc writes the
+    /// plain pointer `MCAsmInfoCOFF` asks for, and the section-relative
+    /// relocation COFF has instead.
+    fn dwarf(&self, _state: &ArchState, format: crate::output::Format) -> DwarfTarget {
         DwarfTarget {
             cfi: Some(CfiTarget {
                 data_align: -4,
                 ra_column: 30,
                 initial: vec![cfi::Insn::DefCfa(31, 0)],
-                fde_encoding: 0x1b,
+                fde_encoding: if format.is_coff() { 0x00 } else { 0x1b },
                 eh_frame_align: 8,
                 cie_version: 1,
             }),

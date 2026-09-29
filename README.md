@@ -200,18 +200,19 @@ form by form and in random whole programs as well.
   writing the plain `R_X86_64_PC32` would have been a different program
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
-  `.secrel32` and `@IMGREL`, and x86-64 unwind data from `.seh_*`; see
+  `.secrel32` and `@IMGREL`, x86-64 unwind data from `.seh_*`, and DWARF; see
   [PE/COFF](#pecoff)
 - Mach-O relocatable objects for x86-64 and arm64 (`-f macho`, or a Darwin
   triple such as `-a arm64-apple-macos`), with Darwin's section, symbol and
-  data-in-code directives, byte for byte as llvm-mc writes them; see
-  [Mach-O objects](#mach-o-objects)
+  data-in-code directives and its `__DWARF` segment, byte for byte as llvm-mc
+  writes them; see [Mach-O objects](#mach-o-objects)
 - branch relaxation, alignment, `.org`, symbol arithmetic, conditionals
 - macros: `.macro` with defaults, `:req` and `:vararg`, plus `.rept`, `.irp`,
   `.irpc`, `.exitm` and `.purgem`
 - DWARF: line tables from `.file` and `.loc`, versions 2 to 5, call frame
   information from `.cfi_*` in `.eh_frame` or `.debug_frame`, and `-g` to
-  describe the assembly source itself; see [Debug information](#debug-information)
+  describe the assembly source itself, in ELF, PE/COFF and Mach-O objects
+  alike; see [Debug information](#debug-information)
 - each target's own comment syntax, so ARM's `@`, AArch64's `//` and SPARC's
   `!` work, and `#` stays an immediate prefix where it is one
 - the x86 instruction-set extensions both GNU as and llvm-mc assemble: AVX-512
@@ -310,15 +311,14 @@ form by form and in random whole programs as well.
   string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
-- in PE/COFF objects: DWARF (`-g`, `.loc` and `.cfi_*` are refused with
-  `-f coff`) and CodeView debug information, unwind data for ARM64 (its
+- in PE/COFF objects: CodeView debug information, unwind data for ARM64 (its
   `.seh_*` directives are refused), i386 `.safeseh`, and unwind data for a
   function in a COMDAT section, which needs `.xdata` and `.pdata` sections
   associated with it (refused)
 - in Mach-O objects: 32-bit machines (i386, armv7), thread-local variables
-  (`@TLVP`, `@TLVPPAGE`), DWARF and call frame information (`-g`, `.loc` and
-  `.cfi_*` are refused, and with them compact unwind), indirect symbol tables
-  (`.indirect_symbol`), `LC_VERSION_MIN_*` and linker options
+  (`@TLVP`, `@TLVPPAGE`), compact unwind, which llvm-mc writes beside
+  `__eh_frame` on arm64 and which makes `.cfi_*` an error there, indirect
+  symbol tables (`.indirect_symbol`), `LC_VERSION_MIN_*` and linker options
 - x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
   `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
   instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
@@ -906,7 +906,36 @@ from `.rept` or `.irp` on its line in the block, and one from an included file
 on its line there; llvm-mc puts every instruction in the main file at the
 outermost line that expanded it, and describes each label as well.
 
-Three differences remain:
+Which of the two that is depends on the object format as well, since for some
+formats only one of them writes anything: GNU as for mingw writes x86's PE
+objects and llvm-mc writes ARM64's, and llvm-mc alone writes Mach-O. So
+x86-64's DWARF is GNU as's in an ELF or a PE object and llvm-mc's in a Mach-O
+one.
+
+The sections go wherever the format puts them, and so does the work a
+relocation would otherwise do. ELF and PE/COFF keep DWARF's own names;
+PE/COFF gives each section the characteristics the mingw assembler gives it,
+`IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_DISCARDABLE |
+IMAGE_SCN_MEM_READ`, and writes an offset from one of them into another as
+`IMAGE_REL_*_SECREL`, which is the relocation COFF has for an offset within a
+section. A Mach-O object gathers them into a `__DWARF` segment
+(`__debug_line`, `__debug_line_str`, `__debug_info`, `__debug_abbrev`,
+`__debug_str`, `__debug_aranges`, `__debug_ranges`, `__debug_rnglists` and
+`__debug_frame`, each marked `S_ATTR_DEBUG`) and puts the frame table in
+`__TEXT,__eh_frame`, and needs far fewer relocations than either format:
+every section in the object already has an address there, so an offset into
+another debugging section is a number, and an FDE's address and its
+language-specific data area are distances the assembler works out. What is
+left is the addresses of code, which name the section they are in rather than
+the function, since a debugger reads a debugging section expecting the values
+in it to be filled in already. The CIE moves with the format too: GNU as
+numbers the return address column 32 in a PE object on x86-64 rather than the
+psABI's 16, llvm-mc gives an FDE in a PE object a plain pointer where ELF has
+a four-byte PC-relative one and a pointer-sized PC-relative one in a Mach-O
+object, and Darwin reaches the personality routine through the GOT whatever
+the encoding byte says.
+
+Four differences remain:
 
 - GNU as gives a `view -0` row an address of its own wherever its frag
   obstack happened to start a new chunk, which depends on the host's memory
@@ -920,6 +949,8 @@ Three differences remain:
 - For `-g` on llvm-mc's targets, llvm-mc numbers the last statement of an
   included file against the file that included it, reading past that file's
   buffer; rsasm gives its line in the included file.
+- `-g` writes DWARF into a PE object. GNU as for mingw writes STABS there
+  unless `--gdwarf-<n>` asks for DWARF, and rsasm has no STABS to write.
 
 The producer named in the unit is `rsasm` and its version, or the value of
 `DEBUG_PRODUCER`, which llvm-mc also reads.
@@ -961,6 +992,11 @@ What the source can say:
   `.seh_handler`, `.seh_handlerdata`, `.seh_endprologue` and `.seh_endproc`
   write `.xdata` and `.pdata`, counting the prologue from the final lengths
   of its instructions
+- DWARF: `.file` and `.loc` write the `.debug_*` sections, `.cfi_*` writes
+  `.eh_frame` or `.debug_frame`, and `-g` describes the source; see
+  [Debug information](#debug-information). A function can carry both
+  descriptions at once, `.seh_*` for the Windows unwinder and `.cfi_*` for a
+  DWARF one, as it can in the mingw assembler
 
 Backends choose relocations as ELF numbers, the one numbering all of them
 share, and name in a `reloc::RelocClass` what a number cannot say;
@@ -998,6 +1034,13 @@ follows llvm-mc:
   x86-64, one-byte `nop`s for i386, whose default Windows CPU has no `nopl`.
 - On i386, a local label spelled with a leading `L` is private, as in
   llvm-mc's Microsoft conventions; elsewhere `.L` is.
+
+The debugging sections are the exception: they follow whichever assembler
+checks the target's DWARF in any format, which for x86 is GNU as, so an x86
+PE object's `.debug_*` and `.eh_frame` are GNU as's and differ from llvm-mc's
+in version, file table and CIE alike. Everything else in the object still
+follows llvm-mc, and on ARM64, which mingw has no assembler for, so do the
+debugging sections.
 
 Neither reference writes `IMAGE_REL_AMD64_REL32_1` to `_5`: both measure every
 PC-relative field from four bytes past it and put the difference in the field,
@@ -1041,6 +1084,12 @@ The source is Darwin's assembly, as llvm-mc reads it for those triples:
   arm64, where `:lo12:` is not accepted.
 - `.build_version` writes `LC_BUILD_VERSION`, and `.data_region` with
   `.end_data_region` writes `LC_DATA_IN_CODE`. On arm64 `;` starts a comment.
+- **Debugging information** goes in a `__DWARF` segment of its own and in
+  `__TEXT,__eh_frame`, as llvm-mc writes it; see
+  [Debug information](#debug-information). On arm64 `.cfi_*` is refused,
+  because llvm-mc writes a compact unwind word in `__LD,__compact_unwind`
+  beside every frame there and the linker reads that in preference to
+  `__eh_frame`; describing a frame only once would be describing it wrongly.
 
 **What is left to the linker is decided by atoms, not by binding.** A Mach-O
 linker may move or drop the code from one linker-visible label to the next on
@@ -1056,12 +1105,13 @@ relocation for something ELF can express — `adr` or a conditional branch to
 another atom, a 32-bit absolute address on x86-64, a page reference without
 `@PAGE` — the reference is refused, as llvm-mc refuses it.
 
-`tools/macho-diff/run.sh` compares 1,653 cases against llvm-mc 22: single
-statements and whole programs in Clang's style of its own, and the
-`tools/mc-diff` corpora for both machines, every instruction of which has to
-come out the same in a Mach-O object. Every header and load command, section,
-symbol and relocation matches, and each of the 1,588 objects both assemblers
-write is identical byte for byte; the other 65 cases are refused by both.
+`tools/macho-diff/run.sh` compares 1,695 cases against llvm-mc 22: single
+statements and whole programs in Clang's style of its own, line tables and
+frame tables, and the `tools/mc-diff` corpora for both machines, every
+instruction of which has to come out the same in a Mach-O object. Every header
+and load command, section, symbol and relocation matches, and each of the
+1,630 objects both assemblers write is identical byte for byte; the other 65
+cases are refused by both.
 Three differences remain, and the corpora leave them out:
 
 - x86-64 instructions are encoded as GNU as encodes them, in either format, so
@@ -1155,13 +1205,18 @@ is what hid them from rsasm for as long as it did.
   against GNU as 2.47 or llvm-mc 22, whichever the target follows: the line
   table, frame and compilation unit sections byte for byte with their
   relocations, from hand-written snippets, `-g` and whole files from GCC and
-  Clang. 1,260 of 1,260 match across twenty-six target variants.
+  Clang. Three of the variants are the same targets as PE objects, against
+  the mingw assembler for x86 and llvm-mc for ARM64, compared as the
+  debugging sections' characteristics and bytes and every relocation with
+  the addend its field holds; the Mach-O side is in `tools/macho-diff`,
+  where llvm-mc is the reference for the whole object. 1,405 of 1,405 match
+  across twenty-nine target variants.
 - `tools/coff-diff/run.sh` for [PE/COFF objects](#pecoff), against llvm-mc 22
   for x86-64, i386 and ARM64 as whole objects — every section's
   characteristics and bytes, every symbol with its auxiliary records, every
   relocation — from single statements, hand-written programs and Clang's
   output, and against GNU as 2.47 for mingw as relocations with the addends
-  their fields hold. 294 of 294 comparisons match. `tools/oracles/build.sh`
+  their fields hold. 295 of 295 comparisons match. `tools/oracles/build.sh`
   builds GNU as for mingw alongside the other cross assemblers.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols

@@ -204,9 +204,6 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
     if a.format == Format::MachO {
         edit(&mut a.options, |o| o.with_format(Format::MachO));
     }
-    if a.format == Format::Coff && a.options.debug_source() {
-        return Err("`-g` writes DWARF, which rsasm does not write into COFF objects yet".into());
-    }
     // Flat output has no relocations to defer to a linker.
     if a.format.is_flat() {
         edit(&mut a.options, |o| o.with_relocatable(false));

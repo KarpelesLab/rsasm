@@ -14,6 +14,12 @@
 //! instructions go in a CIE. Each target follows the one that checks its
 //! encodings (see [`Flavor`]), and the differences are written down where they
 //! are decided.
+//!
+//! The object format has a say too, since only one of the two writes some of
+//! them: there is no GNU as for Mach-O here and no llvm-mc for m68k. It also
+//! decides what the sections are called (`Assembler::dwarf_section_pair`),
+//! and how much of what one section says about another a relocation has to
+//! carry (`Assembler::dwarf_offset`).
 
 pub mod cfi;
 pub(crate) mod emit;
@@ -103,7 +109,48 @@ impl Assembler {
     /// The DWARF conventions of the object being written.
     pub(crate) fn dwarf_target(&self) -> DwarfTarget {
         let (arch, state) = self.target_state();
-        arch.dwarf(state)
+        let mut target = arch.dwarf(state, self.options.format);
+        // Darwin's private label prefix is `L` rather than ELF's `.L`, which
+        // is what keeps a label out of the symbol table and out of the unit
+        // `-g` makes; see `output::macho::is_temporary`.
+        if self.options.format == crate::output::Format::MachO {
+            target.private_prefix = "L";
+        }
+        target
+    }
+
+    /// The Mach-O segment and section a generated DWARF section goes into,
+    /// or `None` in a format that keeps DWARF's own section names.
+    ///
+    /// llvm-mc gathers the debugging sections into a `__DWARF` segment no
+    /// loader maps, and puts the frame table beside the code it describes.
+    /// Only the sections this assembler generates are listed, since only
+    /// those reach here.
+    pub(crate) fn dwarf_section_pair(&self, name: &str) -> Option<(&'static str, &'static str)> {
+        if self.options.format != crate::output::Format::MachO {
+            return None;
+        }
+        Some(match name {
+            ".eh_frame" => ("__TEXT", "__eh_frame"),
+            ".debug_line" => ("__DWARF", "__debug_line"),
+            ".debug_line_str" => ("__DWARF", "__debug_line_str"),
+            ".debug_info" => ("__DWARF", "__debug_info"),
+            ".debug_abbrev" => ("__DWARF", "__debug_abbrev"),
+            ".debug_str" => ("__DWARF", "__debug_str"),
+            ".debug_aranges" => ("__DWARF", "__debug_aranges"),
+            ".debug_ranges" => ("__DWARF", "__debug_ranges"),
+            ".debug_rnglists" => ("__DWARF", "__debug_rnglists"),
+            ".debug_frame" => ("__DWARF", "__debug_frame"),
+            _ => return None,
+        })
+    }
+
+    /// What a generated DWARF section is called in the object being written.
+    pub(crate) fn dwarf_object_name(&self, name: &str) -> String {
+        match self.dwarf_section_pair(name) {
+            Some((segment, section)) => format!("{segment},{section}"),
+            None => name.to_string(),
+        }
     }
 
     /// Pins the current position of the current section for a line table

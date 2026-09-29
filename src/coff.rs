@@ -276,15 +276,6 @@ impl Assembler {
         true
     }
 
-    /// Refuses DWARF line and frame information in a COFF object; see the
-    /// README's "Not yet".
-    pub(crate) fn coff_refuse_dwarf(&mut self, name: &str, span: Span) {
-        self.diags.error(
-            span,
-            format!("`{name}` writes DWARF, which rsasm does not write into COFF objects yet"),
-        );
-    }
-
     fn coff_def(&mut self, cur: &mut Cursor<'_>, span: Span) {
         let Some((name, nspan)) = self.expect_name(cur) else {
             return;

@@ -67,6 +67,16 @@ pub enum RelocClass {
     SectionRelative,
     /// The one-based index of the target's section: COFF's `.secidx`.
     SectionIndex,
+    /// A symbol an FDE points at: the function it describes, or its
+    /// language-specific data area.
+    ///
+    /// ELF and COFF relocate these like any other reference, so the class
+    /// says nothing there. A Mach-O object gives every section an address,
+    /// and on x86-64 llvm-mc uses that to write the distance itself rather
+    /// than leave it to the linker
+    /// (`MCAsmInfo::DwarfFDESymbolsUseAbsDiff`), which is why the field
+    /// needs a name of its own.
+    FrameSymbol,
 }
 
 /// The format-neutral description of one relocation, recorded next to the
@@ -81,7 +91,12 @@ pub struct RelocDesc {
     /// `X86_64_RELOC_SIGNED_1/2/4` exist because its PC-relative relocations
     /// are defined from the end of the field rather than the end of the
     /// instruction, so the difference has to be recorded in the type.
-    pub trailing: u8,
+    ///
+    /// Negative where the reference is measured from the *start* of the
+    /// field, as DWARF's `DW_EH_PE_pcrel` is: there the relocation reaches
+    /// four bytes further than the value does, and the field makes up the
+    /// difference.
+    pub trailing: i8,
     /// The symbol subtracted from the target, for a difference that only a
     /// pair of relocations can express (Mach-O's `SUBTRACTOR`).
     pub subtrahend: Option<SymbolId>,
@@ -94,7 +109,7 @@ impl RelocDesc {
         // A PC-relative field measured from `adjust` bytes past its start
         // has the difference between that and its width after it.
         let trailing = if kind.pcrel {
-            (kind.adjust as i16 - kind.size as i16).clamp(0, 255) as u8
+            (kind.adjust as i16 - kind.size as i16).clamp(-128, 127) as i8
         } else {
             0
         };

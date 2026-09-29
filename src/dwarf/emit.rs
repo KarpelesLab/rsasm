@@ -138,6 +138,11 @@ impl Assembler {
         }
         let version = self.dwarf_line_version();
         self.number_generated_files(version);
+        // The two references make these sections in different orders, and the
+        // order they are made in is the order a Mach-O object holds them: GNU
+        // as writes the line table, then the unit, then the frame table,
+        // while llvm-mc writes the frame table first and the line table last
+        // of all.
         match self.dwarf_target().flavor {
             // GNU as's `dwarf2_finish`: no table without a row, unless the
             // source has a unit of its own for one; and a unit to go with
@@ -158,27 +163,36 @@ impl Assembler {
                     }
                     added = true;
                 }
-            }
-            // llvm-mc writes a table for a numbered `.file` alone.
-            Flavor::Llvm => {
-                if self.dwarf.line.is_used() {
-                    self.emit_debug_line();
-                    if self.dwarf.line.source.on {
-                        self.llvm_unit(version);
-                    }
+                if !self.dwarf.cfi.fdes.is_empty() {
+                    self.emit_frames();
                     added = true;
                 }
             }
-        }
-        if !self.dwarf.cfi.fdes.is_empty() {
-            self.emit_frames();
-            added = true;
+            // llvm-mc writes a table for a numbered `.file` alone.
+            Flavor::Llvm => {
+                if !self.dwarf.cfi.fdes.is_empty() {
+                    self.emit_frames();
+                    added = true;
+                }
+                if self.dwarf.line.is_used() {
+                    if self.dwarf.line.source.on {
+                        self.llvm_unit(version);
+                    }
+                    self.emit_debug_line();
+                    added = true;
+                }
+            }
         }
         added
     }
 
     /// Finds or creates a section for generated DWARF, whose bytes are the
     /// object's target's, whatever `.arch` was last active.
+    ///
+    /// `name` is DWARF's own, which is what ELF and PE/COFF call the
+    /// section; in a Mach-O object it names the pair the section has there
+    /// (see [`Assembler::dwarf_section_pair`]), and the section is created
+    /// with the type and attributes llvm-mc gives it.
     pub(crate) fn dwarf_section(
         &mut self,
         name: &str,
@@ -186,8 +200,13 @@ impl Assembler {
         entsize: u64,
         align: u64,
     ) -> SectionId {
-        let n = self.interner.intern(name);
-        let id = self.get_or_create_section(n, SectionKind::Progbits, flags, 1);
+        let id = match self.dwarf_section_pair(name) {
+            Some((segment, section)) => self.macho_section(segment, section, None),
+            None => {
+                let n = self.interner.intern(name);
+                self.get_or_create_section(n, SectionKind::Progbits, flags, 1)
+            }
+        };
         let s = self.section_mut(id);
         s.align = s.align.max(align);
         if entsize != 0 {
@@ -253,6 +272,30 @@ impl Assembler {
     pub(crate) fn pcrel_kind(&self, size: u8) -> FixupKind {
         let reloc = self.target().data_reloc(size, true).unwrap_or(0);
         FixupKind::pcrel(size, 0).with_reloc(reloc)
+    }
+
+    /// A four-byte offset into another generated DWARF section, at `pos`
+    /// plus `offset`.
+    ///
+    /// Each format says it differently. ELF relocates the field against the
+    /// section it points into; PE/COFF has a relocation for an offset within
+    /// a section and writes that (`IMAGE_REL_*_SECREL`), as the mingw
+    /// assembler does. A Mach-O object needs no relocation at all: both
+    /// sections are in this object and neither moves relative to the other,
+    /// so llvm-mc writes the number
+    /// (`MCAsmInfoDarwin::DwarfUsesRelocationsAcrossSections` is false).
+    pub(crate) fn dwarf_offset(&mut self, b: &mut Blob, pos: Pos, offset: u64) {
+        if self.options.format == crate::output::Format::MachO {
+            let at = self.pos_offset(pos) + offset;
+            b.int(at, 4);
+            return;
+        }
+        let e = self.pos_expr(pos, offset);
+        let mut kind = self.abs_kind(4);
+        if self.options.format.is_coff() {
+            kind = kind.with_class(crate::reloc::RelocClass::SectionRelative);
+        }
+        b.fixup(4, e, kind);
     }
 
     /// Numbers GNU as's views: a row at the same address as the one before
@@ -354,9 +397,7 @@ impl Assembler {
                     o
                 }
             };
-            let e = asm.pos_expr(pos, off);
-            let kind = asm.abs_kind(4);
-            b.fixup(4, e, kind);
+            asm.dwarf_offset(b, pos, off);
             off
         };
 
@@ -416,9 +457,8 @@ impl Assembler {
                 let mut first = 0;
                 for (i, f) in files.iter().flatten().enumerate() {
                     if shared && i == 1 {
-                        let e = self.pos_expr(str_pos.expect("DWARF 5 has line strings"), first);
-                        let kind = self.abs_kind(4);
-                        b.fixup(4, e, kind);
+                        let pos = str_pos.expect("DWARF 5 has line strings");
+                        self.dwarf_offset(&mut b, pos, first);
                     } else {
                         first = path(self, &mut b, &f.name);
                     }

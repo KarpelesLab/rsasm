@@ -182,7 +182,7 @@ impl Architecture for SuperH {
 
     /// GNU as's conventions, as for every SuperH encoding: code counted in
     /// words.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         DwarfTarget {
             cfi: Some(CfiTarget {
                 data_align: -4,

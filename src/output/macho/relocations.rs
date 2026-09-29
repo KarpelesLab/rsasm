@@ -149,6 +149,15 @@ impl Assembler {
                 return Vec::new();
             }
         }
+        // A symbol an FDE points at is a value the writer works out itself on
+        // x86-64, as long as this object defines it; one it does not define is
+        // an ordinary reference.
+        let resolved = desc.class == RelocClass::FrameSymbol
+            && cpu == Some(super::Cpu::X86_64)
+            && v.plus.is_some_and(|s| self.symbols.get(s).is_defined());
+        if desc.class == RelocClass::FrameSymbol && !resolved {
+            desc.class = RelocClass::Plain;
+        }
         let r = Relocation {
             section,
             offset: at,
@@ -157,6 +166,12 @@ impl Assembler {
             kind: kind.reloc,
             desc,
         };
+        if resolved {
+            for s in [v.plus, v.minus].into_iter().flatten() {
+                self.symbols.get_mut(s).used = true;
+            }
+            return vec![r];
+        }
         if let Some(cpu) = cpu
             && super::reloc_type(cpu, &r).is_none()
         {
