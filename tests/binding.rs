@@ -306,7 +306,8 @@ glob:   nop
 fn riscv_relocates_differences_it_cannot_fold_as_pairs() {
     // llvm-mc names a label at `.text+8` where rsasm names the section with
     // an addend of 8, and `base` and `other` likewise; the linker reads both
-    // the same way.
+    // the same way. The `R_RISCV_RELAX` after the call is the mark GNU as
+    // puts beside a relocation a linker may rewrite; a difference gets none.
     let asm = assemble_for(
         "riscv64",
         "        .globl  glob
@@ -324,6 +325,7 @@ other:  .byte   0
         relocs(&asm),
         vec![
             reloc(0, 19, "glob", 0),
+            reloc(0, 51, "", 0),
             reloc(8, 35, "ext", 0),
             reloc(8, 39, ".text", 8),
             reloc(12, 35, ".text", 0),

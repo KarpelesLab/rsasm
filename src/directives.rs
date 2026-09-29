@@ -978,6 +978,50 @@ impl Assembler {
                 self.map_data_frag();
             }
         }
+        // A target whose linker deletes instructions cannot have the
+        // alignment settled here; see `Architecture::align_reloc`. The state
+        // that decides it is the one in force at the directive, as it is in
+        // GNU as, which reads `.option norvc` and `.option norelax` the same
+        // way for it. A flat image has no linker to hand it to, and an object
+        // for another machine no relocation to carry it, so both settle the
+        // alignment here as every other target does. The maximum skip goes
+        // with it: GNU as passes it to the ordinary alignment and not to
+        // this one, since only the linker knows how far it will have to
+        // skip.
+        if fill.is_empty()
+            && self.options.relocatable
+            && self.arch.elf_machine() == self.target().elf_machine()
+            && let Some((unit, kind)) = self.arch.align_reloc(&self.arch_state, align)
+        {
+            self.push_frag(
+                FragKind::Align {
+                    align: unit,
+                    nop_state: Some(nop_state.clone()),
+                    fill,
+                    max_skip: None,
+                    pad: 0,
+                },
+                span,
+            );
+            let pad = align - unit;
+            let value = self.exprs.int(pad, span);
+            let nops = self.arch.nop_fill(&nop_state, pad);
+            let s = self.cur_section();
+            s.emit_variants(
+                vec![crate::section::Variant {
+                    bytes: nops,
+                    fixups: vec![crate::section::Fixup {
+                        offset: 0,
+                        expr: value,
+                        kind,
+                        span,
+                    }],
+                }],
+                span,
+            );
+            self.section_mut(self.cur).align = self.section(self.cur).align.max(align);
+            return true;
+        }
         self.push_frag(
             FragKind::Align {
                 align,

@@ -387,13 +387,8 @@ fn emit(a: &mut Asm<'_, '_>, p: P, name: &str, ops: &Operands<'_>) -> Option<()>
             if got {
                 let load = if a.rv64() { LD } else { LW };
                 let load = encode::rs1(encode::rd(load, rd.bits()), rd.bits());
-                a.auipc_split(
-                    auipc,
-                    load,
-                    &target,
-                    encode::kind_got_hi20(),
-                    encode::kind_got_lo12(),
-                );
+                let hi = a.may_relax(encode::kind_got_hi20());
+                a.auipc_split(auipc, load, &target, hi, encode::kind_got_lo12());
             } else {
                 let addi = encode::rs1(encode::rd(ADDI, rd.bits()), rd.bits());
                 a.auipc_split(

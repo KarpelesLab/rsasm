@@ -55,15 +55,18 @@ whole, as `canon.sh` prints them from `llvm-readobj`:
 - every relocation, by section and offset: type, offset, target and addend,
   through `relocs.awk`.
 
-Targets are compared by what the linker makes of them. llvm-mc on RISC-V
-relocates against a local label where GNU as and rsasm use the label's section
-plus an offset, and linkers read those alike, so both print as
-`.text+0x40`. The exception is a relocation the linker looks the symbol up
-for: `R_RISCV_PCREL_LO12_*` names the `auipc` holding the high half, and lld
-finds it by the symbol's value, ignoring the addend, while a GOT entry belongs
-to a symbol. For those the symbol has to be a label, and prints as
-`@.text+0x40` with the addend apart. `tools/gas-diff` and `tools/xas-diff`
-compare their objects the same way, with the same script.
+Targets are compared by what the linker makes of them. llvm-mc relocates
+against a local label where a target's GNU as uses the label's section plus an
+offset, and linkers read those alike, so both print as `.text+0x40`. There are
+two exceptions. A relocation the linker looks the symbol up for --
+`R_RISCV_PCREL_LO12_*` names the `auipc` holding the high half, and lld finds
+it by the symbol's value, ignoring the addend, while a GOT entry belongs to a
+symbol -- has to name a label, and prints as `@.text+0x40` with the addend
+apart. And a RISC-V reference that relaxation leaves to the linker names a
+label too, in all three assemblers: a linker that deletes bytes moves the
+label and adjusts the symbol, and would leave an offset into the section
+behind. `tools/gas-diff` and `tools/xas-diff` compare their objects the same
+way, with the same script.
 
 Every target but x86-64 has a corpus (x86 objects are compared against GNU as,
 in `tools/gas-diff`). Each walks a symbol of every binding through the
@@ -77,6 +80,21 @@ objects:
 - A conditional branch that is left to the linker, to a symbol outside the
   file or a global one in it: llvm-mc inverts it around a `jal` with
   `R_RISCV_JAL`; rsasm keeps the branch with `R_RISCV_BRANCH`.
+- A reference *back* to a label in its own section, with linker relaxation
+  on: llvm-mc has resolved one by the time it reads the label and folds it,
+  where GNU as and rsasm relocate it like a forward one. The two byte-level
+  snippets that have one assemble it with `.option norelax`.
+
+RISC-V runs with `-mattr=+relax`, because rsasm has relaxation on as GNU as
+does; the head of each RISC-V corpus says what that means for the objects.
+Two things are then GNU as's rather than llvm-mc's, and `canon.sh
+--ignore-reloc R_RISCV_RELAX` keeps the first out of this comparison: which
+relocations carry an `R_RISCV_RELAX` (llvm-mc marks `R_RISCV_JAL` and the
+thread-local slots as well), and the `R_RISCV_ALIGN` an alignment leaves
+behind (llvm-mc measures the padding from a two-byte no-op whatever the
+instruction set). Both are checked against GNU as in `tests/riscv.rs`, and
+`tools/link-diff` links every RISC-V program a second time with `--relax` to
+show they do what GNU as's do.
 
 And where the ARM and Thumb corpora follow GNU as instead, which is the
 reference for ARM objects (see `tools/xas-diff/README.md`), and llvm-mc

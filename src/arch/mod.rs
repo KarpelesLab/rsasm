@@ -1444,6 +1444,32 @@ pub trait Architecture {
         false
     }
 
+    /// How an alignment in a code section is left to a linker that may delete
+    /// instructions out from under it, for a target with linker relaxation:
+    /// the boundary the assembler still reaches itself, and the fixup that
+    /// asks the linker for the rest. `None`, the default, means the assembler
+    /// aligns the section itself, which is right wherever nothing shortens a
+    /// section after it is written.
+    ///
+    /// RISC-V is the one target that needs it. A relaxing linker deletes
+    /// instructions, so an offset the assembler aligned is no longer aligned
+    /// by the time the program runs; GNU as therefore emits the most padding
+    /// the alignment could ever need and an `R_RISCV_ALIGN` saying how much
+    /// of it the linker may take back. The assembler still aligns to the
+    /// width of the shortest instruction, which no relaxation changes, since
+    /// the padding it writes has to start on an instruction boundary.
+    ///
+    /// The padding is `align - unit` bytes of [`Architecture::nop_fill`], and
+    /// the fixup goes at the start of it with `align - unit` as its value.
+    /// Only a relocatable object can carry one.
+    fn align_reloc(
+        &self,
+        _state: &ArchState,
+        _align: u64,
+    ) -> Option<(u64, crate::section::FixupKind)> {
+        None
+    }
+
     /// Whether GNU as rounds the end of a section with these flags up to the
     /// section's alignment.
     ///

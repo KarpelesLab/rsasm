@@ -25,9 +25,11 @@ llvm-mc and GNU as all shorten what they emit, so compression is exercised
 by every case rather than by `c.*` rows, which none of the three accepts
 from source in the same way.
 
-GNU as runs with `-mno-relax`: it otherwise pairs every symbolic reference
-with an `R_RISCV_RELAX` marker, which is a hint to the linker rather than
-part of the encoding, and neither llvm-mc nor rsasm writes one.
+Both references run with linker relaxation on -- GNU as needs no asking,
+llvm-mc wants `+relax` -- because rsasm has it on as GNU as does. It is what
+puts an `R_RISCV_RELAX` beside each relocation a linker may rewrite, leaves a
+reference to a label in the case's own section to the linker, and hands an
+alignment in code to it as an `R_RISCV_ALIGN`.
 
 One case in eight is a small program rather than a single instruction: a
 forward branch to the label the harness defines after every case, over a
@@ -63,11 +65,11 @@ OPCODES = os.path.join(gasfuzz.BINUTILS_SRC, "opcodes", "riscv-opc.c")
 
 TARGETS = {
     "riscv32": Target("riscv32", "riscv32",
-                      gas="riscv64-elf-as", gas_flags=["-march=rv32gc", "-mno-relax"],
-                      mc="riscv32", mc_flags=["-mattr=+m,+a,+f,+d,+c"]),
+                      gas="riscv64-elf-as", gas_flags=["-march=rv32gc"],
+                      mc="riscv32", mc_flags=["-mattr=+m,+a,+f,+d,+c,+relax"]),
     "riscv64": Target("riscv64", "riscv64",
-                      gas="riscv64-elf-as", gas_flags=["-march=rv64gc", "-mno-relax"],
-                      mc="riscv64", mc_flags=["-mattr=+m,+a,+f,+d,+c"]),
+                      gas="riscv64-elf-as", gas_flags=["-march=rv64gc"],
+                      mc="riscv64", mc_flags=["-mattr=+m,+a,+f,+d,+c,+relax"]),
 }
 XLEN = {"riscv32": 32, "riscv64": 64}
 
@@ -309,20 +311,28 @@ def make(rng, target, mutate, forms):
 
 # ---- what the references disagree about -------------------------------------
 
-def resolves_a_local_label(text, res, target):
-    """Same bytes, fewer relocations.
+def gas_relocations_and_mc_bytes(text, res, target):
+    """GNU as's relocations, llvm-mc's bytes.
 
-    GNU as leaves every reference to a label to the linker, because linker
-    relaxation may still move it; llvm-mc resolves the ones it can, and rsasm
-    does too -- README.md records RISC-V as checked against llvm-mc, and
-    src/arch/riscv/mod.rs says relaxation is not implemented, so objects come
-    out as llvm-mc writes them without it. `-mno-relax` does not change what
-    GNU as does here.
+    Once relaxation is on, which it is here as it is in both references, the
+    two part company twice over a reference to a label in the case's own
+    section. GNU as writes the distance as it stands into a relocated branch
+    or jump -- by its own comment "to improve objdump readability" -- and
+    rounds the section's size up to the alignment an `R_RISCV_ALIGN` raised;
+    llvm-mc does neither, and also marks `R_RISCV_JAL` and the thread-local
+    slots relaxable where GNU as does not. rsasm takes what a linker reads
+    from GNU as -- which relocations there are, and which carry an
+    `R_RISCV_RELAX` -- and what it does not from llvm-mc, which is the field
+    under a relocation and the end of the section. `tools/link-diff` links the
+    result against GNU as's with `--relax` to show the two programs come out
+    the same.
     """
-    g, r = res.get("gas"), res.get("rsasm")
-    if not g or g[0] != "ok" or r[0] != "ok":
+    g, m, r = res.get("gas"), res.get("mc"), res.get("rsasm")
+    if not g or not m or not r or any(v[0] != "ok" for v in (g, m, r)):
         return False
-    return g[1][0] == r[1][0] and len(g[1][1]) > len(r[1][1])
+    # Only where the marks are what the references disagree about; anything
+    # else the two disagree over is a split of its own.
+    return g[1][1] != m[1][1] and r[1][1] == g[1][1] and r[1][0] == m[1][0]
 
 
 def relocates_a_bare_symbol(text, res, target):
@@ -368,14 +378,21 @@ def gas_takes_more_spellings(text, res, target):
     return bool(g and m and g[0] == "ok" and m[0] == "err")
 
 
-def gas_relocates_a_local_label(text, res, target):
-    """GNU as leaves a `%pcrel_hi`/`%pcrel_lo` pair against a local label to
-    the linker, because relaxation may still move it; llvm-mc computes the
-    displacement. The bytes differ, since one has the field zeroed."""
+def gas_fills_a_relocated_displacement(text, res, target):
+    """Same relocations, same lengths, different bytes.
+
+    Both references leave a branch or a jump to a label in its own section to
+    the linker once relaxation is on, since the linker may shorten what lies
+    between. GNU as then writes the distance as it stands into the field
+    anyway -- its own comment says "to improve objdump readability" -- where
+    llvm-mc leaves it empty for the linker to fill in from the addend. rsasm
+    leaves it empty, as it does for a reference out of the file.
+    """
     g, m = res.get("gas"), res.get("mc")
     if not g or not m or g[0] != "ok" or m[0] != "ok":
         return False
-    return len(g[1][1]) > len(m[1][1])
+    return (g[1][1] == m[1][1] and bool(g[1][1])
+            and len(g[1][0]) == len(m[1][0]) and g[1][0] != m[1][0])
 
 
 def gas_does_not_shorten_an_alias(text, res, target):
@@ -397,7 +414,7 @@ def li_expands_differently(text, res, target):
 
 RULES = gasfuzz.Rules(
     deviations=[
-        ("resolves-a-local-label", resolves_a_local_label),
+        ("gas-relocations-and-mc-bytes", gas_relocations_and_mc_bytes),
         ("relocates-a-bare-symbol", relocates_a_bare_symbol),
         ("takes-a-signed-upper-immediate", takes_a_signed_upper_immediate),
     ],
@@ -405,7 +422,7 @@ RULES = gasfuzz.Rules(
         ("mc-takes-an-out-of-range-value", mc_takes_an_out_of_range_value, "gas"),
         ("gas-takes-more-spellings", gas_takes_more_spellings, "gas"),
         ("li-expands-differently", li_expands_differently, "mc"),
-        ("gas-relocates-a-local-label", gas_relocates_a_local_label, "mc"),
+        ("gas-fills-a-relocated-displacement", gas_fills_a_relocated_displacement, "mc"),
         ("gas-does-not-shorten-an-alias", gas_does_not_shorten_an_alias, "mc"),
     ])
 

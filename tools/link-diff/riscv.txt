@@ -173,3 +173,44 @@ helper:
         ret
 __tls_get_addr:
         ret
+
+=== alignment and calls a relaxing link shortens
+# The `call` pairs shrink to one instruction under `--relax`, which moves the
+# code after them; the `R_RISCV_ALIGN` on each alignment is what keeps the
+# labels after it on their boundary, and the branches across the shortened
+# calls are relocated so the linker can work them out again. Without
+# relaxation the linker leaves the worst-case padding where it is, which is
+# the other half of what this checks.
+--- a.s
+        .text
+        .globl  _start
+_start:
+        call    helper
+        beq     a0, a1, past
+        .p2align 4
+aligned16:
+        call    helper
+        .p2align 3
+aligned8:
+        nop
+        call    helper
+past:
+        bne     a0, a1, aligned16
+        j       aligned8
+        lla     a2, aligned16
+        lla     a3, aligned8
+        ret
+        # Each section is left on its own alignment with a fill byte, which
+        # is an ordinary alignment in both assemblers. GNU as rounds a
+        # section's size up to its alignment and rsasm, like llvm-mc, does
+        # not, so a section that ended short would move the next object's
+        # code and hide what this program is about.
+        .p2align 4, 0
+--- b.s
+        .text
+        .globl  helper
+helper:
+        call    _start
+        .p2align 3
+        ret
+        .p2align 3, 0

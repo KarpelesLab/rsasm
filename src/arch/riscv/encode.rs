@@ -203,18 +203,21 @@ pub fn kind_pair_lo12(store: bool) -> FixupKind {
         .with_reloc_symbol(RelocSymbol::FragmentStart)
 }
 
-/// The `auipc` of `lga` (or `la` under `.option pic`), which addresses the
-/// symbol's GOT slot.
+/// The `auipc` of `lga` (or `la` under `.option pic`), and of an explicit
+/// `%got_pcrel_hi`, which addresses the symbol's GOT slot.
 ///
 /// The slot is the linker's to place, so the field is never resolved here,
 /// even for a label in the same section, and the relocation names the symbol
 /// itself: a GOT entry belongs to a symbol, not to an offset into a section.
+/// Both references also take a number, which asks the linker for the slot of
+/// nothing at all and so is relocated against no symbol.
 pub fn kind_got_hi20() -> FixupKind {
     FixupKind::data(4)
         .with_reloc(reloc::GOT_HI20)
         .scatter(hi20)
         .with_reloc_symbol(RelocSymbol::Symbol)
         .linker_only()
+        .relocated_in_objects()
 }
 
 /// The load from the GOT slot that [`kind_got_hi20`] addressed, and the
@@ -343,6 +346,21 @@ pub fn kind_cj() -> FixupKind {
         .with_field(12, 2)
         .with_reloc(reloc::RVC_JUMP)
         .scatter(cj_imm)
+}
+
+/// `R_RISCV_ALIGN`, which hands an alignment in a relaxable code section to
+/// the linker: the mark sits on the first byte of the padding and its value is
+/// how many of those bytes the linker may delete.
+///
+/// It names no symbol and fills no field, so the value is the addend alone,
+/// which is what `relocated_in_objects` leaves behind. Nothing can resolve it
+/// here: only the linker knows what the section will finally be, which is the
+/// whole point of writing it.
+pub fn kind_align() -> FixupKind {
+    FixupKind::data(0)
+        .with_reloc(reloc::ALIGN)
+        .linker_only()
+        .relocated_in_objects()
 }
 
 /// The `auipc`/`jalr` pair of `call`, patched as one eight-byte field.

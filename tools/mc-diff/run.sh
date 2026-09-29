@@ -30,6 +30,13 @@ root=$(cd "$here/../.." && pwd)
 # `.riscv.attributes` from the ISA it was given, which it does not do of its
 # own accord and every RISC-V assembler does: without it the objects differ
 # by that section alone.
+#
+# `+relax` is llvm-mc's switch for linker relaxation, which GNU as has on
+# unless told otherwise and which rsasm therefore also has on. Without it
+# llvm-mc resolves a reference to a label in its own section, where a relaxing
+# assembler has to leave it to the linker, so the two would differ on every
+# local branch. What they still differ on with it, and where rsasm follows GNU
+# as instead, is in the heads of the RISC-V corpora.
 ARCHES="
 x86-64|x86-64|x86_64|
 i386|i386|i386|
@@ -42,8 +49,8 @@ i386-simd|i386|i386|
 aarch64|aarch64|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
 arm|arm|armv7|-mattr=+neon,+vfp4,+fp16
 thumb|thumb|thumbv7|-mattr=+neon,+vfp4,+fp16
-riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes
-riscv64|riscv64|riscv64|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes
+riscv32|riscv32|riscv32|-mattr=+m,+a,+f,+d,+c,+relax -riscv-add-build-attributes
+riscv64|riscv64|riscv64|-mattr=+m,+a,+f,+d,+c,+relax -riscv-add-build-attributes
 powerpc|powerpc|powerpc|
 powerpc64|powerpc64|powerpc64|
 powerpc64le|powerpc64le|powerpc64le|
@@ -114,9 +121,18 @@ compare() { # arch, rsasm_arch, triple, flags, header, name, source
 # rsasm writes what GNU as writes into every ARM object, so the section is
 # left out here; `tools/xas-diff` compares it against GNU as, which is the
 # reference for ARM objects.
+#
+# `R_RISCV_RELAX` is left out for the same kind of reason. rsasm writes the
+# marks GNU as writes, and llvm-mc under `+relax` writes them beside
+# `R_RISCV_JAL`, `R_RISCV_TLS_GOT_HI20` and `R_RISCV_TLS_GD_HI20` as well,
+# where GNU as leaves a jump and a thread-local slot alone. Which relocations
+# carry a mark is checked against GNU as in `tests/riscv.rs`, and what the
+# marks do is checked by `tools/link-diff`, which links every RISC-V program a
+# second time with `--relax`.
 canon() { # arch, object
   case "$1" in
     arm | thumb) "$here/canon.sh" --ignore .ARM.attributes "$2" ;;
+    riscv32 | riscv64) "$here/canon.sh" --ignore-reloc R_RISCV_RELAX "$2" ;;
     *) "$here/canon.sh" "$2" ;;
   esac
 }
