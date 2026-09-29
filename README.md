@@ -1239,7 +1239,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,675 of 8,675 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 39,075 of 39,075 match across twenty-three target variants. For RISC-V
+  supports. 40,618 of 40,618 match across twenty-three target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things; llvm-mc runs
   with `+relax` there, because relaxation is on in rsasm as it is in GNU as,
@@ -1295,7 +1295,7 @@ is what hid them from rsasm for as long as it did.
   both assemblers' objects, alignment and all. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 290 of 290 match across
+  addend a COFF relocation keeps in its field. 294 of 294 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
@@ -1311,7 +1311,7 @@ is what hid them from rsasm for as long as it did.
   the mingw assembler for x86 and llvm-mc for ARM64, compared as the
   debugging sections' characteristics and bytes and every relocation with
   the addend its field holds; the Mach-O side is in `tools/macho-diff`,
-  where llvm-mc is the reference for the whole object. 1,405 of 1,405 match
+  where llvm-mc is the reference for the whole object. 1,425 of 1,425 match
   across twenty-nine target variants.
 - `tools/coff-diff/run.sh` for [PE/COFF objects](#pecoff), against llvm-mc 22
   for x86-64, i386 and ARM64 as whole objects — every section's
