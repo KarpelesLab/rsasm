@@ -62,7 +62,12 @@ import simd
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
-GAS = os.environ.get("GAS", "as")
+# The pinned assembler, as every other fuzzer and every x86 corpus uses: a
+# host `as` is whatever the distribution ships, and an older one refuses the
+# newest extensions, which reads as a finding against rsasm rather than as the
+# reference being out of date.
+ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
+GAS = os.environ.get("GAS", os.path.join(ORACLES, "bin", "x86_64-elf-as"))
 LLVM_MC = os.environ.get("LLVM_MC", "llvm-mc")
 
 MODES = {

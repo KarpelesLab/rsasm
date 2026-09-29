@@ -183,6 +183,21 @@ def canon(path):
 
     for s in secs:
         s["name"] = cstr(strtab, s["name"])
+    # A field a relocation covers belongs to the linker, and the references
+    # disagree about what they leave in it: GNU as writes uninitialized memory
+    # into the addresses in `.avr.prop`, so the same source differs from run to
+    # run and host to host. `tools/mc-diff/canon.sh --zero-relocated` blanks
+    # them for the same reason.
+    relocated = {}
+    for s in secs:
+        if s["ty"] != 4:
+            continue
+        name = secs[s["info"]]["name"]
+        if name != ".avr.prop":
+            continue
+        for i in range(s["size"] // 12):
+            off, = struct.unpack_from("<I", data, s["off"] + i * 12)
+            relocated.setdefault(name, []).append(off)
     out = [f"flags {e_flags:#x}"]
     for s in sorted(secs, key=lambda s: s["name"]):
         if s["size"] == 0 or not (s["flags"] & 2 or s["name"] == ".avr.prop"):
@@ -190,7 +205,10 @@ def canon(path):
         out.append(f"section {s['name']} type={s['ty']} flags={s['flags']:#x} "
                    f"size={s['size']:#x} align={s['align']}")
         if s["ty"] != 8:
-            out.append("  " + data[s["off"]:s["off"] + s["size"]].hex())
+            body = bytearray(data[s["off"]:s["off"] + s["size"]])
+            for off in relocated.get(s["name"], ()):
+                body[off:off + 4] = b"\0\0\0\0"
+            out.append("  " + body.hex())
     syms = []
     symtab = next((s for s in secs if s["ty"] == 2), None)
     if symtab:
