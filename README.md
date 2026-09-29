@@ -60,7 +60,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 21825 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the exclusives and the LSE atomics, pointer authentication, memory tagging, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 23365 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3222 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 571 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
@@ -348,13 +348,13 @@ form by form and in random whole programs as well.
   PACBTI, and the M-profile special registers of `vmrs`/`vmsr`
 - AArch64: SME beyond `smstart`, `smstop` and `zero {za}` — the ZA array and
   its tiles, `zt0`, the multi-vector and strided register lists, predicates as
-  counters and `psel`; and the general-purpose instructions no SIMD mnemonic
-  shares, which have never been there: the atomics (`ldxr`, `casp`,
-  `ldadd`…), memory tagging, and the pointer-authentication instructions that
-  name a register (`pacia x0, x1`) rather than the `paciasp`-style hints,
-  which are there. `movprfx` is assembled but its sequence is not checked,
-  where llvm-mc refuses an instruction that does not use the prefixed
-  register and GNU as warns
+  counters and `psel`; and the general-purpose instructions that are one form
+  each rather than a family, which neither encoder has ever had: the CRC32
+  instructions, the unprivileged `ldtr`/`sttr`, the byte and halfword
+  `ldapurb` and `stlurb`, `bfc`, `ctz`, `rmif`, `rprfm`, `udf`, `wfet`,
+  `maddpt`/`msubpt` and the 64-byte `ld64b`/`st64b`. `movprfx` is assembled
+  but its sequence is not checked, where llvm-mc refuses an instruction that
+  does not use the prefixed register and GNU as warns
 - PowerPC: POWER10's matrix-multiply accelerator (`xvi8ger4` and the other
   MMA instructions), POWER11's `xxaes*` and `xxgfmul128*`, decimal floating
   point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
@@ -1347,22 +1347,33 @@ AArch64's SIMD, floating-point and SVE table is derived from llvm-mc rather
 than written: `tools/tables/aarch64.py` disassembles random instruction words
 to find every form llvm-mc prints, measures where each operand's bits go by
 assembling the form with one operand changed at a time, and checks every form
-against llvm-mc before writing `src/arch/aarch64/table_data.rs` (5,879 forms) and
-the corpora that check it, `tools/mc-diff/aarch64-{simd,sve}-words.txt` (17,600
-lines, compared a batch at a time). `tools/tables/aarch64.py check` says
-whether they are still what llvm-mc gives. The backend is fuzzed by
-`tools/fuzz/aarch64.py`, whose cases are llvm-mc's or GNU objdump's
-disassembly of random words, a quarter of them mutated into likely-invalid
-ones; runs of 500,000 instructions find no case where rsasm differs from both
-references. Where the two disagree, rsasm follows llvm-mc for what an
-instruction means and GNU as for what is out of range: llvm-mc takes
+against llvm-mc before writing `src/arch/aarch64/table_data.rs` (6,399 forms) and
+the corpora that check it, `tools/mc-diff/aarch64-{simd,sve,gp}-words.txt`
+(19,144 lines, compared a batch at a time). The general-purpose groups that
+are families of the same shape go through it too, and are the `gp` corpus:
+the load/store exclusives and the acquire/release accesses, the LSE, LSE128,
+LSUI, RCPC and FEAT_THE atomics, the pointer-authentication instructions that
+name a register (the `paciasp`-style hints, which both references treat as
+mnemonics of their own, stay in `insn.rs`), and memory tagging.
+`tools/tables/aarch64.py check` says whether they are still what llvm-mc
+gives. The backend is fuzzed by `tools/fuzz/aarch64.py`, whose cases are
+llvm-mc's or GNU objdump's disassembly of random words, a quarter of them
+mutated into likely-invalid ones; runs of 500,000 instructions find no case
+where rsasm differs from both references. Where the two disagree, rsasm
+follows llvm-mc for what an instruction means and GNU as for what is out of
+range: llvm-mc takes
 `ext v0.8b, v1.8b, v2.8b, #8` or `scvtf s0, w0, #33` and truncates them,
 where GNU as and rsasm refuse them. It also refuses the SVE spellings only
 llvm-mc reads — an unpredicated `and z0.s, z0.s, z1.s`, whose element size is
 always `.d`, and an immediate outside the element's signed range, such as
 `mov z0.h, #-65408` — and takes the ones only GNU as reads: `fcmp s0, 0` for
 `#0.0`, and a register list `{z0.h - z1.s}` of two element sizes is refused
-as llvm-mc refuses it. `smstart`, `smstop` and `zero {za}` are handwritten.
+as llvm-mc refuses it. Two of the new groups' forms go the other way and
+are unpredictable rather than unencodable, so GNU as warns and assembles
+them and rsasm does too, where llvm-mc refuses them: a store-exclusive whose
+status register is also one of its sources (`stxr w0, x0, [x1]`), and an
+`ldraa` that writes back the register it loads into. `smstart`, `smstop`
+and `zero {za}` are handwritten.
 
 The system instructions are generated the same way from the other reference:
 `tools/tables/aarch64-sys.py` takes the names from binutils' own tables —

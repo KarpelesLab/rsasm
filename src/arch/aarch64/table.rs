@@ -1,4 +1,5 @@
-//! The table-driven half of the backend: SIMD, floating point and SVE.
+//! The table-driven half of the backend: SIMD, floating point, SVE, and the
+//! general-purpose groups built the same way.
 //!
 //! These instruction sets are thousands of forms that differ in a handful of
 //! opcode bits and in which lane arrangement or element size each register
@@ -8,6 +9,13 @@
 //! operand changed at a time to measure where that operand's bits go, and
 //! writes the result to [`table_data`]: for each form, the operands it takes
 //! and the opcode left when all of them are zero.
+//!
+//! The general-purpose groups here are the ones shaped the same way: the
+//! load/store exclusives, the acquire/release accesses and the atomics, one
+//! form per operation, ordering and access size, the
+//! pointer-authentication instructions that name a register, and memory
+//! tagging. The rest of the general-purpose instruction
+//! set, whose interest is in its aliases, is written out in [`super::insn`].
 //!
 //! This module is the other half: an operand grammar covering what those
 //! forms are written with (`v0.4s`, `d3`, `v1.s[2]`, `z0.d`, `p1/z`,
@@ -130,13 +138,11 @@ pub enum Kind {
     Shift(u8),
     /// `mul vl`, after an SVE offset.
     MulVl,
-    /// `[`, `]` and `]!` of an address. Nothing in the table writes back —
-    /// the loads and stores that do are the handwritten ones — but the
-    /// grammar reads `]!`, so that it is an operand a form does not take
-    /// rather than a syntax error.
+    /// `[`, `]` and `]!` of an address: the last is the pre-index writeback
+    /// of `stlr w0, [x1, #-4]!`, whose offset is the one value the form
+    /// takes.
     Open,
     Close,
-    #[allow(dead_code)]
     CloseWb,
     /// An index extend with no amount: `uxtw`.
     Ext(u8),
@@ -174,7 +180,9 @@ pub enum Enc {
         max: i64,
     },
     /// The value itself, bit `.0` to word bit `.1`; one value bit may go to
-    /// several word bits.
+    /// several word bits. The lowest bit placed says what the value counts
+    /// in: `ldraa x0, [x1, #8]` reaches word bits 12-20 and 22 from its own
+    /// bits 3-12, so its offset is a multiple of eight.
     Scatter {
         min: i64,
         max: i64,
@@ -195,6 +203,10 @@ pub enum Enc {
     /// Must equal the value of an earlier number in the same form, and
     /// encodes nothing of its own: `add z0.b, p0/m, z0.b, z1.b`.
     Tied(u8),
+    /// Must be the register after an earlier one, and encodes nothing of its
+    /// own: `casp x0, x1, x2, x3, [x4]` names each pair by its even
+    /// register, and the odd one has to follow it.
+    TiedNext(u8),
     /// A few values, each with a code: `#90`/`#270`.
     Choice {
         lsb: u8,
@@ -976,6 +988,12 @@ fn apply(enc: Enc, v: Option<Val>, word: u32) -> Result<u32, String> {
         Enc::Scatter { min, max, bits } => {
             let v = int(v)?;
             range(v, min, max)?;
+            let step = 1i64 << bits.first().map_or(0, |b| b.0);
+            if (v - min).rem_euclid(step) != 0 {
+                return Err(format!(
+                    "must be a multiple of {step} from {min}, but is {v}"
+                ));
+            }
             Ok(set_bits(word, bits, v as u64))
         }
         Enc::Affine {
@@ -1007,7 +1025,7 @@ fn apply(enc: Enc, v: Option<Val>, word: u32) -> Result<u32, String> {
             Ok(set_bits(word, bits, x))
         }
         // Checked by `encode`, which knows which operand is repeated.
-        Enc::Tied(_) => Ok(word),
+        Enc::Tied(_) | Enc::TiedNext(_) => Ok(word),
         Enc::Choice { lsb, width, map } => {
             let v = int(v)?;
             match map.iter().find(|(x, _)| *x == v) {
@@ -1055,6 +1073,18 @@ fn encode(form: Form, shape: &[u16], atoms: &[(Atom, Span)]) -> Result<u32, (Spa
                     *span,
                     format!(
                         "operand {} has to be the same register as operand {}",
+                        k + 1,
+                        owners[j as usize] + 1
+                    ),
+                ));
+            }
+            if let Enc::TiedNext(j) = enc
+                && v.and_then(Val::int) != values[j as usize].and_then(Val::int).map(|n| n + 1)
+            {
+                return Err((
+                    *span,
+                    format!(
+                        "operand {} has to be the register after operand {}",
                         k + 1,
                         owners[j as usize] + 1
                     ),
@@ -1250,7 +1280,9 @@ mod tests {
                 for enc in [slot.a, slot.b] {
                     match enc {
                         Enc::None => continue,
-                        Enc::Tied(j) => assert!((j as usize) < seen, "{shape:?}"),
+                        Enc::Tied(j) | Enc::TiedNext(j) => {
+                            assert!((j as usize) < seen, "{shape:?}")
+                        }
                         _ => {}
                     }
                     seen += 1;

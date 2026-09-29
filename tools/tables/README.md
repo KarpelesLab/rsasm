@@ -27,7 +27,11 @@ and checked against it.
 - `aarch64.py` measures the AArch64 SIMD, floating-point and SVE instruction
   set against llvm-mc and writes `src/arch/aarch64/table_data.rs`,
   `table_names.rs` and the corpora `tools/mc-diff/aarch64-simd-words.txt` and
-  `aarch64-sve-words.txt`, as below.
+  `aarch64-sve-words.txt`, as below. The general-purpose groups that are
+  families of the same shape -- named by `GP_GROUPS` in `a64.py`, and today
+  the load/store exclusives, the acquire/release accesses, the atomics,
+  pointer authentication and memory tagging -- are measured
+  the same way and go to `aarch64-gp-words.txt`.
 - `aarch64-sys.py` does the same for the system instructions against the
   other reference: the names come from binutils' `aarch64-sys-regs.def` and
   the `aarch64_sys_regs_*` tables in `aarch64-opc.c`, and each encoding from
@@ -65,9 +69,10 @@ Each line it prints is parsed by the operand grammar in `a64.py` into a
 mnemonic and operands, and the lines are grouped by *shape*: the mnemonic and
 what each operand looks like, `v0.4s` and `v1.8b` being different shapes but
 `v0.4s` and `v3.4s` the same. A shape is kept if it has a SIMD, floating-point
-or SVE operand, or if the mnemonic has a shape that does and the handwritten
+or SVE operand, if the mnemonic has a shape that does and the handwritten
 encoders in `insn.rs` do not know it (`ldapur x0, [x1]` goes with
-`ldapur d0, [x1]`, `cntd x0` with the rest of SVE). SME beyond `smstart`,
+`ldapur d0, [x1]`, `cntd x0` with the rest of SVE), or if the mnemonic is one
+of the general-purpose groups `GP_GROUPS` names. SME beyond `smstart`,
 `smstop` and `zero {za}` is left out.
 
 Spellings llvm-mc accepts but never prints (`uxtl`, `cmle` with three
@@ -75,8 +80,10 @@ registers, `mov z0.b, w0`) are listed in `ALIASES`, as syntax only.
 
 ## How a form is measured
 
-For each shape, one line is assembled with every register zero, and then
-again with each number in it changed on its own: every register, every lane
+For each shape, one line is assembled with every register zero -- or, where
+llvm-mc refuses that, with a different register in each operand, since a
+store-exclusive may not name its status register as a source as well -- and
+then again with each number in it changed on its own: every register, every lane
 index, and for an immediate a dense run around the printed value, the powers
 of two and their neighbours, and so on outwards while llvm-mc keeps accepting
 it. From the words that come back:
@@ -92,6 +99,11 @@ it. From the words that come back:
 - a handful of values with codes of their own (`#90`/`#270`) is a choice;
 - two registers that only move together are tied: `add z0.b, p0/m, z0.b,
   z1.b`.
+
+A general-purpose register another operand of the baseline already names is
+no evidence about this one's range, and does not end its run: llvm-mc refuses
+`stxr w0, x0, [x1]`, where GNU as warns and assembles it, and every A64
+register field is the same five bits wide.
 
 Two things make ranges hard to read off llvm-mc. It takes out-of-range
 immediates and truncates them (`ext v0.8b, v1.8b, v2.8b, #8` is `#0`), so a
@@ -115,7 +127,8 @@ the backend tries it, on every line assembled so far.
 
 ## Files
 
-- `a64.py` runs llvm-mc and holds the operand grammar, shared with
+- `a64.py` runs llvm-mc, holds the operand grammar and names the
+  general-purpose groups the table covers, all shared with
   `tools/fuzz/aarch64.py`.
 - `aarch64.py` sweeps, fits, checks and writes the table and corpora.
 - `aarch64-probe.py` fits one line and prints what it measured, for looking

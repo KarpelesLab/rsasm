@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Shared pieces for the AArch64 table generator: running llvm-mc, and the
-operand grammar that both the sweep and the fitter speak.
+"""Shared pieces for the AArch64 table generator: running llvm-mc, the
+operand grammar that both the sweep and the fitter speak, and which
+general-purpose mnemonics the table is responsible for.
 
 Nothing here knows an encoding. Instruction words come from llvm-mc, either by
 disassembling random words (which is how the forms are discovered) or by
@@ -19,14 +20,64 @@ MATTR = ",".join([
     "+v9.5a", "+sve2", "+sve2p1", "+sve2-aes", "+sve2-sha3", "+sve2-sm4",
     "+sve2-bitperm", "+sve-aes2", "+sve-b16b16", "+sve-bfscale",
     "+sve-f16f32mm", "+crypto", "+dotprod", "+i8mm", "+fullfp16", "+bf16",
-    "+lse", "+rcpc", "+rand", "+memtag", "+pauth", "+fp16fml", "+flagm",
-    "+sb", "+ssbs", "+predres", "+tme", "+ls64", "+f64mm", "+f32mm",
+    "+lse", "+lse128", "+lsui", "+rcpc", "+rand", "+mte", "+pauth",
+    "+fp16fml", "+flagm", "+sb", "+ssbs", "+predres", "+ls64", "+f64mm",
+    "+f32mm",
     "+jsconv", "+complxnum", "+rcpc3", "+cssc", "+the", "+d128", "+lut",
     "+faminmax", "+fp8", "+fp8fma", "+fp8dot2", "+fp8dot4", "+sme", "+sme2",
     "+sme2p1",
 ])
 
 TRIPLE = "aarch64"
+
+# The general-purpose groups the encoding table covers, which it takes whole
+# rather than only where a SIMD mnemonic shares them. Every one of them is a
+# family of near-identical forms that differ in an ordering suffix or an
+# access size, which is what the table is for; the rest of the
+# general-purpose instruction set is written out in `insn.rs`, and a mnemonic
+# named here must not be there as well, or both encoders would claim it.
+#
+# `re.X` ignores the spaces, so each alternative reads as its pieces.
+GP_GROUPS = re.compile(r"""
+    # The load/store exclusives and the acquire/release accesses of baseline
+    # ARMv8-A: `ldxr`, `stlxrh`, `ldaxp`, `ldar`, `stllrb`. `clrex` has no
+    # operand to vary and is written out with the other barriers.
+    ld a? xr [bh]? | ld a? xp | st l? xr [bh]? | st l? xp
+  | ld l? ar [bh]? | st ll? r [bh]?
+    # The LSE atomics of ARMv8.1-A, and the unprivileged ones FEAT_LSUI adds
+    # with a `t` after the ordering: `casal`, `caspt`, `swpb`, `ldaddalh`,
+    # `stumin`, `ldtadd`. A `st<op>` is the `ld<op>` that discards its result
+    # and has no acquire form of its own.
+  | cas (a|l|al)? t? [bh]? | casp (a|l|al)? t?
+  | swp t? (a|l|al)? [bh]?
+  | ld (add|clr|eor|set|smax|smin|umax|umin) (a|l|al)? [bh]?
+  | st (add|clr|eor|set|smax|smin|umax|umin) l? [bh]?
+  | ldt (add|clr|set) (a|l|al)? | stt (add|clr|set) l?
+  | ld a? txr | st l? txr
+    # FEAT_LSE128's atomics on a 128-bit value, which name the two registers
+    # holding it, and FEAT_THE's read-check-write atomics, which do the same
+    # in their `p` forms.
+  | swpp (a|l|al)? | ld (clr|set) p (a|l|al)?
+  | rcw s? (cas|clr|set|swp) p? (a|l|al)?
+    # FEAT_LRCPC's acquiring load and FEAT_LRCPC3's ordered pair.
+  | ldapr [bh]? | ldiapp | stilp
+    # The pointer-authentication instructions that name a register. The
+    # spellings with a fixed modifier -- `paciasp`, `paciaz`, `pacia1716`,
+    # `xpaclri` -- are `hint` encodings and separate mnemonics to both
+    # references, and `insn.rs` has them with the rest of the hints.
+  | pac (i|d) z? (a|b) | aut (i|d) z? (a|b) | pacga | xpac (i|d)
+  | b l? r (aa|ab) z? | e? ret (aa|ab) | ldra (a|b)
+    # Memory tagging: the tag arithmetic, the tagged stores and the loads and
+    # stores of a tag on its own. `subp` and `subps` are not the handwritten
+    # `sub` and `subs`, and `cmpp` is the alias of `subps xzr, ...`.
+  | irg | addg | subg | gmi | subp s? | cmpp
+  | st z? 2? g m? | stgp | ldg m?
+""", re.X)
+
+
+def gp_group(mnemonic):
+    """True for a mnemonic the table owns although no SIMD form shares it."""
+    return GP_GROUPS.fullmatch(mnemonic) is not None
 
 
 def _mc(args, text):
