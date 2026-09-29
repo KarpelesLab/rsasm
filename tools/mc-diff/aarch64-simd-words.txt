@@ -4087,6 +4087,42 @@ ldapur x18, [x21, #111]
 ldapur x9, [x16]
 ldapur xzr, [sp, #255]
 ldapur xzr, [sp]
+ldtnp q0, q0, [x0, #-1024]
+ldtnp q0, q0, [x0]
+ldtnp q16, q4, [x5, #-560]
+ldtnp q31, q31, [sp, #1008]
+ldtnp q31, q31, [sp]
+ldtnp q6, q2, [x17]
+ldtnp x0, x0, [x0, #-512]
+ldtnp x0, x0, [x0]
+ldtnp x22, x26, [x0]
+ldtnp x22, x8, [x9, #-352]
+ldtnp xzr, xzr, [sp, #504]
+ldtnp xzr, xzr, [sp]
+ldtp q0, q0, [x0, #-1024]
+ldtp q0, q0, [x0, #-1024]!
+ldtp q0, q0, [x0]
+ldtp q0, q0, [x0], #-1024
+ldtp q10, q25, [x5, #-144]
+ldtp q18, q30, [x30, #464]!
+ldtp q22, q23, [x27], #-896
+ldtp q24, q5, [x19]
+ldtp q31, q31, [sp, #1008]
+ldtp q31, q31, [sp, #1008]!
+ldtp q31, q31, [sp]
+ldtp q31, q31, [sp], #1008
+ldtp x0, x0, [x0, #-512]
+ldtp x0, x0, [x0, #-512]!
+ldtp x0, x0, [x0]
+ldtp x0, x0, [x0], #-512
+ldtp x11, x27, [x18, #40]!
+ldtp x15, x28, [x14], #240
+ldtp x17, x3, [x30]
+ldtp x21, x28, [x18, #-136]
+ldtp xzr, xzr, [sp, #504]
+ldtp xzr, xzr, [sp, #504]!
+ldtp xzr, xzr, [sp]
+ldtp xzr, xzr, [sp], #504
 luti2 v0.16b, { v0.16b }, v0[0]
 luti2 v0.16b, { v22.16b }, v21[3]
 luti2 v0.8h, { v0.8h }, v0[0]
@@ -4209,7 +4245,7 @@ mov x25, v4.d[1]
 mov xzr, v31.d[1]
 movi d0, #-72057594037927936
 movi d31, #18446744073709551615
-movi d4, #18374966859414962175
+movi d4, #18374966855153483520
 movi v0.16b, #0
 movi v0.2d, #-72057594037927936
 movi v0.2s, #0
@@ -4229,7 +4265,7 @@ movi v14.4s, #168, lsl #16
 movi v14.4s, #243, msl #8
 movi v2.8b, #1
 movi v26.2s, #250, lsl #8
-movi v29.2d, #18374686479688335360
+movi v29.2d, #72057594021216000
 movi v29.4h, #142
 movi v31.16b, #255
 movi v31.2d, #18446744073709551615
@@ -7004,6 +7040,42 @@ stlur x13, [x27, #0]
 stlur x4, [x18]
 stlur xzr, [sp, #255]
 stlur xzr, [sp]
+sttnp q0, q0, [x0, #-1024]
+sttnp q0, q0, [x0]
+sttnp q17, q30, [x6, #-288]
+sttnp q31, q31, [sp, #1008]
+sttnp q31, q31, [sp]
+sttnp q4, q31, [x28]
+sttnp x0, x0, [x0, #-512]
+sttnp x0, x0, [x0]
+sttnp x20, x26, [x9, #304]
+sttnp x22, x14, [x6]
+sttnp xzr, xzr, [sp, #504]
+sttnp xzr, xzr, [sp]
+sttp q0, q0, [x0, #-1024]
+sttp q0, q0, [x0, #-1024]!
+sttp q0, q0, [x0]
+sttp q0, q0, [x0], #-1024
+sttp q10, q21, [x24], #432
+sttp q28, q5, [x28, #-192]!
+sttp q31, q31, [sp, #1008]
+sttp q31, q31, [sp, #1008]!
+sttp q31, q31, [sp]
+sttp q31, q31, [sp], #1008
+sttp q6, q8, [x8, #-832]
+sttp q7, q11, [x24]
+sttp x0, x0, [x0, #-512]
+sttp x0, x0, [x0, #-512]!
+sttp x0, x0, [x0]
+sttp x0, x0, [x0], #-512
+sttp x13, x15, [x26, #-160]!
+sttp x20, x25, [x25, #152]
+sttp x25, x29, [x23], #208
+sttp x26, x10, [x12]
+sttp xzr, xzr, [sp, #504]
+sttp xzr, xzr, [sp, #504]!
+sttp xzr, xzr, [sp]
+sttp xzr, xzr, [sp], #504
 sub d0, d0, d0
 sub d18, d1, d30
 sub d31, d31, d31

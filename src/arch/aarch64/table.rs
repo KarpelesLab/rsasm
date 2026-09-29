@@ -11,8 +11,8 @@
 //! and the opcode left when all of them are zero.
 //!
 //! The general-purpose groups here are the ones shaped the same way: the
-//! load/store exclusives and the acquire/release accesses, one form per
-//! ordering and access size. The rest of the general-purpose instruction
+//! load/store exclusives, the acquire/release accesses and the atomics, one
+//! form per operation, ordering and access size. The rest of the general-purpose instruction
 //! set, whose interest is in its aliases, is written out in [`super::insn`].
 //!
 //! This module is the other half: an operand grammar covering what those
@@ -199,6 +199,10 @@ pub enum Enc {
     /// Must equal the value of an earlier number in the same form, and
     /// encodes nothing of its own: `add z0.b, p0/m, z0.b, z1.b`.
     Tied(u8),
+    /// Must be the register after an earlier one, and encodes nothing of its
+    /// own: `casp x0, x1, x2, x3, [x4]` names each pair by its even
+    /// register, and the odd one has to follow it.
+    TiedNext(u8),
     /// A few values, each with a code: `#90`/`#270`.
     Choice {
         lsb: u8,
@@ -1011,7 +1015,7 @@ fn apply(enc: Enc, v: Option<Val>, word: u32) -> Result<u32, String> {
             Ok(set_bits(word, bits, x))
         }
         // Checked by `encode`, which knows which operand is repeated.
-        Enc::Tied(_) => Ok(word),
+        Enc::Tied(_) | Enc::TiedNext(_) => Ok(word),
         Enc::Choice { lsb, width, map } => {
             let v = int(v)?;
             match map.iter().find(|(x, _)| *x == v) {
@@ -1059,6 +1063,18 @@ fn encode(form: Form, shape: &[u16], atoms: &[(Atom, Span)]) -> Result<u32, (Spa
                     *span,
                     format!(
                         "operand {} has to be the same register as operand {}",
+                        k + 1,
+                        owners[j as usize] + 1
+                    ),
+                ));
+            }
+            if let Enc::TiedNext(j) = enc
+                && v.and_then(Val::int) != values[j as usize].and_then(Val::int).map(|n| n + 1)
+            {
+                return Err((
+                    *span,
+                    format!(
+                        "operand {} has to be the register after operand {}",
                         k + 1,
                         owners[j as usize] + 1
                     ),
@@ -1254,7 +1270,9 @@ mod tests {
                 for enc in [slot.a, slot.b] {
                     match enc {
                         Enc::None => continue,
-                        Enc::Tied(j) => assert!((j as usize) < seen, "{shape:?}"),
+                        Enc::Tied(j) | Enc::TiedNext(j) => {
+                            assert!((j as usize) < seen, "{shape:?}")
+                        }
                         _ => {}
                     }
                     seen += 1;
