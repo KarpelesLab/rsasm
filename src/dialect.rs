@@ -52,7 +52,7 @@ use crate::assembler::Assembler;
 use crate::cursor::Cursor;
 use crate::dialect_cc::CcDirective;
 use crate::lexer::{Dialect, Punct, TokKind};
-use crate::parser::Statement;
+use crate::parser::{Body, Statement};
 use crate::section::{FragKind, Fragment, SectionFlags, SectionKind};
 use crate::source::Span;
 
@@ -287,7 +287,10 @@ impl Assembler {
                 self.builtin_directive(stmt, n);
                 return;
             }
-            Alias::Data(width) => self.alias_data(&mut cur, width, span),
+            Alias::Data(width) => {
+                let word = self.statement_word(stmt);
+                self.alias_data(&mut cur, width, span, &word)
+            }
             Alias::Space(width) => self.alias_space(&mut cur, width, span),
             Alias::Fill(width) => self.alias_fill(&mut cur, width, span),
             Alias::Even => {
@@ -508,7 +511,18 @@ impl Assembler {
         }
     }
 
-    fn alias_data(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span) {
+    /// The word a statement's body starts with, lowercased, which is how a
+    /// dialect's own table looked the directive up and how a diagnostic names
+    /// it back.
+    fn statement_word(&self, stmt: &Statement) -> String {
+        let name = match stmt.body {
+            Some(Body::Directive { name, .. } | Body::Insn { mnemonic: name, .. }) => name,
+            _ => return String::new(),
+        };
+        self.interner.get(name).to_ascii_lowercase()
+    }
+
+    fn alias_data(&mut self, cur: &mut Cursor<'_>, width: u8, span: Span, directive: &str) {
         self.motorola_align(width, span);
         if cur.at_end() {
             return;
@@ -541,7 +555,7 @@ impl Assembler {
                 let Some(e) = self.parse_expr(cur) else {
                     return;
                 };
-                self.emit_value(width, e, span);
+                self.emit_value_in(width, e, span, directive);
             }
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;

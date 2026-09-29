@@ -622,8 +622,8 @@ fn a_thread_local_target_is_named_and_typed_as_one() {
 
 /// What `m68k-elf-as` refuses, and for its own reasons: its lexer takes the
 /// suffix off the end of an operand's text before parsing what is left, and
-/// compares it with `strncmp`; `m68k_elf_cons` knows one suffix and refuses a
-/// relocation wider than the value.
+/// compares it with `strncmp`; `m68k_elf_cons` knows one suffix, refuses a
+/// relocation wider than the value, and is reached by `.long` alone.
 #[test]
 fn thread_local_suffixes_are_refused_where_the_reference_refuses_them() {
     for (src, needle) in [
@@ -637,8 +637,17 @@ fn thread_local_suffixes_are_refused_where_the_reference_refuses_them() {
         ),
         (" move.l #tv@TLSGD+8,%d0", "goes at the end of an operand"),
         (" .data\n .long tv@TLSGD", "in a 4-byte data field"),
-        (" .data\n .word tv@TLSLDO", "in a 2-byte data field"),
-        (" .data\n .byte tv@TLSLDO", "in a 1-byte data field"),
+        // A narrower directive is refused for the reason every directive
+        // but `.long` is, since none of them reaches `m68k_elf_cons`; see
+        // `only_dot_long_reads_a_relocation_modifier_in_data`.
+        (
+            " .data\n .word tv@TLSLDO",
+            "reads no relocation modifier in `.word`",
+        ),
+        (
+            " .data\n .byte tv@TLSLDO",
+            "reads no relocation modifier in `.byte`",
+        ),
     ] {
         let e = errors_dialect("m68k", Gas, &tls_source(src));
         assert!(
@@ -654,6 +663,124 @@ fn thread_local_suffixes_are_refused_where_the_reference_refuses_them() {
         " .data\nd: .long 0\n .text\n move.l d@TLSIE(%a0),%d0\n",
     );
     assert!(e.contains("defined outside a thread-local section"), "{e}");
+}
+
+/// The other four of `m68k-parse.h`'s `enum pic_relocation`. `@GOT` and
+/// `@PLT` are offsets into the table and `@GOTPC` and `@PLTPC` offsets to
+/// the entry, which the suffix decides and the addressing mode does not: the
+/// same `R_68K_GOT32` serves `jsr x@GOTPC` and `move.l #x@GOTPC,%d0`. The
+/// width of the field then picks between the three relocations each has.
+#[test]
+fn position_independent_suffixes_relocate_the_field_the_operand_landed_in() {
+    let src = " move.l x@GOT(%a0),%d0\n move.l x@GOT:w(%a0,%d1.w),%d0\n\
+                move.l x@GOT:b(%a0,%d1.w),%d0\n move.l x@PLT(%a0),%d0\n\
+                move.w #x@PLT,%d0\n move.b #x@PLT,%d0\n\
+                jsr x@GOTPC\n move.w #x@GOTPC,%d0\n move.b #x@GOTPC,%d0\n\
+                jsr x@PLTPC\n bsr.w x@PLTPC\n move.b #x@PLTPC,%d0\n";
+    assert_eq!(
+        relocs("m68k", Gas, src),
+        vec![
+            (0x04, 10, 0), // R_68K_GOT32O, a 68020 base displacement
+            (0x0c, 11, 0), // R_68K_GOT16O, a `:w` base displacement
+            (0x11, 12, 0), // R_68K_GOT8O, the byte of a brief extension word
+            (0x16, 16, 0), // R_68K_PLT32O
+            (0x1c, 17, 0), // R_68K_PLT16O, a word immediate
+            (0x21, 18, 0), // R_68K_PLT8O, the low byte of a `.b` immediate
+            (0x24, 7, 0),  // R_68K_GOT32, an absolute address
+            (0x2a, 8, 0),  // R_68K_GOT16
+            (0x2f, 9, 0),  // R_68K_GOT8
+            (0x32, 13, 0), // R_68K_PLT32
+            (0x38, 14, 0), // R_68K_PLT16, a `bsr.w` displacement
+            (0x3d, 15, 0), // R_68K_PLT8
+        ]
+    );
+    assert_eq!(
+        obj("m68k", Gas, src),
+        "20 30 01 70 00 00 00 00 20 30 11 20 00 00 20 30 10 00 \
+         20 30 01 70 00 00 00 00 30 3c 00 00 10 3c 00 00 \
+         4e b9 00 00 00 00 30 3c 00 00 10 3c 00 00 \
+         4e b9 00 00 00 00 61 00 00 00 10 3c 00 00"
+    );
+    // Each of them asks the linker for something belonging to one symbol, so
+    // the relocation names it where this backend would otherwise name its
+    // section, a plain local label included.
+    assert_eq!(
+        named_relocs(" .text\nloc: nop\n move.l loc@GOT(%a5),%d0\n"),
+        vec![(6, 10, "loc".to_string())]
+    );
+}
+
+/// A `:b` or `:s` displacement, which fits only in the low byte of a brief
+/// extension word. GNU as widens it wherever the operand has no such word:
+/// silently to the word a `d(An)` or `d(PC)` already uses, and with a warning
+/// where a full extension word is forced.
+#[test]
+fn a_byte_displacement_size_uses_a_brief_extension_word_or_widens() {
+    let src = " move.l x:b(%a0,%d1.w),%d0\n move.l x:s(%a0,%d1.w),%d0\n\
+                move.l x:b(%a0),%d0\n move.l x:b(%pc,%d1.w),%d0\n\
+                move.l x:b(%pc),%d0\n move.l ([x:b,%a0],%d1.w),%d0\n\
+                move.l 8:b(%a0,%d1.w),%d0\n move.l 8:b(%a0),%d0\n";
+    assert_eq!(
+        relocs("m68k", Gas, src),
+        vec![
+            (0x03, 3, 0), // R_68K_8, the brief extension word's byte
+            (0x07, 3, 0), // and `:s` is the same size
+            (0x0a, 2, 0), // R_68K_16: no index, so no brief extension word
+            (0x0f, 6, 1), // R_68K_PC8, measured from the extension word
+            (0x12, 5, 0), // R_68K_PC16, the widened `d(PC)`
+            (0x18, 2, 0), // R_68K_16: memory indirect forces a full word
+        ]
+    );
+    assert_eq!(
+        obj("m68k", Gas, src),
+        "20 30 10 00 20 30 10 00 20 28 00 00 20 3b 10 00 20 3a 00 00 \
+         20 30 11 25 00 00 20 30 10 08 20 28 00 08"
+    );
+    // The size was asked for, so a constant too large for it is truncated
+    // with a warning rather than refused, and `isbyte` takes -255 to 255.
+    gas(" move.l 255:b(%a0,%d1.w),%d0\n", "20 30 10 ff");
+    gas(" move.l -255:b(%a0,%d1.w),%d0\n", "20 30 10 01");
+    let asm = assemble_dialect("m68k", Gas, " move.l 256:b(%a0,%d1.w),%d0\n");
+    assert!(!asm.diags.has_errors());
+    assert!(
+        asm.diags.render(&asm.sm, false).contains("does not fit"),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    // An absolute address has no byte form at all, which GNU as calls an
+    // unsupported byte value rather than widening.
+    err("m68k", Gas, " move.l x:b,%d0\n", "has no byte form");
+}
+
+/// GNU as's `md_pseudo_table` gives m68k an `m68k_elf_cons` for `long` and
+/// nothing else, so `@TLSLDO` is a thread-local offset in a `.long` and junk
+/// after the expression in every other spelling of a four-byte directive —
+/// the Motorola dialect's `dc.l` among them, which `--mri` refuses too.
+#[test]
+fn only_dot_long_reads_a_relocation_modifier_in_data() {
+    const LDO32: u32 = 31;
+    assert_eq!(
+        relocs(
+            "m68k",
+            Gas,
+            " .section .tdata,\"awT\",@progbits\ntv: .long 1\n .data\n .long tv@TLSLDO\n",
+        ),
+        vec![(0, LDO32, 0)]
+    );
+    for dir in [".int", ".4byte", ".dc.l"] {
+        err(
+            "m68k",
+            Gas,
+            &format!(" .section .tdata,\"awT\",@progbits\ntv: .long 1\n .data\n {dir} tv@TLSLDO\n"),
+            &format!("reads no relocation modifier in `{dir}`"),
+        );
+    }
+    err(
+        "m68k",
+        Motorola,
+        " section .tdata,data\ntv: dc.l 1\n section .data,data\n dc.l tv@TLSLDO\n",
+        "reads no relocation modifier in `dc.l`",
+    );
 }
 
 // ---- the 68000 and 68010 ------------------------------------------------------

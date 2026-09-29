@@ -154,6 +154,7 @@ impl Architecture for AArch64 {
         crate::arch::ModifierSymbols {
             needs: None,
             tls: name == "dtprel",
+            ..crate::arch::ModifierSymbols::default()
         }
     }
 
