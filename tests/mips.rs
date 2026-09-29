@@ -675,7 +675,9 @@ fn bad_operands_are_diagnosed() {
     assert!(errors_for("mips", "add.s $f0, $f2, $4").contains("floating-point register"));
     assert!(errors_for("mips", "add $f0, $f2, $f4").contains("integer register"));
     assert!(errors_for("mips", "lw $1, 8($f0)").contains("base register"));
-    assert!(errors_for("mips", "lui $4, %got(sym)").contains("unsupported relocation operator"));
+    assert!(
+        errors_for("mips", "lui $4, %frobnicate(sym)").contains("unsupported relocation operator")
+    );
     assert!(errors_for("mips", "li $4, sym").contains("assembly time"));
     assert!(errors_for("mips", "div $4, $8, $9").contains("$zero"));
     assert!(errors_for("mips", "teq $4, $5, 1024").contains("0 to 1023"));
@@ -1006,5 +1008,337 @@ fn noreorder_is_recorded_in_the_header() {
             want,
             "{src}"
         );
+    }
+}
+
+// ---- position-independent code --------------------------------------------
+
+/// The relocations the position-independent operators write, which are the
+/// same in o32 and n64. Both references agree on every one of them; see
+/// `tools/mc-diff/mips-pic-relocs.txt`, which compares the objects.
+#[test]
+fn the_position_independent_operators_name_the_got() {
+    let src = "\
+        .abicalls\n\
+        .text\n\
+        lw $4, %got(x)($gp)\n\
+        lw $25, %call16(x)($gp)\n\
+        lw $4, %got_disp(x)($gp)\n\
+        lw $4, %got_page(x)($gp)\n\
+        addiu $4, $4, %got_ofst(x)\n\
+        lui $4, %got_hi(x)\n\
+        lw $4, %got_lo(x)($4)\n\
+        lui $25, %call_hi(x)\n\
+        lw $25, %call_lo(x)($25)\n\
+        lw $5, %gp_rel(x)($gp)\n";
+    let want = [
+        9,  // GOT16
+        11, // CALL16
+        19, // GOT_DISP
+        20, // GOT_PAGE
+        21, // GOT_OFST
+        22, // GOT_HI16
+        23, // GOT_LO16
+        30, // CALL_HI16
+        31, // CALL_LO16
+        7,  // GPREL16
+    ];
+    assert_eq!(relocs("mips", src), want);
+    assert_eq!(relocs("mips64", src), want);
+    // Nothing is ever computed: the GOT is the linker's, so the field stays
+    // zero even where the target is in this file.
+    enc(
+        ".abicalls\nlw $4, %got(loc)($gp)\nloc: nop",
+        "8f 84 00 00 00 00 00 00",
+    );
+}
+
+/// `%higher` and `%highest` are the two fields above `%hi` that a 64-bit
+/// address needs. o32 has no relocation for either, and GNU as answers
+/// "relocation %highest isn't supported by the current ABI"; llvm-mc
+/// assembles them there, and rsasm follows GNU as. A constant is worked out,
+/// each half biased so that the ones below it reconstruct the address.
+#[test]
+fn the_upper_halves_of_a_64_bit_address() {
+    enc64(
+        "sym = 0x123456789abcdef0\n\
+         lui $4, %highest(sym)\n\
+         lui $4, %higher(sym)\n\
+         lui $4, %hi(sym)\n\
+         addiu $4, $4, %lo(sym)",
+        "3c 04 12 34 3c 04 56 79 3c 04 9a bd 24 84 de f0",
+    );
+    assert_eq!(
+        relocs("mips64", "lui $4, %highest(x)\nlui $4, %higher(x)"),
+        [29, 28]
+    );
+    for src in ["lui $4, %highest(x)", "lui $4, %higher(x)"] {
+        let e = errors_for("mips", src);
+        assert!(e.contains("o32 has no relocation"), "{src}: {e}");
+    }
+}
+
+/// `%half` is `R_MIPS_16`, the whole of a 16-bit field. GNU as reads it and
+/// llvm-mc calls it an invalid relocation operator, so the bytes here come
+/// from GNU as; a number under it is refused, since GNU as writes the value
+/// in place of the instruction rather than encoding it.
+#[test]
+fn half_puts_a_whole_address_in_a_16_bit_field() {
+    enc("addiu $4, $4, %half(x)", "24 84 00 00");
+    // Under `REL` the addend is the field's, plain.
+    enc("addiu $4, $4, %half(x + 8)", "24 84 00 08");
+    assert_eq!(relocs("mips", "addiu $4, $4, %half(x)"), [1]);
+    let e = errors_for("mips", "addiu $4, $4, %half(8)");
+    assert!(e.contains("no reference assembles it"), "{e}");
+}
+
+/// The nesting is grammar, not a special case: an operator wraps another,
+/// and n64 packs the chain into the three relocation types of one `r_info`,
+/// innermost first. GNU as composes any chain; llvm-mc reads only
+/// `%hi`/`%lo` of `%neg` of `%gp_rel` and drops the outer operators of
+/// anything else, so the general shapes are checked here against GNU as.
+#[test]
+fn nested_operators_compose_into_one_relocation() {
+    // The three types are packed a byte each, the primary one first.
+    let composite = |t1: u32, t2: u32, t3: u32| t1 | (t2 << 8) | (t3 << 16);
+    assert_eq!(
+        relocs(
+            "mips64",
+            ".text\nf: lui $gp, %hi(%neg(%gp_rel(f)))\naddiu $gp, $gp, %lo(%neg(%gp_rel(f)))"
+        ),
+        [composite(7, 24, 5), composite(7, 24, 6)]
+    );
+    // Any other chain composes the same way.
+    assert_eq!(
+        relocs("mips64", "lui $4, %hi(%lo(%got(x)))\nlui $4, %hi(%neg(x))"),
+        [composite(9, 6, 5), composite(24, 5, 0)]
+    );
+    // An o32 `r_info` holds one type, which is why GNU as reads one
+    // operator there and calls a second a bad expression.
+    let e = errors_for("mips", "lui $4, %hi(%neg(%gp_rel(x)))");
+    assert!(e.contains("one relocation operator too many"), "{e}");
+    let e = errors_for("mips64", "lui $4, %hi(%hi(%hi(%hi(x))))");
+    assert!(e.contains("one relocation operator too many"), "{e}");
+}
+
+/// `%neg` only ever negates another operator. On its own GNU as stops with
+/// an internal error, and as the outermost of a chain it stops with one too,
+/// so there is nothing to follow and rsasm refuses both.
+#[test]
+fn neg_has_to_wrap_another_operator() {
+    for src in ["addiu $4, $4, %neg(x)", "addiu $4, $4, %neg(%gp_rel(x))"] {
+        let e = errors_for("mips64", src);
+        assert!(e.contains("only negates another operator"), "{src}: {e}");
+    }
+}
+
+/// A number under an operator that names a place in the GOT, or a distance
+/// from `$gp`, is refused: GNU as calls it an unsupported constant in a
+/// relocation, and llvm-mc relocates it against nothing.
+#[test]
+fn a_position_independent_operator_needs_a_symbol() {
+    for src in [
+        "addiu $4, $4, %got(4)",
+        "addiu $4, $4, %call16(4)",
+        "addiu $4, $4, %gp_rel(8)",
+        "addiu $4, $4, %got_disp(8)",
+    ] {
+        let e = errors_for("mips", src);
+        assert!(e.contains("has nothing to relocate"), "{src}: {e}");
+    }
+}
+
+/// o32's prologue. `.cpload` builds `$gp` out of `_gp_disp` and the register
+/// holding the function's own address; `.cprestore` saves it where a call
+/// can find it again, through `$at` when the offset is too wide for the
+/// store's own field.
+#[test]
+fn cpload_and_cprestore_are_o32s_prologue() {
+    let asm = assemble_for(
+        "mips",
+        ".abicalls\n.text\n.cpload $25\n.cprestore 16\n.cprestore 0x18000\n",
+    );
+    assert!(
+        !asm.diags().has_errors(),
+        "{}",
+        asm.diags().render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&section(&asm, ".text")),
+        "3c 1c 00 00 27 9c 00 00 03 99 e0 21 af bc 00 10 \
+         3c 01 00 02 00 3d 08 21 ac 3c 80 00"
+    );
+    assert_eq!(relocs("mips", ".abicalls\n.cpload $25"), [5, 6]);
+    // llvm-mc keeps the previous offset for a negative one and warns; GNU
+    // as stores at it, and so does rsasm.
+    enc(".abicalls\n.cprestore -32768", "af bc 80 00");
+    // `$gp` is whatever `.cplocal` last said, which is `$gp` itself in o32,
+    // where that directive is read and ignored.
+    enc(".abicalls\n.cplocal $17\n.cprestore 8", "af bc 00 08");
+}
+
+/// `.cpsetup` and `.cpreturn` are the n32 and n64 prologue, and the
+/// composite relocation is what the whole nesting exists for. `.cplocal`
+/// moves `$gp` to another register, which the directives after it use.
+#[test]
+fn cpsetup_and_cpreturn_are_the_new_abis_prologue() {
+    let asm = assemble_for(
+        "mips64",
+        ".abicalls\n.text\nf:\n.cpsetup $25, 24, f\n.cpreturn\n\
+         .cpsetup $25, $16, f\n.cpreturn\n.cplocal $17\n.cpsetup $25, 32, f\n.cpreturn\n",
+    );
+    assert!(
+        !asm.diags().has_errors(),
+        "{}",
+        asm.diags().render(&asm.sm, false)
+    );
+    assert_eq!(
+        hex(&section(&asm, ".text")),
+        "ff bc 00 18 3c 1c 00 00 27 9c 00 00 03 99 e0 2d \
+         df bc 00 18 \
+         03 80 80 25 3c 1c 00 00 27 9c 00 00 03 99 e0 2d \
+         02 00 e0 25 \
+         ff b1 00 20 3c 11 00 00 26 31 00 00 02 39 88 2d \
+         df b1 00 20"
+    );
+    // A `.cpreturn` with no `.cpsetup` in front of it loads from -1($sp):
+    // the offset starts at a sentinel GNU as never checks.
+    enc64(".abicalls\n.cpreturn", "df bc ff ff");
+}
+
+/// Each `$gp` directive belongs to one ABI, and the other reads it and does
+/// nothing — which is what both references do, rather than refuse it.
+/// Nothing at all happens until the file has said `.abicalls`.
+#[test]
+fn a_gp_directive_of_the_other_abi_is_ignored() {
+    // o32 ignores the new ABIs' three.
+    enc(
+        ".abicalls\n.cpsetup $25, 8, f\n.cpreturn\n.cplocal $28\nf: nop",
+        "00 00 00 00",
+    );
+    // n64 ignores o32's two.
+    enc64(".abicalls\n.cpload $25\n.cprestore 16\nnop", "00 00 00 00");
+    // And without `.abicalls` none of them does anything.
+    enc(".cpload $25\n.cprestore 16\nnop", "00 00 00 00");
+    enc64(".cpsetup $25, 8, f\n.cpreturn\nf: nop", "00 00 00 00");
+}
+
+/// `.abicalls`, and the `.option pic2` that says the same, set
+/// `EF_MIPS_PIC` in the header; `.option pic0` takes it back and leaves the
+/// `EF_MIPS_CPIC` rsasm's objects always carry. Both references agree, and
+/// both read the state at the end of the file.
+#[test]
+fn abicalls_is_recorded_in_the_header() {
+    for (src, want) in [
+        ("\tnop\n", 0x5000_1004u32),
+        ("\t.abicalls\n", 0x5000_1006),
+        ("\t.option pic2\n", 0x5000_1006),
+        ("\t.abicalls\n\t.option pic0\n", 0x5000_1004),
+        ("\t.option pic0\n", 0x5000_1004),
+    ] {
+        let asm = assemble_for("mips", src);
+        assert!(!asm.diags().has_errors(), "{src}");
+        let elf = rsasm::output::elf::build(&asm).expect("an object");
+        assert_eq!(
+            u32::from_be_bytes([elf[36], elf[37], elf[38], elf[39]]),
+            want,
+            "{src}"
+        );
+    }
+    // GNU as refuses any other `pic` number.
+    let e = errors_for("mips", ".option pic1");
+    assert!(e.contains("not supported"), "{e}");
+}
+
+/// `.gpword` and `.gpdword` write how far a symbol is from `_gp`, which is
+/// what a position-independent jump table holds. Outside
+/// position-independent code they are `.word` and its doubleword, as GNU as
+/// makes them, and take a list. llvm-mc composes `R_MIPS_64` into both and
+/// loses the symbol of a global target, so these come from GNU as.
+#[test]
+fn gpword_measures_from_gp() {
+    assert_eq!(relocs("mips", ".abicalls\n.data\n.gpword x"), [12]);
+    // Eight bytes is GPREL32 composed with R_MIPS_64, which only an n64
+    // `r_info` holds.
+    assert_eq!(
+        relocs("mips64", ".abicalls\n.data\n.gpdword x"),
+        [12 | (18 << 8)]
+    );
+    let e = errors_for("mips", ".abicalls\n.data\n.gpdword x");
+    assert!(e.contains("needs the n64 `r_info`"), "{e}");
+    // Without `.abicalls` they are the plain absolute words, and take a list.
+    assert_eq!(relocs("mips", ".data\n.gpword x, y"), [2, 2]);
+    assert_eq!(relocs("mips64", ".data\n.gpdword x"), [18]);
+    // Only a bare symbol: GNU as calls an addend or a number an unsupported
+    // use of the directive.
+    for src in [
+        ".abicalls\n.data\n.gpword x + 4",
+        ".abicalls\n.data\n.gpword 4",
+    ] {
+        let e = errors_for("mips", src);
+        assert!(e.contains("takes a bare symbol"), "{src}: {e}");
+    }
+}
+
+/// The data directives that write a thread-local offset, which a `.word`
+/// cannot spell. `.tpreldword`, the fourth of the set, is refused: GNU as
+/// 2.47 stops with an internal error on it.
+#[test]
+fn thread_local_offsets_in_data() {
+    let src = ".data\n.dtprelword tv\n.tprelword tv\n.dtpreldword tv\n\
+               .section .tdata,\"awT\",@progbits\n.globl tv\ntv: .word 1\n";
+    assert_eq!(
+        relocs("mips", src),
+        [
+            39, // TLS_DTPREL32
+            47, // TLS_TPREL32
+            41, // TLS_DTPREL64
+        ]
+    );
+    let asm = assemble_for("mips", src);
+    let target = asm.relocs[0].symbol.expect("a symbol");
+    assert_eq!(asm.symbols.get(target).ty, rsasm::symbol::SymType::Tls);
+    let e = errors_for("mips", ".data\n.tpreldword tv");
+    assert!(e.contains("internal error"), "{e}");
+    // A target that cannot be thread-local is refused, as it is for the
+    // access models.
+    let e = errors_for("mips", ".data\nd: .dtprelword d");
+    assert!(e.contains("outside a thread-local section"), "{e}");
+}
+
+/// Under `.abicalls` GNU as reaches a symbol through the GOT for `la`, `j`
+/// and `jal`, in a sequence that differs by ABI and by whether the symbol is
+/// local, and `j` of a symbol stops being a jump at all. rsasm expands none
+/// of it and refuses the three rather than assemble the direct form, which
+/// GNU ld will not put in a shared object.
+#[test]
+fn the_pic_expansions_of_la_j_and_jal_are_refused() {
+    let e = errors_for("mips", ".abicalls\nla $4, x");
+    assert!(e.contains("does not expand"), "{e}");
+    for src in [".abicalls\njal x", ".abicalls\nj x"] {
+        let e = errors_for("mips", src);
+        assert!(e.contains("the GOT"), "{src}: {e}");
+    }
+    // A number is not reached through the GOT, and `jalx`, which changes
+    // ISA mode, keeps its `R_MIPS_26` in both references.
+    enc(".abicalls\nla $4, 0x1234", "24 04 12 34");
+    assert_eq!(relocs("mips", ".abicalls\njalx x"), [4]);
+}
+
+/// A relocation operator has nowhere to go on a branch or jump target, on a
+/// shift amount, or on a whole register's worth of value, and neither
+/// reference has a field for one there.
+#[test]
+fn a_relocation_operator_needs_a_16_bit_field() {
+    for src in [
+        "j %got(x)",
+        "beq $4, $5, %got(x)",
+        "b %lo(x)",
+        "bnez $4, %hi(x)",
+        "sll $4, $5, %lo(2)",
+        "li $4, %lo(8)",
+    ] {
+        let e = errors_for("mips", src);
+        assert!(e.contains("nowhere to go"), "{src}: {e}");
     }
 }

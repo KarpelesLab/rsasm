@@ -228,6 +228,13 @@ pub enum Request {
     Literal(LiteralRequest),
     /// Writes out the section's literal pool here: `.ltorg`.
     FlushLiterals,
+    /// Bytes a directive stands for, with the fixups into them, which the
+    /// backend built itself. MIPS's `.cpload` and its relatives are each a
+    /// short instruction sequence that sets `$gp` up, and its `.gpword` and
+    /// thread-local data directives are a word carrying a relocation no
+    /// generic data directive can spell. `code` says the bytes are
+    /// instructions, so that the section counts as holding some.
+    Emit { bytes: Variant, code: bool },
     /// A relocation that covers no bytes, placed where the section stands,
     /// so on whatever is emitted next: AArch64's `.tlsdesccall sym` marks the
     /// `blr` after it for the linker that rewrites the sequence, and ARM's
@@ -1422,10 +1429,14 @@ pub trait Architecture {
     /// (see [`Architecture::addend_in_field`]) writes there, given the addend
     /// and the value of the symbol the relocation names: its offset in its
     /// section where it is defined, zero where it is undefined or common.
+    /// `by_section` says the relocation names a section rather than the
+    /// symbol the source wrote, which is how a local label is relocated.
     ///
     /// Normally the addend. GNU as for ARM leaves the symbol's value in the
-    /// field of some thread-local relocations as well; see `Arm::rel_field`.
-    fn rel_field(&self, _reloc: u32, addend: i64, _symbol_value: i64) -> i64 {
+    /// field of some thread-local relocations as well; see `Arm::rel_field`,
+    /// and MIPS writes `R_MIPS_GOT16`'s addend as a high half where the
+    /// target is local; see `Mips::rel_field`.
+    fn rel_field(&self, _reloc: u32, addend: i64, _symbol_value: i64, _by_section: bool) -> i64 {
         addend
     }
 

@@ -30,6 +30,13 @@ root=$(cd "$here/../.." && pwd)
 # `.riscv.attributes` from the ISA it was given, which it does not do of its
 # own accord and every RISC-V assembler does: without it the objects differ
 # by that section alone.
+#
+# The `mips-pic` and `mips64-pic` keys are the same two targets with
+# `-position-independent`, which is llvm-mc's only way of turning the `$gp`
+# setup directives on: it does not act on `.abicalls` the way GNU as and
+# rsasm do. Every snippet in those corpora says `.abicalls` all the same,
+# since that is what rsasm reads, and it is also what makes llvm-mc's
+# `EF_MIPS_PIC` and rsasm's agree.
 ARCHES="
 x86-64|x86-64|x86_64|
 i386|i386|i386|
@@ -50,6 +57,8 @@ powerpc64le|powerpc64le|powerpc64le|
 mips|mips|mips|
 mipsel|mipsel|mipsel|
 mips64|mips64|mips64|
+mips-pic|mips|mips|-position-independent
+mips64-pic|mips64|mips64|-position-independent
 sparc|sparc|sparc|
 sparcv9|sparcv9|sparcv9|
 "

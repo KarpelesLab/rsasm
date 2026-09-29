@@ -1,0 +1,170 @@
+=== the position-independent operators
+# Position-independent n64 code. The notes here are the file's; a snippet's
+# own are above it, as in the other corpora, and this one has nowhere else
+# to put them -- a comment block before the first `=== ` line would be
+# compared as a snippet of its own, and an empty one differs by
+# `EF_MIPS_PIC` alone.
+#
+# llvm-mc turns the `$gp` directives on with `-position-independent` alone
+# and does not read `.abicalls` for it; GNU as and rsasm read the directive.
+# Every snippet here says `.abicalls` anyway, since that is what rsasm needs
+# and what makes the header's `EF_MIPS_PIC` agree on both sides.
+#
+# The operators write the same relocations as in o32 -- R_MIPS_GOT16 (9),
+# CALL16 (11), GPREL16 (7), GOT_DISP (19), GOT_PAGE (20), GOT_OFST (21),
+# GOT_HI16 (22), GOT_LO16 (23), CALL_HI16 (30), CALL_LO16 (31) -- and n64
+# adds `%higher` (28) and `%highest` (29), the two fields above `%hi` that a
+# 64-bit address needs and that o32 has no relocation for. These are `RELA`
+# here, so the field stays zero and the addend is the entry's.
+#
+# What is not here, because the two references answer differently, and GNU
+# as is followed: `%half`, which llvm-mc calls an invalid relocation
+# operator; a nesting other than `%hi`/`%lo` of `%neg` of `%gp_rel`, which
+# GNU as composes generally and llvm-mc reads the outermost of, dropping the
+# rest; a number under an operator that names a place in the GOT, which GNU
+# as calls an unsupported constant in a relocation; and `.gpword` and
+# `.gpdword`, where llvm-mc composes R_MIPS_64 into both -- only `.gpdword`
+# takes it -- and loses the symbol of a global target. `tests/mips.rs` holds
+# those against GNU as's answer instead.
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        ld      $4, %got(x)($gp)
+        daddiu  $4, $4, %lo(x)
+        ld      $25, %call16(y)($gp)
+        ld      $4, %got_disp(x)($gp)
+        ld      $4, %got_page(x)($gp)
+        daddiu  $4, $4, %got_ofst(x)
+        lui     $4, %got_hi(x)
+        daddu   $4, $4, $gp
+        ld      $4, %got_lo(x)($4)
+        lui     $25, %call_hi(y)
+        daddu   $25, $25, $gp
+        ld      $25, %call_lo(y)($25)
+        lw      $5, %gp_rel(sdat)($gp)
+
+# The four fields of a 64-bit address, which only the new ABIs have
+# relocations for.
+=== the parts of a 64-bit address
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        lui     $4, %highest(x)
+        daddiu  $4, $4, %higher(x)
+        dsll    $4, $4, 16
+        daddiu  $4, $4, %hi(x)
+        dsll    $4, $4, 16
+        daddiu  $4, $4, %lo(x)
+        lui     $5, %highest(x + 0x1234)
+        daddiu  $5, $5, %higher(x + 0x1234)
+
+# The whole point of the n64 `r_info`: it holds three relocation types, and
+# `%hi(%neg(%gp_rel(f)))` is all three at once -- how far `f` is from `_gp`,
+# negated, and then the high half of that. The `%lo` beside it is the same
+# chain with LO16 last. R_MIPS_SUB is 24.
+=== a composite relocation, which is what the nesting is for
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        lui     $gp, %hi(%neg(%gp_rel(f)))
+        addiu   $gp, $gp, %lo(%neg(%gp_rel(f)))
+        daddu   $gp, $gp, $25
+        lui     $4, %hi(%neg(%gp_rel(f + 16)))
+        addiu   $4, $4, %lo(%neg(%gp_rel(f + 16)))
+
+# `.cpsetup` is the n32 and n64 prologue, and it is exactly that composite:
+# the caller's `$gp` is saved, the function's own address in `$reg1` is
+# added to the negated distance from `_gp` to the label, and `$gp` is back.
+# The middle instruction is `addiu`, not `daddiu`, in both references.
+=== .cpsetup saving $gp on the stack
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpsetup $25, 24, f
+        nop
+        .cpreturn
+        jr      $31
+        nop
+
+=== .cpsetup saving $gp in a register
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpsetup $25, $16, f
+        nop
+        .cpreturn
+        jr      $31
+        nop
+
+=== .cpsetup takes whichever register holds the address
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpsetup $4, 0, f
+        nop
+
+# `.cplocal` says another register holds `$gp`, and the directives after it
+# use it: the `.cpsetup` below writes `$16` and the `.cpreturn` restores it.
+=== .cplocal moves $gp to another register
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cplocal $16
+        .cpsetup $25, 32, f
+        nop
+        .cpreturn
+        jr      $31
+        nop
+
+# `.cpload` and `.cprestore` belong to o32. GNU as reads and ignores them
+# here rather than refusing, and so does rsasm.
+=== the o32 prologue directives are ignored in n64
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpload $25
+        .cprestore 16
+        nop
+
+=== .option pic2 is .abicalls
+        .option pic2
+        .set    noreorder
+        .text
+        .globl  f
+f:      ld      $4, %got_disp(x)($gp)
+
+=== .option pic0 takes position independence back
+        .abicalls
+        .option pic0
+        .set    noreorder
+        .text
+        .globl  f
+f:      nop
+
+=== refused: a relocation operator on a jump target
+        .abicalls
+        .set    noreorder
+        .text
+        j       %got(x)
+
+=== refused: a relocation operator on a branch target
+        .abicalls
+        .set    noreorder
+        .text
+        beq     $4, $5, %got(x)

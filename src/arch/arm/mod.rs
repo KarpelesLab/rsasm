@@ -451,7 +451,7 @@ impl Architecture for Arm {
     /// `R_ARM_TLS_LDM32` does have the value taken out, and is written
     /// through the same howto, which writes nothing where what is left is
     /// zero: an addend equal to the symbol's value leaves the field zero.
-    fn rel_field(&self, reloc: u32, addend: i64, symbol_value: i64) -> i64 {
+    fn rel_field(&self, reloc: u32, addend: i64, symbol_value: i64, _by_section: bool) -> i64 {
         match reloc {
             reloc::TLS_LDO32 if addend != 0 => addend.wrapping_add(symbol_value),
             reloc::TLS_LDM32 if addend == symbol_value => 0,

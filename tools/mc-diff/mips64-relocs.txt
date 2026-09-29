@@ -267,3 +267,38 @@ bss:    .space  16
 === refused: a modifier the backend does not know, in data
         .data
         .word   x@foobar
+
+# The data directives that write a thread-local offset, which a `.word`
+# cannot spell since both references refuse an access-model operator in
+# one. `.dtprelword` is R_MIPS_TLS_DTPREL32 (39) and `.tprelword`
+# R_MIPS_TLS_TPREL32 (47), a variable's place within its module's block and
+# its place relative to the thread pointer; `.dtpreldword` is the
+# doubleword form, DTPREL64 (41), and the one whose addend is the entry's.
+# Neither reference aligns any of them, and both make the target `STT_TLS`
+# whatever `.type` said. `.tpreldword`, the fourth of the set, is refused:
+# GNU as 2.47 stops with an internal error on it, so nothing says what its
+# eight bytes hold.
+#
+# Every target here is at the start of its section, which is the only
+# place the two references agree on the `RELA` addend: against a symbol
+# further in GNU as leaves the symbol's value in the addend as well as in
+# the symbol, so a linker counts it twice, where llvm-mc -- which rsasm
+# follows -- writes the addend alone. Under `REL` the two agree, and the o32
+# corpus has that case. An undefined target is left out for a different
+# reason: llvm-mc drops the symbol of one, leaving the relocation against
+# nothing, where GNU as and rsasm name it.
+=== thread-local offsets in data
+        .set    noreorder
+        .data
+        .globl  d
+d:
+        .dtprelword tv
+        .tprelword tv
+        .dtpreldword tv
+        .byte   1
+        .dtprelword tv + 4
+        .dtpreldword tv + 8
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .word   0x11223344
+tv2:    .word   0x55667788

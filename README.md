@@ -61,7 +61,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3222 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 571 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
-| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 854 |
+| MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 880 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 344 |
 | m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3791 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1285 |
@@ -107,6 +107,24 @@ form by form and in random whole programs as well.
   of the instruction forms a linker may rewrite into a direct reference takes
   the relaxable relocation GNU as gives it — `R_386_GOT32X`, or
   `R_X86_64_GOTPCRELX` and its REX form
+- MIPS position-independent code, which reaches everything outside the object
+  through a global offset table `$gp` points into: the operators `%got`,
+  `%call16`, `%got_disp`, `%got_page`, `%got_ofst`, `%got_hi`, `%got_lo`,
+  `%call_hi`, `%call_lo`, `%gp_rel` (also spelled `%gprel`) and `%neg`, and
+  with them the rest of what GNU as's operand parser reads — `%half`, and
+  `%higher` and `%highest` for the two fields above `%hi` that a 64-bit
+  address needs — each in any 16-bit field, an instruction's own immediate or
+  a memory operand's displacement; the nesting that composes them, which is
+  grammar rather than a special case, since an n64 `r_info` holds three
+  relocation types and `%hi(%neg(%gp_rel(f)))` fills all three; the `$gp`
+  prologue directives, each the instruction sequence GNU as expands it to —
+  `.cpload` and `.cprestore` in o32, `.cpsetup`, `.cpreturn` and `.cplocal`
+  in n32 and n64, with the ones belonging to the other ABI read and ignored
+  as both references read them; `.abicalls` and `.option pic2`, which turn
+  all of that on and set `EF_MIPS_PIC`, and `.option pic0`, which takes it
+  back; and `.gpword` and `.gpdword`, a symbol's distance from `_gp` in four
+  bytes or eight, which outside position-independent code are the plain
+  absolute words GNU as makes them
 - `x@SIZE` on x86, the size of a symbol rather than its address:
   `R_386_SIZE32`, `R_X86_64_SIZE32` and, in an eight-byte field,
   `R_X86_64_SIZE64`. A symbol the file defines and does not export has a size
@@ -158,13 +176,17 @@ form by form and in random whole programs as well.
   the one initial exec reads, `%dtprel_hi`/`%dtprel_lo` for an offset within
   a module's block and `%tprel_hi`/`%tprel_lo` for one from the thread
   pointer; an n64 `r_info` holds one of them and leaves its other two types
-  `R_MIPS_NONE`, which is what both references compose. SPARC reads the
-  eighteen operators its GNU as reads, the same in V8 and V9: the local-exec
-  halves `%tle_hix22()` and `%tle_lox10()`, initial exec's `%tie_hi22()` and
-  `%tie_lo10()`, general dynamic's `%tgd_hi22()` and `%tgd_lo10()`, and local
-  dynamic's `%tldm_hi22()`, `%tldm_lo10()`, `%tldo_hix22()` and
-  `%tldo_lox10()`, each of which names a step of a model rather than a part of
-  a value and so goes in whichever field the instruction has; and the eight
+  `R_MIPS_NONE`, which is what both references compose. Its three data
+  directives are there too — `.dtprelword` and `.tprelword` for a four-byte
+  offset and `.dtpreldword` for an eight-byte one, which a `.word` cannot
+  spell since both references refuse an access-model operator in one.
+  SPARC reads the eighteen operators its GNU as reads, the same in V8 and
+  V9: the local-exec halves `%tle_hix22()` and `%tle_lox10()`, initial
+  exec's `%tie_hi22()` and `%tie_lo10()`, general dynamic's `%tgd_hi22()`
+  and `%tgd_lo10()`, and local dynamic's `%tldm_hi22()`, `%tldm_lo10()`,
+  `%tldo_hix22()` and `%tldo_lox10()`, each of which names a step of a model
+  rather than a part of a value and so goes in whichever field the
+  instruction has; and the eight
   that fill no field at all and are written after the last operand —
   `%tie_ld()`, `%tie_ldx()`, `%tie_add()`, `%tgd_add()`, `%tldm_add()`,
   `%tldo_add()`, and `%tgd_call()` and `%tldm_call()`, which take the place of
@@ -365,16 +387,28 @@ form by form and in random whole programs as well.
   writes and llvm-mc, the reference here, does not; the `.module` options
   that would change which instructions are accepted (the ISA names, the
   application-specific extensions), where the ones that only describe the
-  floating-point unit are there; the position-independent operators and the
-  `$gp` setup around them (`%got`, `%call16`, `%got_page`, `%gp_rel` and
-  their relatives, `.cpload`, `.cpsetup`, `.cprestore`, `.abicalls`), where
-  the thread-local operators — `%tlsgd`, `%tlsldm`, `%dtprel_hi`,
-  `%dtprel_lo`, `%gottprel`, `%tprel_hi` and `%tprel_lo`, which reach the GOT
-  through `$gp` the same way — are there; and the data directives that write
-  a thread-local offset (`.dtprelword`, `.tprelword`, `.dtpreldword`), which
-  a `.word` cannot spell, since both references refuse an access-model
-  operator in one. `.tpreldword` is refused by rsasm and would have no
-  reference to check against anyway: GNU as 2.47 aborts on it
+  floating-point unit are there; and the n32 ABI, since no target name
+  selects it — `mips` and `mipsel` are o32, `mips64` and `mips64el` n64 —
+  so of the two shapes of `$gp` prologue each is checked in one ABI rather
+  than two. The position-independent operators are there, but not what
+  `.abicalls` does to the *macros*: GNU as then reaches a symbol through the
+  GOT for `la`, `j` and `jal`, in a sequence that differs by ABI, by whether
+  the symbol is local and by whether a `.cprestore` has been seen, and `j`
+  of a symbol stops being a jump at all, so rsasm refuses those three in
+  position-independent code rather than assemble the direct form GNU ld will
+  not put in a shared object. `-KPIC` has no rsasm spelling either, so
+  `.abicalls` or `.option pic2` is the only way to ask for
+  position-independent code. Five spellings GNU as takes are refused with
+  the reason: `%neg` written as the outermost operator, which GNU as stops
+  on with an internal error; a number under a composite operator, which it
+  relocates against nothing; `%half` of a number, for which it writes the
+  value in place of the instruction; `.gpdword` in an o32 object, where it
+  writes two relocation entries for the one field and no linker reads them;
+  and an addend wider than a signed 16-bit field on a `%got` of a local
+  symbol, which GNU as puts in the field as a high half and refuses for a
+  global symbol. `.tpreldword` is refused for the same kind of reason: GNU
+  as 2.47 stops with an internal error on it, so no reference says what its
+  eight bytes hold
 - ARM: `.arch`, `.cpu`, `.fpu` and `.arch_extension` say what the object was
   built for without changing which instructions this backend accepts, so
   `.arch armv4t` does not refuse an ARMv7 instruction as GNU as would. A
@@ -1058,7 +1092,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,675 of 8,675 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 39,049 of 39,049 match across twenty-one target variants. For RISC-V
+  supports. 39,075 of 39,075 match across twenty-three target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things.
 - `tools/xas-diff/run.sh` against cross GNU as 2.47 for m68k (for each CPU
@@ -1098,9 +1132,10 @@ is what hid them from rsasm for as long as it did.
   and `@PLTPC`, ARM's `sym(GOT)`),
   the x86, AArch64, PowerPC, RISC-V and SPARC thread-local access models,
   which the linker turns into local exec, ARM's and Thumb's, whose descriptor
-  calls it turns into initial exec, the MIPS models that need no GOT
-  (`%tprel_hi`/`%tprel_lo` and `%dtprel_hi`/`%dtprel_lo`), weak definitions a
-  second object overrides, `.comm`
+  calls it turns into initial exec, all five MIPS models and its
+  position-independent operators (`%got`, `%call16`, `%gp_rel` and the
+  `%got_hi`/`%got_lo` pair, which measure from the `_gp` the script defines
+  for them), weak definitions a second object overrides, `.comm`
   symbols merged between objects with different sizes, `.bss`, and
   references into another object's sections. The targets whose linker
   relaxes — SuperH, RX, RL78, MSP430, V850/RH850, AVR and RISC-V — are linked
@@ -1108,7 +1143,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 286 of 286 match across
+  addend a COFF relocation keeps in its field. 289 of 289 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global

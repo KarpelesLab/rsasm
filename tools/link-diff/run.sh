@@ -64,12 +64,13 @@
 #   made of those. They are in the ARM and Thumb rows too: `(TLSGD)`,
 #   `(TLSLDM)` and `(TLSLDO)`, `(GOTTPOFF)`, `(TPOFF)`, and the descriptor's
 #   `(TLSDESC)` with the `(tlscall)` branch and the `.tlsdescseq` marks,
-#   which GNU ld rewrites into initial-exec loads. The MIPS row has the two
-#   models that need no GOT, `%tprel_hi`/`%tprel_lo` and
-#   `%dtprel_hi`/`%dtprel_lo`; `%tlsgd`, `%tlsldm` and `%gottprel` are
-#   offsets from a `_gp` that the script here never defines, so GNU ld
-#   reports each of them as truncated, and `tools/mc-diff` compares those
-#   objects instead. The RISC-V rows have `%tprel_hi`, `%tprel_lo` and the
+#   which GNU ld rewrites into initial-exec loads. The MIPS row has all five
+#   models -- `%tprel_hi`/`%tprel_lo` and `%dtprel_hi`/`%dtprel_lo`, which
+#   need no GOT, and `%tlsgd`, `%tlsldm` and `%gottprel`, which read one
+#   through `$gp` -- as well as the position-independent `%got`, `%call16`,
+#   `%gp_rel` and the `%got_hi`/`%got_lo` pair. Those all measure from `_gp`,
+#   which is why `script` defines it.
+#   The RISC-V rows have `%tprel_hi`, `%tprel_lo` and the
 #   `%tprel_add` mark, `%tls_ie_pcrel_hi` and `%tls_gd_pcrel_hi` with the
 #   `%pcrel_lo` that completes each, and the `la.tls.ie` and `la.tls.gd`
 #   those two expand from; their descriptor operators are not linked, since
@@ -213,6 +214,13 @@ script() { # base script-commands bits nobits
     [ -n "$cmds" ] && echo "$cmds"
     echo "SECTIONS {"
     echo "  . = $base;"
+    # GNU ld's MIPS backend looks `_gp` up itself to resolve a GP-relative
+    # or GOT relocation, and a script of its own leaves it undefined: the
+    # default script's `_gp = ALIGN(16) + 0x7ff0` is what a real link has.
+    # `PROVIDE` is not enough, since the lookup is the linker's own and not
+    # a reference from an object, so the assignment is unconditional --
+    # which is why it is made only for the targets that want it.
+    [ -n "$needs_gp" ] && echo "  _gp = . + 0x7ff0;"
     for s in $3; do echo "  $s : { *($s) }"; done
     for s in $4; do
       if [ "$s" = .bss ]; then echo "  .bss : { *(.bss) *(COMMON) }"
@@ -363,6 +371,10 @@ run_target() { # corpora key arch as asflags linkers ldflags base variants
   # image rather than as ELF sections.
   pe=""
   case "$linkers" in pe:*) pe=1; linkers=${linkers#pe:} ;; esac
+  # See `script`: only MIPS needs `_gp`, and only MIPS objects reference the
+  # GOT and the small data area it addresses.
+  needs_gp=""
+  case "$key" in mips*) needs_gp=1 ;; esac
   for l in ${linkers//,/ }; do
     link_ld=$(tool "$l") && break
   done

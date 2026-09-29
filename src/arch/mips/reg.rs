@@ -68,6 +68,16 @@ pub const AT: Reg = Reg {
     class: RegClass::Gpr,
     num: 1,
 };
+/// `$gp`, which position-independent code points at the global offset
+/// table, and `$sp`, which the `$gp` setup directives save it below.
+pub const GP: Reg = Reg {
+    class: RegClass::Gpr,
+    num: 28,
+};
+pub const SP: Reg = Reg {
+    class: RegClass::Gpr,
+    num: 29,
+};
 /// `$ra`, the implicit link register of `jal` and of `jalr` written with one
 /// operand.
 pub const RA: Reg = Reg {

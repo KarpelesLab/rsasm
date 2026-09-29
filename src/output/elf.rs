@@ -474,11 +474,15 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 // type into the low 8, not the 32/32 split ELF64 uses.
                 Class::Elf32 => buf.u32((sym << 8) | (r.kind & 0xff)),
                 // MIPS n64 splits the 64-bit info into a 32-bit symbol and
-                // four one-byte fields, the primary type last. Big-endian that
-                // is bit-for-bit the standard packing; little-endian it is not.
+                // four one-byte fields — the special symbol, the third type,
+                // the second type and the primary type — which is why the
+                // backend packs up to three types into `kind`, one per byte.
+                // Big-endian that is bit-for-bit the standard packing;
+                // little-endian it is not.
                 Class::Elf64 if mips64el => {
                     buf.out.extend_from_slice(&sym.to_le_bytes());
-                    buf.out.extend_from_slice(&[0, 0, 0, r.kind as u8]);
+                    let (t2, t3) = ((r.kind >> 8) as u8, (r.kind >> 16) as u8);
+                    buf.out.extend_from_slice(&[0, t3, t2, r.kind as u8]);
                 }
                 Class::Elf64 => buf.u64(((sym as u64) << 32) | r.kind as u64),
             }
