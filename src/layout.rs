@@ -1971,7 +1971,11 @@ impl Assembler {
                                         r.addend
                                     } else {
                                         let value = r.symbol.map_or(0, |s| self.named_value(s));
-                                        arch.rel_field(r.kind, r.addend, value)
+                                        let by_section = r.symbol.is_some_and(|s| {
+                                            self.symbols.get(s).ty
+                                                == crate::symbol::SymType::Section
+                                        });
+                                        arch.rel_field(r.kind, r.addend, value, by_section)
                                     };
                                     let endian = arch.endian();
                                     if let FragKind::Bytes { variants, chosen } =

@@ -1,0 +1,207 @@
+=== the position-independent operators
+# Position-independent o32 code: the operators that reach the global offset
+# table through `$gp`, and the directives that set `$gp` up. The notes here
+# are the file's; a snippet's own are above it, as in the other corpora, and
+# this one has nowhere else to put them -- a comment block before the first
+# `=== ` line would be compared as a snippet of its own, and an empty one
+# differs by `EF_MIPS_PIC` alone, which is the first thing below.
+#
+# llvm-mc turns the `$gp` directives on with `-position-independent` alone
+# and does not read `.abicalls` for it; GNU as and rsasm read the directive.
+# Every snippet here says `.abicalls` anyway, since that is what rsasm needs
+# and what makes the header's `EF_MIPS_PIC` agree on both sides.
+#
+# The relocation each operator writes is the same in both references, and
+# the same in o32 and n64: R_MIPS_GOT16 (9), CALL16 (11), GPREL16 (7),
+# GOT_DISP (19), GOT_PAGE (20), GOT_OFST (21), GOT_HI16 (22), GOT_LO16 (23),
+# CALL_HI16 (30) and CALL_LO16 (31). They go in any 16-bit field, an
+# instruction's own immediate or a memory operand's displacement, and
+# nothing computes one: the GOT is the linker's and `$gp` points into it.
+#
+# What is not here, because the two references answer differently, and GNU
+# as is followed:
+#
+#   * a nested operator, which o32 has no room for -- an o32 `r_info` holds
+#     one relocation type -- and which GNU as calls a bad expression while
+#     llvm-mc reads the outermost and drops the rest;
+#   * `%half`, which GNU as reads as R_MIPS_16 and llvm-mc calls an invalid
+#     relocation operator; and `%higher` and `%highest`, which GNU as
+#     refuses here as unsupported by the ABI and llvm-mc assembles;
+#   * a number under one of these operators, which GNU as calls an
+#     unsupported constant in a relocation and llvm-mc relocates against
+#     nothing;
+#   * an addend on a `%got` or a `%call16`, which GNU as puts in the field
+#     as it is and llvm-mc puts there as a high half. BFD reads a GOT16 as a
+#     high half only where the target is local, its entry being a page that
+#     a `%lo` completes, and a CALL16 never;
+#   * `%call16`, `%got_disp`, `%got_hi` and `%got_lo` of a symbol defined
+#     here, which GNU as relocates against the section and llvm-mc against
+#     the label;
+#   * `.cplocal`, which GNU as reads and ignores outside n32 and n64 and
+#     llvm-mc refuses there;
+#   * `.gpword` and `.gpdword`, where llvm-mc composes R_MIPS_64 into both
+#     -- only `.gpdword` takes it -- and loses the symbol of a global
+#     target; and `.cprestore` of a negative offset, which llvm-mc warns
+#     about and ignores, keeping the previous offset.
+#
+# `tests/mips.rs` holds those against GNU as's answer instead.
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        lw      $4, %got(x)($gp)
+        addiu   $4, $4, %lo(x)
+        lw      $25, %call16(y)($gp)
+        lw      $4, %got_disp(x)($gp)
+        lw      $4, %got_page(x)($gp)
+        addiu   $4, $4, %got_ofst(x)
+        lui     $4, %got_hi(x)
+        addu    $4, $4, $gp
+        lw      $4, %got_lo(x)($4)
+        lui     $25, %call_hi(y)
+        addu    $25, $25, $gp
+        lw      $25, %call_lo(y)($25)
+        lw      $5, %gp_rel(sdat)($gp)
+        ori     $6, $6, %got(x)
+        sw      $7, %gp_rel(sdat)($gp)
+
+# Under `REL` the addend lives in the relocated field. Both references write
+# it plainly for the operators whose relocation BFD installs as it stands,
+# and as a high half -- shifted down by sixteen and biased by 0x8000, as
+# `%hi` is -- for `%got_hi` and `%call_hi`, whose howto has that rightshift.
+=== an addend in the field
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        addiu   $4, $4, %lo(x + 8)
+        lw      $4, %got_disp(x + 8)($gp)
+        lw      $4, %got_page(x + 8)($gp)
+        addiu   $4, $4, %got_ofst(x + 8)
+        lui     $4, %got_hi(x + 0x8000)
+        lw      $4, %got_lo(x + 0x8000)($4)
+        lui     $4, %call_hi(x + 0x18000)
+        lw      $4, %call_lo(x + 0x18000)($4)
+        lw      $4, %gp_rel(x + 8)($gp)
+
+# A `%got` of a symbol defined here names the GOT entry for the symbol's
+# *page*, which the `%lo` after it completes, so its field holds the high
+# half of the offset and not the offset: 0 for a label in the first 32 KB,
+# 1 past that. That is the pair position-independent o32 code loads a local
+# address with.
+=== a local address as a page and an offset
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  glob
+        .weak   wk
+f:
+        lw      $4, %got(loc)($gp)
+        addiu   $4, $4, %lo(loc)
+        lw      $5, %got(glob)($gp)
+        lw      $6, %got(wk)($gp)
+        lw      $8, %gp_rel(loc)($gp)
+        lw      $9, %got_page(loc)($gp)
+        addiu   $9, $9, %got_ofst(loc)
+        nop
+loc:    nop
+glob:   nop
+wk:     nop
+
+# `.cpload $t9` is o32's prologue: `_gp_disp` is the distance from the `lui`
+# to the linker's `_gp`, and the register holds the function's own address,
+# so the three instructions give the GOT's address wherever the code was
+# loaded. GNU as makes `_gp_disp` an `STT_OBJECT` symbol and llvm-mc leaves
+# it untyped; rsasm follows llvm-mc, as it does for everything else a MIPS
+# object holds.
+=== .cpload sets $gp up from the caller's $t9
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpload $25
+        nop
+
+=== .cpload takes whichever register holds the address
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpload $4
+        nop
+
+# `.cprestore` saves `$gp` where a call can find it again. An offset that
+# fits the store's own field is one instruction; a larger one goes through
+# `$at`, whose high half is biased as `%hi` is.
+=== .cprestore saves $gp on the stack
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpload $25
+        .cprestore 16
+        nop
+        .cprestore 0
+        nop
+        .cprestore 32767
+        nop
+
+=== .cprestore of an offset no field holds goes through $at
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cprestore 0x10000
+        nop
+        .cprestore 0x18000
+        nop
+
+# `.cpsetup` and `.cpreturn` belong to n32 and n64. GNU as reads and ignores
+# them here rather than refusing, and so does rsasm.
+=== the n64 prologue directives are ignored in o32
+        .abicalls
+        .set    noreorder
+        .text
+        .globl  f
+f:
+        .cpsetup $25, 24, f
+        nop
+        .cpreturn
+        nop
+
+# `.option pic2` says what `.abicalls` says, and `.option pic0` takes it
+# back: the header keeps `EF_MIPS_CPIC` and loses `EF_MIPS_PIC`.
+=== .option pic2 is .abicalls
+        .option pic2
+        .set    noreorder
+        .text
+        .globl  f
+f:      lw      $4, %got(x)($gp)
+
+=== .option pic0 takes position independence back
+        .abicalls
+        .option pic0
+        .set    noreorder
+        .text
+        .globl  f
+f:      nop
+
+# Neither a GOT slot nor half an address is a place to jump to, and neither
+# reference has a field for one there.
+=== refused: a relocation operator on a jump target
+        .abicalls
+        .set    noreorder
+        .text
+        j       %got(x)
+
+=== refused: a relocation operator on a branch target
+        .abicalls
+        .set    noreorder
+        .text
+        beq     $4, $5, %got(x)

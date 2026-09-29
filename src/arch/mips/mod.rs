@@ -15,6 +15,7 @@
 
 pub(crate) mod abi;
 pub mod encode;
+pub(crate) mod gp;
 pub mod insn;
 pub mod operand;
 pub mod pseudo;
@@ -41,6 +42,12 @@ pub(crate) const FEATURE_SOFTFLOAT: u64 = 4;
 /// `ArchState::features` bit: `.module nooddspreg`, which gives up the odd
 /// single-precision registers.
 pub(crate) const FEATURE_NO_ODD_SPREG: u64 = 8;
+/// `ArchState::features` bit: the file has said `.abicalls`, or the
+/// `.option pic2` that means the same, so its code reaches everything
+/// outside the object through the global offset table. It is what the
+/// header's `EF_MIPS_PIC` records and what turns the `$gp` setup
+/// directives on; see [`gp`].
+pub(crate) const FEATURE_PIC: u64 = 16;
 
 pub fn lookup(name: &str) -> Option<Box<dyn Architecture>> {
     let (canonical, endian, bits) = match name {
@@ -108,18 +115,40 @@ impl Architecture for Mips {
 
     /// What llvm-mc writes for the default CPUs: MIPS32 with the o32 ABI and
     /// `EF_MIPS_CPIC`, or MIPS64 (n64 has no ABI bits) with `EF_MIPS_CPIC`,
-    /// plus `EF_MIPS_NOREORDER` once the source has said `.set noreorder`.
+    /// plus `EF_MIPS_NOREORDER` once the source has said `.set noreorder`
+    /// and `EF_MIPS_PIC` once it has said `.abicalls`. Both references add
+    /// the last two the same way, and both read the state at the end of the
+    /// file, so an `.abicalls` taken back by a later `.option pic0` leaves
+    /// `EF_MIPS_CPIC` alone.
     fn elf_flags(&self, state: &ArchState) -> u32 {
         let base = if self.bits == 64 {
             0x6000_0004
         } else {
             0x5000_1004
         };
-        base | u32::from(state.features & FEATURE_NOREORDER != 0)
+        let noreorder = u32::from(state.features & FEATURE_NOREORDER != 0);
+        let pic = 2 * u32::from(state.features & FEATURE_PIC != 0);
+        base | noreorder | pic
     }
 
     fn align_is_log2(&self) -> bool {
         true
+    }
+
+    /// `R_MIPS_GOT16` against a local symbol names the GOT entry for the
+    /// symbol's *page*, which a `%lo` of the same address completes, and
+    /// BFD installs its `REL` addend the way it installs a `%hi`: shifted
+    /// down by sixteen and biased by 0x8000, so that adding the
+    /// sign-extended low half gets back to the address. Against a global
+    /// symbol the entry is the symbol's own and the addend goes in plainly.
+    /// Both references do this; it is `_bfd_mips_elf_got16_reloc` that
+    /// decides which, by the same test as the `by_section` here.
+    fn rel_field(&self, reloc: u32, addend: i64, _symbol_value: i64, by_section: bool) -> i64 {
+        if reloc == reloc::GOT16 && by_section {
+            addend.wrapping_add(0x8000) >> 16
+        } else {
+            addend
+        }
     }
 
     /// llvm-mc, the reference, aligns `.text`, `.data` and `.bss` to 16
@@ -222,6 +251,11 @@ impl Architecture for Mips {
             self.module(cx, cur);
             return true;
         }
+        // `.abicalls`, the `$gp` setup directives and the data directives
+        // that need a relocation of their own; see [`gp`].
+        if self.pic_directive(cx, name, cur, cur.peek().span) {
+            return true;
+        }
         if name != ".set" {
             return false;
         }
@@ -294,6 +328,24 @@ impl Architecture for Mips {
             );
             return None;
         };
+        // Under `.abicalls` GNU as stops assembling these two as jumps: the
+        // target is reached through the GOT, so `jal sym` becomes a load
+        // and a `jalr`, and `j sym` becomes a branch. Assembling the direct
+        // form instead would be a different program, and one GNU ld refuses
+        // to put in a shared object, so rsasm refuses the spelling and
+        // leaves the sequence to be written out. `jalx`, which changes ISA
+        // mode, keeps its `R_MIPS_26` in both references.
+        if matches!(mnemonic.as_str(), "j" | "jal") && cx.state.features & FEATURE_PIC != 0 {
+            cx.error(
+                req.mnemonic_span,
+                format!(
+                    "`{mnemonic}` of a symbol in position-independent code goes through \
+                     the GOT, which rsasm does not expand; write the `lw` with `%call16` \
+                     and the `jalr` yourself"
+                ),
+            );
+            return None;
+        }
         // Every MIPS instruction is one word wide, so there is never more than
         // one candidate for the layout pass to choose between.
         encode::encode(cx, &def, &args, self.endian, self.bits == 64).map(|v| vec![v])

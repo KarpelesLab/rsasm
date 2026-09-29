@@ -8,7 +8,7 @@
 //! in the word the field lives.
 
 use super::insn::{Def, Form};
-use super::operand::{Imm, Operand, RelocMod};
+use super::operand::{Imm, Operand, RelocMod, RelocMods};
 use super::reg::{self, Reg};
 use super::reloc;
 use crate::arch::AsmCtx;
@@ -51,13 +51,13 @@ pub const fn imm(v: i64) -> u32 {
 // stays next to the instruction that uses it.
 
 /// A plain 16-bit immediate in the low half of an I-format word.
-fn field_imm16(word: u64, v: i64) -> u64 {
+pub(crate) fn field_imm16(word: u64, v: i64) -> u64 {
     (word & 0xffff_0000) | ((v as u64) & 0xffff)
 }
 
 /// `%hi`: bits 31..16, biased by 0x8000 so that adding the *sign-extended*
 /// `%lo` of the same address gets back to the address itself.
-fn field_hi16(word: u64, v: i64) -> u64 {
+pub(crate) fn field_hi16(word: u64, v: i64) -> u64 {
     (word & 0xffff_0000) | (((v.wrapping_add(0x8000) >> 16) as u64) & 0xffff)
 }
 
@@ -107,9 +107,27 @@ pub fn jump_fixup() -> FixupKind {
         .scatter(field_target26)
 }
 
-fn imm16_fixup(modifier: RelocMod) -> FixupKind {
+/// `%higher`: bits 47..32, biased so that the three fields below it
+/// reconstruct the address; and `%highest`, bits 63..48, biased again for
+/// the same reason.
+fn field_higher(word: u64, v: i64) -> u64 {
+    (word & 0xffff_0000) | (((v.wrapping_add(0x8000_8000) >> 32) as u64) & 0xffff)
+}
+
+fn field_highest(word: u64, v: i64) -> u64 {
+    (word & 0xffff_0000) | (((v.wrapping_add(0x8000_8000_8000) >> 48) as u64) & 0xffff)
+}
+
+/// The fixup for a 16-bit field, given the chain of operators on it.
+///
+/// A chain of more than one is an n64 composite, whose relocation types are
+/// packed in the order the ABI applies them; the field itself is then
+/// whatever the innermost operator would put there, which for a composite
+/// is nothing, since n64 keeps its addend in the relocation entry.
+fn imm16_fixup(mods: RelocMods) -> FixupKind {
     let base = FixupKind::data(4).scatter(field_imm16);
-    match modifier {
+    let inner = mods.inner();
+    let kind = match inner {
         RelocMod::Hi => FixupKind::data(4)
             .with_reloc(reloc::HI16)
             .scatter(field_hi16),
@@ -118,6 +136,18 @@ fn imm16_fixup(modifier: RelocMod) -> FixupKind {
         // A bare immediate must actually fit; it gets the same relocation as
         // `%lo` because both name the low half of an address.
         RelocMod::None => base.with_field(16, 1).with_reloc(reloc::LO16),
+        RelocMod::Higher => FixupKind::data(4)
+            .with_reloc(reloc::HIGHER)
+            .scatter(field_higher),
+        RelocMod::Highest => FixupKind::data(4)
+            .with_reloc(reloc::HIGHEST)
+            .scatter(field_highest),
+        // Both references relocate `%half` of a label rather than resolve
+        // it, as they do the other parts of an address.
+        RelocMod::Half => base
+            .with_reloc(reloc::R16)
+            .with_addend_limits(-0x8000, 0x7fff)
+            .relocated_in_objects(),
         RelocMod::TlsGd => tls_fixup(reloc::TLS_GD, false),
         RelocMod::TlsLdm => tls_fixup(reloc::TLS_LDM, false),
         RelocMod::DtprelHi => tls_fixup(reloc::TLS_DTPREL_HI16, true),
@@ -125,7 +155,39 @@ fn imm16_fixup(modifier: RelocMod) -> FixupKind {
         RelocMod::Gottprel => tls_fixup(reloc::TLS_GOTTPREL, false),
         RelocMod::TprelHi => tls_fixup(reloc::TLS_TPREL_HI16, true),
         RelocMod::TprelLo => tls_fixup(reloc::TLS_TPREL_LO16, false),
-    }
+        // The position-independent operators. Each names a place in the GOT
+        // or a distance from `$gp`, neither of which exists before the
+        // link, so none of them is ever computed here. `%neg` is in the
+        // same boat: it only ever negates one of the others.
+        m => {
+            let got = !matches!(m, RelocMod::GpRel | RelocMod::Neg);
+            let high = matches!(m, RelocMod::GotHi | RelocMod::CallHi);
+            let k = got_fixup(m.reloc(), high, got);
+            if signed_addend(m) {
+                k.with_addend_limits(-0x8000, 0x7fff)
+            } else {
+                k
+            }
+        }
+    };
+    kind.with_reloc(mods.reloc())
+}
+
+/// Whether BFD's howto for this operator is `complain_overflow_signed`, so
+/// that GNU as answers "relocation overflow" for an addend wider than the
+/// field it goes in. The operators that hold a whole offset from `$gp` are
+/// marked so; the halves of one — `%got_hi`, `%got_lo` and their `%call`
+/// twins — are not, holding part of a value being the point of them.
+fn signed_addend(m: RelocMod) -> bool {
+    matches!(
+        m,
+        RelocMod::Got
+            | RelocMod::Call16
+            | RelocMod::GotDisp
+            | RelocMod::GotPage
+            | RelocMod::GotOfst
+            | RelocMod::GpRel
+    )
 }
 
 /// The field of a thread-local operator, given the relocation both references
@@ -142,6 +204,27 @@ fn tls_fixup(reloc: u32, high: bool) -> FixupKind {
     FixupKind::data(4)
         .with_reloc(reloc)
         .with_class(crate::reloc::RelocClass::ThreadLocal)
+        .linker_only()
+        .scatter(if high { field_hi16 } else { field_imm16 })
+}
+
+/// The field of a position-independent operator, which is the same story as
+/// [`tls_fixup`]: the GOT is the linker's, and `$gp` points into it, so
+/// neither an object nor a flat image can work the value out. Under `REL`
+/// the field holds the addend, biased by 0x8000 on the half `%got_hi` and
+/// `%call_hi` name, exactly as `%hi` writes it, and plain everywhere else.
+/// `got` says the value is a place in the GOT rather than a distance from
+/// `$gp`, which is all a writer that does not number relocations as ELF
+/// does could tell them apart by.
+fn got_fixup(reloc: u32, high: bool, got: bool) -> FixupKind {
+    let class = if got {
+        crate::reloc::RelocClass::Got
+    } else {
+        crate::reloc::RelocClass::Plain
+    };
+    FixupKind::data(4)
+        .with_reloc(reloc)
+        .with_class(class)
         .linker_only()
         .scatter(if high { field_hi16 } else { field_imm16 })
 }
@@ -214,7 +297,11 @@ pub fn place_imm16(
     v: Imm,
     what: &str,
 ) -> Option<()> {
-    match v.modifier {
+    // A chain of operators is never worked out here, whatever it wraps:
+    // GNU as resolves a constant by the innermost operator alone, and only
+    // when the fixup is not part of a composite one.
+    let single = v.mods.as_slice().len() <= 1;
+    match v.mods.inner() {
         RelocMod::None => match cx.constant(v.expr) {
             Some(n) => {
                 if !(IMM16_LO..=IMM16_HI).contains(&n) {
@@ -226,22 +313,76 @@ pub fn place_imm16(
                 }
                 w.push(word | imm(n));
             }
-            None => w.push_fixup(word, v.expr, imm16_fixup(RelocMod::None), v.span),
+            None => w.push_fixup(word, v.expr, imm16_fixup(v.mods), v.span),
         },
-        RelocMod::Hi => match cx.constant(v.expr) {
+        // The parts of an address a file can settle for itself, which GNU
+        // as's `calculate_reloc` is the list of.
+        RelocMod::Hi if single => match cx.constant(v.expr) {
             Some(n) => w.push(word | imm(n.wrapping_add(0x8000) >> 16)),
-            None => w.push_fixup(word, v.expr, imm16_fixup(RelocMod::Hi), v.span),
+            None => w.push_fixup(word, v.expr, imm16_fixup(v.mods), v.span),
         },
-        RelocMod::Lo => match cx.constant(v.expr) {
+        RelocMod::Lo if single => match cx.constant(v.expr) {
             Some(n) => w.push(word | imm(n)),
-            None => w.push_fixup(word, v.expr, imm16_fixup(RelocMod::Lo), v.span),
+            None => w.push_fixup(word, v.expr, imm16_fixup(v.mods), v.span),
         },
-        // A thread-local operator always relocates, even where the operand
-        // looks like a number: the layout pass is what refuses `%tprel_lo(4)`,
-        // and it only sees a fixup.
-        m => w.push_fixup(word, v.expr, imm16_fixup(m), v.span),
+        RelocMod::Higher if single => match cx.constant(v.expr) {
+            Some(n) => w.push(word | imm(n.wrapping_add(0x8000_8000) >> 32)),
+            None => w.push_fixup(word, v.expr, imm16_fixup(v.mods), v.span),
+        },
+        RelocMod::Highest if single => match cx.constant(v.expr) {
+            Some(n) => {
+                w.push(word | imm(n.wrapping_add(0x8000_8000_8000) >> 48));
+            }
+            None => w.push_fixup(word, v.expr, imm16_fixup(v.mods), v.span),
+        },
+        // `%half` of an address relocates like the other parts of one, but
+        // of a number there is nothing to follow: GNU as leaves the value
+        // alone in the word where the instruction should be, and llvm-mc
+        // does not read `%half` at all.
+        RelocMod::Half if cx.constant(v.expr).is_some() => {
+            cx.error(
+                v.span,
+                "`%half` of a number is refused: no reference assembles it \
+                 (GNU as writes the value in place of the instruction), so write \
+                 the number itself",
+            );
+            return None;
+        }
+        // Everything else names something only the linker lays out — a
+        // place in the GOT, a distance from `$gp`, an offset within a
+        // thread's block — so a number is refused rather than written,
+        // which is GNU as's "unsupported constant in relocation". A
+        // thread-local access is left to the layout pass, which has the
+        // fuller message for one, and so is anything with a symbol in it.
+        m if !is_thread_local(m) && cx.constant(v.expr).is_some() => {
+            cx.error(
+                v.span,
+                format!(
+                    "`{}` of a number has nothing to relocate: only the linker knows \
+                     where the GOT and `_gp` are",
+                    v.mods.written()
+                ),
+            );
+            return None;
+        }
+        _ => w.push_fixup(word, v.expr, imm16_fixup(v.mods), v.span),
     }
     Some(())
+}
+
+/// Whether an operator names a place a thread's block, which the layout
+/// pass refuses a number for with a message of its own.
+fn is_thread_local(m: RelocMod) -> bool {
+    matches!(
+        m,
+        RelocMod::TlsGd
+            | RelocMod::TlsLdm
+            | RelocMod::DtprelHi
+            | RelocMod::DtprelLo
+            | RelocMod::Gottprel
+            | RelocMod::TprelHi
+            | RelocMod::TprelLo
+    )
 }
 
 /// Places a memory operand's displacement, which defaults to zero.
@@ -433,9 +574,36 @@ impl Args<'_> {
         }
     }
 
+    /// A branch or jump target, which is one of the fields no relocation
+    /// operator fits: both references refuse `beq $4, $5, %got(x)` and
+    /// `j %got(x)`, since neither a GOT slot nor half an address is a place
+    /// to jump to.
+    pub fn target(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<Imm> {
+        let v = self.imm(cx, i)?;
+        self.plain(cx, v, "a branch or jump target")?;
+        Some(v)
+    }
+
+    /// Requires an immediate with no relocation operator on it.
+    fn plain(&self, cx: &mut AsmCtx<'_>, v: Imm, what: &str) -> Option<()> {
+        if v.mods.is_empty() {
+            return Some(());
+        }
+        cx.error(
+            v.span,
+            format!(
+                "`{}` takes no relocation operator on {what}, so `{}` has nowhere to go",
+                self.mnemonic,
+                v.mods.written()
+            ),
+        );
+        None
+    }
+
     /// A constant in `0..=max`, for shift amounts and trap codes.
     pub fn small_const(&self, cx: &mut AsmCtx<'_>, i: usize, max: u32, what: &str) -> Option<u32> {
         let v = self.imm(cx, i)?;
+        self.plain(cx, v, what)?;
         let Some(n) = cx.constant(v.expr) else {
             cx.error(v.span, format!("{what} must be a constant"));
             return None;
@@ -579,7 +747,7 @@ pub fn encode(
         Form::RsRtOff => {
             a.arity(cx, 3)?;
             let (s, t) = (a.gpr(cx, 0)?, a.gpr(cx, 1)?);
-            let target = a.imm(cx, 2)?;
+            let target = a.target(cx, 2)?;
             w.push_fixup(
                 base | rs(s.num) | rt(t.num),
                 target.expr,
@@ -606,13 +774,13 @@ pub fn encode(
                 );
                 return None;
             }
-            let target = a.imm(cx, 1)?;
+            let target = a.target(cx, 1)?;
             w.push_fixup(base | rs(s.num), target.expr, branch_fixup(), target.span);
         }
         Form::CcOff => {
             a.arity_between(cx, 1, 2)?;
             let (flag, skip) = a.leading_fcc(cx, a.ops.len() == 2)?;
-            let target = a.imm(cx, skip)?;
+            let target = a.target(cx, skip)?;
             w.push_fixup(
                 base | cc(flag.num),
                 target.expr,
@@ -622,7 +790,7 @@ pub fn encode(
         }
         Form::Off26 => {
             a.arity(cx, 1)?;
-            let target = a.imm(cx, 0)?;
+            let target = a.target(cx, 0)?;
             w.push_fixup(base, target.expr, jump_fixup(), target.span);
         }
         Form::Nullary => {

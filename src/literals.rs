@@ -201,6 +201,22 @@ impl Assembler {
                 }
                 Request::Literal(lit) => self.literal_pools.entry(self.cur).or_default().push(lit),
                 Request::FlushLiterals => self.flush_literals(span),
+                // The words a directive expands to are code like any other,
+                // so they mark the section as holding instructions; only
+                // the line table is left out, since neither reference
+                // records a row for a directive.
+                Request::Emit { bytes, code } => {
+                    if self.check_nobits(span) {
+                        continue;
+                    }
+                    if code {
+                        self.map_code();
+                        self.cur_section().has_instructions = true;
+                    } else {
+                        self.map_data();
+                    }
+                    self.cur_section().emit_variants(vec![bytes], span);
+                }
                 // The last word on a tag wins, as it does in GNU as, where
                 // each directive overwrites the attribute.
                 Request::Attribute { vendor, tag, value } => {

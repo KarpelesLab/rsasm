@@ -313,3 +313,28 @@ bss:    .space  16
 === refused: a modifier the backend does not know, in data
         .data
         .word   x@foobar
+
+# The data directives that write a thread-local offset, which a `.word`
+# cannot spell since both references refuse an access-model operator in
+# one. `.dtprelword` is R_MIPS_TLS_DTPREL32 (39) and `.tprelword`
+# R_MIPS_TLS_TPREL32 (47), a variable's place within its module's block and
+# its place relative to the thread pointer; `.dtpreldword` is the
+# doubleword form, DTPREL64 (41). Neither reference aligns any of them, and
+# both make the target `STT_TLS` whatever `.type` said. `.tpreldword`, the
+# fourth of the set, is refused: GNU as 2.47 stops with an internal error
+# on it, so nothing says what its eight bytes hold.
+=== thread-local offsets in data
+        .set    noreorder
+        .data
+        .globl  d
+d:
+        .dtprelword tv
+        .tprelword tv
+        .dtpreldword tv
+        .byte   1
+        .dtprelword tloc
+        .tprelword tloc
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .word   0x11223344
+tloc:   .word   0x55667788

@@ -11,7 +11,7 @@
 //! llvm-mc do.
 
 use super::encode::{Args, Words, branch_fixup, imm, place_imm16, rd, rs, rt};
-use super::operand::{Imm, RelocMod};
+use super::operand::{Imm, RelocMod, RelocMods};
 use super::reg::{self, Reg};
 use crate::arch::{AsmCtx, Endian};
 use crate::section::Variant;
@@ -128,19 +128,31 @@ pub fn expand(
                 // An address that is already a number is just a constant.
                 load_constant(cx, &mut w, d, v, narrow)?;
             } else {
-                if v.modifier != RelocMod::None {
+                if !v.mods.is_empty() {
                     cx.error(
                         v.span,
                         "`la` already splits its operand into %hi and %lo halves",
                     );
                     return None;
                 }
+                // Under `.abicalls` GNU as reaches a symbol through the GOT
+                // instead, in a sequence that differs by ABI and by whether
+                // the symbol is local; rsasm expands none of it.
+                if cx.state.features & super::FEATURE_PIC != 0 {
+                    cx.error(
+                        v.span,
+                        "`la` of a symbol in position-independent code loads a GOT \
+                         entry, which rsasm does not expand; write the `lw` with \
+                         `%got` or `%got_disp` yourself",
+                    );
+                    return None;
+                }
                 let hi = Imm {
-                    modifier: RelocMod::Hi,
+                    mods: RelocMods::one(RelocMod::Hi),
                     ..v
                 };
                 let lo = Imm {
-                    modifier: RelocMod::Lo,
+                    mods: RelocMods::one(RelocMod::Lo),
                     ..v
                 };
                 place_imm16(cx, &mut w, LUI | rt(d.num), hi, "address")?;
@@ -152,7 +164,7 @@ pub fn expand(
         // always-true `bgezal $zero`, which is why it links.
         "b" | "bal" => {
             a.arity(cx, 1)?;
-            let target = a.imm(cx, 0)?;
+            let target = a.target(cx, 0)?;
             let word = if name == "b" { BEQ } else { BGEZAL };
             // `beq $zero, $zero` and `bgezal $zero` both name it.
             super::abi::mark_zero(cx.state);
@@ -164,7 +176,7 @@ pub fn expand(
         "beqz" | "bnez" | "beqzl" | "bnezl" => {
             a.arity(cx, 2)?;
             let s = a.gpr(cx, 0)?;
-            let target = a.imm(cx, 1)?;
+            let target = a.target(cx, 1)?;
             let word = match name {
                 "beqz" => BEQ,
                 "bnez" => BNE,
@@ -179,7 +191,7 @@ pub fn expand(
         "bge" | "bgt" | "ble" | "blt" | "bgeu" | "bgtu" | "bleu" | "bltu" => {
             a.arity(cx, 3)?;
             let (x, y) = (a.gpr_unused(cx, 0)?, a.gpr_unused(cx, 1)?);
-            let target = a.imm(cx, 2)?;
+            let target = a.target(cx, 2)?;
             ordered_branch(cx, &mut w, name, x, y, target);
         }
 
@@ -196,6 +208,18 @@ pub fn expand(
 /// take two instructions. Note the *signed 32-bit* reading: `li $a0,
 /// 0xffffffff` is `addiu $a0, $zero, -1`, not a two-instruction sequence.
 fn load_constant(cx: &mut AsmCtx<'_>, w: &mut Words, dest: Reg, v: Imm, narrow: u32) -> Option<()> {
+    // The whole value goes in, so there is no field for a relocation
+    // operator to name part of.
+    if !v.mods.is_empty() {
+        cx.error(
+            v.span,
+            format!(
+                "a whole register is loaded here, so `{}` has nowhere to go",
+                v.mods.written()
+            ),
+        );
+        return None;
+    }
     let Some(n) = cx.constant(v.expr) else {
         cx.error(
             v.span,

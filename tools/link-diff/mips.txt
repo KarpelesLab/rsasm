@@ -160,17 +160,16 @@ reader:
         jr      $31
         nop
 
-# Thread-local storage. Only the two models that need no GOT are linked
-# here: the link script this harness writes places no `.got` and defines no
-# `_gp`, so GNU ld reports every `%tlsgd`, `%tlsldm` and `%gottprel` as
-# "relocation truncated to fit" -- the offset is measured from a `_gp` that
-# is zero. Whole objects for those three are compared in
-# `tools/mc-diff/mips-relocs.txt` instead.
+# Thread-local storage, both the models that need no GOT and the three that
+# read one through `$gp`. The GOT-based ones need the `_gp` this harness's
+# script now defines: without it GNU ld reports every `%tlsgd`, `%tlsldm`
+# and `%gottprel` as "relocation truncated to fit", the offset being
+# measured from a `_gp` that is zero.
 #
-# `.tbss` is left out for the same kind of reason: this script lays the
-# NOBITS sections out in the order the objects name them, which puts `.bss`
-# between `.tdata` and `.tbss`, and the MIPS linker refuses a thread-local
-# segment with a non-thread-local section inside it.
+# `.tbss` is left out: this script lays the NOBITS sections out in the
+# order the objects name them, which puts `.bss` between `.tdata` and
+# `.tbss`, and the MIPS linker refuses a thread-local segment with a
+# non-thread-local section inside it.
 #
 # No operand here carries an addend: llvm-mc, the reference for MIPS,
 # drops the addend of a thread-local relocation, and under `REL` there is
@@ -222,5 +221,103 @@ helper:
         nop
         .data
         .word   0x99aabbcc
+        .bss
+        .space  8
+
+# Position-independent code, which is what `_gp` in this harness's link
+# script is for: GNU ld's MIPS backend looks the symbol up itself to resolve
+# a GP-relative or GOT relocation, and without it every one of them is
+# "truncated to fit". The link puts a GOT entry behind each `%got` and
+# `%call16`, so the image shows the `$gp`-relative offsets the linker chose
+# and the entries themselves, which is what these relocations are for.
+#
+# The `$gp` setup directives are not here: llvm-mc, the reference for
+# MIPS, expands them only with `-position-independent`, which this harness
+# does not pass, so its objects would hold nothing where rsasm's hold the
+# prologue. `tools/mc-diff/mips-pic-relocs.txt` compares those with the
+# flag.
+=== position-independent calls and data through the GOT
+--- a.s
+        .abicalls
+        .text
+        .set    noreorder
+        .globl  _start
+        .type   _start, @function
+_start:
+        lw      $25, %call16(helper)($gp)
+        nop
+        jalr    $25
+        nop
+        lw      $4, %got(gdata)($gp)
+        nop
+        lw      $5, %got(hidden)($gp)
+        nop
+        lw      $6, %got(loc)($gp)
+        addiu   $6, $6, %lo(loc)
+        lw      $7, %gp_rel(sdat)($gp)
+        lui     $8, %got_hi(gdata)
+        addu    $8, $8, $gp
+        lw      $8, %got_lo(gdata)($8)
+        jr      $31
+        nop
+        .data
+        .globl  gdata
+gdata:  .word   0x11223344
+loc:    .word   0x55667788
+        .section .sdata,"aw",@progbits
+        .globl  sdat
+sdat:   .word   0x99aabbcc
+        .bss
+        .space  4
+--- b.s
+        .abicalls
+        .text
+        .set    noreorder
+        .globl  helper
+        .hidden hidden
+        .globl  hidden
+        .type   helper, @function
+helper:
+        lw      $25, %call16(_start)($gp)
+        nop
+        lw      $4, %got(gdata)($gp)
+        nop
+        jr      $31
+        nop
+        .data
+hidden: .word   0x0f0f0f0f
+        .bss
+        .space  8
+
+=== thread-local variables reached through the GOT
+--- a.s
+        .abicalls
+        .text
+        .set    noreorder
+        .globl  _start
+_start:
+        addiu   $4, $gp, %tlsgd(tv)
+        addiu   $5, $gp, %tlsldm(tv)
+        lw      $6, %gottprel(tv)($gp)
+        jr      $31
+        nop
+        .data
+        .word   1
+        .bss
+        .space  4
+        .section .tdata,"awT",@progbits
+        .globl  tv
+tv:     .word   0x55667788
+--- b.s
+        .abicalls
+        .text
+        .set    noreorder
+        .globl  helper
+helper:
+        lw      $6, %gottprel(tv)($gp)
+        jr      $31
+        nop
+        .data
+        .word   2
         .bss
         .space  8
