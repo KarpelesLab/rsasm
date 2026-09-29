@@ -144,6 +144,7 @@ impl Architecture for Sparc {
         ModifierSymbols {
             needs: matches!(op.name, "tgd_call" | "tldm_call").then_some(operand::TLS_GET_ADDR),
             tls: true,
+            ..ModifierSymbols::default()
         }
     }
 

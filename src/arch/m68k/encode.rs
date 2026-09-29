@@ -474,6 +474,16 @@ pub fn ea(cx: &mut AsmCtx<'_>, op: &Operand, ecx: EaCtx) -> Option<Vec<Alt>> {
 }
 
 fn absolute(cx: &mut AsmCtx<'_>, v: &Value) -> Option<Alt> {
+    // There is no byte-sized absolute address: the two modes are `abs.W` and
+    // `abs.L`, and GNU as calls the size unsupported rather than widening it
+    // the way a displacement widens.
+    if v.width == Some(Width::B) {
+        cx.error(
+            v.span,
+            "an absolute address has no byte form; write `:w` or `:l`",
+        );
+        return None;
+    }
     match cx.constant(v.e) {
         Some(n) => {
             let short = match v.width {
@@ -487,7 +497,8 @@ fn absolute(cx: &mut AsmCtx<'_>, v: &Value) -> Option<Alt> {
                     }
                     true
                 }
-                Some(Width::L) => false,
+                // A byte is already refused above.
+                Some(Width::L | Width::B) => false,
                 None => fits_abs_w(n),
             };
             if !short && !fits_32(n) {
@@ -634,19 +645,28 @@ fn indexed(
                     Some(ix) => brief(0o60 | reg as u16, ix, 0),
                 }]);
             };
+            // A byte displacement lives in the low eight bits of a brief
+            // extension word, and so needs the index register that shares
+            // that word; see `no_brief_word`.
+            if v.width == Some(Width::B)
+                && let Some(ix) = index
+            {
+                return Some(vec![byte_brief(cx, 0o60 | reg as u16, ix, v)]);
+            }
             let constant = cx.constant(v.e);
             // Forms in order of preference, each allowed only if the value
-            // fits and the CPU has it.
+            // fits and the CPU has it. A byte reaching here has no index
+            // register, so it is the word `d(An)` already is.
             let long = match (v.width, constant) {
                 (Some(Width::L), _) => true,
-                (Some(Width::W), Some(n)) => {
+                (Some(Width::W | Width::B), Some(n)) => {
                     if !fits_i16(n) {
                         cx.error(v.span, format!("displacement {n} does not fit in a word"));
                         return None;
                     }
                     false
                 }
-                (Some(Width::W), None) => false,
+                (Some(Width::W | Width::B), None) => false,
                 (None, Some(n)) => match index {
                     None if n == 0 => return Some(vec![Alt::field(2, reg)]),
                     Some(ix) if fits_i8(n) => {
@@ -727,6 +747,7 @@ fn indexed(
 
 /// A 16-bit displacement or a 32-bit base displacement, for the no-base form.
 fn sized_disp(cx: &mut AsmCtx<'_>, v: &Value, indexed: bool) -> Option<Field> {
+    no_brief_word(cx, v);
     let long = match (v.width, cx.constant(v.e)) {
         (Some(w), _) => w == Width::L,
         (None, Some(n)) => !fits_i16(n),
@@ -751,6 +772,49 @@ fn brief(field: u16, ix: &Index, disp: i64) -> Alt {
         field,
         bytes: ext.to_be_bytes().to_vec(),
         fixups: vec![],
+    }
+}
+
+/// A brief extension word whose displacement was written `:b`, whether or not
+/// the value is known yet.
+///
+/// The size was asked for, so nothing wider is considered and a constant that
+/// does not fit is truncated rather than refused: GNU as warns and carries on,
+/// and its `isbyte` takes the whole of -255 to 255, which is every value a
+/// byte can be read as signed or unsigned.
+fn byte_brief(cx: &mut AsmCtx<'_>, field: u16, ix: &Index, v: &Value) -> Alt {
+    let Some(n) = cx.constant(v.e) else {
+        let mut alt = brief(field, ix, 0);
+        let mut k = abs_kind(1);
+        k.signed = true;
+        alt.fixups.push(fixup(1, v.e, k, v.span));
+        return alt;
+    };
+    if !(-255..=255).contains(&n) {
+        cx.diags
+            .warning(v.span, format!("displacement {n} does not fit in a byte"));
+    }
+    brief(field, ix, n)
+}
+
+/// GNU as's `:b not permitted; defaulting to :w`.
+///
+/// The only field a byte displacement fits in is the low eight bits of a brief
+/// extension word, and that word holds nothing else: no wide displacement, no
+/// outer displacement and no suppressed base register. An operand that needs a
+/// full extension word for any of those reasons has nowhere to put a byte, so
+/// GNU as warns and assembles a word, which leaves the program the source
+/// asked for apart from the width of one field.
+///
+/// A plain `d(An)` or `d(PC)` is the one place it says nothing: the word it
+/// would widen to is the mode that operand already has.
+fn no_brief_word(cx: &mut AsmCtx<'_>, v: &Value) {
+    if v.width == Some(Width::B) {
+        cx.diags.warning(
+            v.span,
+            "this operand needs a full extension word, which has no byte displacement; \
+             `:b` is assembled as `:w`",
+        );
     }
 }
 
@@ -786,6 +850,10 @@ fn pc_relative(
     if !pc_is_target(cx, v) {
         let n = cx.constant(v.e).unwrap_or(0);
         return match index {
+            // A byte displacement is the brief extension word's, and with no
+            // index register there is no brief extension word; see
+            // `no_brief_word`.
+            Some(ix) if v.width == Some(Width::B) => Some(vec![byte_brief(cx, 0o73, ix, v)]),
             None if fits_i16(n) && v.width != Some(Width::L) => Some(vec![Alt {
                 field: 0o72,
                 ..word_disp(0, n)
@@ -821,13 +889,25 @@ fn pc_relative(
 
     let mut alts = Vec::new();
     match (index, v.width) {
-        (None, Some(Width::W)) => alts.push(word()),
+        // A byte displacement is the brief extension word's alone, and with an
+        // index register that word is already what `d(PC,Xn)` uses; with none,
+        // it widens to the word `d(PC)` has; see `no_brief_word`.
+        (Some(ix), Some(Width::B)) => alts.push(brief_pc(ix)),
+        (None, Some(Width::W | Width::B)) => alts.push(word()),
         (Some(_), Some(Width::W)) => {
             need_020(cx, cpu, span, "a 16-bit indexed PC displacement")?;
             alts.push(wide(cx, false));
         }
         (_, Some(Width::L)) => {
             need_020(cx, cpu, span, "a 32-bit PC displacement")?;
+            alts.push(wide(cx, true));
+        }
+        // A suffix on a PC-relative operand and no size to go with it is the
+        // one place GNU as picks a width without weighing the alternatives:
+        // the 32-bit base displacement, whether or not the symbol is one it
+        // could reach from here, so that `move.l near@PLT(%pc),%d0` is the
+        // same instruction wherever `near` is.
+        (_, None) if cpu.wide() && cx.find_modifier_for(v.e).is_some() => {
             alts.push(wide(cx, true));
         }
         (None, None) => {
@@ -862,6 +942,7 @@ fn mem_indirect(
         let Some(v) = v else {
             return Field::Null;
         };
+        no_brief_word(cx, v);
         let target = pc && pc_is_target(cx, v);
         let long = match (v.width, cx.constant(v.e)) {
             (Some(w), _) => w == Width::L,

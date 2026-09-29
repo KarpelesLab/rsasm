@@ -413,37 +413,51 @@ impl Architecture for M68k {
         true
     }
 
-    /// What a data directive takes. `m68k_elf_cons` reads one suffix,
-    /// `@TLSLDO`, and refuses a relocation wider than the value, so the
-    /// four-byte `R_68K_TLS_LDO32` fits only a `.long`. The other four models
-    /// are the operand parser's alone and have no spelling here at all.
+    /// Only `.long` reads a suffix in data, since only `.long` is the
+    /// directive m68k's GNU as points at its own `m68k_elf_cons`; `.int`,
+    /// `.4byte` and every `.dc.l` stay with the plain `cons`, which calls the
+    /// `@` junk after the expression.
+    fn directive_modifiers(&self) -> Option<&'static [&'static str]> {
+        Some(&[".long"])
+    }
+
+    /// What `.long` takes. `m68k_elf_cons` reads one suffix, `@TLSLDO`, and
+    /// refuses a relocation wider than the value, so the four-byte
+    /// `R_68K_TLS_LDO32` fits only a four-byte field. The other eight
+    /// suffixes are the operand parser's alone and have no spelling here at
+    /// all.
     fn modifier_reloc(&self, name: &str, size: u8, _pcrel: bool) -> Option<u32> {
         (name == "tlsldo" && size == 4).then_some(reloc::R_68K_TLS_LDO32)
     }
 
-    /// What an instruction operand takes: any of the five models, in whatever
-    /// width the field the operand was encoded into has, which is GNU as's
-    /// `get_reloc_code (n, pcrel, pic_reloc)` over the fixups `md_assemble`
-    /// makes. Anything else is refused, the position-independent suffixes
-    /// included; see [`reloc`].
+    /// What an instruction operand takes: any of the nine suffixes, in
+    /// whatever width the field the operand was encoded into has, which is
+    /// GNU as's `get_reloc_code (n, pcrel, pic_reloc)` over the fixups
+    /// `md_assemble` makes. Anything else is refused; see [`reloc`].
     fn fixup_modifier_reloc(
         &self,
         name: &str,
         kind: &crate::section::FixupKind,
     ) -> crate::arch::FixupModifier {
-        match reloc::tls(name, kind.size) {
+        match reloc::suffix(name, kind.size) {
             Some(r) => crate::arch::FixupModifier::Reloc(r),
             None => crate::arch::FixupModifier::Unknown,
         }
     }
 
-    /// A thread-local model names a variable, which GNU as marks `STT_TLS`
-    /// and relocates by name. None of them needs a symbol of its own: the
-    /// m68k psABI reaches the GOT through a register the code already holds,
-    /// so nothing here implies `_GLOBAL_OFFSET_TABLE_`.
+    /// A thread-local model names a variable, which GNU as marks `STT_TLS`.
+    /// None of the nine suffixes needs a symbol of its own: the m68k psABI
+    /// reaches the GOT through a register the code already holds, so not
+    /// even `@GOT` implies `_GLOBAL_OFFSET_TABLE_`, and an object GNU as
+    /// writes for one has no such symbol.
     fn modifier_symbols(&self, name: &str) -> crate::arch::ModifierSymbols {
         crate::arch::ModifierSymbols {
             tls: reloc::is_tls(name),
+            // What each of them asks for belongs to one symbol -- a GOT
+            // slot, a PLT entry, a thread-local offset -- so the relocation
+            // names it, where this backend relocates everything else against
+            // its section. GNU as keeps even a plain local label for one.
+            names_target: reloc::is_suffix(name),
             ..crate::arch::ModifierSymbols::default()
         }
     }

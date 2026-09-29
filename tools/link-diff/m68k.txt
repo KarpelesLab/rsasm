@@ -193,3 +193,46 @@ tv3:    .long   3
         .section .tbss,"awT",@nobits
         .globl  tb
 tb:     .space  16
+
+# The position-independent suffixes, resolved by a static link. `%a5` holds
+# the GOT pointer the psABI asks for, which the linker defines as
+# `_GLOBAL_OFFSET_TABLE_`; `@GOT` then reads a slot of it, and `@GOTPC`
+# reaches the same slot from the PC. `@PLTPC` on a branch resolves to the
+# target, there being no dynamic linker to route it through a stub. Which
+# slot of the GOT each symbol gets is the order the linker meets the
+# relocations in, so the GOT pointer is loaded with an immediate: GNU as
+# writes the fixup of a relaxable `lea` after every other one in the object,
+# and a `lea` of the table would move both slots.
+#
+# `@PLT` is left out: GNU ld 2.47 fails a BFD assertion on `R_68K_PLTOFF32`
+# in a static link, so there is no reference for it. So is a GOT slot for a
+# local label, whose place among the global ones the m68k linker works out
+# from the symbol's index within its object, which the section symbols GNU
+# as writes and rsasm does not move; `tools/xas-diff/m68k-relocs.txt` has
+# that relocation, where the two objects agree exactly.
+=== position-independent references across objects
+--- a.s
+        .text
+        .globl  _start
+        .type   _start, @function
+_start:
+        move.l  #_GLOBAL_OFFSET_TABLE_,%a5
+        move.l  gdata@GOT(%a5),%a0
+        move.l  (%a0),%d0
+        move.l  gdata@GOTPC(%pc),%d1
+        move.l  other@GOT(%a5),%a1
+        bsr.w   helper@PLTPC
+        bra.w   helper@PLTPC
+        rts
+--- b.s
+        .text
+        .globl  helper
+        .type   helper, @function
+helper:
+        move.l  gdata@GOT(%a5),%d0
+        rts
+        .data
+        .globl  gdata, other
+        .type   gdata, @object
+gdata:  .long   0x11223344
+other:  .long   0x55667788

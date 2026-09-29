@@ -255,6 +255,29 @@ movew (%d1),%d0
 movew %d0,(%d1.w*2)
 movew %a0@(0x12345),%d0
 
+# ---- a `:b` displacement, and the widths it is read as ----
+# `:s` is the other spelling, as it is on a branch. The byte lives in the low
+# eight bits of a brief extension word, so an operand with an index register
+# keeps it; one without widens to the word its mode already has, and one that
+# needs a full extension word — a suppressed or data-register base, or a
+# memory-indirect operand — widens with a warning from both assemblers.
+movel 8:b(%a0,%d1.w),%d0
+movel 8:s(%a0,%d1.w),%d0
+movel 8:b(%a0,%d1.l*4),%d0
+movel -128:b(%a0,%d1.w),%d0
+movel 255:b(%a0,%d1.w),%d0
+movel 8:b(%a0),%d0
+movel 0:b(%a0),%d0
+movel 8:s(%a0),%d0
+movel 8:b(%pc,%d1.w),%d0
+movel 8:s(%pc),%d0
+movel (8:b,%a0,%d1.w),%d0
+movel (8:b,%a0),%d0
+movel %a0@(8:b,%d1:w),%d0
+movel 8:b(%d1),%d0
+movel ([8:b,%a0,%d1.w]),%d0
+movel ([8:b,%a0],%d1.w,4:b),%d0
+
 # ---- the 68881, the 68851 and the rest of the 68020 set ----
 # (every form of GNU's table is also in m68k-020.txt and its siblings;
 # these are the readable spellings.) GNU as writes extended and packed

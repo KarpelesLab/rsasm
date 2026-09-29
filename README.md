@@ -66,7 +66,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 854 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 344 |
-| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3764 |
+| m68k: 68000–68060, CPU32, 68881/68882, 68851, ColdFire, GNU and Motorola syntax | `m68k` `68000` … `68060` `cpu32` `5475` … | GNU as, vasm | 3791 |
 | SuperH SH-1 to SH-4A, both endians | `sh` `shl` | GNU as | 1285 |
 | Renesas RX (RXv1), GNU and CC-RX syntax | `rx` | GNU as | 647 |
 | Renesas RL78, GNU and CC-RL syntax | `rl78` | GNU as | 531 |
@@ -245,7 +245,15 @@ form by form and in random whole programs as well.
   immediates in every size (`#1.5` in Motorola source, `#0r1.5` in GNU's), the
   68851 and on-chip MMUs, `cas2`, `callm`, `move16`, CPU32 and ColdFire,
   chosen by GNU as's CPU names (`-a 68040`, `.arch 5475`, `.arch 68000,68881`),
-  with what the chosen CPU lacks refused by a message naming what it needs
+  with what the chosen CPU lacks refused by a message naming what it needs;
+  the nine `@` suffixes an operand takes, which are `m68k-parse.h`'s
+  `enum pic_relocation` -- the position-independent `@GOT`, `@PLT`, `@GOTPC`
+  and `@PLTPC` and the thread-local `@TLSGD`, `@TLSLDM`, `@TLSLDO`, `@TLSIE`
+  and `@TLSLE` -- each relocated by the width of the field the operand
+  landed in, and `@TLSLDO` in a `.long`, which is the one data directive GNU
+  as reads a suffix in; and a `:b`, `:s`, `:w` or `:l` displacement size,
+  the byte one going in a brief extension word where the operand has one and
+  widening to a word where it does not
 - AVR as `avr-elf-as` assembles it: each core's own instruction set, chosen
   by family (`avr5`) or by device (`atmega328p`) with `-a` or `.arch`; the
   `lo8()`/`hi8()`/`pm()`/`gs()` modifiers in instructions and data; and
@@ -349,11 +357,7 @@ form by form and in random whole programs as well.
   accepted
 - thread-local storage on the other targets: the symbols and sections are
   right everywhere, and every target with a thread-local model reads the
-  access-model operands. m68k reads its five `@` suffixes in an instruction
-  operand and `@TLSLDO` in data, but takes the data one in any four-byte
-  directive, where GNU as points only `.long` at the `m68k_elf_cons` that
-  reads it and leaves `.int`, `.4byte` and `.dc.l` to the plain `cons`, which
-  calls the `@` junk. SPARC's data operators — `%r_disp32()`, `%r_plt32()`
+  access-model operands. SPARC's data operators — `%r_disp32()`, `%r_plt32()`
   and the thread-local `%r_tls_dtpoff32()`/`%r_tls_dtpoff64()`, which GNU as
   reads in `.word` and `.xword` — are not there either; llvm-mc, which is what the
   SPARC harnesses compare against, has none of them. Mach-O's `@TLVP` and PE's
@@ -395,12 +399,12 @@ form by form and in random whole programs as well.
   (`.fopt id=`); vasm's `MACHINE`, `FPU` and `CHIP` directives (use `.arch`);
   vasm's sized `fbcc.w`, which GNU as does not take either (`fbcc` is 16
   bits, `fbcc.l` 32); CPU32's `tbl*` table lookups, for which no reference
-  here has an encoding; the position-independent operand suffixes, which are
-  refused where the five thread-local ones are read -- for a `%a0`-relative
-  operand GNU as writes `R_68K_GOT32O` for `x@GOT`, `R_68K_PLT32O` for
-  `x@PLT`, `R_68K_PLT32` for `x@PLTPC` and `R_68K_GOT32` for `x@GOTPC`;
-  and a `:b` or `:s` displacement size, which GNU as puts in a brief
-  extension word and widens to a word in a `d(An)`. On ColdFire, an
+  here has an encoding; and a size GNU as reads and throws away, which rsasm
+  refuses: one on an operand whose width the instruction itself settles
+  (`move.l #x:w,%d0`, `bra x:b`), one written in front of a suffix rather
+  than after it (`x:w@GOT`, where `x@GOT:w` is the ordinary spelling), and
+  one wider than the field the CPU has, which on a 68000 is a `:w` or `:l`
+  displacement beside an index register. On ColdFire, an
   instruction as written that the core dropped is refused where GNU as
   substitutes one it kept (`addil #5,%a0@`, which GNU as writes as `addql`),
   since rsasm substitutes nothing
@@ -1143,7 +1147,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,672 of 25,672 match across fifty-seven
+  from checksum-pinned sources. 25,699 of 25,699 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -1163,7 +1167,8 @@ is what hid them from rsasm for as long as it did.
   of an address (`@ha`/`@l`, `%hi`/`%lo`, `:lo12:`, `:abs_g1_nc:`,
   `:lower16:`, `hi()`/`lo()`), literal pools and constant pools loading
   another object's symbols, ARM/Thumb interworking, the GOT and PLT operands
-  where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, ARM's `sym(GOT)`),
+  where the backend has them (`@GOTPCREL`, `@GOT`, `@PLT`, m68k's `@GOTPC`
+  and `@PLTPC`, ARM's `sym(GOT)`),
   the x86, AArch64, PowerPC, RISC-V and SPARC thread-local access models,
   which the linker turns into local exec, ARM's and Thumb's, whose descriptor
   calls it turns into initial exec, the MIPS models that need no GOT
@@ -1176,7 +1181,7 @@ is what hid them from rsasm for as long as it did.
   `R_MSP430_SYM_DIFF` pairs and `.avr.prop` exist for. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 285 of 285 match across
+  addend a COFF relocation keeps in its field. 286 of 286 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global
