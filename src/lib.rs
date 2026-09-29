@@ -14,7 +14,9 @@
 //!
 //! The pipeline is [`lexer`] to a parser to an architecture backend
 //! ([`arch`]), which produces [`section`] fragments that the layout resolves
-//! into bytes and relocations for [`output`].
+//! into bytes and relocations for [`output`]. With the `link` feature there
+//! is one more stage after that, which hands the object to the qld linker
+//! and gets a program back.
 //!
 //! # What is public API
 //!
@@ -46,6 +48,18 @@
 //! * The object writers: [`output::elf::build`], [`output::coff::build`],
 //!   [`output::macho::build`], [`output::raw::build`] and
 //!   [`output::ihex::build`].
+// The `link` bullet names items that only exist behind the feature, so it
+// is written as a conditional doc attribute rather than as `//!` lines: a
+// `cargo doc --no-default-features` would otherwise report links to a
+// module that is not there.
+#![cfg_attr(
+    feature = "link",
+    doc = "* With the `link` feature, which is in the default set:",
+    doc = "  [`link::link`], [`link::supports`], [`link::Options`] with its",
+    doc = "  `with_*` builders, [`link::Kind`] and [`link::Error`]. Without",
+    doc = "  the feature the crate has no dependencies at all and the module",
+    doc = "  does not exist."
+)]
 //! * Diagnostics: [`diag::DiagBag`], [`diag::Diagnostic`],
 //!   [`diag::Severity`] and [`diag::DiagBag::render`], with
 //!   [`source::SourceMap`] and [`source::Span`] as far as rendering needs
@@ -75,6 +89,8 @@ pub(crate) mod expr;
 pub(crate) mod intern;
 pub(crate) mod layout;
 pub mod lexer;
+#[cfg(feature = "link")]
+pub mod link;
 pub(crate) mod literals;
 pub(crate) mod macros;
 pub(crate) mod mapping;
