@@ -230,6 +230,11 @@ btl:    .space  4
 # fits the value: the model's own relocation is the four-byte one, so a
 # `.long` takes it and nothing narrower does. A constant written after the
 # suffix is folded into the addend, which an operand does not allow.
+#
+# `.long` is also the only directive that reaches `m68k_elf_cons`, GNU as's
+# `md_pseudo_table` replacing that one entry and leaving every other
+# spelling of a four-byte directive to the plain `cons`, which calls the `@`
+# junk after the expression.
 === a thread-local offset in data
         .section .tdata,"awT",@progbits
 tl:     .long   1
@@ -240,6 +245,7 @@ tl:     .long   1
         .long   4+tl@TLSLDO
         .long   ext@TLSLDO
         .long   tl@TLSLDO, tl@TLSLDO
+
 === refused: a thread-local model in data other than @TLSLDO
         .section .tbss,"awT",@nobits
 x:      .space  4
@@ -250,6 +256,21 @@ x:      .space  4
 x:      .space  4
         .data
         .word   x@TLSLDO
+=== refused: @TLSLDO in a .int
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .data
+        .int    x@TLSLDO
+=== refused: @TLSLDO in a .4byte
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .data
+        .4byte  x@TLSLDO
+=== refused: @TLSLDO in a .dc.l
+        .section .tbss,"awT",@nobits
+x:      .space  4
+        .data
+        .dc.l   x@TLSLDO
 === refused: a thread-local suffix spelled in lower case
         .section .tbss,"awT",@nobits
 x:      .space  4
@@ -265,6 +286,69 @@ x:      .space  4
 d:      .long   0
         .text
         move.l  d@TLSIE(%a0),%d0
+
+# The other four suffixes of `enum pic_relocation`, which the width of the
+# field picks a relocation for exactly as it does for a thread-local model.
+# `@GOT` and `@PLT` are offsets into the table, which is what an operand
+# relative to the register holding its address needs, and `@GOTPC` and
+# `@PLTPC` are offsets to the entry itself; which of a pair a field takes is
+# the suffix's to say and not the addressing mode's, so `#x@GOTPC` and
+# `jsr x@GOTPC` both take `R_68K_GOT32`. None of them makes GNU as write a
+# `_GLOBAL_OFFSET_TABLE_` of its own: the m68k psABI reaches the table
+# through a register the code already holds.
+=== position-independent suffixes in instruction operands
+        .text
+        .globl  gfn
+        move.l  x@GOT(%a0),%d0
+        move.l  x@PLT(%a0),%d0
+        move.l  x@GOTPC(%a0),%d0
+        move.l  x@PLTPC(%a0),%d0
+        move.l  x@GOT:w(%a0,%d1.w),%d0
+        move.l  x@PLT:w(%a0,%d1.w),%d0
+        move.l  x@GOTPC:w(%a0,%d1.w),%d0
+        move.l  x@PLTPC:w(%a0,%d1.w),%d0
+        move.l  x@GOT:b(%a0,%d1.w),%d0
+        move.l  x@PLT:b(%a0,%d1.w),%d0
+        move.l  x@GOTPC:b(%a0,%d1.w),%d0
+        move.l  x@PLTPC:b(%a0,%d1.w),%d0
+        move.l  #x@GOT,%d0
+        move.w  #x@PLT,%d0
+        move.b  #x@GOTPC,%d0
+        move.l  x@GOT,%d0
+        move.l  gfn@PLT(%pc),%d0
+        move.l  gfn@PLT(%pc,%d1.w),%d0
+        lea     gfn@GOT(%pc),%a0
+        lea     x@GOT(%a5),%a0
+        lea     (gfn@PLT,%a5),%a1
+        jsr     gfn@PLTPC
+        bsr.w   gfn@PLTPC
+        jmp     x@GOTPC
+        move.l  ([x@GOT,%a0],gfn@PLTPC),%d0
+        move.l  loc@GOT(%a5),%d0
+loc:    nop
+gfn:    rts
+
+# A byte displacement needs the brief extension word that an index register
+# shares, so `:b` is what reaches the one-byte relocation of a suffix without
+# going through an immediate. Where there is no brief extension word to be
+# had GNU as widens it: silently to the word a `d(An)` or `d(PC)` already
+# uses, and with a warning where a full extension word is forced.
+=== a byte displacement size on a symbol
+        .text
+        move.l  x:b(%a0,%d1.w),%d0
+        move.l  x:s(%a0,%d1.w),%d0
+        move.l  x.b(%a0,%d1.w),%d0
+        move.l  x:b(%a0,%a1.l*4),%d0
+        move.l  x:b(%a0),%d0
+        move.l  x:b(%pc,%d1.w),%d0
+        move.l  x:b(%pc),%d0
+        move.l  (x:b,%a0,%d1.w),%d0
+        move.l  %a0@(x:b,%d1:w),%d0
+        move.l  ([x:b,%a0],%d1.w),%d0
+        lea     x:s(%a0,%d1.w),%a2
+=== refused: a byte-sized absolute address
+        .text
+        move.l  x:b,%d0
 
 # `.even` is the 680x0 port's `.align 2`, and pads with zeros wherever it
 # stands. The `.dc`, `.dcb` and `.ds` in the same syntax are in
