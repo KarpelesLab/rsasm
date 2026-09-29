@@ -34,7 +34,36 @@ options:
       --list-arch    list the architectures this build supports
       --no-color     do not colorize diagnostics
   -h, --help         show this message
+
+linking (`--link`, x86-64 and AArch64 ELF or PE32+ only):
+      --link         link the object into a runnable program instead of
+                     writing it, and write that to <file>
+  -e, --entry <sym>  entry symbol (default: the target's, `_start`)
+  -l <name>          link against lib<name>; `-l:<file>` names a file in the
+                     search path, which is how `crt1.o` is reached
+  -L <dir>           add <dir> to the library search path
+      --dynamic-linker <path>
+                     record <path> as the program interpreter
+      -shared        link a shared library
+      -pie           link a position-independent executable
 ";
+
+/// What `--link` and the options around it asked for.
+///
+/// The parser accepts them whether or not this build has the `link`
+/// feature, so that a build without it can say so plainly rather than
+/// report an unknown option.
+#[cfg_attr(not(feature = "link"), allow(dead_code))]
+#[derive(Default)]
+struct Link {
+    wanted: bool,
+    entry: Option<String>,
+    libraries: Vec<String>,
+    search_paths: Vec<PathBuf>,
+    dynamic_linker: Option<PathBuf>,
+    shared: bool,
+    pie: bool,
+}
 
 struct Args {
     inputs: Vec<PathBuf>,
@@ -45,6 +74,7 @@ struct Args {
     defines: Vec<(String, String)>,
     hex: bool,
     color: bool,
+    link: Link,
     /// Whether `-d` was given; otherwise the architecture picks.
     dialect_given: bool,
     /// The word size `-f elf32`, `-f elf64`, `-f win32` or `-f win64` named,
@@ -90,6 +120,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         defines: Vec::new(),
         hex: false,
         color: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        link: Link::default(),
         dialect_given: false,
         elf_bits: None,
         format_given: false,
@@ -174,6 +205,21 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                 }
             }
             "--no-color" => a.color = false,
+            "--link" => a.link.wanted = true,
+            "-e" | "--entry" => a.link.entry = Some(next(&mut i, arg)?),
+            "-l" => a.link.libraries.push(next(&mut i, "-l")?),
+            "-L" => a.link.search_paths.push(PathBuf::from(next(&mut i, "-L")?)),
+            "--dynamic-linker" => {
+                a.link.dynamic_linker = Some(PathBuf::from(next(&mut i, arg)?));
+            }
+            "-shared" => a.link.shared = true,
+            "-pie" => a.link.pie = true,
+            _ if arg.starts_with("-l") && arg.len() > 2 => {
+                a.link.libraries.push(arg[2..].to_string());
+            }
+            _ if arg.starts_with("-L") && arg.len() > 2 => {
+                a.link.search_paths.push(PathBuf::from(&arg[2..]));
+            }
             _ if arg.starts_with("-I") && arg.len() > 2 => {
                 let dir = PathBuf::from(&arg[2..]);
                 edit(&mut a.options, |o| o.with_include_path(dir));
@@ -208,6 +254,30 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
     if a.format.is_flat() {
         edit(&mut a.options, |o| o.with_relocatable(false));
     }
+    #[cfg(not(feature = "link"))]
+    if a.link.wanted {
+        return Err(
+            "`--link` needs the `link` cargo feature, which this build of rsasm was made without"
+                .into(),
+        );
+    }
+    if !a.link.wanted
+        && (a.link.entry.is_some()
+            || !a.link.libraries.is_empty()
+            || !a.link.search_paths.is_empty()
+            || a.link.dynamic_linker.is_some()
+            || a.link.shared
+            || a.link.pie)
+    {
+        return Err(
+            "`-e`, `-l`, `-L`, `--dynamic-linker`, `-shared` and `-pie` describe a link, \
+             which only `--link` asks for"
+                .into(),
+        );
+    }
+    if a.link.shared && a.link.pie {
+        return Err("`-shared` and `-pie` ask for different kinds of output".into());
+    }
     Ok(Some(a))
 }
 
@@ -240,6 +310,18 @@ fn run(args: Args) -> Result<ExitCode, String> {
         .or_else(arch::default_arch)
         .ok_or_else(|| "this build has no architecture backends enabled".to_string())?,
     };
+
+    // Refuse a link rsasm cannot hand to qld before assembling anything, so
+    // that the answer does not arrive after the work.
+    #[cfg(feature = "link")]
+    if args.link.wanted && !rsasm::link::supports(args.format, arch.elf_machine()) {
+        return Err(format!(
+            "`--link` cannot make a program out of {} output for {}; \
+             qld links ELF and PE32+ objects for x86-64 and AArch64",
+            format_name(args.format),
+            arch.name()
+        ));
+    }
 
     let mut options = args.options.clone().with_format(args.format);
     if !args.dialect_given {
@@ -279,7 +361,8 @@ fn run(args: Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::FAILURE);
     }
 
-    let bytes = match args.format {
+    #[allow(unused_mut)]
+    let mut bytes = match args.format {
         Format::Elf => output::elf::build(&asm).map_err(|e| e.to_string())?,
         Format::Coff => output::coff::build(&asm).map_err(|e| e.to_string())?,
         Format::MachO => output::macho::build(&asm).map_err(|e| e.to_string())?,
@@ -289,6 +372,13 @@ fn run(args: Args) -> Result<ExitCode, String> {
         // know about needs an arm; `--format` cannot name one.
         _ => return Err(format!("no writer for {:?} output", args.format)),
     };
+
+    // The object goes straight into the linker, so nothing is written
+    // between the two steps; what `-o` names is the program.
+    #[cfg(feature = "link")]
+    if args.link.wanted {
+        bytes = link_image(&args, &asm, bytes)?;
+    }
 
     // Intel HEX is already text; `--hex` prints it as it is.
     if args.hex && args.format == Format::IntelHex {
@@ -311,5 +401,77 @@ fn run(args: Args) -> Result<ExitCode, String> {
 
     std::fs::write(&args.output, &bytes)
         .map_err(|e| format!("cannot write `{}`: {e}", args.output.display()))?;
+    // A program nobody may execute is not much of a program.
+    #[cfg(all(unix, feature = "link"))]
+    if args.link.wanted {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&args.output, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("cannot make `{}` executable: {e}", args.output.display()))?;
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The `-f` name of a format, for a diagnostic to quote.
+#[cfg(feature = "link")]
+fn format_name(format: Format) -> &'static str {
+    match format {
+        Format::Elf => "elf",
+        Format::Coff => "coff",
+        Format::MachO => "macho",
+        Format::Binary => "bin",
+        Format::IntelHex => "ihex",
+        _ => "this",
+    }
+}
+
+/// Links the assembled object into a program and returns its bytes.
+///
+/// Whatever qld reports along the way is rendered here, in rsasm's own
+/// style, before the failure is handed back; a link that fails is an
+/// ordinary error with a non-zero exit, as a refused instruction is.
+#[cfg(feature = "link")]
+fn link_image(args: &Args, asm: &Assembler, object: Vec<u8>) -> Result<Vec<u8>, String> {
+    use rsasm::diag::DiagBag;
+    use rsasm::link::{self, Kind};
+
+    let kind = if args.link.shared {
+        Kind::Shared
+    } else if args.link.pie {
+        Kind::Pie
+    } else if args.link.dynamic_linker.is_some() {
+        Kind::Executable
+    } else {
+        Kind::StaticExecutable
+    };
+    let mut options = link::Options::new()
+        .with_kind(kind)
+        .with_target(args.format, asm.target().elf_machine());
+    if let Some(entry) = &args.link.entry {
+        options = options.with_entry(entry);
+    }
+    if let Some(path) = &args.link.dynamic_linker {
+        options = options.with_dynamic_linker(path);
+    }
+    for dir in &args.link.search_paths {
+        options = options.with_search_path(dir);
+    }
+    for library in &args.link.libraries {
+        options = options.with_library(library);
+    }
+
+    // The object exists only in memory, so it is named after the first
+    // source: that is the file it would otherwise have been written to, and
+    // the name a diagnostic about it should use.
+    let name = args.inputs.first().and_then(|p| p.file_stem()).map_or_else(
+        || "a.o".to_string(),
+        |s| format!("{}.o", s.to_string_lossy()),
+    );
+
+    let mut diags = DiagBag::new();
+    let image = link::link(vec![(name, object)], &options, &mut diags);
+    let rendered = diags.render(asm.source_map(), args.color);
+    if !rendered.is_empty() {
+        eprint!("{rendered}");
+    }
+    image.map_err(|e| format!("link failed: {e}"))
 }

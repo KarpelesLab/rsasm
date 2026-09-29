@@ -78,15 +78,40 @@ jobs:
       - name: Clippy with no backends
         run: cargo clippy --all-targets --no-default-features -- -D warnings
 
-      # Each backend on its own, so no feature can come to depend on another
-      # being enabled alongside it. The list is read out of Cargo.toml rather
-      # than repeated here, so adding a backend cannot silently skip this.
-      - name: Build and test each backend alone
+      # `link` is the only feature with a dependency behind it, so with it off
+      # the crate must have none at all. That is a property of rsasm worth
+      # keeping, and the only way to keep it is to check it.
+      - name: No dependencies without the `link` feature
+        run: |
+          set -euo pipefail
+          deps=$(cargo tree --no-default-features --prefix none | tail -n +2 | sort -u)
+          if [ -n "$deps" ]; then
+            echo "::error::--no-default-features pulled in: $(echo $deps)"
+            exit 1
+          fi
+
+      # Both halves of the pair a library consumer may ask for: everything
+      # rsasm assembles with the linker behind it, which the `test` job covers
+      # as --all-features, and everything it assembles without.
+      - name: Build and test every backend with no linker
+        run: |
+          set -euo pipefail
+          backends=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].features | keys[] | select(. != "default" and . != "link")' \
+            | paste -sd,)
+          echo "backends: $backends"
+          cargo build --no-default-features --features "$backends"
+          cargo test --no-default-features --features "$backends"
+
+      # Each feature on its own, so none can come to depend on another being
+      # enabled alongside it. The list is read out of Cargo.toml rather than
+      # repeated here, so adding a backend cannot silently skip this.
+      - name: Build and test each feature alone
         run: |
           set -euo pipefail
           features=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[0].features | keys[] | select(. != "default")')
-          echo "backends: $(echo $features)"
+          echo "features: $(echo $features)"
           for f in $features; do
             echo "::group::$f"
             cargo build --no-default-features --features "$f"
@@ -521,6 +546,28 @@ jobs:
           readelf -hSsr hello.o
           ld -o hello hello.o
           test "$(./hello)" = "Hello from rsasm!"
+
+      # The same program again, linked by qld inside rsasm rather than by GNU
+      # ld afterwards: `--link` writes a program, not an object, and it has to
+      # be a program the kernel will run.
+      - name: Assemble, link in process and run
+        run: |
+          set -euxo pipefail
+          ./target/release/rsasm --link -o hello-qld examples/hello.s
+          readelf -hl hello-qld
+          test "$(./hello-qld)" = "Hello from rsasm!"
+
+      # And what it refuses: an architecture qld does not link has to say so
+      # rather than write something unrunnable.
+      - name: A link qld cannot do is refused
+        run: |
+          set -uo pipefail
+          ./target/release/rsasm --link -a riscv64 -o never examples/hello.s \
+            > refused.log 2>&1 && { echo "::error::--link accepted riscv64"; exit 1; }
+          cat refused.log
+          grep -q "x86-64 and AArch64" refused.log \
+            || { echo "::error::the refusal did not say what qld links"; exit 1; }
+          test ! -e never
 
       - name: Flat binary output
         run: ./target/release/rsasm -f bin -o hello.bin examples/hello.s && test -s hello.bin

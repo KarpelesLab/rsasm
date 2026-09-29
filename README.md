@@ -29,6 +29,9 @@ _start:
 
 $ rsasm -o hello.o hello.s && ld -o hello hello.o && ./hello
 Hello from rsasm!
+
+$ rsasm --link -o hello hello.s && ./hello   # or link it without leaving rsasm
+Hello from rsasm!
 ```
 
 ## Install
@@ -549,11 +552,24 @@ rsasm [options] <input.s>...
       --gdwarf-<n>   the same, as DWARF version <n> (2 to 5); the version
                      also applies to `.loc` source
       --list-arch    list the architectures this build supports
+
+linking (`--link`, x86-64 and AArch64 ELF or PE32+ only):
+      --link         link the object into a runnable program instead of
+                     writing it, and write that to <file>
+  -e, --entry <sym>  entry symbol (default: the target's, `_start`)
+  -l <name>          link against lib<name>; `-l:<file>` names a file in the
+                     search path, which is how `crt1.o` is reached
+  -L <dir>           add <dir> to the library search path
+      --dynamic-linker <path>
+                     record <path> as the program interpreter
+      -shared        link a shared library
+      -pie           link a position-independent executable
 ```
 
 Architectures are cargo features, all on by default — `x86`, `aarch64`, `arm`,
 `riscv`, `powerpc`, `mips`, `sparc`, `retro` (the Z80, 6502, 8080 and 8051),
-`m68k`, `superh`, `rx`, `rl78`, `v850`, `k78`, `avr` and `msp430`:
+`m68k`, `superh`, `rx`, `rl78`, `v850`, `k78`, `avr` and `msp430` — and so is
+`link`, described under "Linking" below:
 
 ```console
 $ cargo build --no-default-features --features x86,aarch64
@@ -584,7 +600,8 @@ if !asm.finish() || asm.diags().has_errors() {
 Only a small part of the crate is API: `Assembler` and the methods that drive
 it, `Options` and its `with_*` builders, `output::Format` and the writers'
 `build`, `arch::lookup` with the `Architecture` trait, `section::SectionId`,
-the diagnostics types and `lexer::Dialect`. Everything else — the opcode
+the diagnostics types, `lexer::Dialect`, and — with the `link` feature —
+`link::link` and what it takes. Everything else — the opcode
 tables, the operand parsers, the expression arena, the macro engine, the
 layout — is an implementation detail and is not documented on docs.rs; see
 "What is public API" there for the exact list. `Options` and the other types
@@ -1124,6 +1141,62 @@ Three differences remain, and the corpora leave them out:
 - A reference through the GOT on arm64 to a label some way into its atom is
   refused, since a GOT relocation has no addend; llvm-mc accepts it,
   relocating against the atom and writing the offset into the instruction.
+
+## Linking
+
+An object file is not a program: its addresses are not final, and nothing in
+it has resolved a reference from one file to another. `--link` finishes the
+job in the same process, through [qld](https://github.com/KarpelesLab/qld), a
+linker written in Rust, so that what `-o` names is something that runs:
+
+```console
+$ rsasm --link -o hello examples/hello.s
+$ ./hello
+Hello from rsasm!
+```
+
+Nothing is written between the two steps. The object exists only as bytes in
+memory, and the image comes back the same way, which is why `--link` needs
+neither a temporary file nor a second process. Whatever the link has to
+report arrives through rsasm's own diagnostics, in the shape a refused
+instruction has, and a link that fails exits non-zero instead of leaving
+something unrunnable behind:
+
+```console
+$ rsasm --link -o bad bad.s
+error: bad.o:(.text+0x1): undefined symbol: nowhere
+rsasm: link failed: 1 error
+```
+
+A program that calls into a library needs the library and the loader that
+will find it, which `-l`, `-L` and `--dynamic-linker` name exactly as they do
+for GNU ld. `-l:<file>` names a file in the search path rather than a
+`lib<name>`, which is how a C runtime's startup objects are reached:
+
+```console
+$ rsasm --link -o hi -L/usr/lib64 --dynamic-linker /lib64/ld-linux-x86-64.so.2 \
+    -l:crt1.o -l:crti.o -lc -l:crtn.o hi.s
+```
+
+The libraries are searched after the assembled object, in the order they were
+given. `-e` names the entry symbol, which is `_start` otherwise, and `-shared`
+and `-pie` ask for a shared library or a position-independent executable in
+place of the fixed-address static executable `--link` produces on its own.
+
+qld links ELF and PE32+ images for x86-64 and AArch64, which is a small part
+of what rsasm assembles, so a link it cannot do is refused before anything is
+assembled rather than after:
+
+```console
+$ rsasm --link -a riscv64 -o never prog.s
+rsasm: `--link` cannot make a program out of elf output for riscv64; qld links ELF and PE32+ objects for x86-64 and AArch64
+```
+
+Linking is the `link` cargo feature, and qld is the only dependency rsasm has.
+The feature is in the default set, because an assembler that stops at an
+object leaves the last step to some other tool; `--no-default-features` gives
+a crate with no dependencies at all, and a build made that way says so plainly
+when it is asked to link.
 
 ## Verification
 
