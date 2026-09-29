@@ -666,3 +666,82 @@ fn x86_64_differences_name_defined_symbols() {
     let err = macho_for("x86-64", "\t.long _ext - _f\n_f: ret\n").expect_err("should be refused");
     assert!(err.contains("only subtract symbols defined"), "{err}");
 }
+
+/// A line table and a frame table in the sections Darwin puts them in,
+/// with the relocations llvm-mc leaves behind: one against `__text` for
+/// the line program's address, and none at all in `__TEXT,__eh_frame`,
+/// whose FDE address llvm-mc works out itself.
+#[cfg(feature = "x86")]
+#[test]
+fn x86_64_debug_and_frame_sections() {
+    let src = r#"	.section	__TEXT,__text,regular,pure_instructions
+	.file	1 "a.c"
+	.globl	_f
+_f:
+	.cfi_startproc
+	.loc	1 3 0
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	.loc	1 4 0
+	popq	%rbp
+	retq
+	.cfi_endproc
+"#;
+    assert_object(
+        "x86-64",
+        src,
+        &[
+            "cf fa ed fe 07 00 00 01 03 00 00 00 01 00 00 00",
+            "03 00 00 00 a0 01 00 00 00 00 00 00 00 00 00 00",
+            "19 00 00 00 38 01 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "7f 00 00 00 00 00 00 00 c0 01 00 00 00 00 00 00",
+            "7f 00 00 00 00 00 00 00 07 00 00 00 07 00 00 00",
+            "03 00 00 00 00 00 00 00 5f 5f 74 65 78 74 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "06 00 00 00 00 00 00 00 c0 01 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 04 00 80 00 00 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 65 68 5f 66 72 61",
+            "6d 65 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 08 00 00 00 00 00 00 00",
+            "40 00 00 00 00 00 00 00 c8 01 00 00 03 00 00 00",
+            "00 00 00 00 00 00 00 00 0b 00 00 68 00 00 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 64 65 62 75 67 5f",
+            "6c 69 6e 65 00 00 00 00 5f 5f 44 57 41 52 46 00",
+            "00 00 00 00 00 00 00 00 48 00 00 00 00 00 00 00",
+            "37 00 00 00 00 00 00 00 08 02 00 00 00 00 00 00",
+            "40 02 00 00 01 00 00 00 00 00 00 02 00 00 00 00",
+            "00 00 00 00 00 00 00 00 02 00 00 00 18 00 00 00",
+            "48 02 00 00 01 00 00 00 58 02 00 00 08 00 00 00",
+            "0b 00 00 00 50 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 01 00 00 00 01 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "55 48 89 e5 5d c3 00 00 14 00 00 00 00 00 00 00",
+            "01 7a 52 00 01 78 10 01 10 0c 07 08 90 01 00 00",
+            "24 00 00 00 1c 00 00 00 d8 ff ff ff ff ff ff ff",
+            "06 00 00 00 00 00 00 00 00 41 0e 10 86 02 43 0d",
+            "06 00 00 00 00 00 00 00 33 00 00 00 04 00 1b 00",
+            "00 00 01 01 01 fb 0e 0d 00 01 01 01 01 00 00 00",
+            "01 00 00 01 00 61 2e 63 00 00 00 00 00 00 09 02",
+            "00 00 00 00 00 00 00 00 14 4b 02 02 00 01 01 00",
+            "28 00 00 00 01 00 00 06 01 00 00 00 0f 01 00 00",
+            "00 00 00 00 00 00 00 00 00 5f 66 00 00 00 00 00",
+        ],
+    );
+}
+
+/// llvm-mc writes a compact unwind word beside `__eh_frame` on arm64,
+/// which rsasm does not; half a description is worse than none.
+#[cfg(feature = "aarch64")]
+#[test]
+fn arm64_call_frame_information_is_refused() {
+    let err = macho_for("aarch64", "\t.cfi_startproc\n\tret\n\t.cfi_endproc\n")
+        .expect_err("should be refused");
+    assert!(err.contains("compact unwind"), "{err}");
+}

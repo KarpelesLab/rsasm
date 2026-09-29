@@ -331,7 +331,11 @@ impl Architecture for Msp430 {
     /// GNU as's conventions, with an explicit address advance for every row
     /// since its linker relaxes code (`DWARF2_USE_FIXED_ADVANCE_PC`). It has
     /// no call frame information.
-    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+    fn dwarf(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+    ) -> crate::dwarf::DwarfTarget {
         crate::dwarf::DwarfTarget {
             fixed_advance_pc: true,
             ..crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)

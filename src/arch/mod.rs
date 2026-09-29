@@ -1577,11 +1577,21 @@ pub trait Architecture {
     /// What this target's DWARF sections look like: whose conventions they
     /// follow, the line table's instruction unit and the CIE's constants.
     ///
+    /// The object format is part of the question, unlike the relocation
+    /// numbering: which reference writes DWARF for a target depends on the
+    /// format — there is no GNU as for Mach-O and no llvm-mc for m68k — and
+    /// the two write different CIEs. Only the targets that come out as
+    /// something other than ELF have to read it.
+    ///
     /// The default is a line table in GNU as's conventions counted in bytes,
     /// with no call frame information, which is what GNU as has for the
     /// targets where it has none (RX, RL78, V850) and what is safe for a
     /// target no reference writes DWARF for.
-    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+    fn dwarf(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+    ) -> crate::dwarf::DwarfTarget {
         crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)
     }
 

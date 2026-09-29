@@ -451,7 +451,7 @@ impl Architecture for M68k {
     /// GNU as's conventions, as for every m68k encoding: code counted in
     /// words, and a frame that starts with the return address just above the
     /// stack pointer.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         DwarfTarget {
             cfi: Some(CfiTarget {
                 data_align: -4,

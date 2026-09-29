@@ -178,7 +178,11 @@ impl Architecture for Rl78 {
         true
     }
 
-    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+    fn dwarf(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+    ) -> crate::dwarf::DwarfTarget {
         crate::dwarf::DwarfTarget {
             fixed_advance_pc: true,
             ..crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)

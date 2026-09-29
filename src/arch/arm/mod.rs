@@ -511,7 +511,7 @@ impl Architecture for Arm {
 
     /// llvm-mc's conventions, as for every ARM encoding, in either
     /// instruction set.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         DwarfTarget {
             cfi: Some(CfiTarget {
                 data_align: -4,

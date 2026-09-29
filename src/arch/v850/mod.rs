@@ -195,7 +195,11 @@ impl Architecture for V850 {
     /// as any.
     /// GNU as's conventions, as for every V850 encoding: code counted in
     /// words, and no call frame information.
-    fn dwarf(&self, _state: &ArchState) -> crate::dwarf::DwarfTarget {
+    fn dwarf(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+    ) -> crate::dwarf::DwarfTarget {
         crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 2)
     }
 

@@ -157,6 +157,14 @@ impl Assembler {
             kind: kind.reloc,
             desc,
         };
+        // An FDE's `initial_location` on x86-64 needs no relocation: the
+        // writer knows both addresses and fills the field in.
+        if cpu == Some(super::Cpu::X86_64) && desc.class == RelocClass::FrameSymbol && desc.pcrel {
+            for s in [v.plus, v.minus].into_iter().flatten() {
+                self.symbols.get_mut(s).used = true;
+            }
+            return vec![r];
+        }
         if let Some(cpu) = cpu
             && super::reloc_type(cpu, &r).is_none()
         {

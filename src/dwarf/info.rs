@@ -72,8 +72,9 @@ impl Assembler {
         }
     }
 
-    /// Whether a section of that name exists and holds anything.
+    /// Whether a DWARF section of that name exists and holds anything.
     pub(crate) fn section_has_bytes(&self, name: &str) -> bool {
+        let name = self.dwarf_object_name(name);
         self.sections
             .iter()
             .any(|s| self.interner.get(s.name) == name && s.size > 0)
@@ -92,7 +93,24 @@ impl Assembler {
 
     /// A four-byte offset into `section`, `offset` bytes past `pos`.
     fn section_offset(&mut self, b: &mut Blob, pos: Pos, offset: u64) {
-        self.address(b, pos, offset, 4);
+        self.dwarf_offset(b, pos, offset);
+    }
+
+    /// The unit's `DW_AT_stmt_list`: the offset of its line program, which is
+    /// at the start of `.debug_line`.
+    ///
+    /// llvm-mc writes the line table after the unit that describes it, so the
+    /// section does not exist yet. Where the field is a relocation the section
+    /// is made here, last of the unit's; a Mach-O object needs only the
+    /// number, and making it would put it in the object ahead of the frame
+    /// table.
+    fn line_table_offset(&mut self, b: &mut Blob) {
+        if self.options.format == crate::output::Format::MachO {
+            b.int(0, 4);
+            return;
+        }
+        let pos = (self.debug_section(".debug_line", 1), 0);
+        self.dwarf_offset(b, pos, 0);
     }
 
     // ---- GNU as ------------------------------------------------------------
@@ -418,10 +436,6 @@ impl Assembler {
             return;
         }
         let use_ranges = segs.len() > 1 && version >= 3;
-        let line_start = match self.section_id(".debug_line") {
-            Some(s) => (s, 0),
-            None => return,
-        };
         let info_sec = self.debug_section(".debug_info", 1);
         let abbrev_sec = self.debug_section(".debug_abbrev", 1);
         let aranges_sec = self.debug_section(".debug_aranges", 1);
@@ -544,7 +558,7 @@ impl Assembler {
             b.u8(ptr);
         }
         b.uleb(1);
-        self.section_offset(&mut b, line_start, 0);
+        self.line_table_offset(&mut b);
         match ranges_at {
             Some((pos, off)) => self.section_offset(&mut b, pos, off),
             None => {
@@ -584,8 +598,10 @@ impl Assembler {
         self.push_blob(info_sec, b, Span::DUMMY);
     }
 
-    /// The section of that name, if the source or the assembler made one.
+    /// The DWARF section of that name, if the source or the assembler made
+    /// one.
     pub(crate) fn section_id(&self, name: &str) -> Option<SectionId> {
+        let name = self.dwarf_object_name(name);
         self.sections
             .iter()
             .find(|s| self.interner.get(s.name) == name)

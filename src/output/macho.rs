@@ -407,7 +407,7 @@ pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
             // llvm-mc picks the `SIGNED_n` variant by what the field holds,
             // which is the addend less the bytes after the field, rather than
             // by those bytes alone: `leaq _x-4(%rip)` is a `SIGNED_4` as well.
-            RelocClass::Plain if d.pcrel && d.size == 4 => match r.addend + field_bias(r) {
+            RelocClass::Plain if d.pcrel && d.size == 4 => match r.addend + field_bias(cpu, r) {
                 -1 => x86_64_reloc::SIGNED_1,
                 -2 => x86_64_reloc::SIGNED_2,
                 -4 => x86_64_reloc::SIGNED_4,
@@ -472,16 +472,20 @@ fn addend_place(cpu: Cpu, ty: u8) -> AddendPlace {
     }
 }
 
-/// What a PC-relative relocation's field holds beyond the addend. Mach-O's
-/// PC-relative relocations are measured from the end of the *field*, where
-/// x86 measures from the end of the instruction, so the field is short by
-/// the bytes of the instruction that follow it; `X86_64_RELOC_SIGNED_1/2/4`
-/// exist to tell the linker so, though llvm-mc picks them by the result.
-fn field_bias(r: &Relocation) -> i64 {
-    if r.desc.pcrel {
-        -(r.desc.trailing as i64)
-    } else {
-        0
+/// What a PC-relative relocation's field holds beyond the addend.
+///
+/// Mach-O's PC-relative relocations are measured from the end of the
+/// *field*. x86 measures a displacement from the end of the instruction, so
+/// the field is short by the bytes of the instruction that follow it, and
+/// `X86_64_RELOC_SIGNED_1/2/4` exist to tell the linker so, though llvm-mc
+/// picks them by the result; a DWARF `DW_EH_PE_pcrel` field, measured from
+/// its own start, is over by its own width in the same way. arm64's are all
+/// measured from the instruction word, which is the field, so nothing is
+/// left over there.
+fn field_bias(cpu: Cpu, r: &Relocation) -> i64 {
+    match cpu {
+        Cpu::X86_64 if r.desc.pcrel => -(r.desc.trailing as i64),
+        _ => 0,
     }
 }
 
@@ -635,8 +639,35 @@ pub(crate) fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
         ("__DATA", "__thread_bss") => (S_THREAD_LOCAL_ZEROFILL, 0),
         ("__DATA", "__thread_data") => (S_THREAD_LOCAL_REGULAR, 0),
         ("__DATA", "__thread_init") => (S_THREAD_LOCAL_INIT_FUNCTION_POINTERS, 0),
+        // The debugging sections, which a linker copies without looking
+        // inside and a `strip` drops; the segment alone does not say so, and
+        // `__DWARF,__foo` is an ordinary section.
+        (
+            "__DWARF",
+            "__debug_line" | "__debug_line_str" | "__debug_info" | "__debug_abbrev" | "__debug_str"
+            | "__debug_aranges" | "__debug_ranges" | "__debug_rnglists" | "__debug_frame",
+        ) => (S_REGULAR, S_ATTR_DEBUG),
+        // The frame table is one item per function, which the linker keeps
+        // or drops with the function it describes: coalesced, live-support,
+        // and with no static symbols of its own to keep.
+        ("__TEXT", "__eh_frame") => (
+            S_COALESCED,
+            S_ATTR_NO_TOC | S_ATTR_STRIP_STATIC_SYMS | S_ATTR_LIVE_SUPPORT,
+        ),
         _ => return None,
     })
+}
+
+/// Whether llvm-mc gives the section a start symbol of its own, which takes
+/// the place of the `ltmpN` label an arm64 object would otherwise carry
+/// there (`MCMachOStreamer::changeSection` leaves a section that has one
+/// alone).
+///
+/// `MCObjectFileInfo` names one for each debugging section it creates, and
+/// the symbol is dropped from the table again because nothing relocates
+/// against it; `__debug_aranges` is the one it creates without.
+fn has_start_symbol(segment: &str, section: &str) -> bool {
+    segment == "__DWARF" && section != "__debug_aranges" && precreated(segment, section).is_some()
 }
 
 /// Whether a linker-visible label starts an atom strictly after `from` and
@@ -832,6 +863,19 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         let Some(&si) = places.index.get(&r.section) else {
             continue;
         };
+        // An FDE's `initial_location` is a distance this writer can work
+        // out, since every section already has an address; llvm-mc writes
+        // the number and leaves no relocation behind.
+        if cpu == Cpu::X86_64 && r.desc.class == RelocClass::FrameSymbol && r.desc.pcrel {
+            let here = places.addr[&r.section] as i64 + r.offset as i64;
+            let target = r.symbol.map_or(0, |t| places.symbol(asm, t)) + r.addend;
+            let (off, size) = (r.offset as usize, r.desc.size as usize);
+            if off + size <= secs[si].bytes.len() {
+                crate::arch::Endian::Little
+                    .write(&mut secs[si].bytes[off..off + size], (target - here) as u64);
+            }
+            continue;
+        }
         let ty = reloc_type(cpu, r).ok_or_else(|| {
             OutputError::Unsupported("a reference here has no Mach-O relocation".into())
         })?;
@@ -882,7 +926,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             None => {
                 field = target - places.named(asm, a);
                 if r.desc.pcrel {
-                    field += field_bias(r);
+                    field += field_bias(cpu, r);
                     if !external {
                         // A local PC-relative field keeps the distance as
                         // the assembler measured it, from the end of the
@@ -972,17 +1016,9 @@ fn collect_sections(asm: &Assembler) -> Result<Vec<Sec>, OutputError> {
     for s in &asm.sections {
         let name = asm.interner.get(s.name).to_string();
         let (segment, section) = split_name(&name).ok_or_else(|| {
-            OutputError::Unsupported(if name.starts_with(".debug_") || name.ends_with("_frame") {
-                // What `-g`, `.loc` and `.cfi_*` make, all in ELF's terms.
-                "DWARF and call frame information are not written to Mach-O objects yet; \
-                 assemble without `-g`, `.loc` and `.cfi_*`"
-                    .to_string()
-            } else {
-                format!(
-                    "`{name}` is not a Mach-O section; Mach-O sections are named \
-                     `SEGMENT,SECTION`"
-                )
-            })
+            OutputError::Unsupported(format!(
+                "`{name}` is not a Mach-O section; Mach-O sections are named `SEGMENT,SECTION`"
+            ))
         })?;
         let info = asm.macho.sections.get(&s.id);
         let (ty, attrs) = match info {
@@ -1032,7 +1068,22 @@ fn assign_addresses(secs: &mut [Sec]) {
     }
 }
 
+/// Whether a section is one of the debugging sections, whose relocations
+/// llvm-mc keeps local wherever it can: a debugger reads a debugging section
+/// expecting the values in it to be filled in already, so
+/// `MachObjectWriter::recordRelocation` names the section rather than the
+/// atom a symbol belongs to.
+fn debugging(asm: &Assembler, section: SectionId) -> bool {
+    asm.macho
+        .sections
+        .get(&section)
+        .is_some_and(|i| i.attrs & S_ATTR_DEBUG != 0)
+}
+
 /// What a relocation against `target` names.
+///
+/// A relocation in a debugging section names the section its target is in,
+/// whatever the target is; see [`debugging`].
 ///
 /// A linker-visible or undefined symbol names itself. An assembler-local
 /// label names the atom it is in; with no atom, x86-64 names the section and
@@ -1056,6 +1107,11 @@ fn name_target(
         return Named::Section(r.section);
     };
     let sym = asm.symbols.get(target);
+    if debugging(asm, r.section)
+        && let SymbolValue::Label { section, .. } = sym.value
+    {
+        return Named::Section(section);
+    }
     if !is_temporary(asm.interner.get(sym.name)) || !sym.is_defined() || visible.contains(&target) {
         return Named::Symbol(target);
     }
@@ -1072,7 +1128,7 @@ fn name_target(
             Named::Symbol(target)
         }
         Cpu::Arm64 => Named::SectionLabel(section),
-        Cpu::X86_64 if literal && added && r.addend + field_bias(r) != 0 => {
+        Cpu::X86_64 if literal && added && r.addend + field_bias(cpu, r) != 0 => {
             visible.insert(target);
             Named::Symbol(target)
         }
@@ -1095,20 +1151,24 @@ fn collect_symbols(
 
     // The label arm64 objects carry at the start of each section is a local
     // symbol like any other, created when the section was: it goes among the
-    // others where that happened, as llvm-mc has it.
+    // others where that happened, as llvm-mc has it. The sections llvm-mc
+    // makes with a start symbol of its own get none, and the labels are
+    // numbered over those that do.
+    let mut next = 0;
     let mut labels = secs
         .iter()
         .enumerate()
-        .filter(|_| cpu.labels_sections())
+        .filter(|(_, s)| cpu.labels_sections() && !has_start_symbol(&s.segment, &s.section))
         .map(|(i, s)| {
             let mark = asm.macho.section_marks.get(&s.id).copied().unwrap_or(0);
             let label = OutSym {
-                name: format!("ltmp{i}"),
+                name: format!("ltmp{next}"),
                 n_type: N_SECT,
                 n_sect: i as u8 + 1,
                 n_desc: 0,
                 n_value: s.addr,
             };
+            next += 1;
             (mark, s.id, label)
         })
         .collect::<Vec<_>>()

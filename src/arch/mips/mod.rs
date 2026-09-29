@@ -152,7 +152,7 @@ impl Architecture for Mips {
     /// llvm-mc's conventions, as for every MIPS encoding. Its FDE addresses
     /// are absolute, a pointer's width, where other targets measure them from
     /// the field.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         let wide = self.bits == 64;
         DwarfTarget {
             cfi: Some(CfiTarget {

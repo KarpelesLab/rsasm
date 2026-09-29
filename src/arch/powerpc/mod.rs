@@ -196,7 +196,7 @@ impl Architecture for PowerPc {
 
     /// llvm-mc's conventions, as for every PowerPC encoding: addresses in
     /// the line table and CFA advances counted in four-byte instructions.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         let wide = self.bits() == 64;
         DwarfTarget {
             cfi: Some(CfiTarget {

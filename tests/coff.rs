@@ -290,14 +290,64 @@ fn a_field_coff_has_no_relocation_for_is_refused() {
     assert!(e.contains("no relocation"), "{e}");
 }
 
+/// A section's characteristics and bytes, by its full name: a DWARF section
+/// is named past eight characters, so its header holds `/<offset>` into the
+/// string table instead.
+fn named_section(b: &[u8], want: &str) -> (u32, Vec<u8>) {
+    let strings = u32at(b, 8) as usize + 18 * u32at(b, 12) as usize;
+    for i in 0..u16at(b, 2) as usize {
+        let h = 20 + 40 * i;
+        let short = String::from_utf8_lossy(&b[h..h + 8])
+            .trim_end_matches('\0')
+            .to_string();
+        let name = match short.strip_prefix('/') {
+            Some(n) => {
+                let at = strings + n.parse::<usize>().expect("string table offset");
+                let end = at + b[at..].iter().position(|&c| c == 0).expect("terminator");
+                String::from_utf8_lossy(&b[at..end]).to_string()
+            }
+            None => short,
+        };
+        if name == want {
+            let (size, at) = (u32at(b, h + 16) as usize, u32at(b, h + 20) as usize);
+            return (u32at(b, h + 36), b[at..at + size].to_vec());
+        }
+    }
+    panic!("no `{want}` section");
+}
+
 #[test]
-fn dwarf_is_refused_in_coff_objects() {
-    let e = errors(
-        "x86-64",
-        Format::Coff,
-        ".cfi_startproc\nret\n.cfi_endproc\n",
+fn a_frame_table_in_a_coff_object_is_what_the_mingw_assembler_writes() {
+    // x86_64-w64-mingw32-as, for `.cfi_startproc; ret; .cfi_endproc`. The
+    // CIE names return address column 32, which is what GNU as numbers it in
+    // a PE object, and the FDE's address field holds four, which is what
+    // `IMAGE_REL_AMD64_REL32` measures past.
+    let (flags, bytes) = named_section(
+        &coff("x86-64", ".cfi_startproc\nret\n.cfi_endproc\n"),
+        ".eh_frame",
     );
-    assert!(e.contains("DWARF"), "{e}");
+    // IMAGE_SCN_CNT_INITIALIZED_DATA | MEM_READ, aligned to eight bytes.
+    assert_eq!(flags, 0x4040_0040);
+    assert_eq!(
+        bytes,
+        unhex(&[
+            "1400000000000000017a520001782001",
+            "1b0c0708a0010000",
+            "140000001c00000004000000010000000000000000000000",
+        ])
+    );
+}
+
+#[test]
+fn a_line_table_in_a_coff_object_is_discardable_and_section_relative() {
+    let object = coff("x86-64", ".file 1 \"a.c\"\n.loc 1 7\nnop\n");
+    // IMAGE_SCN_CNT_INITIALIZED_DATA | MEM_DISCARDABLE | MEM_READ, aligned
+    // to one byte: what the mingw assembler gives every `.debug_*` section.
+    for name in [".debug_line", ".debug_info", ".debug_abbrev", ".debug_str"] {
+        assert_eq!(named_section(&object, name).0, 0x4210_0040, "{name}");
+    }
+    // `.debug_aranges` is the one it aligns to twice the pointer size.
+    assert_eq!(named_section(&object, ".debug_aranges").0, 0x4250_0040);
 }
 
 #[test]

@@ -207,7 +207,7 @@ impl Architecture for Riscv {
     /// every distance and writes plain address advances. With it (`-mattr=+relax`)
     /// it writes each one as a `R_RISCV_ADD`/`R_RISCV_SUB` pair for the linker
     /// to fix up, as GNU as does even with `-mno-relax`.
-    fn dwarf(&self, _state: &ArchState) -> DwarfTarget {
+    fn dwarf(&self, _state: &ArchState, _format: crate::output::Format) -> DwarfTarget {
         let wide = self.xlen == 64;
         DwarfTarget {
             cfi: Some(CfiTarget {

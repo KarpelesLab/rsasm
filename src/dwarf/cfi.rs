@@ -25,6 +25,7 @@ use crate::assembler::Assembler;
 use crate::cursor::Cursor;
 use crate::expr::ExprRef;
 use crate::lexer::{Punct, TokKind};
+use crate::reloc::RelocClass;
 use crate::section::{SectionFlags, SectionId};
 use crate::source::Span;
 
@@ -580,15 +581,31 @@ impl Assembler {
         }
     }
 
+    /// What the CIE's personality pointer relocates as. Darwin reaches the
+    /// personality routine through the GOT whatever the encoding says, which
+    /// is what `X86_64MCAsmInfoDarwin::getExprForPersonalitySymbol` writes;
+    /// ELF and COFF relocate the symbol itself.
+    fn personality_class(&self) -> RelocClass {
+        if self.options.format == crate::output::Format::MachO {
+            RelocClass::Got
+        } else {
+            RelocClass::Plain
+        }
+    }
+
     /// Writes a pointer field in encoding `enc`, relocated against `e`.
-    fn encoded_pointer(&mut self, b: &mut Blob, enc: u8, e: ExprRef, ptr: u8) {
+    ///
+    /// `class` says what the field is for where a format writes some of them
+    /// differently; only an FDE's `initial_location` is such a field, and
+    /// only in a Mach-O object (see [`RelocClass::FrameSymbol`]).
+    fn encoded_pointer(&mut self, b: &mut Blob, enc: u8, e: ExprRef, ptr: u8, class: RelocClass) {
         let size = encoding_size(enc, ptr);
         let kind = if enc & 0x70 == DW_EH_PE_PCREL {
             self.pcrel_kind(size)
         } else {
             self.abs_kind(size)
         };
-        b.fixup(size, e, kind);
+        b.fixup(size, e, kind.with_class(class));
     }
 
     // ---- GNU as ------------------------------------------------------------
@@ -729,15 +746,20 @@ impl Assembler {
             if eh {
                 b.int(after_len - cies[cie].offset, 4);
             } else {
-                let e = self.pos_expr(base, cies[cie].offset);
-                let kind = self.abs_kind(4);
-                b.fixup(4, e, kind);
+                let off = cies[cie].offset;
+                self.dwarf_offset(&mut b, base, off);
             }
             let start = self.pos_offset(fde.start);
             let end = fde.end.map_or(start, |p| self.pos_offset(p));
             let begin = self.pos_expr(fde.start, 0);
             if eh {
-                self.encoded_pointer(&mut b, cfi.fde_encoding, begin, ptr);
+                self.encoded_pointer(
+                    &mut b,
+                    cfi.fde_encoding,
+                    begin,
+                    ptr,
+                    RelocClass::FrameSymbol,
+                );
                 let size = encoding_size(cfi.fde_encoding, ptr);
                 b.int(end - start, size as usize);
                 let lsize = fde
@@ -745,7 +767,7 @@ impl Assembler {
                     .map_or(0, |(enc, _)| encoding_size(enc, ptr) as u64);
                 b.uleb(lsize);
                 if let Some((enc, e)) = fde.lsda {
-                    self.encoded_pointer(&mut b, enc, e, ptr);
+                    self.encoded_pointer(&mut b, enc, e, ptr, RelocClass::FrameSymbol);
                 }
             } else {
                 let kind = self.abs_kind(ptr);
@@ -825,7 +847,8 @@ impl Assembler {
             b.uleb(size);
             if let Some((enc, e)) = per {
                 b.u8(enc);
-                self.encoded_pointer(b, enc, e, ptr);
+                let class = self.personality_class();
+                self.encoded_pointer(b, enc, e, ptr, class);
             }
             if lsda != DW_EH_PE_OMIT {
                 b.u8(lsda);
@@ -949,7 +972,8 @@ impl Assembler {
                         b.uleb(size);
                         if let Some((enc, e)) = fde.personality {
                             b.u8(enc);
-                            self.encoded_pointer(&mut b, enc, e, ptr);
+                            let class = self.personality_class();
+                            self.encoded_pointer(&mut b, enc, e, ptr, class);
                         }
                         if let Some((enc, _)) = fde.lsda {
                             b.u8(enc);
@@ -979,15 +1003,19 @@ impl Assembler {
             if eh {
                 b.int(after - cie_off, 4);
             } else {
-                let e = self.pos_expr(base, cie_off);
-                let kind = self.abs_kind(4);
-                b.fixup(4, e, kind);
+                self.dwarf_offset(&mut b, base, cie_off);
             }
             let start = self.pos_offset(fde.start);
             let end = fde.end.map_or(start, |p| self.pos_offset(p));
             let begin = self.pos_expr(fde.start, 0);
             let size = if eh {
-                self.encoded_pointer(&mut b, cfi.fde_encoding, begin, ptr);
+                self.encoded_pointer(
+                    &mut b,
+                    cfi.fde_encoding,
+                    begin,
+                    ptr,
+                    RelocClass::FrameSymbol,
+                );
                 encoding_size(cfi.fde_encoding, ptr)
             } else {
                 let kind = self.abs_kind(ptr);
@@ -1001,7 +1029,7 @@ impl Assembler {
                     .map_or(0, |(enc, _)| encoding_size(enc, ptr) as u64);
                 b.uleb(lsize);
                 if let Some((enc, e)) = fde.lsda {
-                    self.encoded_pointer(&mut b, enc, e, ptr);
+                    self.encoded_pointer(&mut b, enc, e, ptr, RelocClass::FrameSymbol);
                 }
             }
             cfa = initial_cfa;
