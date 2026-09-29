@@ -7,9 +7,12 @@ by llvm-mc, and each line it prints is assembled again by llvm-mc, by GNU as
 and by rsasm. That reaches every form llvm-mc can print, operands of every
 value included, with no table of forms written for the fuzzer: a table
 written from the same understanding as the backend's would share its
-mistakes. Some cases are then mutated into likely-invalid ones — a lane
-index or shift one past its range, a register of the wrong width, an
-arrangement swapped for another — so that what rsasm refuses is checked too.
+mistakes. The general-purpose groups the encoding table covers -- the
+exclusives, the atomics, pointer authentication and memory tagging -- are
+fuzzed with them, and come from the words that land nowhere in particular.
+Some cases are then mutated into likely-invalid ones — a lane index or shift
+one past its range, a register of the wrong width, an arrangement swapped
+for another — so that what rsasm refuses is checked too.
 
     tools/fuzz/aarch64.py fuzz --count 100000
     tools/fuzz/aarch64.py fuzz --only '^(ld|st)[1-4]' --seed 3
@@ -57,7 +60,7 @@ OBJCOPY = GAS.replace("-as", "-objcopy")
 OBJDUMP = GAS.replace("-as", "-objdump")
 GAS_MARCH = "-march=armv9.5-a+sve2+sve2-aes+sve2-sha3+sve2-sm4+sve2-bitperm+crypto+sm4+sha3" \
     "+dotprod+i8mm+fp16+fp16fml+bf16+rcpc+rcpc3+sme2+sve2p1+f64mm+f32mm+cssc+the+lut" \
-    "+faminmax+fp8+fp8fma+fp8dot2+fp8dot4+sve-b16b16+sme2p1"
+    "+faminmax+fp8+fp8fma+fp8dot2+fp8dot4+sve-b16b16+sme2p1+memtag+lse128+lsui+d128"
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +169,8 @@ def run_mc_results(lines):
 # ---------------------------------------------------------------------------
 
 def interesting(text, word=None):
-    """A line worth fuzzing: SIMD, floating point or SVE, and not a branch."""
+    """A line worth fuzzing: SIMD, floating point, SVE or one of the
+    general-purpose groups the table covers, and not a branch."""
     try:
         mn, atoms = a64.parse_line(text)
     except ValueError:
@@ -181,7 +185,7 @@ def interesting(text, word=None):
     if sum(1 for a in atoms if a.kind[0] in ("zlist", "vlist")) > 1:
         return False
     kinds = {a.kind[0] for a in atoms}
-    return (word is not None and (word >> 25) & 0xf == 0b0010) or \
+    return (word is not None and (word >> 25) & 0xf == 0b0010) or a64.gp_group(mn) or \
         bool(kinds & {"v", "vidx", "vidxa", "s", "z", "zidx", "p", "pm", "pz", "vlist",
                          "vlistidx", "zlist", "plist", "fimm"})
 

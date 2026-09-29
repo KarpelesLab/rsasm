@@ -292,7 +292,9 @@ skipped, so a machine that has lost one cannot read as a pass.
 ## AArch64
 
 `aarch64.py` fuzzes the AArch64 backend, SIMD, floating point and SVE above
-all, against llvm-mc and GNU as.
+all, and the general-purpose groups the encoding table covers with them --
+the exclusives, the atomics, pointer authentication and memory tagging --
+against llvm-mc and GNU as.
 
 ```console
 $ cargo build --all-features --bin rsasm
@@ -305,7 +307,8 @@ $ tools/fuzz/aarch64.py check --no-gas tools/mc-diff/aarch64-sve-words.txt
 There is no table of forms here. Cases are llvm-mc's own disassembly of
 random instruction words, weighted towards the AdvSIMD, floating-point and
 SVE encoding groups, so every form llvm-mc prints is reachable with operands
-of every value; the backend's table was measured from llvm-mc too, but by
+of every value; the words that land outside those groups are what reaches
+the general-purpose ones; the backend's table was measured from llvm-mc too, but by
 assembling, so the disassembler's view is an independent one. `--mutations`
 (default 0.25) is the fraction of cases then changed into likely-invalid ones:
 a number moved past its range, an arrangement or register width swapped, an
@@ -318,9 +321,11 @@ that refuses one line of a batch is run again without it. The classes are
 and `gas-only` (the references disagree and rsasm follows that one), and
 `neither`. The AArch64 corpora follow llvm-mc, except that rsasm refuses the
 out-of-range immediates llvm-mc truncates (`ext v0.8b, v1.8b, v2.8b, #8`),
-as GNU as does. `--source gnu` takes the cases from GNU objdump's
-disassembly instead, which is how the spellings GNU as source is written in
-get tried. Lines for what the backend leaves out are dropped rather than
+as GNU as does, and that it assembles a store-exclusive whose status
+register is also one of its sources (`stxr w0, x0, [x1]`), which llvm-mc
+refuses and GNU as warns about. `--source gnu` takes the cases from GNU
+objdump's disassembly instead, which is how the spellings GNU as source is
+written in get tried. Lines for what the backend leaves out are dropped rather than
 counted: SME's ZA array and lookup tables, predicates as counters, and the
 multi-vector operands of SME2 (two register lists in one instruction).
 
