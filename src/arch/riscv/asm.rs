@@ -8,7 +8,7 @@ use super::operand::{Imm, Mem, Modifier, Operands};
 use super::pseudo::AUIPC;
 use super::reg::{self, Reg};
 use crate::arch::AsmCtx;
-use crate::section::{FixupKind, Variant};
+use crate::section::{FixupKind, RelocSymbol, Variant};
 use crate::source::Span;
 
 pub struct Asm<'c, 'a> {
@@ -16,6 +16,11 @@ pub struct Asm<'c, 'a> {
     pub xlen: u8,
     /// Whether the C extension may shorten what is emitted.
     pub rvc: bool,
+    /// Whether the linker may relax what this instruction is part of, which
+    /// decides both the `R_RISCV_RELAX` marks and what is left to the linker
+    /// rather than resolved; see [`super::reloc::relaxable`] and
+    /// [`super::reloc::deferred_when_relaxed`].
+    relax: bool,
     pub span: Span,
     out: Buf,
     /// A shorter candidate for a single relaxable branch or jump. Layout picks
@@ -28,11 +33,18 @@ pub struct Asm<'c, 'a> {
 }
 
 impl<'c, 'a> Asm<'c, 'a> {
-    pub fn new(cx: &'c mut AsmCtx<'a>, xlen: u8, rvc: bool, span: Span) -> Asm<'c, 'a> {
+    pub fn new(
+        cx: &'c mut AsmCtx<'a>,
+        xlen: u8,
+        rvc: bool,
+        relax: bool,
+        span: Span,
+    ) -> Asm<'c, 'a> {
         Asm {
             cx,
             xlen,
             rvc,
+            relax,
             span,
             out: Buf::default(),
             alt: None,
@@ -46,6 +58,23 @@ impl<'c, 'a> Asm<'c, 'a> {
 
     pub fn rv64(&self) -> bool {
         self.xlen == 64
+    }
+
+    /// Marks a fixup the linker may rewrite whatever its relocation, for the
+    /// one case GNU as decides by where the instruction came from rather than
+    /// by the relocation alone.
+    ///
+    /// `R_RISCV_GOT_HI20` is relaxable in the pair `la` and `lga` expand to,
+    /// which a linker can turn into a direct reference, and nowhere else:
+    /// `md_apply_fix` tests `source_macro`, since an `auipc` the source wrote
+    /// itself with `%got_pcrel_hi` may be part of a sequence it does not
+    /// recognise.
+    pub fn may_relax(&self, kind: FixupKind) -> FixupKind {
+        if self.relax {
+            kind.marked_by(super::reloc::RELAX)
+        } else {
+            kind
+        }
     }
 
     /// Emits a 32-bit word, shortening it where the C extension allows.
@@ -108,6 +137,36 @@ impl<'c, 'a> Asm<'c, 'a> {
         out.push(self.out.finish());
         if let Some(long) = self.long {
             out.push(long.finish());
+        }
+        // GNU as decides an `R_RISCV_RELAX`, and whether a reference to this
+        // section is still the assembler's to resolve, in `md_apply_fix`:
+        // from the relocation the field ended up with and from whether
+        // `.option relax` was in force on the line, which is exactly what is
+        // known here.
+        if self.relax {
+            for variant in &mut out {
+                for fixup in &mut variant.fixups {
+                    if super::reloc::relaxable(fixup.kind.reloc) {
+                        fixup.kind = fixup.kind.marked_by(super::reloc::RELAX);
+                    }
+                    if let Some(sized) = super::reloc::deferred_when_relaxed(fixup.kind.reloc) {
+                        fixup.kind = if sized {
+                            fixup.kind.relocated_when_relaxed()
+                        } else {
+                            fixup.kind.relocated_in_objects()
+                        };
+                        // A linker that deletes bytes moves the labels after
+                        // them and adjusts the symbols it knows, but not an
+                        // offset into a section, so such a reference has to
+                        // name the label itself; GNU as says the same with
+                        // `TC_FORCE_RELOCATION_LOCAL`. A pair's low half
+                        // already names the label on its `auipc`.
+                        if fixup.kind.reloc_symbol == RelocSymbol::Section {
+                            fixup.kind = fixup.kind.with_reloc_symbol(RelocSymbol::Symbol);
+                        }
+                    }
+                }
+            }
         }
         out
     }
@@ -206,6 +265,7 @@ impl<'c, 'a> Asm<'c, 'a> {
         let kind = match imm.modifier {
             Some(Modifier::Hi) => encode::kind_hi20(false),
             Some(Modifier::PcrelHi) => encode::kind_hi20(true),
+            Some(Modifier::GotPcrelHi) => encode::kind_got_hi20(),
             // GNU as reads every thread-local high half in either `lui` or
             // `auipc`, though only one of the two makes an address the rest
             // of the sequence can use; llvm-mc pairs each with its own
@@ -810,6 +870,7 @@ fn name(m: Modifier) -> &'static str {
         Modifier::Lo => "`%lo`",
         Modifier::PcrelHi => "`%pcrel_hi`",
         Modifier::PcrelLo => "`%pcrel_lo`",
+        Modifier::GotPcrelHi => "`%got_pcrel_hi`",
         Modifier::TprelHi => "`%tprel_hi`",
         Modifier::TprelLo => "`%tprel_lo`",
         Modifier::TprelAdd => "`%tprel_add`",

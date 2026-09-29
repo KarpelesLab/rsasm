@@ -3,6 +3,11 @@
 //! Every expected byte string here came from `llvm-mc -mattr=+m,+a,+f,+d,+c`
 //! (LLVM 22), via `tools/mc-diff`. Because `+c` is on, the expectations also
 //! pin down which instructions llvm-mc chose to compress.
+//!
+//! What relaxation adds is `riscv64-elf-as`'s instead, since llvm-mc and GNU
+//! as disagree about part of it (see tools/mc-diff/riscv64-relocs.txt): the
+//! `R_RISCV_RELAX` marks, and the `R_RISCV_ALIGN` an alignment in relaxable
+//! code leaves behind, are what `riscv64-elf-as -march=rv64gc` writes.
 
 #![cfg(feature = "riscv")]
 
@@ -348,8 +353,21 @@ fn relocation_modifiers_select_relocation_types() {
     assert!(!asm.diags.has_errors());
     let kinds: Vec<(u64, u32)> = asm.relocs.iter().map(|r| (r.offset, r.kind)).collect();
     // R_RISCV_HI20, R_RISCV_LO12_I, R_RISCV_LO12_S, R_RISCV_CALL_PLT: llvm-mc
-    // writes the PLT form for a `call` with or without `@plt`.
-    assert_eq!(kinds, vec![(0, 26), (4, 27), (8, 28), (12, 19)]);
+    // writes the PLT form for a `call` with or without `@plt`. Each is
+    // followed by the R_RISCV_RELAX that says the linker may rewrite it.
+    assert_eq!(
+        kinds,
+        vec![
+            (0, 26),
+            (0, 51),
+            (4, 27),
+            (4, 51),
+            (8, 28),
+            (8, 51),
+            (12, 19),
+            (12, 51)
+        ]
+    );
 
     let asm = assemble_for("riscv64", "call sym@plt\nj sym\nbeqz a0, sym\n");
     assert!(!asm.diags.has_errors());
@@ -357,27 +375,47 @@ fn relocation_modifiers_select_relocation_types() {
     // R_RISCV_CALL_PLT, then two R_RISCV_JAL: where the target is a symbol
     // the linker places, nothing here knows it is within a branch's reach,
     // so `beqz` becomes `c.bnez` over a `jal` and it is the jump that is
-    // relocated. llvm-mc writes exactly this.
-    assert_eq!(kinds, vec![(0, 19), (8, 17), (14, 17)]);
+    // relocated. llvm-mc writes exactly this. Neither jump carries an
+    // R_RISCV_RELAX: GNU as marks a call, not a branch.
+    assert_eq!(kinds, vec![(0, 19), (0, 51), (8, 17), (14, 17)]);
 }
 
+/// A reference to a label in its own section still picks its instruction by
+/// the distance as written, but with relaxation on the field belongs to the
+/// linker, which may shorten what lies between. `.option norelax` is what
+/// resolves one, and is the only way the distance shows in the bytes.
 #[test]
 fn branches_to_labels() {
     enc64(
-        "start:\nadd a0, a0, a1\naddi a1, a1, -1\nbnez a1, start\nret",
+        ".option norelax\nstart:\nadd a0, a0, a1\naddi a1, a1, -1\nbnez a1, start\nret",
         "2e 95 fd 15 f5 fd 82 80",
     );
-    // A local call and tail resolve without a relocation.
+    // Forwards, which is where llvm-mc relocates one too: it resolves a
+    // backward reference as it reads it, and only GNU as goes back to
+    // relocate that as well.
+    enc64("beqz a0, done\nli a0, 1\ndone:\nret", "01 c1 05 45 82 80");
     enc64(
-        "target:\nret\ncall target\ntail target",
+        ".option norelax\ntarget:\nret\ncall target\ntail target",
         "82 80 97 00 00 00 e7 80 e0 ff 17 03 00 00 67 00 63 ff",
     );
     enc64(
-        "la a0, value\nlla a1, value\nvalue:\nret",
+        "target:\nret\ncall target\ntail target",
+        "82 80 97 00 00 00 e7 80 00 00 17 03 00 00 67 00 03 00",
+    );
+    enc64(
+        ".option norelax\nla a0, value\nlla a1, value\nvalue:\nret",
         "17 05 00 00 13 05 05 01 97 05 00 00 93 85 85 00 82 80",
     );
+    enc64(
+        "la a0, value\nlla a1, value\nvalue:\nret",
+        "17 05 00 00 13 05 05 00 97 05 00 00 93 85 05 00 82 80",
+    );
     // `c.jal` exists only on RV32.
-    enc32("jal target\nnop\ntarget:\nret", "11 20 01 00 82 80");
+    enc32(
+        ".option norelax\njal target\nnop\ntarget:\nret",
+        "11 20 01 00 82 80",
+    );
+    enc32("jal target\nnop\ntarget:\nret", "01 20 01 00 82 80");
 }
 
 // ---- `auipc` pairs ------------------------------------------------------------
@@ -433,6 +471,16 @@ const TLSDESC_HI20: u32 = 62;
 const TLSDESC_LOAD_LO12: u32 = 63;
 const TLSDESC_ADD_LO12: u32 = 64;
 const TLSDESC_CALL: u32 = 65;
+const ALIGN: u32 = 43;
+const RELAX: u32 = 51;
+
+/// The `R_RISCV_RELAX` GNU as writes at the same offset as a relocation a
+/// linker may rewrite, and just after it. It names no symbol, and rsasm
+/// leaves its addend at zero as llvm-mc does, where GNU as happens to copy
+/// the addend of the relocation it marks; no linker reads either.
+fn relax(offset: u64) -> (u64, u32, String, i64) {
+    (offset, RELAX, String::new(), 0)
+}
 
 /// Both halves of each pair are relocated, and the low half names a label at
 /// its `auipc`, as the psABI requires: lld looks the `auipc` up by that
@@ -453,30 +501,49 @@ fn auipc_pairs_relocate_both_halves() {
         relocs_of(&assemble_for("riscv64", src)),
         vec![
             rel(0x00, PCREL_HI20, "ext", 0),
+            relax(0x00),
             rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            relax(0x04),
             rel(0x08, PCREL_HI20, "ext", 4),
+            relax(0x08),
             rel(0x0c, PCREL_LO12_I, "@0x8", 0),
+            relax(0x0c),
             rel(0x10, PCREL_HI20, "ext", 0),
+            relax(0x10),
             rel(0x14, PCREL_LO12_I, "@0x10", 0),
+            relax(0x14),
             rel(0x18, PCREL_HI20, "ext", 0),
+            relax(0x18),
             rel(0x1c, PCREL_LO12_S, "@0x18", 0),
+            relax(0x1c),
             rel(0x20, PCREL_HI20, "ext", 0),
+            relax(0x20),
             rel(0x24, PCREL_LO12_I, "@0x20", 0),
+            relax(0x24),
+            // `lga` is one of the two macros whose GOT reference GNU as
+            // marks; an `auipc` the source wrote with `%got_pcrel_hi` is not.
             rel(0x28, GOT_HI20, "ext", 0),
+            relax(0x28),
             rel(0x2c, PCREL_LO12_I, "@0x28", 0),
+            relax(0x2c),
             rel(0x30, CALL_PLT, "ext", 0),
+            relax(0x30),
             rel(0x38, CALL_PLT, "ext", 0),
+            relax(0x38),
             rel(0x40, CALL_PLT, "ext", 0),
+            relax(0x40),
             rel(0x48, PCREL_HI20, "ext", 0),
+            relax(0x48),
             rel(0x4c, PCREL_LO12_I, "@0x48", 0),
+            relax(0x4c),
         ]
     );
 }
 
 /// `lga`, and `la` under `.option pic`, go through the GOT even for a label
 /// in the same section, and load the slot at the target's word size; `lla`
-/// never does. A same-section `lw`/`sw` of a label resolves. llvm-mc's bytes
-/// and relocations.
+/// never does. A same-section `lw`/`sw` of a label is relocated like the
+/// rest while relaxation is on. llvm-mc's bytes and relocations.
 #[test]
 fn got_loads_and_option_pic() {
     let src = "lga a0, ext\n.option push\n.option pic\nla a1, ext\nla a2, local\n\
@@ -486,32 +553,59 @@ fn got_loads_and_option_pic() {
         src,
         "17 05 00 00 03 25 05 00 97 05 00 00 83 a5 05 00 17 06 00 00 03 26 06 00 \
          97 06 00 00 93 86 06 00 17 07 00 00 13 07 07 00 97 07 00 00 83 a7 07 00 \
-         97 02 00 00 23 ac f2 fe",
+         97 02 00 00 23 a0 f2 00",
     );
     assert_eq!(
         relocs_of(&assemble_for("riscv32", src)),
         vec![
             rel(0x00, GOT_HI20, "ext", 0),
+            relax(0x00),
             rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            relax(0x04),
             rel(0x08, GOT_HI20, "ext", 0),
+            relax(0x08),
             rel(0x0c, PCREL_LO12_I, "@0x8", 0),
+            relax(0x0c),
             // The GOT slot belongs to `local` itself, not to `.text+0x28`.
             rel(0x10, GOT_HI20, "@0x28", 0),
+            relax(0x10),
             rel(0x14, PCREL_LO12_I, "@0x10", 0),
+            relax(0x14),
             rel(0x18, PCREL_HI20, "ext", 0),
+            relax(0x18),
             rel(0x1c, PCREL_LO12_I, "@0x18", 0),
+            relax(0x1c),
             rel(0x20, PCREL_HI20, "ext", 0),
+            relax(0x20),
             rel(0x24, PCREL_LO12_I, "@0x20", 0),
+            relax(0x24),
+            // A pair that reaches a label in its own section is relocated
+            // all the same while relaxation is on, since the linker may move
+            // the two apart, and names the label rather than the section it
+            // is in: a linker that deletes bytes moves the label and adjusts
+            // the symbol, and would leave an offset into the section behind.
+            rel(0x28, PCREL_HI20, "@0x28", 0),
+            relax(0x28),
+            rel(0x2c, PCREL_LO12_I, "@0x28", 0),
+            relax(0x2c),
+            rel(0x30, PCREL_HI20, "@0x28", 0),
+            relax(0x30),
+            rel(0x34, PCREL_LO12_S, "@0x30", 0),
+            relax(0x34),
         ]
     );
 }
 
-/// A resolved pair leaves nothing for the linker, and no label behind.
+/// Under `.option norelax` a pair that reaches a label in its own section is
+/// resolved, and leaves nothing for the linker and no label behind. With
+/// relaxation on nothing here is resolved: the linker may shorten what lies
+/// between the reference and the label, so both halves are relocated, as
+/// `riscv64-elf-as` relocates them.
 #[test]
 fn resolved_pairs_need_no_relocation() {
     let asm = assemble_for(
         "riscv64",
-        "la a0, x\nlw a1, x\nsw a1, x, t0\njump x, t1\nx: ret\n",
+        ".option norelax\nla a0, x\nlw a1, x\nsw a1, x, t0\njump x, t1\nx: ret\n",
     );
     assert_eq!(relocs_of(&asm), vec![]);
     let b = rsasm::output::elf::build(&asm).expect("ELF output");
@@ -556,8 +650,8 @@ tv:     .dword 0\n\
 /// pointer keeps its full width, though `add a0, a0, tp` on its own has a
 /// two-byte form, and the marks on it and on the `jalr` fill nothing in.
 ///
-/// Bytes and relocations are `riscv64-elf-as -mno-relax`'s; llvm-mc writes
-/// the same for every form it takes (see tools/mc-diff/riscv64-relocs.txt).
+/// Bytes and relocations are `riscv64-elf-as`'s; llvm-mc writes the same for
+/// every form it takes (see tools/mc-diff/riscv64-relocs.txt).
 #[test]
 fn thread_local_access_models() {
     enc64(
@@ -570,30 +664,45 @@ fn thread_local_access_models() {
         relocs_of(&assemble_for("riscv64", TLS64)),
         vec![
             rel(0x00, TPREL_HI20, "tv", 0),
+            relax(0x00),
             rel(0x04, TPREL_ADD, "tv", 0),
+            relax(0x04),
             rel(0x08, TPREL_LO12_I, "tv", 0),
+            relax(0x08),
             rel(0x0c, TPREL_LO12_S, "tv", 0),
+            relax(0x0c),
+            // A linker lays the slot of an initial-exec or general-dynamic
+            // sequence out itself, and marks neither `auipc`; it can still
+            // shorten the load that follows.
             rel(0x10, TLS_GOT_HI20, "ext", 0),
             rel(0x14, PCREL_LO12_I, "@0x10", 0),
+            relax(0x14),
             rel(0x18, TLS_GD_HI20, "ext", 0),
             rel(0x1c, PCREL_LO12_I, "@0x18", 0),
+            relax(0x1c),
             // The three halves of a descriptor name the `auipc`'s label, as
             // `%pcrel_lo` does; only the `auipc` names the variable.
             rel(0x20, TLSDESC_HI20, "ext", 0),
+            relax(0x20),
             rel(0x24, TLSDESC_LOAD_LO12, "@0x20", 0),
+            relax(0x24),
             rel(0x28, TLSDESC_ADD_LO12, "@0x20", 0),
+            relax(0x28),
             rel(0x2c, TLSDESC_CALL, "@0x20", 0),
+            relax(0x2c),
             rel(0x30, TLS_GOT_HI20, "tv", 0),
             rel(0x34, PCREL_LO12_I, "@0x30", 0),
+            relax(0x34),
             rel(0x38, TLS_GD_HI20, "ext", 0),
             rel(0x3c, PCREL_LO12_I, "@0x38", 0),
+            relax(0x3c),
         ]
     );
 }
 
 /// On RV32 an initial-exec pair reads a 32-bit slot, so `la.tls.ie` ends in
 /// `lw` rather than `ld`; nothing else about the models changes with the word
-/// size. `riscv64-elf-as -march=rv32gc -mno-relax`'s bytes and relocations.
+/// size. `riscv64-elf-as -march=rv32gc`'s bytes and relocations.
 #[test]
 fn thread_local_models_on_rv32() {
     let src = "\
@@ -616,11 +725,16 @@ tv:     .word 0\n\
         vec![
             rel(0x00, TLS_GOT_HI20, "tv", 0),
             rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            relax(0x04),
             rel(0x08, TLS_GD_HI20, "ext", 0),
             rel(0x0c, PCREL_LO12_I, "@0x8", 0),
+            relax(0x0c),
             rel(0x10, TPREL_HI20, "tv", 0),
+            relax(0x10),
             rel(0x14, TPREL_ADD, "tv", 0),
+            relax(0x14),
             rel(0x18, TPREL_LO12_I, "tv", 0),
+            relax(0x18),
         ]
     );
 }
@@ -720,13 +834,16 @@ fn relaxed(arch: &str, src: &str, head: &str, tail: &str, len: usize) {
     assert_eq!((h.as_str(), t.as_str()), (head, tail), "{src}");
 }
 
+/// The distance as written picks the instruction even where relaxation
+/// leaves the field itself to the linker, which is why each head below is
+/// the wide form with an empty displacement.
 #[test]
 fn compressed_branches_grow_when_the_target_is_out_of_reach() {
     // c.beqz reaches +-256 bytes; beq is chosen once the target is further.
     relaxed(
         "riscv64",
         "beqz a0, far\n.space 300\nfar:\nret",
-        "63 08 05 12",
+        "63 00 05 00",
         "82 80",
         306,
     );
@@ -734,14 +851,14 @@ fn compressed_branches_grow_when_the_target_is_out_of_reach() {
     relaxed(
         "riscv64",
         "j ahead\n.space 4000\nnop\nahead:\nret",
-        "6f 00 70 7a",
+        "6f 00 00 00",
         "01 00 82 80",
         4008,
     );
     relaxed(
         "riscv32",
         "jal target\n.space 3000\ntarget:\nret",
-        "ef 00 d0 3b",
+        "ef 00 00 00",
         "82 80",
         3006,
     );
@@ -794,8 +911,9 @@ fn immediates_out_of_range_name_the_limit() {
 fn a_branch_past_its_reach_becomes_a_pair() {
     // Past +-4 KiB a conditional branch cannot reach, and the way out is the
     // opposite branch over a `jal`. Both GNU as and llvm-mc write this, and
-    // the bytes below are theirs. Only the pair is compared: the rest of the
-    // section is the five thousand bytes the branch jumps over.
+    // the bytes below are theirs; the jump's own field is empty because
+    // relaxation leaves it to the linker. Only the pair is compared: the
+    // rest of the section is the five thousand bytes the branch jumps over.
     let pair = |src: &str, want: &str| {
         let got = hex(&text_for("riscv64", src));
         assert!(
@@ -805,19 +923,25 @@ fn a_branch_past_its_reach_becomes_a_pair() {
     };
     pair(
         "beq a0, a1, far\n.space 5000\nfar: ret",
-        "63 14 b5 00 6f 10 c0 38",
+        "63 14 b5 00 6f 00 00 00",
     );
     // With the C extension the opposite branch has a two-byte form, which
     // moves the jump and so the distance the branch skips.
-    pair("beqz a0, far\n.space 5000\nfar: ret", "19 e1 6f 10 c0 38");
+    pair("beqz a0, far\n.space 5000\nfar: ret", "19 e1 6f 00 00 00");
 }
 
 #[test]
 fn branches_out_of_range_are_reported() {
-    // Past `jal`'s +-1 MiB there is nothing left to expand into. GNU as
-    // truncates the displacement here; llvm-mc refuses it, and so does this.
-    let src = "beq a0, a1, far\n.space 3000000\nfar: ret";
+    // Past `jal`'s +-1 MiB there is nothing left to expand into, and under
+    // `.option norelax` that is as far as the branch will ever reach: llvm-mc
+    // refuses it and so does this, where GNU as truncates the displacement.
+    // With relaxation on the distance is the linker's to work out, and both
+    // references take it, as GNU as puts it: "assume jumps are in range; the
+    // linker will catch any that aren't".
+    let src = ".option norelax\nbeq a0, a1, far\n.space 3000000\nfar: ret";
     assert!(try_text_for("riscv64", src).is_err());
+    let src = "beq a0, a1, far\n.space 3000000\nfar: ret";
+    assert!(try_text_for("riscv64", src).is_ok());
     // An odd displacement cannot be encoded at all.
     assert!(try_text_for("riscv64", "beq a0, a1, 3").is_err());
     assert!(try_text_for("riscv64", "j 3").is_err());
@@ -853,12 +977,14 @@ fn operand_shape_errors() {
         ".option push\n.option pop\n.option pop",
         "no `.option push`",
     );
+    // GNU as nests without limit; the stack here lives in the three bits a
+    // level takes of one word, so it runs out at twenty.
     rejects(
         "riscv64",
-        &".option push\n".repeat(31),
-        "nested more than 30 deep",
+        &".option push\n".repeat(21),
+        "nested more than 20 deep",
     );
-    assert!(try_text_for("riscv64", &".option push\n".repeat(30)).is_ok());
+    assert!(try_text_for("riscv64", &".option push\n".repeat(20)).is_ok());
 }
 
 /// Every one of these is wrong in some way. The only requirement is that the
@@ -1059,4 +1185,130 @@ fn objects_carry_the_isa_string() {
             "{arch}: {src}"
         );
     }
+}
+
+/// An alignment in a section a linker may relax cannot be settled here: the
+/// linker deletes instructions, so an offset aligned now is no longer aligned
+/// when the program runs. `riscv64-elf-as` writes the most padding the
+/// alignment could need, measured from the width of the shortest instruction,
+/// and an `R_RISCV_ALIGN` saying how much of it the linker may take back; the
+/// assembler itself only reaches that width. Nothing is left to the linker for
+/// an alignment no wider than one instruction.
+#[test]
+fn an_alignment_in_relaxable_code_is_left_to_the_linker() {
+    let src = "nop\n.align 3\nnop\n.align 4\nnop\n.align 1\nnop";
+    // Two bytes of `nop`, six of padding for `.align 3`, two, fourteen for
+    // `.align 4`, two, then `.align 1` reaches no further than a compressed
+    // instruction and pads nothing.
+    enc64(
+        src,
+        "01 00 01 00 13 00 00 00 01 00 01 00 13 00 00 00 13 00 00 00 13 00 00 00 01 00 \
+         01 00",
+    );
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![rel(0x02, ALIGN, "", 6), rel(0x0a, ALIGN, "", 14)]
+    );
+    // The width to reach, and so the padding, is four bytes without the C
+    // extension, which makes `.align 2` the one that needs no linker.
+    let src = ".option norvc\nnop\n.align 3\nnop\n.align 2\nnop";
+    enc64(src, "13 00 00 00 13 00 00 00 13 00 00 00 13 00 00 00");
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![rel(0x04, ALIGN, "", 4)]
+    );
+    // An explicit fill byte is an ordinary alignment, padded to exactly what
+    // it needs, as it is in GNU as: only no-op padding may be deleted.
+    let src = "nop\n.align 3, 0\nnop\n.balign 8, 0x13\nnop";
+    enc64(src, "01 00 00 00 00 00 00 00 01 00 13 13 13 13 13 13 01 00");
+    assert_eq!(relocs_of(&assemble_for("riscv64", src)), vec![]);
+    // A maximum skip is dropped: only the linker knows how far it will have
+    // to skip, and GNU as passes the limit to the ordinary alignment alone.
+    let src = "nop\n.p2align 3,,2\nnop";
+    enc64(src, "01 00 01 00 13 00 00 00 01 00");
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![rel(0x02, ALIGN, "", 6)]
+    );
+    // The same on RV32.
+    let src = "nop\n.align 3\nnop";
+    enc32(src, "01 00 01 00 13 00 00 00 01 00");
+    assert_eq!(
+        relocs_of(&assemble_for("riscv32", src)),
+        vec![rel(0x02, ALIGN, "", 6)]
+    );
+}
+
+/// `.option norelax` stops both halves of relaxation for the statements it
+/// covers — the mark beside a relocation and the alignment left to the linker
+/// — and `.option relax` starts them again; `.option push` and `.option pop`
+/// save and restore the setting, as they do for `.option pic` and the C
+/// extension.
+#[test]
+fn option_norelax_gates_relaxation_per_statement() {
+    let src = "\
+        call a\n\
+        .option norelax\n\
+        call b\n\
+        .option relax\n\
+        call c\n\
+        .option push\n\
+        .option norelax\n\
+        call d\n\
+        .option pop\n\
+        call e\n";
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x00, CALL_PLT, "a", 0),
+            relax(0x00),
+            rel(0x08, CALL_PLT, "b", 0),
+            rel(0x10, CALL_PLT, "c", 0),
+            relax(0x10),
+            rel(0x18, CALL_PLT, "d", 0),
+            rel(0x20, CALL_PLT, "e", 0),
+            relax(0x20),
+        ]
+    );
+    // An alignment under `.option norelax` is padded to what it needs, and
+    // the one after it is the linker's again.
+    let src = "nop\n.option norelax\n.align 3\nnop\n.option relax\n.align 3\nnop";
+    enc64(src, "01 00 01 00 13 00 00 00 01 00 01 00 13 00 00 00 01 00");
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![rel(0x0a, ALIGN, "", 6)]
+    );
+}
+
+/// `%got_pcrel_hi(sym)` puts the address of the symbol's GOT slot in an
+/// `auipc` or a `lui`, to be completed by a `%pcrel_lo` that names the
+/// `auipc`. GNU as marks `R_RISCV_GOT_HI20` relaxable only where `la` or
+/// `lga` wrote the pair, since an `auipc` the source wrote itself may belong
+/// to a sequence the linker would not recognise; the `%pcrel_lo` beside it is
+/// marked either way.
+#[test]
+fn got_pcrel_hi_addresses_the_got_slot() {
+    let src = "\
+        1: auipc a0, %got_pcrel_hi(ext)\n\
+        ld a0, %pcrel_lo(1b)(a0)\n\
+        lui a1, %got_pcrel_hi(ext)\n\
+        auipc a2, %got_pcrel_hi(ext+4)\n";
+    enc64(src, "17 05 00 00 03 35 05 00 b7 05 00 00 17 06 00 00");
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x00, GOT_HI20, "ext", 0),
+            rel(0x04, PCREL_LO12_I, "@0x0", 0),
+            relax(0x04),
+            rel(0x08, GOT_HI20, "ext", 0),
+            rel(0x0c, GOT_HI20, "ext", 4),
+        ]
+    );
+    // Only the high half takes it, and only a linker can compute it.
+    rejects("riscv64", "addi a0, a0, %got_pcrel_hi(ext)", "12-bit field");
+    rejects(
+        "riscv64",
+        ".word %got_pcrel_hi(ext)",
+        "expected an expression",
+    );
 }

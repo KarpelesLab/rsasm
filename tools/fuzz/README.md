@@ -543,20 +543,23 @@ $ tools/fuzz/riscv.py fuzz --target riscv32 --only '^f' --seed 7
 $ tools/fuzz/riscv.py check --target riscv64 lines.txt
 ```
 
-GNU as runs with `-mno-relax`: it otherwise pairs every symbolic reference
-with an `R_RISCV_RELAX` marker, which is a hint to the linker rather than
-part of the encoding, and neither llvm-mc nor rsasm writes one.
+Both references run with linker relaxation on -- GNU as needs no asking,
+llvm-mc wants `+relax` -- because rsasm has it on as GNU as does. It is what
+puts an `R_RISCV_RELAX` beside each relocation a linker may rewrite, leaves a
+reference to a label in the case's own section to the linker, and hands an
+alignment in code to it as an `R_RISCV_ALIGN`.
 
-The references part ways often enough to need rules: GNU as leaves a
-reference to a label to the linker where llvm-mc resolves it, does not run
-an alias through compression, and expands `li` into a longer sequence for
-some values; llvm-mc truncates a value past the end of a field where GNU as
-refuses it. rsasm follows llvm-mc, which is what README.md records RISC-V as
-checked against. Three things rsasm does on purpose are listed as
-deviations: it resolves a local label the way llvm-mc does, it takes a bare
-symbol in a twelve-bit field where both references insist on `%lo`, and it
-reads the twenty-bit field of `lui` and `auipc` as signed as well as
-unsigned.
+The references part ways often enough to need rules: GNU as fills the field
+of a branch it relocates in with the distance as it stands and llvm-mc leaves
+it empty, GNU as does not run an alias through compression, and it expands
+`li` into a longer sequence for some values; llvm-mc truncates a value past
+the end of a field where GNU as refuses it. rsasm follows llvm-mc, which is
+what README.md records RISC-V as checked against, except for the relaxation
+markers, which are GNU as's. That mixture is the first deviation listed --
+GNU as's relocations with llvm-mc's bytes, which is also why the section's
+tail is not padded -- and the other two are that rsasm takes a bare symbol in
+a twelve-bit field where both references insist on `%lo`, and reads the
+twenty-bit field of `lui` and `auipc` as signed as well as unsigned.
 
 One case in eight is a small program rather than a single instruction: a
 forward branch to the label the harness defines after every case, over a

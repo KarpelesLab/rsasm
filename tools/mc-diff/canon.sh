@@ -42,6 +42,13 @@
 # but section and file symbols, sorted: ARM's mapping symbols and Thumb
 # function bits are local, and are what that comparison is for.
 #
+# `--ignore-reloc TYPE` leaves out every relocation of that type. It is for a
+# relocation the two references disagree about writing at all rather than for
+# one of them getting it wrong: `R_RISCV_RELAX`, which llvm-mc writes only
+# under `-mattr=+relax` and then beside relocations GNU as does not, so
+# `tools/mc-diff` passes it for RISC-V and the marks are checked against GNU
+# as in `tests/riscv.rs` and through a relaxing link in `tools/link-diff`.
+#
 # `--zero-relocated NAME=WIDTH` blanks the `WIDTH` bytes at each relocation in
 # section `NAME` before printing it. A field a relocation covers belongs to the
 # linker, and the references disagree about what they leave in it: GNU as for
@@ -55,9 +62,14 @@ full=0
 zero_name=
 zero_width=0
 ignore=
+ignore_reloc=
 [ "$1" = --full ] && { full=1; shift; }
 if [ "$1" = --ignore ]; then
   ignore=$2
+  shift 2
+fi
+if [ "$1" = --ignore-reloc ]; then
+  ignore_reloc=$2
   shift 2
 fi
 if [ "$1" = --zero-relocated ]; then
@@ -159,5 +171,6 @@ ${AWK:-awk} -v full="$full" '
 # after the others.
 llvm-readobj --relocs --expand-relocs "$obj" |
   ${AWK:-awk} -f "$here/relocs.awk" "$tmp/syms" - |
+  ${AWK:-awk} -v drop="$ignore_reloc" '{ if (drop == "" || $3 != drop) print }' |
   ${AWK:-awk} '{ o = substr($2, 3); printf "%s\t%16s\t%s\n", $1, o, $0 }' |
   sort -s -t "$(printf '\t')" -k1,1 -k2,2 | cut -f3-

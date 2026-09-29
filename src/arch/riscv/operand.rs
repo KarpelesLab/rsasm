@@ -18,6 +18,10 @@ use crate::source::Span;
 
 /// A `%`-prefixed relocation modifier.
 ///
+/// `%got_pcrel_hi` is the high half of the address of a symbol's GOT slot,
+/// which `%pcrel_lo(label)` completes as it completes `%pcrel_hi`; it is what
+/// `lga`, and `la` under `.option pic`, expand to.
+///
 /// The thread-local ones name the four access models the psABI has: local
 /// exec (`%tprel_hi`, `%tprel_lo`, and the `%tprel_add` that marks the add of
 /// the thread pointer), initial exec (`%tls_ie_pcrel_hi`), general dynamic
@@ -30,6 +34,7 @@ pub enum Modifier {
     Lo,
     PcrelHi,
     PcrelLo,
+    GotPcrelHi,
     TprelHi,
     TprelLo,
     TprelAdd,
@@ -48,6 +53,7 @@ impl Modifier {
             "lo" => Modifier::Lo,
             "pcrel_hi" => Modifier::PcrelHi,
             "pcrel_lo" => Modifier::PcrelLo,
+            "got_pcrel_hi" => Modifier::GotPcrelHi,
             "tprel_hi" => Modifier::TprelHi,
             "tprel_lo" => Modifier::TprelLo,
             "tprel_add" => Modifier::TprelAdd,

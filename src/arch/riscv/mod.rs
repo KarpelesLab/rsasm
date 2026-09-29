@@ -53,7 +53,8 @@ pub struct Riscv {
 }
 
 /// `ArchState::features` bit 0 says whether the C extension may shorten what
-/// is emitted, and bit 1 whether `la` goes through the GOT.
+/// is emitted, bit 1 whether `la` goes through the GOT, and bit 2 whether the
+/// linker may relax what follows.
 ///
 /// `.option push` / `.option pop` need a stack, and `ArchState` has no field
 /// for one, so the word doubles as it: each push shifts everything left by a
@@ -62,8 +63,9 @@ pub struct Riscv {
 /// how an unmatched pop is noticed.
 const RVC: u64 = 1;
 const PIC: u64 = 2;
-const LEVEL: u64 = RVC | PIC;
-const LEVEL_BITS: u32 = 2;
+const RELAX: u64 = 4;
+const LEVEL: u64 = RVC | PIC | RELAX;
+const LEVEL_BITS: u32 = 3;
 const STACK_BOTTOM: u64 = 1 << LEVEL_BITS;
 
 /// How many `.option push` levels are open.
@@ -78,6 +80,12 @@ fn rvc_enabled(state: &ArchState) -> bool {
 /// Whether `.option pic` is in effect.
 pub(super) fn pic_enabled(state: &ArchState) -> bool {
     state.features & PIC != 0
+}
+
+/// Whether the linker may relax what is assembled here: `.option relax`,
+/// which GNU as starts a file with.
+fn relax_enabled(state: &ArchState) -> bool {
+    state.features & RELAX != 0
 }
 
 impl Architecture for Riscv {
@@ -106,8 +114,10 @@ impl Architecture for Riscv {
             bits: self.xlen,
             syntax: Syntax::Att,
             // `rv32gc` / `rv64gc` is what toolchains default to, so compressed
-            // instructions are on unless `.option norvc` turns them off.
-            features: STACK_BOTTOM | RVC,
+            // instructions are on unless `.option norvc` turns them off, and
+            // linker relaxation is on as GNU as has it unless `.option
+            // norelax` turns it off.
+            features: STACK_BOTTOM | RVC | RELAX,
             intel_register_prefix: false,
             used: 0,
             private: 0,
@@ -156,6 +166,24 @@ impl Architecture for Riscv {
 
     fn align_is_log2(&self) -> bool {
         true
+    }
+
+    /// A relaxing linker deletes instructions, so an alignment it will move
+    /// code under is left to it, as `riscv_frag_align_code` leaves it: the
+    /// assembler reaches the width of the shortest instruction, two bytes
+    /// with compressed instructions and four without, and the linker takes
+    /// back as much of the padding after that as it needs to.
+    ///
+    /// Nothing is left to the linker where the alignment is no wider than
+    /// that shortest instruction, since no relaxation can disturb it, nor
+    /// under `.option norelax`, where there is no relaxation to disturb it.
+    fn align_reloc(
+        &self,
+        state: &ArchState,
+        align: u64,
+    ) -> Option<(u64, crate::section::FixupKind)> {
+        let unit = if rvc_enabled(state) { 2 } else { 4 };
+        (relax_enabled(state) && align > unit).then(|| (unit, encode::kind_align()))
     }
 
     /// llvm-mc, the reference, aligns `.text` to the size of the shortest
@@ -257,7 +285,8 @@ impl Architecture for Riscv {
         let rvc = rvc_enabled(cx.state);
         let cur = req.cursor();
         let ops = Operands::parse(&cur, req.span);
-        let mut a = Asm::new(cx, self.xlen, rvc, req.span);
+        let relax = relax_enabled(cx.state);
+        let mut a = Asm::new(cx, self.xlen, rvc, relax, req.span);
 
         match pseudo::expand(&mut a, &mnemonic, &ops) {
             Handled::Done => return Some(a.finish()),
@@ -305,18 +334,19 @@ impl Architecture for Riscv {
             "norvc" => cx.state.features &= !RVC,
             "pic" => cx.state.features |= PIC,
             "nopic" => cx.state.features &= !PIC,
-            "push" if option_depth(features) >= 30 => {
-                cx.error(tok.span, "`.option push` nested more than 30 deep");
+            "relax" => cx.state.features |= RELAX,
+            "norelax" => cx.state.features &= !RELAX,
+            "push" if option_depth(features) >= 20 => {
+                cx.error(tok.span, "`.option push` nested more than 20 deep");
             }
             "push" => cx.state.features = (features << LEVEL_BITS) | (features & LEVEL),
             "pop" if option_depth(features) == 0 => {
                 cx.error(tok.span, "`.option pop` with no `.option push`");
             }
             "pop" => cx.state.features = features >> LEVEL_BITS,
-            // Linker relaxation is not implemented, so objects come out as
-            // llvm-mc writes them without it (see README.md), and `.option
-            // arch` carries an extension list this backend does not track.
-            "relax" | "norelax" | "arch" => {}
+            // `.option arch` carries an extension list this backend does not
+            // track.
+            "arch" => {}
             _ => cx.error(tok.span, format!("unknown `.option {word}`")),
         }
         true

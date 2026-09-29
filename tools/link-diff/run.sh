@@ -101,17 +101,20 @@ bin="${RSASM_ORACLES:-$root/target/oracles}/bin"
 # (or PATH), or `mc:<triple>` for llvm-mc. GNU as is preferred here: it is
 # what rsasm follows for whole objects, so its local and mapping symbols are
 # rsasm's, and the linker is its own ld. llvm-mc stands in for the targets
-# rsasm follows it for -- MIPS, SPARC, PowerPC and RISC-V section alignment
-# is llvm-mc's, and a GNU as reference would place the second object's
-# `.text` differently for that reason alone.
+# rsasm follows it for -- MIPS, SPARC and PowerPC section alignment is
+# llvm-mc's, and a GNU as reference would place the second object's `.text`
+# differently for that reason alone.
 #
-# RISC-V is linked both ways: without relaxation, and with it, which is
-# where a `call` pair that is really one instruction gets shortened. Its
-# reference is asked for `.riscv.attributes` (`-riscv-add-build-attributes`),
-# which rsasm writes into every object and llvm-mc only on request: the
-# section is not part of the image, but it takes up room in front of the
-# `.got` that the script's catch-all puts it in, and would move every GOT
-# slot a thread-local sequence reads.
+# RISC-V is linked both ways: without relaxation, and with it, which is where
+# a `call` pair that is really one instruction gets shortened. Its reference
+# is GNU as, whose relaxation markers rsasm writes: llvm-mc under `+relax`
+# also marks `R_RISCV_JAL`, so its jumps shrink to `c.j` where GNU as's and
+# rsasm's do not, and the images would differ in length. `-march` names the
+# extensions rsasm's `.riscv.attributes` claims, `imafdc` rather than `gc`,
+# which are the same instruction set spelled without `zifencei`: the section
+# is not part of the image, but it takes up room in front of the `.got` that
+# the script's catch-all puts it in, and would move every GOT slot a
+# thread-local sequence reads.
 #
 # There is no MIPS64 row: the MIPS GNU ld among the oracles emulates only
 # o32. There is no Z80 row: rsasm writes no ELF for the 8-bit targets.
@@ -128,8 +131,8 @@ i386|i386|i386|x86_64-elf-as|--32|x86_64-elf-ld|-m elf_i386|0x8048000|
 aarch64|aarch64|aarch64|aarch64-elf-as||aarch64-elf-ld||0x400000|
 arm|arm|arm|arm-none-eabi-as|-march=armv7-a|arm-none-eabi-ld||0x8000|
 thumb|thumb|thumb|arm-none-eabi-as|-march=armv7-a -mthumb|arm-none-eabi-ld||0x8000|
-riscv32|riscv|riscv32|mc:riscv32|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes|riscv64-elf-ld|-m elf32lriscv --no-relax|0x10000|-m elf32lriscv --relax
-riscv64|riscv|riscv64|mc:riscv64|-mattr=+m,+a,+f,+d,+c -riscv-add-build-attributes|riscv64-elf-ld|-m elf64lriscv --no-relax|0x10000|-m elf64lriscv --relax
+riscv32|riscv|riscv32|riscv64-elf-as|-march=rv32imafdc|riscv64-elf-ld|-m elf32lriscv --no-relax|0x10000|-m elf32lriscv --relax
+riscv64|riscv|riscv64|riscv64-elf-as|-march=rv64imafdc|riscv64-elf-ld|-m elf64lriscv --no-relax|0x10000|-m elf64lriscv --relax
 powerpc|powerpc|powerpc|mc:powerpc||powerpc64-linux-gnu-ld|-m elf32ppc|0x10000000|
 powerpc64|powerpc64|powerpc64|mc:powerpc64||powerpc64-linux-gnu-ld|-m elf64ppc --no-toc-optimize|0x10000000|
 powerpc64le|powerpc64|powerpc64le|mc:powerpc64le||powerpc64-linux-gnu-ld|-m elf64lppc --no-toc-optimize|0x10000000|

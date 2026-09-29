@@ -1,3 +1,21 @@
+# Linker relaxation is on here, as it is in both references: llvm-mc runs with
+# `-mattr=+relax` and GNU as needs no asking. So a reference to a symbol is
+# relocated even where it is a label in this very section, since the linker
+# may shorten what lies between, and `R_RISCV_RELAX` marks each relocation the
+# linker is allowed to rewrite. The marks are left out of this comparison
+# (`canon.sh --ignore-reloc`, see tools/mc-diff/run.sh): llvm-mc writes them
+# beside `R_RISCV_JAL`, `R_RISCV_TLS_GOT_HI20` and `R_RISCV_TLS_GD_HI20` as
+# well, where GNU as leaves a jump and a thread-local slot alone, and rsasm
+# follows GNU as. Which relocations carry one is checked in tests/riscv.rs
+# against `riscv64-elf-as`, and what they do by tools/link-diff, which links
+# every RISC-V program a second time with `--relax`.
+#
+# The field a relocated reference covers is left empty, as llvm-mc leaves it
+# and as a reference out of the file leaves it; GNU as fills a branch or a
+# jump in with the distance as it stands, which no linker reads.
+# `R_RISCV_ALIGN` does not appear below because these sections align nothing
+# wider than an instruction; tests/riscv.rs covers it.
+
 === la and lla of an external symbol relocate both halves
         la      a0, ext
         lla     a1, ext
@@ -402,8 +420,8 @@ de:     auipc   a7, %tlsdesc_hi(tg)
 
 === la.tls.ie and la.tls.gd expand to an auipc pair
 # The expansion does not change with relaxation: `.option norelax` only stops
-# GNU as pairing each relocation with an `R_RISCV_RELAX`, which llvm-mc
-# without `+relax` never writes and rsasm does not write either.
+# the `R_RISCV_RELAX` beside each relocation, and neither half of an
+# initial-exec or general-dynamic pair carries one anyway.
         .section .tdata,"awT",@progbits
 tv:     .dword  0
         .text

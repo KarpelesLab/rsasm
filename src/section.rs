@@ -264,6 +264,28 @@ pub struct FixupKind {
     /// does not tell the reader what to do about it: a literal load that
     /// does not reach its pool needs the pool moved, not the load.
     pub range_hint: Option<&'static str>,
+    /// Relocated even where the target is in the fixup's own section and the
+    /// distance is therefore known, for a linker that may delete
+    /// instructions between the two.
+    ///
+    /// The distance still sizes the instruction — a RISC-V branch takes its
+    /// compressed form when the distance as written fits — but it is not what
+    /// the field ends up holding, nor is it range-checked: the linker works
+    /// the distance out again and writes it from the addend. Unlike
+    /// [`FixupKind::object_reloc`], which hides the value from layout as well
+    /// and so gives a relaxable instruction its widest form, and unlike a
+    /// flat image, which has no linker and keeps the value with no
+    /// relocation.
+    pub relocated_when_relaxed: bool,
+    /// A second relocation at the same offset as the first, written after it,
+    /// against no symbol and with no addend. `0` means none.
+    ///
+    /// It marks the first rather than describing a field of its own, so it
+    /// only appears where the first is written at all. RISC-V's
+    /// `R_RISCV_RELAX` is the one: it tells a linker that the sequence the
+    /// first relocation belongs to may be rewritten, and GNU as writes it
+    /// beside every relocation a linker knows how to relax.
+    pub marker_reloc: u32,
     /// What the relocation computes, for a writer that does not number
     /// relocations the way [`FixupKind::reloc`] does; see the crate's
     /// `reloc::RelocClass`.
@@ -327,6 +349,8 @@ impl FixupKind {
             relax_difference: false,
             accepts: None,
             range_hint: None,
+            relocated_when_relaxed: false,
+            marker_reloc: 0,
             class: RelocClass::Plain,
         }
     }
@@ -417,6 +441,20 @@ impl FixupKind {
     /// [`FixupKind::object_reloc`].
     pub fn relocated_in_objects(mut self) -> FixupKind {
         self.object_reloc = true;
+        self
+    }
+
+    /// Leaves the field to the linker although the distance is known; see
+    /// [`FixupKind::relocated_when_relaxed`].
+    pub fn relocated_when_relaxed(mut self) -> FixupKind {
+        self.relocated_when_relaxed = true;
+        self
+    }
+
+    /// Adds a second relocation at the same offset, marking the first; see
+    /// [`FixupKind::marker_reloc`].
+    pub fn marked_by(mut self, reloc: u32) -> FixupKind {
+        self.marker_reloc = reloc;
         self
     }
 

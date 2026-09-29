@@ -1837,7 +1837,25 @@ impl Assembler {
                         }
                         kind = k;
                     }
-                    match self.fixup_value(e, &kind, id, fi, at) {
+                    let mut value = self.fixup_value(e, &kind, id, fi, at);
+                    // A reference a relaxing linker may have to work out
+                    // again picks the instruction from the distance as it
+                    // stands and is then left to the linker; see
+                    // `FixupKind::relocated_when_relaxed`. The range is not
+                    // checked, because the distance the linker finally writes
+                    // is not this one and GNU as says as much ("assume jumps
+                    // are in range; the linker will catch any that aren't").
+                    // Only a reference to a symbol, at that: a bare
+                    // displacement names no place a linker could move, and
+                    // GNU as resolves one outright.
+                    if value.is_some()
+                        && kind.relocated_when_relaxed
+                        && self.options.relocatable
+                        && self.eval(e).is_ok_and(|v| v.plus.is_some())
+                    {
+                        value = None;
+                    }
+                    match value {
                         Some(v) => {
                             if let Some(msg) = self.size_modifier_overflow(e, &kind, id, fi, v) {
                                 self.diags.error(span, msg);
@@ -1879,6 +1897,7 @@ impl Assembler {
                                 kind: kind.reloc,
                                 desc: RelocDesc::of(&kind),
                             });
+                            relocs.extend(marker_relocation(&kind, id, at));
                         }
                         // A Mach-O field is filled in by the writer, which
                         // alone knows what each relocation will name.
@@ -2383,6 +2402,9 @@ impl Assembler {
             kind: reloc,
             desc,
         }];
+        if symbol.is_some() {
+            relocs.extend(marker_relocation(kind, section, at));
+        }
         match subtrahend {
             Some(sub) if self.frag_arch(si, fi).0.difference_subtrahend_first() => {
                 relocs.insert(0, sub)
@@ -2871,6 +2893,23 @@ impl crate::expr::EvalCtx for AddressEnv<'_> {
     ) -> Result<Value, crate::expr::EvalError> {
         Ok(inner)
     }
+}
+
+/// The mark that goes at the same offset as a relocation a linker may
+/// rewrite; see [`FixupKind::marker_reloc`].
+///
+/// GNU as writes one only beside a relocation that names a symbol, since a
+/// field the assembler resolved itself leaves a linker nothing to rewrite;
+/// both callers have already established that.
+fn marker_relocation(kind: &FixupKind, section: SectionId, at: u64) -> Option<Relocation> {
+    (kind.marker_reloc != 0).then(|| Relocation {
+        section,
+        offset: at,
+        symbol: None,
+        addend: 0,
+        kind: kind.marker_reloc,
+        desc: RelocDesc::of(&FixupKind::data(0)),
+    })
 }
 
 /// Explains why a value does not fit its field, naming the actual limit.

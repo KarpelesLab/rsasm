@@ -39,7 +39,14 @@
 # refuses), <key>.txt for each target's own, and <key>-compiler.txt with whole
 # files from GCC (x86) and Clang (every target whose code it assembles), see
 # compiler.sh. A snippet using `.cfi_*` is skipped for a target whose
-# reference has no CFI. Both assemblers run in the same scratch directory,
+# reference has no CFI, and one that aligns code for a target marked `relax`,
+# whose alignment in code is the linker's: RISC-V writes the worst-case
+# padding and an `R_RISCV_ALIGN` there, and llvm-mc without `-mattr=+relax`
+# pads to the boundary, so the addresses a line table advances by differ. The
+# marker itself is checked in tests/riscv.rs and tools/link-diff, and
+# `+relax` is not the answer here because llvm-mc then writes the line
+# table's own advances as `R_RISCV_ADD`/`R_RISCV_SUB` pairs, which rsasm does
+# not (see README.md). Both assemblers run in the same scratch directory,
 # which a DWARF 5 table without `.file 0` names, and both are told to call
 # themselves the reference in the compilation unit, through the
 # DEBUG_PRODUCER variable llvm-mc reads and rsasm reads for this.
@@ -72,8 +79,8 @@ i386|i386|xas x86_64-elf-as --32||cfi
 aarch64|aarch64|mc aarch64||cfi
 arm|arm|mc armv7||cfi
 thumb|thumb|mc thumbv7||cfi
-riscv32|riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c||cfi
-riscv64|riscv64|mc riscv64 -mattr=+m,+a,+f,+d,+c||cfi
+riscv32|riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c||cfi relax
+riscv64|riscv64|mc riscv64 -mattr=+m,+a,+f,+d,+c||cfi relax
 powerpc|powerpc|mc powerpc||cfi
 powerpc64|powerpc64|mc powerpc64||cfi
 powerpc64le|powerpc64le|mc powerpc64le||cfi
@@ -257,6 +264,10 @@ run_file() { # file, key, rsasm arch, reference, format, quirks
     [ -z "$name" ] && return
     case "$snippet $quirks " in
       *.cfi_*) case " $quirks " in *" cfi "*) ;; *) return ;; esac ;;
+    esac
+    case "$snippet" in
+      *.p2align*|*.balign*|*.align*)
+        case " $quirks " in *" relax "*) return ;; esac ;;
     esac
     compare "$key" "$rs" "$ref" "$format" "$quirks" "$name" "$snippet" "$flag"
   }

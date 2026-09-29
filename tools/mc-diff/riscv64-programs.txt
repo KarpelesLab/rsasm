@@ -1,4 +1,12 @@
+# A branch back to a label in its own section is assembled with relaxation
+# off, which is the only way the distance shows in the bytes. With it on,
+# rsasm follows GNU as and relocates the branch; llvm-mc folds a backward
+# reference outright, since it has resolved one by the time it reads the
+# label, and relocates only a forward one, which is what the snippets below
+# check. The relocated forms are checked against GNU as in tests/riscv.rs, and
+# through a relaxing link in tools/link-diff.
 === backward branch to a label
+        .option norelax
 start:
         add     a0, a0, a1
         addi    a1, a1, -1
@@ -93,6 +101,7 @@ func:
         ret
 
 === a loop with local labels
+        .option norelax
         li      t0, 10
 1:      addi    t0, t0, -1
         bnez    t0, 1b
