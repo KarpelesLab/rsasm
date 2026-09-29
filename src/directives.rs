@@ -514,7 +514,7 @@ impl Assembler {
                 self.here_sym = Some(self.anon_label(span));
                 self.bind_positional(mark);
             }
-            self.emit_value(size, e, span);
+            self.emit_value_in(size, e, span, directive);
             if cur.eat_punct(Punct::Comma).is_none() {
                 break;
             }
@@ -609,6 +609,23 @@ impl Assembler {
     /// Emits `size` bytes for `e`, as literal bytes when it already folds to a
     /// constant and as a fixup otherwise.
     pub(crate) fn emit_value(&mut self, size: u8, e: ExprRef, span: Span) {
+        self.emit_value_of(size, e, span, None);
+    }
+
+    /// Emits `size` bytes for `e` on behalf of the data directive spelled
+    /// `directive`, which decides whether a relocation modifier is read there
+    /// at all; see [`Architecture::directive_modifiers`].
+    ///
+    /// [`Architecture::directive_modifiers`]:
+    ///     crate::arch::Architecture::directive_modifiers
+    pub(crate) fn emit_value_in(&mut self, size: u8, e: ExprRef, span: Span, directive: &str) {
+        self.emit_value_of(size, e, span, Some(directive));
+    }
+
+    /// The body of both, with `None` for a value no data directive read: an
+    /// ARM literal pool's entry, whose modifier the instruction that asked
+    /// for the pool has already had read for it.
+    fn emit_value_of(&mut self, size: u8, e: ExprRef, span: Span, directive: Option<&str>) {
         // A zero takes space in a section with no contents, in GNU as and
         // llvm-mc alike: Clang writes a zero-initialised AVR global as
         // `.short 0` in `.bss`. Anything else has nowhere to go.
@@ -659,6 +676,25 @@ impl Assembler {
                     .with_class(class);
                 let espan = self.exprs.span(e);
                 self.cur_section().emit_fixup(size, e, kind, espan);
+                return;
+            }
+            // A backend that reads its modifiers in some data directives and
+            // not others answers for the one that read this value; see
+            // `Architecture::directive_modifiers`.
+            if let Some(dirs) = self.arch.directive_modifiers()
+                && let Some(directive) = directive
+                && !dirs.contains(&directive)
+            {
+                let espan = self.exprs.span(e);
+                let written = crate::arch::written_modifier(&*self.arch, &name);
+                self.diags.error(
+                    espan,
+                    format!(
+                        "the `{}` backend reads no relocation modifier in `{directive}`, so \
+                         {written} is not one here",
+                        self.arch.name()
+                    ),
+                );
                 return;
             }
             match self.arch.modifier_reloc(&name, size, false) {

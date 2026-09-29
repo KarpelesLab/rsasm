@@ -417,6 +417,16 @@
  move.l ([a0]),d0
  move.l ([4,a0]),d0
 
+# ---- a `:b` displacement ----
+# GNU as `--mri` reads the size the same way its own syntax does: the byte
+# goes in a brief extension word where the operand has one, and widens to a
+# word where it has to.
+ move.l 8:b(a0,d1.w),d0
+ move.l 8:s(a0,d1.w),d0
+ move.l 8:b(a0),d0
+ move.l (8:b,a0,d1.w),d0
+ move.l ([8:b,a0,d1.w]),d0
+
 # ---- bit fields and CHK2/CMP2 ----
  bftst d0{1:8}
  bfextu d0{1:8},d1

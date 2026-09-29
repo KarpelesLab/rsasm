@@ -24,9 +24,15 @@ use crate::expr::ExprRef;
 use crate::lexer::{Punct, TokKind, Token};
 use crate::source::Span;
 
-/// An explicit `.w` or `.l` on a displacement or an absolute address.
+/// An explicit `.b`, `.w` or `.l` on a displacement or an absolute address.
+///
+/// [`Width::B`] is a request rather than a promise: the only field a byte fits
+/// in is the 8-bit displacement of a brief extension word, so GNU as reads it
+/// as a word wherever it cannot reach for one, and `:s` is another spelling of
+/// it. See [`super::encode::no_brief_word`].
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Width {
+    B,
     W,
     L,
 }
@@ -388,9 +394,13 @@ impl Parser<'_, '_> {
 
     /// Removes a trailing width: a separate `.w` token (after a number or a
     /// parenthesis), a `.w` glued to a symbol name, or GNU's `:w`.
+    ///
+    /// `s`, for "short", is the other spelling of `b` in both references, and
+    /// means the same thing in a displacement as it does in a branch.
     fn strip_width(&mut self, toks: &[Token]) -> (Vec<Token>, Option<Width>) {
         let n = toks.len();
         let width_of = |s: &str| match s {
+            "b" | "s" => Some(Width::B),
             "w" => Some(Width::W),
             "l" => Some(Width::L),
             _ => None,
