@@ -1,0 +1,72 @@
+=== registers by name
+	.text
+f:
+	.cfi_startproc
+	pushq %rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq %rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq %rbx
+	.cfi_offset rbx, -24
+	.cfi_offset %xmm7, -32
+	.cfi_register %rip, %rax
+	.cfi_same_value %rflags
+	popq %rbx
+	.cfi_restore %rbx
+	popq %rbp
+	.cfi_def_cfa %rsp, 8
+	ret
+	.cfi_endproc
+=== unwind data and a frame table side by side
+	.text
+	.globl f
+	.def f; .scl 2; .type 32; .endef
+f:
+	.seh_proc f
+	.cfi_startproc
+	pushq %rbp
+	.seh_pushreg %rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq %rsp, %rbp
+	.seh_setframe %rbp, 0
+	.cfi_def_cfa_register %rbp
+	subq $32, %rsp
+	.seh_stackalloc 32
+	.cfi_adjust_cfa_offset 32
+	.seh_endprologue
+	nop
+	addq $32, %rsp
+	popq %rbp
+	ret
+	.seh_endproc
+	.cfi_endproc
+=== a frame in .debug_frame too
+	.cfi_sections .eh_frame, .debug_frame
+	.file 1 "a.c"
+	.text
+	.globl f
+f:
+	.loc 1 3 0
+	.cfi_startproc
+	pushq %rbx
+	.cfi_adjust_cfa_offset 8
+	.cfi_rel_offset %rbx, 0
+	.loc 1 4 5 prologue_end
+	movq 16(%rsp), %rax
+	.loc 1 5 1 epilogue_begin
+	popq %rbx
+	.cfi_adjust_cfa_offset -8
+	.cfi_restore %rbx
+	ret
+	.cfi_endproc
+=== lines in a grouped section
+	.file 1 "a.c"
+	.section .text$mn,"xr"
+	.globl f
+f:
+	.loc 1 3 0
+	nop
+	.loc 1 4 0
+	ret

@@ -600,7 +600,10 @@ impl Assembler {
     /// only in a Mach-O object (see [`RelocClass::FrameSymbol`]).
     fn encoded_pointer(&mut self, b: &mut Blob, enc: u8, e: ExprRef, ptr: u8, class: RelocClass) {
         let size = encoding_size(enc, ptr);
-        let kind = if enc & 0x70 == DW_EH_PE_PCREL {
+        // Darwin reaches the personality routine through the GOT relative to
+        // the field whatever the encoding says, so a `Got` field is always a
+        // distance.
+        let kind = if enc & 0x70 == DW_EH_PE_PCREL || class == RelocClass::Got {
             self.pcrel_kind(size)
         } else {
             self.abs_kind(size)

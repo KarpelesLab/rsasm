@@ -115,6 +115,11 @@ impl Assembler {
 
     /// A section switched to by `.section`: llvm-mc describes it too if it
     /// holds code.
+    ///
+    /// Darwin's `.section` does not reach here, and llvm-mc's does not
+    /// register a section for `-g` either, so the unit in a Mach-O object
+    /// describes the section the file started in and no other however much
+    /// code the rest holds.
     pub(crate) fn dwarf_section_named(&mut self, id: SectionId) {
         let flags = self.section(id).flags;
         let st = &mut self.dwarf.line.source;

@@ -33,6 +33,11 @@
 //! symbols at all. As far as llvm-mc 22 writes the same object, rsasm writes it
 //! byte for byte, down to the order of the symbols and the string table's
 //! shared tails; `tools/macho-diff` checks that.
+//!
+//! The debugging sections that `-g`, `.loc` and `.cfi_*` make are written here
+//! as well, in a `__DWARF` segment and in `__TEXT,__eh_frame`. Because every
+//! section already has an address, most of what an ELF object relocates is a
+//! number here; see the `dwarf` module.
 
 mod directives;
 mod relocations;
@@ -863,16 +868,17 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         let Some(&si) = places.index.get(&r.section) else {
             continue;
         };
-        // An FDE's `initial_location` is a distance this writer can work
-        // out, since every section already has an address; llvm-mc writes
-        // the number and leaves no relocation behind.
-        if cpu == Cpu::X86_64 && r.desc.class == RelocClass::FrameSymbol && r.desc.pcrel {
+        // A symbol an FDE points at is a value this writer can work out,
+        // since every section already has an address; llvm-mc writes the
+        // number and leaves no relocation behind.
+        if r.desc.class == RelocClass::FrameSymbol {
             let here = places.addr[&r.section] as i64 + r.offset as i64;
             let target = r.symbol.map_or(0, |t| places.symbol(asm, t)) + r.addend;
+            let value = if r.desc.pcrel { target - here } else { target };
             let (off, size) = (r.offset as usize, r.desc.size as usize);
             if off + size <= secs[si].bytes.len() {
                 crate::arch::Endian::Little
-                    .write(&mut secs[si].bytes[off..off + size], (target - here) as u64);
+                    .write(&mut secs[si].bytes[off..off + size], value as u64);
             }
             continue;
         }

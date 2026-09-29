@@ -22,12 +22,22 @@
 # rest. x86 is checked against the cross x86_64-elf-as rather than the host's
 # as, which compresses debug sections by default and is a different release.
 #
+# The PE/COFF targets (`coff-*`) are here rather than in tools/coff-diff
+# because the reference that writes DWARF for them is not the one that writes
+# the rest of their object: rsasm follows GNU as for x86 DWARF, and the mingw
+# assembler agrees with llvm-mc about almost nothing else in a COFF object, so
+# only the debugging sections and the relocations can be compared. The Mach-O
+# side is in tools/macho-diff, where llvm-mc is the reference for the whole
+# object and the debugging sections come out of the same comparison.
+#
 # Corpora hold snippets separated by `=== <name>` lines, or
 # `=== <name> | <flag>` for one assembled with `-g` or `--gdwarf-<n>` (which
 # llvm-mc spells `-g -dwarf-version=<n>`): common.txt and common-g.txt, whose
-# snippets use only `nop` and register numbers and are run for every target,
-# <key>.txt for each target's own, and <key>-compiler.txt with whole files
-# from GCC (x86) and Clang (every target whose code it assembles), see
+# snippets use only `nop` and register numbers and are run for every ELF
+# target, coff-common.txt for every PE/COFF one (the common corpora are
+# written in ELF's section and symbol syntax, which the mingw assembler
+# refuses), <key>.txt for each target's own, and <key>-compiler.txt with whole
+# files from GCC (x86) and Clang (every target whose code it assembles), see
 # compiler.sh. A snippet using `.cfi_*` is skipped for a target whose
 # reference has no CFI. Both assemblers run in the same scratch directory,
 # which a DWARF 5 table without `.file 0` names, and both are told to call
@@ -43,6 +53,7 @@ awkscript="$root/tools/mc-diff/relocs.awk"
 
 # key | rsasm arch, and options | reference: `xas <tool> <flags>` or
 # `mc <triple> <flags>`
+# | object format, empty for ELF
 # | what differs: `cfi` where the reference has call frame information,
 # `P` where it names the code section `P` (RX; rsasm writes `.text`),
 # `norelocs` where its relocations are not compared (RL78, whose GNU as leaves
@@ -56,32 +67,42 @@ awkscript="$root/tools/mc-diff/relocs.awk"
 # other relocations, when it converts their frags; a pair stays together, and
 # a linker reads the rest in any order)
 TARGETS="
-x86-64|x86-64|xas x86_64-elf-as|cfi
-i386|i386|xas x86_64-elf-as --32|cfi
-aarch64|aarch64|mc aarch64|cfi
-arm|arm|mc armv7|cfi
-thumb|thumb|mc thumbv7|cfi
-riscv32|riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c|cfi
-riscv64|riscv64|mc riscv64 -mattr=+m,+a,+f,+d,+c|cfi
-powerpc|powerpc|mc powerpc|cfi
-powerpc64|powerpc64|mc powerpc64|cfi
-powerpc64le|powerpc64le|mc powerpc64le|cfi
-mips|mips|mc mips|cfi
-mipsel|mipsel|mc mipsel|cfi
-mips64|mips64|mc mips64|cfi
-sparc|sparc|mc sparc|cfi
-sparcv9|sparcv9|mc sparcv9|cfi
-m68k|m68k -d gas|xas m68k-elf-as|cfi
-sh|sh|xas sh-elf-as|cfi
-shl|shl|xas sh-elf-as -little|cfi
-rx|rx|xas rx-elf-as|P
-rl78|rl78|xas rl78-elf-as|norelocs
-v850|v850|xas v850-elf-as|
-avr|avr|xas avr-elf-as|cfi nodiffs
-avr5|avr5|xas avr-elf-as -mmcu=avr5|cfi nodiffs
-avr6|avr6|xas avr-elf-as -mmcu=avr6|cfi nodiffs
-msp430|msp430|xas msp430-elf-as -mcpu=430|byoffset
-msp430x|msp430x|xas msp430-elf-as -mcpu=430x|byoffset
+x86-64|x86-64|xas x86_64-elf-as||cfi
+i386|i386|xas x86_64-elf-as --32||cfi
+aarch64|aarch64|mc aarch64||cfi
+arm|arm|mc armv7||cfi
+thumb|thumb|mc thumbv7||cfi
+riscv32|riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c||cfi
+riscv64|riscv64|mc riscv64 -mattr=+m,+a,+f,+d,+c||cfi
+powerpc|powerpc|mc powerpc||cfi
+powerpc64|powerpc64|mc powerpc64||cfi
+powerpc64le|powerpc64le|mc powerpc64le||cfi
+mips|mips|mc mips||cfi
+mipsel|mipsel|mc mipsel||cfi
+mips64|mips64|mc mips64||cfi
+sparc|sparc|mc sparc||cfi
+sparcv9|sparcv9|mc sparcv9||cfi
+m68k|m68k -d gas|xas m68k-elf-as||cfi
+sh|sh|xas sh-elf-as||cfi
+shl|shl|xas sh-elf-as -little||cfi
+rx|rx|xas rx-elf-as||P
+rl78|rl78|xas rl78-elf-as||norelocs
+v850|v850|xas v850-elf-as||
+avr|avr|xas avr-elf-as||cfi nodiffs
+avr5|avr5|xas avr-elf-as -mmcu=avr5||cfi nodiffs
+avr6|avr6|xas avr-elf-as -mmcu=avr6||cfi nodiffs
+msp430|msp430|xas msp430-elf-as -mcpu=430||byoffset
+msp430x|msp430x|xas msp430-elf-as -mcpu=430x||byoffset
+"
+# The same targets as PE/COFF objects. GNU as for mingw is the reference for
+# x86, as it is for x86's DWARF anywhere; llvm-mc for ARM64, which mingw has
+# no assembler for. A bare `-g` is not in these corpora: it writes STABS in
+# the mingw assembler, where rsasm writes DWARF, so the version is always
+# asked for.
+COFF_TARGETS="
+coff-x86-64|x86-64|xas x86_64-w64-mingw32-as|coff|cfi
+coff-i386|i386|xas i686-w64-mingw32-as|coff|cfi
+coff-aarch64|aarch64|mc aarch64-windows-msvc|coff|cfi
 "
 SECTIONS=".debug_line .debug_line_str .eh_frame .debug_frame .debug_info .debug_abbrev
 .debug_str .debug_aranges .debug_ranges .debug_rnglists"
@@ -95,8 +116,43 @@ rsasm="$root/target/debug/rsasm"
 pass=0
 fail=0
 
-# What the two objects have to agree on.
-canon() { # object
+# What the two objects have to agree on, as the format says it.
+canon() { # object, format
+  case "$2" in
+    coff) canon_coff "$1" ;;
+    *) canon_elf "$1" ;;
+  esac
+}
+
+# A PE/COFF object: each debugging section with its characteristics (which
+# hold the alignment) and its bytes, and every relocation with the addend its
+# field carries, as tools/coff-diff prints them and for the same reason: the
+# two references split an address between the field and the symbol
+# differently, so only the sum means anything.
+canon_coff() { # object
+  local o=$1
+  llvm-readobj --sections --section-data "$o" | ${AWK:-awk} '
+    $1 == "Section" && $2 == "{" { name = ""; data = ""; indata = 0 }
+    $1 == "Name:" && name == "" { name = $2 }
+    $1 == "Characteristics" { f = $3; gsub(/[()]/, "", f); flags = f }
+    $1 == "SectionData" { indata = 1; next }
+    indata && $1 == ")" { indata = 0; next }
+    indata {
+      line = $0
+      sub(/^ *[0-9A-F]+: /, "", line)
+      sub(/ *\|.*$/, "", line)
+      gsub(/ /, "", line)
+      data = data tolower(line)
+      next
+    }
+    $1 == "}" && name != "" {
+      if (name ~ /^\.(debug_|eh_frame)/) printf "%s %s %s\n", name, flags, data
+      name = ""
+    }' | LC_ALL=C sort
+  "$root/tools/coff-diff/canon.sh" --relocs "$o"
+}
+
+canon_elf() { # object
   local o=$1 s
   for s in $SECTIONS; do
     llvm-readobj --sections "$o" | ${AWK:-awk} -v want="$s" '
@@ -127,9 +183,11 @@ by_offset() {
     sort -s -t "$(printf '\t')" -k1,1 -k2,2 -k3,3 | cut -f4-
 }
 
-compare() { # key, rsasm arch, reference, quirks, name, source, flag
-  local key=$1 rs=$2 ref=$3 quirks=$4 name=$5 src=$6 flag=$7 d kind tool m r producer mcflags
-  local -a xasflags=()
+compare() { # key, rsasm arch, reference, format, quirks, name, source, flag
+  local key=$1 rs=$2 ref=$3 format=$4 quirks=$5 name=$6 src=$7 flag=$8
+  local d kind tool m r producer mcflags
+  local -a xasflags=() rsflags=()
+  [ "$format" = coff ] && rsflags=(-f coff)
   d=$(mktemp -d)
   printf '%s\n' "$src" > "$d/in.s"
   # shellcheck disable=SC2086
@@ -152,14 +210,15 @@ compare() { # key, rsasm arch, reference, quirks, name, source, flag
         > "$d/ref.log" 2>&1; fi ;;
   esac
   if [ $? -eq 0 ] && [ -f "$d/ref.o" ]; then
-    m=$(canon "$d/ref.o")
+    m=$(canon "$d/ref.o" "$format")
     case " $quirks " in *" P "*) m=$(printf '%s\n' "$m" | sed 's/ P+0x/ .text+0x/') ;; esac
   else
     m="REF-ERROR: $(grep -m3 -iE 'error|missing' "$d/ref.log" | tr '\n' ' ')"
   fi
   # shellcheck disable=SC2086
-  if (cd "$d" && DEBUG_PRODUCER=$producer "$rsasm" -a $rs $flag -o rs.o in.s) > "$d/rs.log" 2>&1; then
-    r=$(canon "$d/rs.o")
+  if (cd "$d" && DEBUG_PRODUCER=$producer "$rsasm" -a $rs "${rsflags[@]}" $flag -o rs.o in.s) \
+    > "$d/rs.log" 2>&1; then
+    r=$(canon "$d/rs.o" "$format")
   else
     r="RSASM-ERROR: $(grep -m3 -i error "$d/rs.log" | tr '\n' ' ')"
   fi
@@ -191,15 +250,15 @@ compare() { # key, rsasm arch, reference, quirks, name, source, flag
   rm -rf "$d"
 }
 
-run_file() { # file, key, rsasm arch, reference, quirks
-  local file=$1 key=$2 rs=$3 ref=$4 quirks=$5 snippet="" name="" flag="" line
+run_file() { # file, key, rsasm arch, reference, format, quirks
+  local file=$1 key=$2 rs=$3 ref=$4 format=$5 quirks=$6 snippet="" name="" flag="" line
   [ -f "$file" ] || return 0
   flush() {
     [ -z "$name" ] && return
     case "$snippet $quirks " in
       *.cfi_*) case " $quirks " in *" cfi "*) ;; *) return ;; esac ;;
     esac
-    compare "$key" "$rs" "$ref" "$quirks" "$name" "$snippet" "$flag"
+    compare "$key" "$rs" "$ref" "$format" "$quirks" "$name" "$snippet" "$flag"
   }
   while IFS= read -r line; do
     case "$line" in
@@ -213,17 +272,22 @@ run_file() { # file, key, rsasm arch, reference, quirks
 }
 
 wanted="${*:-}"
-while IFS='|' read -r key rs ref quirks; do
+while IFS='|' read -r key rs ref format quirks; do
   [ -z "$key" ] && continue
   if [ -n "$wanted" ]; then
     case " $wanted " in *" $key "*) ;; *) continue ;; esac
   fi
+  case "$format" in
+    coff) common="$here/coff-common" ;;
+    *) common="$here/common" ;;
+  esac
   before=$((pass + fail))
-  for f in "$here"/common*.txt "$here/$key.txt" "$here/$key"-*.txt; do
-    run_file "$f" "$key" "$rs" "$ref" "$quirks"
+  for f in "$common"*.txt "$here/$key.txt" "$here/$key"-*.txt; do
+    run_file "$f" "$key" "$rs" "$ref" "$format" "$quirks"
   done
   echo "[$key] $((pass + fail - before)) cases"
-done <<< "$TARGETS"
+done <<< "$TARGETS
+$COFF_TARGETS"
 
 echo "--- $pass matched, $fail differed"
 [ "$fail" -eq 0 ]

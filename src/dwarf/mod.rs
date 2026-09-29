@@ -14,6 +14,12 @@
 //! instructions go in a CIE. Each target follows the one that checks its
 //! encodings (see [`Flavor`]), and the differences are written down where they
 //! are decided.
+//!
+//! The object format has a say too, since only one of the two writes some of
+//! them: there is no GNU as for Mach-O here and no llvm-mc for m68k. It also
+//! decides what the sections are called (`Assembler::dwarf_section_pair`),
+//! and how much of what one section says about another a relocation has to
+//! carry (`Assembler::dwarf_offset`).
 
 pub mod cfi;
 pub(crate) mod emit;
@@ -103,7 +109,14 @@ impl Assembler {
     /// The DWARF conventions of the object being written.
     pub(crate) fn dwarf_target(&self) -> DwarfTarget {
         let (arch, state) = self.target_state();
-        arch.dwarf(state, self.options.format)
+        let mut target = arch.dwarf(state, self.options.format);
+        // Darwin's private label prefix is `L` rather than ELF's `.L`, which
+        // is what keeps a label out of the symbol table and out of the unit
+        // `-g` makes; see `output::macho::is_temporary`.
+        if self.options.format == crate::output::Format::MachO {
+            target.private_prefix = "L";
+        }
+        target
     }
 
     /// The Mach-O segment and section a generated DWARF section goes into,

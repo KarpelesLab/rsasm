@@ -149,6 +149,15 @@ impl Assembler {
                 return Vec::new();
             }
         }
+        // A symbol an FDE points at is a value the writer works out itself on
+        // x86-64, as long as this object defines it; one it does not define is
+        // an ordinary reference.
+        let resolved = desc.class == RelocClass::FrameSymbol
+            && cpu == Some(super::Cpu::X86_64)
+            && v.plus.is_some_and(|s| self.symbols.get(s).is_defined());
+        if desc.class == RelocClass::FrameSymbol && !resolved {
+            desc.class = RelocClass::Plain;
+        }
         let r = Relocation {
             section,
             offset: at,
@@ -157,9 +166,7 @@ impl Assembler {
             kind: kind.reloc,
             desc,
         };
-        // An FDE's `initial_location` on x86-64 needs no relocation: the
-        // writer knows both addresses and fills the field in.
-        if cpu == Some(super::Cpu::X86_64) && desc.class == RelocClass::FrameSymbol && desc.pcrel {
+        if resolved {
             for s in [v.plus, v.minus].into_iter().flatten() {
                 self.symbols.get_mut(s).used = true;
             }
