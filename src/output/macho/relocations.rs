@@ -83,9 +83,21 @@ impl Assembler {
             );
             return Vec::new();
         }
-        if matches!(desc.class, RelocClass::GotPage | RelocClass::GotPageOff) && v.addend != 0 {
-            self.diags
-                .error(span, "a reference through the GOT cannot have an addend");
+        // A page reference to a slot the linker makes -- a GOT entry, or the
+        // descriptor of a thread-local variable -- names the slot and
+        // nothing in it, so there is nowhere for an offset to go.
+        let slot = match desc.class {
+            RelocClass::GotPage | RelocClass::GotPageOff => Some("the GOT"),
+            RelocClass::ThreadVariablePage | RelocClass::ThreadVariablePageOff => {
+                Some("a thread-local variable's descriptor")
+            }
+            _ => None,
+        };
+        if let Some(what) = slot.filter(|_| v.addend != 0) {
+            self.diags.error(
+                span,
+                format!("a reference through {what} cannot have an addend"),
+            );
             return Vec::new();
         }
         // `sym@GOT - .` is the slot relative to the field: one arm64
@@ -153,7 +165,7 @@ impl Assembler {
         // x86-64, as long as this object defines it; one it does not define is
         // an ordinary reference.
         let resolved = desc.class == RelocClass::FrameSymbol
-            && cpu == Some(super::Cpu::X86_64)
+            && cpu.is_some_and(super::Cpu::resolves_frame_address)
             && v.plus.is_some_and(|s| self.symbols.get(s).is_defined());
         if desc.class == RelocClass::FrameSymbol && !resolved {
             desc.class = RelocClass::Plain;

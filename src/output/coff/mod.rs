@@ -63,7 +63,7 @@ const SYM_DEBUG: i16 = -2;
 
 /// `IMAGE_COMDAT_SELECT_ASSOCIATIVE`: the section is kept exactly when the
 /// one its auxiliary record names is.
-const SELECT_ASSOCIATIVE: u8 = 5;
+pub(crate) const SELECT_ASSOCIATIVE: u8 = 5;
 
 /// `IMAGE_WEAK_EXTERN_SEARCH_ALIAS`: the linker uses the aliased symbol if
 /// nothing else defines the name.
@@ -516,6 +516,17 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             },
         });
     }
+    // An associative COMDAT is numbered after every section that is not
+    // one, so that it never points forward at the section it goes with
+    // (`WinCOFFWriter::assignSectionNumbers`, which says MSVC's linker cannot
+    // read a forward reference).
+    order.sort_by_key(|id| {
+        asm.coff
+            .sections
+            .get(id)
+            .and_then(|i| i.comdat)
+            .is_some_and(|c| c.selection == SELECT_ASSOCIATIVE)
+    });
     for id in order {
         number += 1;
         secs.push(out_section(asm, id, number));

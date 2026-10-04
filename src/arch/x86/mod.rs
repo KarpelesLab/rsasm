@@ -148,9 +148,11 @@ impl Architecture for X86 {
         }
     }
 
-    /// Mach-O's one x86-64 modifier is `@GOTPCREL`: a load through the GOT in
+    /// Mach-O's x86-64 modifiers are `@GOTPCREL` -- a load through the GOT in
     /// a RIP-relative operand, or in data the address of the GOT slot
-    /// relative to the field. A branch cannot go through one.
+    /// relative to the field -- and `@TLVP`, the address of a thread-local
+    /// variable's descriptor, which llvm-mc takes in a RIP-relative operand
+    /// and nowhere else. A branch cannot go through either.
     fn modifier_class(
         &self,
         name: &str,
@@ -161,6 +163,9 @@ impl Architecture for X86 {
             (_, RelocClass::Branch) => None,
             ("gotpcrel", RelocClass::GotLoad) if self.bits == 64 => Some(RelocClass::GotLoad),
             ("gotpcrel", _) if self.bits == 64 => Some(RelocClass::Got),
+            ("tlvp", _) if self.bits == 64 && kind.pcrel && kind.size == 4 => {
+                Some(RelocClass::ThreadVariable)
+            }
             _ => None,
         }
     }

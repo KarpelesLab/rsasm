@@ -78,6 +78,15 @@ cmpq $1, _ext@GOTPCREL(%rip)
 callq _ext@GOTPCREL
 _f: movq _f@GOTPCREL(%rip), %rax
 movq Lf@GOTPCREL(%rip), %rax;Lf: ret
+# ---- thread-local variables, which Darwin reaches through a descriptor ----
+movq _v@TLVP(%rip), %rdi
+movq _v@TLVP(%rip), %rdi;callq *(%rdi)
+leaq _v@TLVP(%rip), %rdi
+movq _v@TLVP+8(%rip), %rdi
+movl _v@TLVP(%rip), %edi
+movq _v@TLVP, %rdi
+.quad _v@TLVP
+.long _v@TLVP
 # ---- absolute references ----
 movl $_ext, %eax
 movl $_ext+4, %eax
@@ -213,3 +222,16 @@ Lfoo: ret
 .build_version iossimulator, 17, 0
 .build_version driverkit, 23, 0
 .build_version xros, 1, 0
+.macosx_version_min 10, 12
+.macosx_version_min 10, 12, 3
+.macosx_version_min 10, 12 sdk_version 10, 13
+.ios_version_min 9, 0
+.tvos_version_min 9, 0
+.watchos_version_min 2, 0
+.macosx_version_min 10, 12;.build_version macos, 11, 0
+.build_version macos, 11, 0;.macosx_version_min 10, 12
+.linker_option "-lfoo"
+.linker_option "-framework", "Bar"
+.linker_option "-lfoo";.linker_option "-lbarbazquux"
+.linker_option
+.linker_option -lfoo

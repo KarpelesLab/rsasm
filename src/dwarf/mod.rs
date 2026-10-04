@@ -132,6 +132,9 @@ impl Assembler {
         }
         Some(match name {
             ".eh_frame" => ("__TEXT", "__eh_frame"),
+            // Not DWARF at all: the compact unwind table, which a Mach-O
+            // object writes beside the frame table and no other format has.
+            ".compact_unwind" => ("__LD", "__compact_unwind"),
             ".debug_line" => ("__DWARF", "__debug_line"),
             ".debug_line_str" => ("__DWARF", "__debug_line_str"),
             ".debug_info" => ("__DWARF", "__debug_info"),

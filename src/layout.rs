@@ -71,6 +71,7 @@ impl Assembler {
         // Which references a Mach-O object resolves depends on where its
         // atoms start, which is settled once every label has been read.
         if self.macho_object() {
+            self.macho_bind_indirect_symbols();
             self.macho.atoms = crate::output::macho::atoms(self);
             if let Some(open) = self.macho.data_regions.iter().find(|r| r.end.is_none()) {
                 let span = open.span;

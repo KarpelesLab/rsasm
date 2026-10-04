@@ -26,18 +26,24 @@
 //!   atom carried as the addend. That is what the `Atoms` table below is for,
 //!   and it is why a Mach-O object has relocations where an ELF one has none.
 //!
-//! What is written: one `LC_SEGMENT_64` with every section; `LC_BUILD_VERSION`
-//! where the source gave `.build_version`, and `LC_DATA_IN_CODE` where it
-//! marked data in code; and `LC_SYMTAB` with `LC_DYSYMTAB`, whose three-way
-//! split of the symbol table is required, not optional, unless there are no
-//! symbols at all. As far as llvm-mc 22 writes the same object, rsasm writes it
-//! byte for byte, down to the order of the symbols and the string table's
-//! shared tails; `tools/macho-diff` checks that.
+//! What is written: one `LC_SEGMENT_64` with every section; the deployment
+//! target where the source gave one, as `LC_BUILD_VERSION` or the older
+//! `LC_VERSION_MIN_*`; `LC_DATA_IN_CODE` where it marked data in code;
+//! `LC_SYMTAB` with `LC_DYSYMTAB`, whose three-way split of the symbol table
+//! is required, not optional, unless there are no symbols at all, and which
+//! points at the indirect symbol table `.indirect_symbol` fills; and one
+//! `LC_LINKER_OPTION` per `.linker_option`.
+//!
+//! As far as llvm-mc 22 writes the same object, rsasm writes it byte for
+//! byte, down to the order of the symbols and the string table's shared
+//! tails; `tools/macho-diff` checks that.
 //!
 //! The debugging sections that `-g`, `.loc` and `.cfi_*` make are written here
 //! as well, in a `__DWARF` segment and in `__TEXT,__eh_frame`. Because every
 //! section already has an address, most of what an ELF object relocates is a
-//! number here; see the `dwarf` module.
+//! number here; see the `dwarf` module. On arm64 a frame is also described by
+//! one word in `__LD,__compact_unwind`, which the linker reads in preference
+//! to the frame table; see [`CompactUnwind`].
 
 mod directives;
 mod relocations;
@@ -63,14 +69,22 @@ const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
 const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xb;
 const LC_SEGMENT_64: u32 = 0x19;
+pub(crate) const LC_VERSION_MIN_MACOSX: u32 = 0x24;
+pub(crate) const LC_VERSION_MIN_IPHONEOS: u32 = 0x25;
 const LC_DATA_IN_CODE: u32 = 0x29;
-const LC_BUILD_VERSION: u32 = 0x32;
+pub(crate) const LC_LINKER_OPTION: u32 = 0x2d;
+pub(crate) const LC_VERSION_MIN_TVOS: u32 = 0x2f;
+pub(crate) const LC_VERSION_MIN_WATCHOS: u32 = 0x30;
+pub(crate) const LC_BUILD_VERSION: u32 = 0x32;
 
 const SEGMENT_COMMAND_64_SIZE: u32 = 72;
 const SECTION_64_SIZE: u32 = 80;
 const SYMTAB_COMMAND_SIZE: u32 = 24;
 const DYSYMTAB_COMMAND_SIZE: u32 = 80;
 const BUILD_VERSION_COMMAND_SIZE: u32 = 24;
+const VERSION_MIN_COMMAND_SIZE: u32 = 16;
+const LINKER_OPTION_COMMAND_SIZE: u32 = 12;
+const INDIRECT_SYMBOL_SIZE: u64 = 4;
 const LINKEDIT_DATA_COMMAND_SIZE: u32 = 16;
 const DATA_IN_CODE_ENTRY_SIZE: u64 = 8;
 const HEADER_SIZE: u32 = 32;
@@ -117,6 +131,10 @@ const N_TYPE: u8 = 0xe;
 const N_PEXT: u8 = 0x10;
 
 // `n_desc` bits.
+/// The low four bits of `n_desc` on an undefined symbol: the linker is to
+/// bind it the first time it is used, which `.indirect_symbol` in a lazy
+/// pointer or stub section asks for.
+pub(crate) const REFERENCE_FLAG_UNDEFINED_LAZY: u16 = 0x0001;
 pub(crate) const N_NO_DEAD_STRIP: u16 = 0x0020;
 pub(crate) const N_WEAK_REF: u16 = 0x0040;
 pub(crate) const N_WEAK_DEF: u16 = 0x0080;
@@ -133,6 +151,7 @@ mod x86_64_reloc {
     pub(crate) const SIGNED_1: u8 = 6;
     pub(crate) const SIGNED_2: u8 = 7;
     pub(crate) const SIGNED_4: u8 = 8;
+    pub(crate) const TLV: u8 = 9;
 }
 
 mod arm64_reloc {
@@ -144,6 +163,8 @@ mod arm64_reloc {
     pub(crate) const GOT_LOAD_PAGE21: u8 = 5;
     pub(crate) const GOT_LOAD_PAGEOFF12: u8 = 6;
     pub(crate) const POINTER_TO_GOT: u8 = 7;
+    pub(crate) const TLVP_LOAD_PAGE21: u8 = 8;
+    pub(crate) const TLVP_LOAD_PAGEOFF12: u8 = 9;
     pub(crate) const ADDEND: u8 = 10;
 }
 
@@ -188,18 +209,76 @@ impl Cpu {
     fn labels_sections(self) -> bool {
         self == Cpu::Arm64
     }
+
+    /// Whether the writer works out an FDE's `initial_location` itself rather
+    /// than leaving the frame table a relocation.
+    ///
+    /// Every section of the object has an address here, so the distance from
+    /// the field to the function is a number on x86-64, where llvm-mc writes
+    /// one too. On arm64, where every relocation has to be external, llvm-mc
+    /// writes the difference of the function and the field, which is a
+    /// `SUBTRACTOR` pair.
+    pub(crate) fn resolves_frame_address(self) -> bool {
+        self == Cpu::X86_64
+    }
+
+    /// What this machine's compact unwind table looks like, where it has one;
+    /// see [`CompactUnwind`].
+    pub(crate) fn compact_unwind(self) -> Option<CompactUnwind> {
+        match self {
+            // llvm-mc writes a compact unwind table for x86-64 only when the
+            // triple names a macOS of 10.6 or later (`useCompactUnwind`), and
+            // rsasm reads no version from a triple.
+            Cpu::X86_64 => None,
+            Cpu::Arm64 => Some(CompactUnwind {
+                dwarf_only: 0x0300_0000,
+                without_eh_frame: true,
+            }),
+        }
+    }
 }
+
+/// How a Mach-O machine splits a frame between `__LD,__compact_unwind` and
+/// `__TEXT,__eh_frame`.
+///
+/// Darwin's linker reads the compact word first and goes to the frame table
+/// only where the word tells it to, so a frame described in one of the two
+/// alone is described wrongly unless these say otherwise.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct CompactUnwind {
+    /// The word that means the frame is described in the frame table
+    /// (`MCObjectFileInfo::CompactUnwindDwarfEHFrameOnly`).
+    pub(crate) dwarf_only: u32,
+    /// Whether a frame whose word describes it needs no frame table entry
+    /// at all (`getSupportsCompactUnwindWithoutEHFrame`).
+    pub(crate) without_eh_frame: bool,
+}
+
+/// `UNWIND_HAS_LSDA`: the bit the compact word carries when the entry points
+/// at a language-specific data area.
+pub(crate) const UNWIND_HAS_LSDA: u32 = 0x4000_0000;
 
 // ---- assembler-side state ---------------------------------------------------
 
-/// The Mach-O platform of a `.build_version`.
+/// The deployment target a `.build_version` or a `.*_version_min` gave the
+/// object. The last of them wins, as it does in llvm-mc, where both write the
+/// same field.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct BuildVersion {
+    /// `LC_BUILD_VERSION`, or the `LC_VERSION_MIN_*` of the platform the
+    /// directive was named after.
+    pub(crate) command: u32,
+    /// The platform, which only `LC_BUILD_VERSION` names.
     pub(crate) platform: u32,
     /// Packed `xxxx.yy.zz`, as Mach-O stores versions.
     pub(crate) minos: u32,
     pub(crate) sdk: u32,
 }
+
+/// The flags an indirect symbol table entry carries in place of a symbol
+/// index, for a pointer the linker can fill in without one.
+const INDIRECT_SYMBOL_LOCAL: u32 = 0x8000_0000;
+const INDIRECT_SYMBOL_ABS: u32 = 0x4000_0000;
 
 /// What one section is in Mach-O's terms, as its directive declared it. Its
 /// name holds the segment and section names; see [`split_name`].
@@ -241,6 +320,20 @@ pub(crate) struct State {
     /// How many symbols there were when each section was created, which is
     /// where its arm64 section label goes among them.
     pub(crate) section_marks: HashMap<SectionId, u32>,
+    /// What each `.indirect_symbol` named, in the order they were written:
+    /// the pointer or stub section it was in, and the name.
+    pub(crate) indirect_symbols: Vec<(SectionId, crate::intern::Name)>,
+    /// The same with the symbols interned, which only happens once the source
+    /// has been read. Their order is the indirect symbol table's, and where a
+    /// section's first entry falls in it is that section's `reserved1`.
+    ///
+    /// llvm-mc creates these symbols last of all
+    /// (`MachObjectWriter::bindIndirectSymbols`), so one that nothing else in
+    /// the file mentions comes after every label in the symbol table rather
+    /// than where the directive was.
+    pub(crate) indirect_bound: Vec<(SectionId, SymbolId)>,
+    /// One `LC_LINKER_OPTION` per `.linker_option`, each the words it gave.
+    pub(crate) linker_options: Vec<Vec<String>>,
     /// Where every atom starts, once the source has been read; see [`Atoms`].
     pub(crate) atoms: Atoms,
 }
@@ -418,6 +511,10 @@ pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
                 -4 => x86_64_reloc::SIGNED_4,
                 _ => x86_64_reloc::SIGNED,
             },
+            // A thread-local variable is reached through its descriptor,
+            // which the loader fills in: a RIP-relative load of the
+            // descriptor's address and nothing else.
+            RelocClass::ThreadVariable if d.pcrel && d.size == 4 => x86_64_reloc::TLV,
             RelocClass::Plain if !d.pcrel => x86_64_reloc::UNSIGNED,
             // A sign-extended field can hold a difference, which the linker
             // checks, but not an address, which it could not.
@@ -431,6 +528,8 @@ pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
             RelocClass::GotPage => arm64_reloc::GOT_LOAD_PAGE21,
             RelocClass::GotPageOff => arm64_reloc::GOT_LOAD_PAGEOFF12,
             RelocClass::Got if matches!(d.size, 4 | 8) => arm64_reloc::POINTER_TO_GOT,
+            RelocClass::ThreadVariablePage => arm64_reloc::TLVP_LOAD_PAGE21,
+            RelocClass::ThreadVariablePageOff => arm64_reloc::TLVP_LOAD_PAGEOFF12,
             RelocClass::Plain if !d.pcrel => arm64_reloc::UNSIGNED,
             _ => return None,
         }),
@@ -444,7 +543,10 @@ fn entry_pcrel(cpu: Cpu, ty: u8, r: &Relocation) -> bool {
     match cpu {
         Cpu::X86_64 => !matches!(ty, x86_64_reloc::UNSIGNED | x86_64_reloc::SUBTRACTOR),
         Cpu::Arm64 => match ty {
-            arm64_reloc::BRANCH26 | arm64_reloc::PAGE21 | arm64_reloc::GOT_LOAD_PAGE21 => true,
+            arm64_reloc::BRANCH26
+            | arm64_reloc::PAGE21
+            | arm64_reloc::GOT_LOAD_PAGE21
+            | arm64_reloc::TLVP_LOAD_PAGE21 => true,
             // As `sym@GOT - .`.
             arm64_reloc::POINTER_TO_GOT => r.desc.pcrel,
             _ => false,
@@ -624,7 +726,11 @@ pub(crate) fn section_attribute(name: &str) -> Option<u32> {
 
 /// The type and attributes of a section llvm-mc knows before it reads any
 /// source, which it keeps whatever a `.section` directive naming it says.
-pub(crate) fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
+///
+/// The machine decides one of them: `MCObjectFileInfo` names
+/// `__LD,__compact_unwind` only where the target has a compact unwind table,
+/// so on x86-64, where rsasm writes none, the pair is an ordinary section.
+pub(crate) fn precreated(cpu: Cpu, segment: &str, section: &str) -> Option<(u32, u32)> {
     Some(match (segment, section) {
         ("__TEXT", "__text") => (S_REGULAR, S_ATTR_PURE_INSTRUCTIONS),
         ("__TEXT", "__cstring") => (S_CSTRING_LITERALS, 0),
@@ -652,6 +758,9 @@ pub(crate) fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
             "__debug_line" | "__debug_line_str" | "__debug_info" | "__debug_abbrev" | "__debug_str"
             | "__debug_aranges" | "__debug_ranges" | "__debug_rnglists" | "__debug_frame",
         ) => (S_REGULAR, S_ATTR_DEBUG),
+        // The compact unwind table is read by the linker alone, and
+        // dropped once it has read it.
+        ("__LD", "__compact_unwind") if cpu.compact_unwind().is_some() => (S_REGULAR, S_ATTR_DEBUG),
         // The frame table is one item per function, which the linker keeps
         // or drops with the function it describes: coalesced, live-support,
         // and with no static symbols of its own to keep.
@@ -671,8 +780,10 @@ pub(crate) fn precreated(segment: &str, section: &str) -> Option<(u32, u32)> {
 /// `MCObjectFileInfo` names one for each debugging section it creates, and
 /// the symbol is dropped from the table again because nothing relocates
 /// against it; `__debug_aranges` is the one it creates without.
-fn has_start_symbol(segment: &str, section: &str) -> bool {
-    segment == "__DWARF" && section != "__debug_aranges" && precreated(segment, section).is_some()
+fn has_start_symbol(cpu: Cpu, segment: &str, section: &str) -> bool {
+    segment == "__DWARF"
+        && section != "__debug_aranges"
+        && precreated(cpu, segment, section).is_some()
 }
 
 /// Whether a linker-visible label starts an atom strictly after `from` and
@@ -763,6 +874,15 @@ enum Named {
     SectionLabel(SectionId),
 }
 
+/// The indirect symbol table and where each pointer section's own part of it
+/// begins; see [`State::indirect_bound`].
+struct Indirect {
+    /// One entry per `.indirect_symbol`, in the order they were written.
+    entries: Vec<u32>,
+    /// The index of a section's first entry, which is its `reserved1`.
+    bases: HashMap<SectionId, u32>,
+}
+
 /// Section addresses and indices, which everything past layout refers to.
 struct Places {
     index: HashMap<SectionId, usize>,
@@ -821,7 +941,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         ));
     }
 
-    let mut secs = collect_sections(asm)?;
+    let mut secs = collect_sections(asm, cpu)?;
     assign_addresses(&mut secs);
     let places = Places {
         index: secs.iter().enumerate().map(|(i, s)| (s.id, i)).collect(),
@@ -1012,12 +1132,42 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         })
         .collect();
 
-    Ok(write(asm, cpu, &secs, syms, counts, &regions))
+    // The indirect symbol table, in the order the directives were written: a
+    // symbol's index, or, for a pointer the linker needs no symbol to fill
+    // in, the flags that say so.
+    let entries: Vec<u32> = asm
+        .macho
+        .indirect_bound
+        .iter()
+        .map(|&(section, id)| {
+            let non_lazy = asm
+                .macho
+                .sections
+                .get(&section)
+                .is_some_and(|i| i.ty == S_NON_LAZY_SYMBOL_POINTERS);
+            let entry = index.get(&id).map(|&i| &syms[i as usize]);
+            let local = entry.is_some_and(|s| s.n_type & N_EXT == 0);
+            match entry {
+                Some(s) if non_lazy && local => {
+                    let abs = s.n_type & N_TYPE == N_ABS;
+                    INDIRECT_SYMBOL_LOCAL | if abs { INDIRECT_SYMBOL_ABS } else { 0 }
+                }
+                _ => index.get(&id).copied().unwrap_or(0),
+            }
+        })
+        .collect();
+    let mut bases: HashMap<SectionId, u32> = HashMap::new();
+    for (i, &(section, _)) in asm.macho.indirect_bound.iter().enumerate() {
+        bases.entry(section).or_insert(i as u32);
+    }
+    let indirect = Indirect { entries, bases };
+
+    Ok(write(asm, cpu, &secs, syms, counts, &regions, &indirect))
 }
 
 /// Every section of the object, in the order the source created them. Unlike
 /// ELF, Mach-O keeps a section with nothing in it.
-fn collect_sections(asm: &Assembler) -> Result<Vec<Sec>, OutputError> {
+fn collect_sections(asm: &Assembler, cpu: Cpu) -> Result<Vec<Sec>, OutputError> {
     let mut out = Vec::new();
     for s in &asm.sections {
         let name = asm.interner.get(s.name).to_string();
@@ -1029,7 +1179,7 @@ fn collect_sections(asm: &Assembler) -> Result<Vec<Sec>, OutputError> {
         let info = asm.macho.sections.get(&s.id);
         let (ty, attrs) = match info {
             Some(i) => (i.ty, i.attrs),
-            None => precreated(segment, section).unwrap_or((S_REGULAR, 0)),
+            None => precreated(cpu, segment, section).unwrap_or((S_REGULAR, 0)),
         };
         // llvm-mc marks a section that any instruction was assembled into.
         let attrs = attrs
@@ -1151,6 +1301,26 @@ fn collect_symbols(
     places: &Places,
     visible: &HashSet<SymbolId>,
 ) -> Symtab {
+    // `.indirect_symbol` is enough on its own to put a symbol in the table,
+    // and where the only thing that named it is a lazy pointer or a stub, the
+    // linker is asked to bind it lazily
+    // (`MachObjectWriter::bindIndirectSymbols`, which binds the pointers that
+    // are not lazy first, so a symbol in both kinds of section is not lazy).
+    let mut indirect: HashMap<SymbolId, bool> = HashMap::new();
+    for lazy_pass in [false, true] {
+        for &(section, id) in &asm.macho.indirect_bound {
+            let lazy = matches!(
+                asm.macho.sections.get(&section).map(|i| i.ty),
+                Some(S_LAZY_SYMBOL_POINTERS | S_SYMBOL_STUBS)
+            );
+            if lazy != lazy_pass || indirect.contains_key(&id) {
+                continue;
+            }
+            let sym = asm.symbols.get(id);
+            let named = sym.is_defined() || sym.used || sym.declared;
+            indirect.insert(id, lazy && !named);
+        }
+    }
     let mut locals: Vec<(Local, OutSym)> = Vec::new();
     let mut externals: Vec<(SymbolId, OutSym)> = Vec::new();
     let mut undefined: Vec<(SymbolId, OutSym)> = Vec::new();
@@ -1164,7 +1334,7 @@ fn collect_symbols(
     let mut labels = secs
         .iter()
         .enumerate()
-        .filter(|(_, s)| cpu.labels_sections() && !has_start_symbol(&s.segment, &s.section))
+        .filter(|(_, s)| cpu.labels_sections() && !has_start_symbol(cpu, &s.segment, &s.section))
         .map(|(i, s)| {
             let mark = asm.macho.section_marks.get(&s.id).copied().unwrap_or(0);
             let label = OutSym {
@@ -1192,10 +1362,15 @@ fn collect_symbols(
         if is_temporary(&name) && !visible.contains(&id) {
             continue;
         }
-        if !sym.is_defined() && !sym.used {
+        if !sym.is_defined() && !sym.used && !indirect.contains_key(&id) {
             continue;
         }
-        let desc = asm.macho.desc(id);
+        let desc = asm.macho.desc(id)
+            | if indirect.get(&id) == Some(&true) {
+                REFERENCE_FLAG_UNDEFINED_LAZY
+            } else {
+                0
+            };
         let global = sym.binding != Binding::Local;
         let section_of = |section: SectionId| places.index.get(&section).map(|&i| i as u8 + 1);
         let out = match &sym.value {
@@ -1377,6 +1552,13 @@ impl Buf {
     }
 }
 
+/// The bytes one `LC_LINKER_OPTION` takes: the command, the count, and each
+/// word with its terminator, rounded up to a pointer.
+fn linker_option_size(words: &[String]) -> u32 {
+    let strings: usize = words.iter().map(|w| w.len() + 1).sum();
+    (LINKER_OPTION_COMMAND_SIZE + strings as u32).next_multiple_of(8)
+}
+
 fn write(
     asm: &Assembler,
     cpu: Cpu,
@@ -1384,15 +1566,21 @@ fn write(
     syms: &[OutSym],
     counts: (u32, u32, u32),
     regions: &[(u32, u16, u16)],
+    indirect: &Indirect,
 ) -> Vec<u8> {
     let strings = string_table(syms);
 
-    let build_version = asm.macho.build_version.is_some();
+    let version = asm.macho.build_version;
     // An object with no symbols has no symbol table, nor the commands that
     // would describe one.
     let has_symtab = !syms.is_empty();
     let data_in_code = !regions.is_empty();
-    let ncmds = 1 + build_version as u32 + data_in_code as u32 + 2 * has_symtab as u32;
+    let options = &asm.macho.linker_options;
+    let ncmds = 1
+        + version.is_some() as u32
+        + data_in_code as u32
+        + 2 * has_symtab as u32
+        + options.len() as u32;
     let sizeofcmds = SEGMENT_COMMAND_64_SIZE
         + SECTION_64_SIZE * secs.len() as u32
         + if data_in_code {
@@ -1405,11 +1593,12 @@ fn write(
         } else {
             0
         }
-        + if build_version {
-            BUILD_VERSION_COMMAND_SIZE
-        } else {
-            0
-        };
+        + match version {
+            Some(v) if v.command == LC_BUILD_VERSION => BUILD_VERSION_COMMAND_SIZE,
+            Some(_) => VERSION_MIN_COMMAND_SIZE,
+            None => 0,
+        }
+        + options.iter().map(|w| linker_option_size(w)).sum::<u32>();
 
     // The file is laid out before anything is written: every load command
     // holds an offset into what comes after it.
@@ -1429,7 +1618,8 @@ fn write(
         off += s.relocs.len() as u64 * RELOCATION_SIZE;
     }
     let dataoff = off;
-    let symoff = dataoff + regions.len() as u64 * DATA_IN_CODE_ENTRY_SIZE;
+    let indirectoff = dataoff + regions.len() as u64 * DATA_IN_CODE_ENTRY_SIZE;
+    let symoff = indirectoff + indirect.entries.len() as u64 * INDIRECT_SYMBOL_SIZE;
     let stroff = symoff + syms.len() as u64 * NLIST_64_SIZE;
 
     let mut b = Buf::default();
@@ -1477,18 +1667,24 @@ fn write(
         });
         b.u32(s.relocs.len() as u32);
         b.u32(s.flags);
-        b.u32(0); // reserved1
+        b.u32(indirect.bases.get(&s.id).copied().unwrap_or(0)); // reserved1
         b.u32(s.reserved2);
         b.u32(0); // reserved3
     }
 
-    if let Some(v) = asm.macho.build_version {
-        b.u32(LC_BUILD_VERSION);
-        b.u32(BUILD_VERSION_COMMAND_SIZE);
-        b.u32(v.platform);
-        b.u32(v.minos);
-        b.u32(v.sdk);
-        b.u32(0); // ntools
+    if let Some(v) = version {
+        b.u32(v.command);
+        if v.command == LC_BUILD_VERSION {
+            b.u32(BUILD_VERSION_COMMAND_SIZE);
+            b.u32(v.platform);
+            b.u32(v.minos);
+            b.u32(v.sdk);
+            b.u32(0); // ntools
+        } else {
+            b.u32(VERSION_MIN_COMMAND_SIZE);
+            b.u32(v.minos);
+            b.u32(v.sdk);
+        }
     }
 
     if data_in_code {
@@ -1515,8 +1711,33 @@ fn write(
         b.u32(nextdef);
         b.u32(nlocal + nextdef); // iundefsym
         b.u32(nundef);
-        for _ in 0..12 {
+        for _ in 0..6 {
             b.u32(0); // the tables an assembler never writes
+        }
+        b.u32(if indirect.entries.is_empty() {
+            0
+        } else {
+            indirectoff as u32
+        });
+        b.u32(indirect.entries.len() as u32);
+        for _ in 0..4 {
+            b.u32(0); // the relocations a linker moves into the __LINKEDIT
+        }
+    }
+
+    // The linker options come after the symbol table's commands, as llvm-mc
+    // writes them.
+    for words in options {
+        b.u32(LC_LINKER_OPTION);
+        b.u32(linker_option_size(words));
+        b.u32(words.len() as u32);
+        let end = b.len() + u64::from(linker_option_size(words) - LINKER_OPTION_COMMAND_SIZE);
+        for w in words {
+            b.out.extend_from_slice(w.as_bytes());
+            b.u8(0);
+        }
+        while b.len() < end {
+            b.u8(0);
         }
     }
 
@@ -1542,6 +1763,10 @@ fn write(
         b.u32(offset);
         b.u16(length);
         b.u16(kind);
+    }
+
+    for &entry in &indirect.entries {
+        b.u32(entry);
     }
 
     for s in syms {

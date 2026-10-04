@@ -160,7 +160,8 @@ impl Architecture for AArch64 {
 
     /// Darwin's page modifiers, each valid only on the field its name
     /// describes: `@PAGE` on an `adrp`, `@PAGEOFF` on the offset that
-    /// completes it, and the `@GOT` pair for a load through the GOT.
+    /// completes it, the `@GOT` pair for a load through the GOT, and the
+    /// `@TLVP` pair for the descriptor of a thread-local variable.
     fn modifier_class(
         &self,
         name: &str,
@@ -172,6 +173,15 @@ impl Architecture for AArch64 {
             "pageoff" => RelocClass::PageOff,
             "gotpage" => RelocClass::GotPage,
             "gotpageoff" => RelocClass::GotPageOff,
+            // A thread-local reference goes in the same two fields a plain
+            // page reference does, so the field each of these belongs on is
+            // the one the class it replaces already names.
+            "tlvppage" if kind.class == RelocClass::Page => {
+                return Some(RelocClass::ThreadVariablePage);
+            }
+            "tlvppageoff" if kind.class == RelocClass::PageOff => {
+                return Some(RelocClass::ThreadVariablePageOff);
+            }
             // In data, `sym@GOT` is the address of the symbol's slot.
             "got" if kind.class == RelocClass::Plain && !kind.pcrel => {
                 return Some(RelocClass::Got);
@@ -190,14 +200,27 @@ impl Architecture for AArch64 {
     ///
     /// A PE object has no `DW_EH_PE_pcrel` FDE address: llvm-mc writes the
     /// plain pointer `MCAsmInfoCOFF` asks for, and the section-relative
-    /// relocation COFF has instead.
+    /// relocation COFF has instead. A Mach-O object has a distance like an
+    /// ELF one, but a pointer-sized one, since `MCObjectFileInfo` gives
+    /// Darwin `DW_EH_PE_pcrel` with no width of its own.
     fn dwarf(&self, _state: &ArchState, format: crate::output::Format) -> DwarfTarget {
         DwarfTarget {
             cfi: Some(CfiTarget {
-                data_align: -4,
+                // The size of a callee-saved stack slot, which Darwin alone
+                // gives its real width (`CalleeSaveStackSlotSize`); every
+                // other AArch64 target leaves `MCAsmInfo`'s default of four.
+                data_align: if format == crate::output::Format::MachO {
+                    -8
+                } else {
+                    -4
+                },
                 ra_column: 30,
                 initial: vec![cfi::Insn::DefCfa(31, 0)],
-                fde_encoding: if format.is_coff() { 0x00 } else { 0x1b },
+                fde_encoding: match format {
+                    f if f.is_coff() => 0x00,
+                    crate::output::Format::MachO => 0x10,
+                    _ => 0x1b,
+                },
                 eh_frame_align: 8,
                 cie_version: 1,
             }),
@@ -223,6 +246,126 @@ impl Architecture for AArch64 {
                     .find_map(|p| numbered_register(name, p, 31))
                     .map(|n| 64 + n)
             })
+    }
+
+    /// The compact unwind word `__LD,__compact_unwind` holds for a frame,
+    /// which on arm64 describes a standard frame pointer prologue, a
+    /// frameless function with a fixed stack adjustment, or neither.
+    ///
+    /// `DarwinAArch64AsmBackend::generateCompactUnwindEncoding` reads the
+    /// directives in the order a compiler writes them and gives up on
+    /// anything else: `.cfi_def_cfa` has to name the frame pointer and be
+    /// followed by the two `.cfi_offset`s that saved it and the return
+    /// address, each pair of callee-saved registers has to be saved in
+    /// register order and in one run downwards from the last offset, and
+    /// there can be only one stack adjustment. Giving up means
+    /// `UNWIND_ARM64_MODE_DWARF`, which asks the linker for the frame table
+    /// instead.
+    fn macho_compact_unwind(&self, insns: &[cfi::Insn], canonical: bool) -> Option<u32> {
+        use cfi::Insn;
+
+        const MODE_FRAMELESS: u32 = 0x0200_0000;
+        const MODE_DWARF: u32 = 0x0300_0000;
+        const MODE_FRAME: u32 = 0x0400_0000;
+        const FRAMELESS_STACK_MASK: u32 = 0x00ff_f000;
+        // The frame pointer and the return address, as `.cfi_offset` names
+        // them, and the first of the vector registers.
+        const FP: u32 = 29;
+        const LR: u32 = 30;
+        const V0: u32 = 64;
+
+        // `.cfi_signal_frame` is not an instruction, only a note on the
+        // frame, and llvm-mc's list of instructions never holds one.
+        let insns: Vec<&Insn> = insns.iter().filter(|i| **i != Insn::Mark).collect();
+        if insns.is_empty() {
+            return Some(MODE_FRAMELESS);
+        }
+        if !canonical {
+            return Some(MODE_DWARF);
+        }
+
+        // A pair of saved registers, lowest first, and the bit it sets,
+        // together with the bits that a later pair may not already have set:
+        // the pairs have to come in this order.
+        const PAIRS: [(u32, u32, u32); 9] = [
+            (19, 0x0000_0001, 0xf1e),
+            (21, 0x0000_0002, 0xf1c),
+            (23, 0x0000_0004, 0xf18),
+            (25, 0x0000_0008, 0xf10),
+            (27, 0x0000_0010, 0xf00),
+            (V0 + 8, 0x0000_0100, 0xe00),
+            (V0 + 10, 0x0000_0200, 0xc00),
+            (V0 + 12, 0x0000_0400, 0x800),
+            (V0 + 14, 0x0000_0800, 0x000),
+        ];
+
+        let mut word = 0u32;
+        let mut has_fp = false;
+        let mut stack = 0u64;
+        let mut offset = 0i64;
+        let mut i = 0;
+        while i < insns.len() {
+            match *insns[i] {
+                Insn::DefCfa(reg, _) => {
+                    // Only a frame pointer; any other CFA register is one
+                    // the word cannot name.
+                    if reg != FP || i + 2 >= insns.len() {
+                        return Some(MODE_DWARF);
+                    }
+                    let (Insn::Offset(lr, lr_at), Insn::Offset(fp, fp_at)) =
+                        (insns[i + 1], insns[i + 2])
+                    else {
+                        return Some(MODE_DWARF);
+                    };
+                    if *fp_at + 8 != *lr_at || *lr != LR || *fp != FP {
+                        return Some(MODE_DWARF);
+                    }
+                    offset = *fp_at;
+                    word |= MODE_FRAME;
+                    has_fp = true;
+                    i += 3;
+                }
+                Insn::DefCfaOffset(by) => {
+                    if stack != 0 {
+                        return Some(MODE_DWARF);
+                    }
+                    stack = by.unsigned_abs();
+                    i += 1;
+                }
+                // Registers are saved in pairs, each `.cfi_offset` eight
+                // bytes below the one before it.
+                Insn::Offset(first, first_at) => {
+                    if i + 1 >= insns.len() || (offset != 0 && first_at != offset - 8) {
+                        return Some(MODE_DWARF);
+                    }
+                    let Insn::Offset(second, second_at) = *insns[i + 1] else {
+                        return Some(MODE_DWARF);
+                    };
+                    if second_at != first_at - 8 {
+                        return Some(MODE_DWARF);
+                    }
+                    offset = second_at;
+                    match PAIRS
+                        .iter()
+                        .find(|&&(lo, _, _)| first == lo && second == lo + 1)
+                    {
+                        Some(&(_, bit, after)) if word & after == 0 => word |= bit,
+                        _ => return Some(MODE_DWARF),
+                    }
+                    i += 2;
+                }
+                _ => return Some(MODE_DWARF),
+            }
+        }
+        if !has_fp {
+            // The stack adjustment is counted in sixteen-byte units, and
+            // twelve bits is as far as it reaches.
+            if stack > 65520 {
+                return Some(MODE_DWARF);
+            }
+            word |= MODE_FRAMELESS | (((stack / 16) as u32) << 12) & FRAMELESS_STACK_MASK;
+        }
+        Some(word)
     }
 
     /// `.ltorg` and `.pool` write the section's literal pool out here.

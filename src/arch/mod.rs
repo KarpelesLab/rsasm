@@ -1687,6 +1687,27 @@ pub trait Architecture {
         crate::dwarf::DwarfTarget::lines_only(crate::dwarf::Flavor::Gnu, 1)
     }
 
+    /// The Mach-O compact unwind word describing a frame whose `.cfi_*`
+    /// directives became `insns`, where the machine has such a word
+    /// (`MCAsmBackend::generateCompactUnwindEncoding`).
+    ///
+    /// Darwin's linker reads one word per frame from `__LD,__compact_unwind`
+    /// and goes to the frame table only for a word that says to, so the word
+    /// is what decides whether `__TEXT,__eh_frame` is written at all.
+    /// `canonical_personality` is whether the frame's personality routine is
+    /// one of the two the format keeps a slot for, which is the only thing
+    /// outside the instructions that the word depends on.
+    ///
+    /// The default is `None`: the machine has no compact unwind table, and
+    /// every frame is described in the frame table alone.
+    fn macho_compact_unwind(
+        &self,
+        _insns: &[crate::dwarf::cfi::Insn],
+        _canonical_personality: bool,
+    ) -> Option<u32> {
+        None
+    }
+
     /// Where the line table row of an instruction goes, as a distance back
     /// from the instruction's end, given its smallest encoding; `None`, the
     /// default, puts it at the start.
