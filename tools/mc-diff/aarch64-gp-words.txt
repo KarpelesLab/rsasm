@@ -4,7 +4,8 @@
 # The groups the table covers whole because no SIMD mnemonic shares
 # them: the load/store exclusives, the acquire/release accesses, the
 # atomics, the pointer-authentication instructions that name a register,
-# and memory tagging.
+# memory tagging, the CRC32 checksums, the unprivileged loads and
+# stores, and the byte and halfword unscaled acquire-release accesses.
 #
 # GNU as takes the zero register in either half of the 128-bit value a
 # FEAT_THE `rcw<op>p` names (`rcwswpp xzr, x1, [x2]`) and llvm-mc does
@@ -169,6 +170,30 @@ cast xzr, xzr, [sp]
 cmpp sp, sp
 cmpp x0, x0
 cmpp x17, x8
+crc32b w0, w0, w0
+crc32b w5, w18, w29
+crc32b wzr, wzr, wzr
+crc32cb w0, w0, w0
+crc32cb wzr, w2, w19
+crc32cb wzr, wzr, wzr
+crc32ch w0, w0, w0
+crc32ch w3, w0, w26
+crc32ch wzr, wzr, wzr
+crc32cw w0, w0, w0
+crc32cw w30, w24, w23
+crc32cw wzr, wzr, wzr
+crc32cx w0, w0, x0
+crc32cx w30, w29, x25
+crc32cx wzr, wzr, xzr
+crc32h w0, w0, w0
+crc32h w12, w17, w16
+crc32h wzr, wzr, wzr
+crc32w w0, w0, w0
+crc32w w30, w15, w4
+crc32w wzr, wzr, wzr
+crc32x w0, w0, x0
+crc32x w3, w23, x19
+crc32x wzr, wzr, xzr
 eretaa
 eretab
 gmi x0, x0, x0
@@ -246,6 +271,48 @@ ldaprb wzr, [sp]
 ldaprh w0, [x0]
 ldaprh w6, [x22]
 ldaprh wzr, [sp]
+ldapurb w0, [x0, #-256]
+ldapurb w0, [x0]
+ldapurb w17, [x2]
+ldapurb w22, [x14, #-211]
+ldapurb wzr, [sp, #255]
+ldapurb wzr, [sp]
+ldapurh w0, [x0, #-256]
+ldapurh w0, [x0]
+ldapurh w15, [x8]
+ldapurh w4, [x5, #157]
+ldapurh wzr, [sp, #255]
+ldapurh wzr, [sp]
+ldapursb w0, [x0, #-256]
+ldapursb w0, [x0]
+ldapursb w14, [x2, #247]
+ldapursb w26, [x4]
+ldapursb wzr, [sp, #255]
+ldapursb wzr, [sp]
+ldapursb x0, [x0, #-256]
+ldapursb x0, [x0]
+ldapursb x11, [sp, #-127]
+ldapursb x17, [x10]
+ldapursb xzr, [sp, #255]
+ldapursb xzr, [sp]
+ldapursh w0, [x0, #-256]
+ldapursh w0, [x0]
+ldapursh w0, [x3]
+ldapursh w14, [x11, #56]
+ldapursh wzr, [sp, #255]
+ldapursh wzr, [sp]
+ldapursh x0, [x0, #-256]
+ldapursh x0, [x0]
+ldapursh x2, [x27, #-223]
+ldapursh x23, [x11]
+ldapursh xzr, [sp, #255]
+ldapursh xzr, [sp]
+ldapursw x0, [x0, #-256]
+ldapursw x0, [x0]
+ldapursw x2, [x22, #-19]
+ldapursw x30, [x11]
+ldapursw xzr, [sp, #255]
+ldapursw xzr, [sp]
 ldar w0, [x0]
 ldar w9, [x4]
 ldar wzr, [sp]
@@ -645,6 +712,60 @@ ldtclrl wzr, wzr, [sp]
 ldtclrl x0, x0, [x0]
 ldtclrl x14, x14, [x16]
 ldtclrl xzr, xzr, [sp]
+ldtr w0, [x0, #-256]
+ldtr w0, [x0]
+ldtr w28, [x17, #-192]
+ldtr w30, [x25]
+ldtr wzr, [sp, #255]
+ldtr wzr, [sp]
+ldtr x0, [x0, #-256]
+ldtr x0, [x0]
+ldtr x2, [x14]
+ldtr xzr, [sp, #255]
+ldtr xzr, [sp]
+ldtr xzr, [x22, #28]
+ldtrb w0, [x0, #-256]
+ldtrb w0, [x0]
+ldtrb w15, [sp, #25]
+ldtrb w27, [x28]
+ldtrb wzr, [sp, #255]
+ldtrb wzr, [sp]
+ldtrh w0, [x0, #-256]
+ldtrh w0, [x0]
+ldtrh w4, [x30]
+ldtrh w6, [x16, #189]
+ldtrh wzr, [sp, #255]
+ldtrh wzr, [sp]
+ldtrsb w0, [x0, #-256]
+ldtrsb w0, [x0]
+ldtrsb w23, [x6]
+ldtrsb w7, [x16, #-193]
+ldtrsb wzr, [sp, #255]
+ldtrsb wzr, [sp]
+ldtrsb x0, [x0, #-256]
+ldtrsb x0, [x0]
+ldtrsb x4, [x23]
+ldtrsb x8, [x6, #61]
+ldtrsb xzr, [sp, #255]
+ldtrsb xzr, [sp]
+ldtrsh w0, [x0, #-256]
+ldtrsh w0, [x0]
+ldtrsh w27, [x4, #160]
+ldtrsh w7, [x11]
+ldtrsh wzr, [sp, #255]
+ldtrsh wzr, [sp]
+ldtrsh x0, [x0, #-256]
+ldtrsh x0, [x0]
+ldtrsh x30, [x22, #-25]
+ldtrsh x8, [sp]
+ldtrsh xzr, [sp, #255]
+ldtrsh xzr, [sp]
+ldtrsw x0, [x0, #-256]
+ldtrsw x0, [x0]
+ldtrsw x12, [x15]
+ldtrsw x14, [x21, #-186]
+ldtrsw xzr, [sp, #255]
+ldtrsw xzr, [sp]
 ldtset w0, w0, [x0]
 ldtset w22, wzr, [x12]
 ldtset wzr, wzr, [sp]
@@ -1169,6 +1290,18 @@ stltxr w0, x0, [x0]
 stltxr w1, x11, [x1]
 stltxr wzr, wzr, [sp]
 stltxr wzr, xzr, [sp]
+stlurb w0, [x0, #-256]
+stlurb w0, [x0]
+stlurb w10, [x7, #71]
+stlurb wzr, [sp, #255]
+stlurb wzr, [sp]
+stlurb wzr, [x24]
+stlurh w0, [x0, #-256]
+stlurh w0, [x0]
+stlurh w28, [x16, #60]
+stlurh w7, [x17]
+stlurh wzr, [sp, #255]
+stlurh wzr, [sp]
 stlxp w1, w23, w28, [x19]
 stlxp w11, w16, w4, [x21]
 stlxp w11, w17, w8, [x15]
@@ -1283,6 +1416,30 @@ sttclrl wzr, [sp]
 sttclrl x0, [x0]
 sttclrl x8, [x12]
 sttclrl xzr, [sp]
+sttr w0, [x0, #-256]
+sttr w0, [x0]
+sttr w14, [x12, #-23]
+sttr w16, [x3]
+sttr wzr, [sp, #255]
+sttr wzr, [sp]
+sttr x0, [x0, #-256]
+sttr x0, [x0]
+sttr x17, [x4]
+sttr x20, [x3, #-63]
+sttr xzr, [sp, #255]
+sttr xzr, [sp]
+sttrb w0, [x0, #-256]
+sttrb w0, [x0]
+sttrb w1, [x22]
+sttrb w13, [x27, #-209]
+sttrb wzr, [sp, #255]
+sttrb wzr, [sp]
+sttrh w0, [x0, #-256]
+sttrh w0, [x0]
+sttrh w18, [x12, #-92]
+sttrh w18, [x13]
+sttrh wzr, [sp, #255]
+sttrh wzr, [sp]
 sttset w0, [x0]
 sttset w6, [x5]
 sttset wzr, [sp]

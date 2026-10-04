@@ -443,6 +443,14 @@ fn conditional_branches() {
         "top:\n b.eq top\n b.ne bot\n bne bot\n b.al top\nbot:\n nop\n",
         "00 00 00 54 61 00 00 54 41 00 00 54 ae ff ff 54 1f 20 03 d5",
     );
+    // FEAT_HBC's `bc.<cond>`, the same branch with the hint that the
+    // condition's outcome is consistent. Neither reference spells it without
+    // the dot, as both spell `b.<cond>`.
+    program(
+        "top:\n bc.eq top\n bc.ne bot\n bc.al top\nbot:\n nop\n",
+        "10 00 00 54 51 00 00 54 de ff ff 54 1f 20 03 d5",
+    );
+    rejects("bceq top\ntop: nop", &["unknown instruction `bceq`"]);
 }
 
 #[test]
@@ -1094,7 +1102,8 @@ fn random_operands_never_panic_or_vanish() {
         "tbnz", "br", "blr", "ret", "eret", "adr", "adrp", "ldr", "str", "ldrb", "strb", "ldrh",
         "strh", "ldrsb", "ldrsh", "ldrsw", "ldur", "stur", "prfm", "ldp", "stp", "ldpsw", "stnp",
         "nop", "wfi", "hint", "dmb", "isb", "clrex", "svc", "brk", "hlt", "mrs", "msr", "dup",
-        "fmov",
+        "fmov", "bc.eq", "bfc", "ctz", "rmif", "setf8", "cfinv", "udf", "wfet", "maddpt", "ld64b",
+        "st64bv", "rprfm", "crc32b", "ldtr", "sttrh", "ldapurb",
     ];
     const PIECES: &[&str] = &[
         "x0",
@@ -1761,4 +1770,140 @@ fn system_diagnostics_name_what_was_expected() {
     );
     rejects("str x0, =1", &["only `ldr` and `ldrsw`"]);
     rejects("add x0, x1, =4", &["only `ldr` loads from"]);
+}
+
+/// The general-purpose instructions that are one form each rather than a
+/// family, which the handwritten encoder owns because a row of the generated
+/// table could not say what each of them constrains: `bfc` computes one
+/// immediate from the other, `ld64b` names a register that has to be even,
+/// and `rprfm` scatters its operation over six bits of the word.
+#[test]
+fn one_off_general_purpose_forms() {
+    check(&[
+        // `bfc` clears a field, which is `bfi` reading the zero register.
+        ("bfc x0, 4, 8", "e0 1f 7c b3"),
+        ("bfc w0, 0, 32", "e0 7f 00 33"),
+        ("bfc w0, 31, 1", "e0 03 01 33"),
+        // FEAT_CSSC's count-trailing-zeros, beside `clz` and `cls`.
+        ("ctz x0, x1", "20 18 c0 da"),
+        ("ctz w0, w1", "20 18 c0 5a"),
+        // FEAT_CPA's checked multiply-adds, which exist only at 64 bits.
+        ("maddpt x0, x1, x2, x3", "20 0c 62 9b"),
+        ("msubpt x30, x29, x28, x27", "be ef 7c 9b"),
+        // FEAT_FlagM and FEAT_FlagM2: three operand shapes, and no family.
+        ("rmif x0, 1, 2", "02 84 00 ba"),
+        ("rmif x30, 63, 15", "cf 87 1f ba"),
+        ("setf8 w0", "0d 08 00 3a"),
+        ("setf16 w30", "cd 4b 00 3a"),
+        ("cfinv", "1f 40 00 d5"),
+        ("axflag", "5f 40 00 d5"),
+        ("xaflag", "3f 40 00 d5"),
+        // The permanently undefined word, whose immediate is the whole of it.
+        ("udf 0", "00 00 00 00"),
+        ("udf 65535", "ff ff 00 00"),
+        // FEAT_WFxT's timed waits, which name a register and so are not
+        // aliases of `hint` as `wfe` and `wfi` are.
+        ("wfet x0", "00 10 03 d5"),
+        ("wfit xzr", "3f 10 03 d5"),
+        // FEAT_LS64's 64-byte accesses: eight consecutive registers named by
+        // the first of them, and a status register for the two that report.
+        ("ld64b x0, [x1]", "20 d0 3f f8"),
+        ("ld64b x22, [sp]", "f6 d3 3f f8"),
+        ("st64b x8, [x30]", "c8 93 3f f8"),
+        ("st64bv x0, x2, [x1]", "22 b0 20 f8"),
+        ("st64bv0 xzr, x22, [x30]", "d6 a3 3f f8"),
+        // FEAT_RPRFM's range prefetch, by name and by number.
+        ("rprfm pldkeep, x1, [x2]", "58 48 a1 f8"),
+        ("rprfm pststrm, x30, [sp]", "fd 4b be f8"),
+        ("rprfm 63, x1, [x2]", "5f f8 a1 f8"),
+    ]);
+}
+
+/// GNU as reads an explicit zero offset in a 64-byte access where llvm-mc
+/// takes the base register alone, so these bytes are GNU as's. Neither reads
+/// any other offset there, and neither reads one in `rprfm`.
+#[test]
+fn a_64_byte_access_reads_an_explicit_zero_offset() {
+    check(&[
+        ("ld64b x0, [x1, 0]", "20 d0 3f f8"),
+        ("st64b x0, [x1, 0]", "20 90 3f f8"),
+        ("st64bv x0, x2, [x1, 0]", "22 b0 20 f8"),
+    ]);
+    rejects("ld64b x0, [x1, 8]", &["base register only"]);
+    rejects("rprfm pldkeep, x1, [x2, 0]", &["base register only"]);
+}
+
+/// Each one-off form refuses what both references refuse, and says what it
+/// wanted instead.
+#[test]
+fn one_off_general_purpose_diagnostics() {
+    rejects("bfc w0, 31, 2", &["the field width", "1..=1"]);
+    rejects("bfc w0, 32, 1", &["the bit position", "0..=31"]);
+    rejects("ctz x0, w1", &["cannot mix 32-bit and 64-bit"]);
+    rejects("maddpt w0, w1, w2, w3", &["`maddpt` is 64-bit only"]);
+    rejects("rmif x0, 64, 0", &["the rotation", "0..=63"]);
+    rejects("rmif x0, 0, 16", &["the flag mask", "0..=15"]);
+    rejects("rmif w0, 0, 0", &["rotates a 64-bit register"]);
+    rejects("setf8 x0", &["reads a 32-bit register"]);
+    rejects("setf8", &["takes 1 operand"]);
+    rejects("cfinv x0", &["takes 0 operand"]);
+    rejects(
+        "udf 65536",
+        &["an undefined-instruction number", "0..=65535"],
+    );
+    rejects("wfet w0", &["takes a 64-bit register"]);
+    // Eight registers start at the one named, so an odd number or one above
+    // `x22` would name a run that does not exist.
+    rejects("ld64b x1, [x1]", &["even `x` register up to `x22`"]);
+    rejects("ld64b x24, [x1]", &["even `x` register up to `x22`"]);
+    rejects("st64bv x0, xzr, [x1]", &["even `x` register up to `x22`"]);
+    rejects("ld64b x0, [xzr]", &["cannot use the zero register"]);
+    rejects(
+        "rprfm pldl1keep, x1, [x2]",
+        &["not a range prefetch operation"],
+    );
+    rejects(
+        "rprfm 64, x1, [x2]",
+        &["a range prefetch operation", "0..=63"],
+    );
+}
+
+/// The general-purpose groups the generated table gained with the one-off
+/// forms: the CRC32 checksums, the unprivileged loads and stores, and the
+/// byte, halfword and signed-word members of the unscaled acquire-release
+/// accesses, whose word and doubleword members were already there.
+#[test]
+fn checksums_and_unscaled_accesses() {
+    check(&[
+        ("crc32b w0, w1, w2", "20 40 c2 1a"),
+        ("crc32h w0, w1, w2", "20 44 c2 1a"),
+        ("crc32w w0, w1, w2", "20 48 c2 1a"),
+        ("crc32x w0, w1, x2", "20 4c c2 9a"),
+        ("crc32cb w0, w1, w2", "20 50 c2 1a"),
+        ("crc32ch w0, w1, w2", "20 54 c2 1a"),
+        ("crc32cw w0, w1, w2", "20 58 c2 1a"),
+        ("crc32cx w0, w1, x2", "20 5c c2 9a"),
+        // The unscaled offset is signed and counts bytes whatever the access
+        // width, so every one of these takes -256..=255.
+        ("ldtr x0, [x1]", "20 08 40 f8"),
+        ("ldtr x0, [x1, 255]", "20 f8 4f f8"),
+        ("ldtr w0, [sp, -256]", "e0 0b 50 b8"),
+        ("ldtrb w0, [x1, 4]", "20 48 40 38"),
+        ("ldtrh w0, [x1, 4]", "20 48 40 78"),
+        ("ldtrsb x0, [x1, 4]", "20 48 80 38"),
+        ("ldtrsh x0, [x1, 4]", "20 48 80 78"),
+        ("ldtrsw x0, [x1, 4]", "20 48 80 b8"),
+        ("sttr x0, [x1, 4]", "20 48 00 f8"),
+        ("sttrb w0, [x1, 4]", "20 48 00 38"),
+        ("sttrh w0, [x1, 4]", "20 48 00 78"),
+        ("ldapurb w0, [x1, 4]", "20 40 40 19"),
+        ("ldapurh w0, [x1, 4]", "20 40 40 59"),
+        ("ldapursb x0, [x1, 4]", "20 40 80 19"),
+        ("ldapursh x0, [x1, 4]", "20 40 80 59"),
+        ("ldapursw x0, [x1, 4]", "20 40 80 99"),
+        ("stlurb w0, [x1, 4]", "20 40 00 19"),
+        ("stlurh w0, [x1, 4]", "20 40 00 59"),
+    ]);
+    rejects("ldtr x0, [x1, 256]", &["-256..=255"]);
+    rejects("ldapurb w0, [x1, -257]", &["-256..=255"]);
 }

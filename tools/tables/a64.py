@@ -72,12 +72,54 @@ GP_GROUPS = re.compile(r"""
     # `sub` and `subs`, and `cmpp` is the alias of `subps xzr, ...`.
   | irg | addg | subg | gmi | subp s? | cmpp
   | st z? 2? g m? | stgp | ldg m?
+    # FEAT_CRC32's checksums, one form per source width and per polynomial.
+  | crc32 c? [bhwx]
+    # The unprivileged loads and stores, which read and write at EL0 whatever
+    # level they run at: one form per access size and signedness, over the
+    # 9-bit unscaled offset the table already measures for `ldapur`.
+  | ldtr [bh]? | ldtrs [bhw] | sttr [bh]?
+    # The members of FEAT_LRCPC2's unscaled acquire-release accesses that no
+    # scalar floating-point form shares: `ldapur` and `stlur` of a word or
+    # doubleword also load and store `s0` and `d0`, so they are in the table
+    # already and in the SIMD corpus with them.
+  | ldapur [bh] | ldapurs [bhw] | stlur [bh]
 """, re.X)
 
 
 def gp_group(mnemonic):
     """True for a mnemonic the table owns although no SIMD form shares it."""
     return GP_GROUPS.fullmatch(mnemonic) is not None
+
+
+# The general-purpose instructions that are one form each rather than a
+# family, which `insn.rs` writes out and the table never sees: no SIMD
+# mnemonic shares them, and a table row could not say what each of them
+# constrains. They are named here so that the fuzzer reaches them all the
+# same -- it keeps a disassembled line whose mnemonic one of the two encoders
+# claims, and the table's claim is `gp_group` above.
+GP_SINGLES = re.compile(r"""
+    # FEAT_FlagM and FEAT_FlagM2, which are three different operand shapes
+    # and not a family: a register and two immediates, one register, and
+    # nothing at all.
+    rmif | setf (8|16) | cfinv | axflag | xaflag
+    # FEAT_CSSC's count-trailing-zeros, which goes beside the handwritten
+    # `clz` and `cls`; the rest of CSSC shares its mnemonics with SVE.
+  | ctz
+    # The `bfm` alias that names no source register, the permanently
+    # undefined word, FEAT_WFxT's timed waits and FEAT_CPA's checked
+    # multiply-adds, each of which is a handwritten family with one more
+    # member.
+  | bfc | udf | wf [ei] t | m (add|sub) pt
+    # FEAT_LS64's 64-byte accesses, whose transfer register has to be even,
+    # and FEAT_RPRFM's range prefetch, whose operation is a name or a six-bit
+    # number scattered over the word.
+  | ld64b | st64b v? 0? | rprfm
+""", re.X)
+
+
+def gp_single(mnemonic):
+    """True for a general-purpose form the handwritten encoder owns alone."""
+    return GP_SINGLES.fullmatch(mnemonic) is not None
 
 
 def _mc(args, text):
