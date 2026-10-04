@@ -1249,7 +1249,7 @@ statements and whole programs in Clang's style of its own, line tables, frame
 tables and compact unwind tables, and the `tools/mc-diff` corpora for both
 machines, every instruction of which has to come out the same in a Mach-O
 object. Every header and load command, section, symbol and relocation
-matches, and each of the 1,692 objects both assemblers write is identical
+matches, and each of the 1,740 objects both assemblers write is identical
 byte for byte; the other 80 cases are refused by both.
 
 Three differences remain, and the corpora leave them out:
