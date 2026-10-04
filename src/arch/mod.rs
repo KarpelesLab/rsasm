@@ -1294,15 +1294,21 @@ pub trait Architecture {
     }
 
     /// The relocation pair, adding one symbol and subtracting another, that
-    /// a `size`-byte data field holding a difference the file cannot fold is
-    /// written as, if the target has one.
+    /// a data field holding a difference the file cannot fold is written as,
+    /// if the target has one.
     ///
     /// Without one, only `sym - label` with the label in the field's own
     /// section can be relocated, as `sym` relative to the field. RISC-V's
     /// linker relaxation needs every difference it cannot see through kept as
     /// its two symbols, so llvm-mc writes `R_RISCV_ADD32`/`R_RISCV_SUB32` for
     /// that one too, and for a difference across sections.
-    fn difference_relocs(&self, _size: u8) -> Option<(u32, u32)> {
+    ///
+    /// The width decides it for most fields, which is why MSP430 reads
+    /// nothing else; a field that shares its bytes with something the
+    /// relocation must not disturb needs a pair that sets the field rather
+    /// than adding to it, and RISC-V tells those apart by
+    /// [`FixupKind::reloc`](crate::section::FixupKind::reloc).
+    fn difference_relocs(&self, _kind: &crate::section::FixupKind) -> Option<(u32, u32)> {
         None
     }
 
@@ -1320,9 +1326,14 @@ pub trait Architecture {
     /// it at all. GNU as for MSP430 writes `R_MSP430_GNU_SUB_ULEB128` and
     /// `R_MSP430_GNU_SET_ULEB128` for one whose labels are in code, which its
     /// linker may relax; the value the file computes stays in the field.
+    ///
+    /// `code_moves` says whether a linker may delete bytes between the two
+    /// labels, which is what RISC-V reads instead of the section's flags; see
+    /// [`Architecture::moves_code`].
     fn uleb128_difference_relocs(
         &self,
         _symbols_in: &crate::section::SectionFlags,
+        _code_moves: bool,
     ) -> Option<(u32, u32)> {
         None
     }
@@ -1333,12 +1344,57 @@ pub trait Architecture {
     /// than folded. `symbols_in` is the flags of the labels' section. GNU as
     /// for MSP430 keeps every difference of labels in code as a pair, since
     /// its linker may relax the code between them.
+    ///
+    /// `code_moves` says whether a linker may delete bytes between the two
+    /// labels, which llvm-mc works out and acts on for RISC-V; see
+    /// [`Architecture::moves_code`].
     fn defers_difference(
         &self,
         _kind: &crate::section::FixupKind,
         _symbols_in: &crate::section::SectionFlags,
+        _code_moves: bool,
     ) -> bool {
         false
+    }
+
+    /// Whether a `.sleb128` of a difference the linker would have to work out
+    /// is refused rather than written as the distance it is here.
+    ///
+    /// The pair a `.uleb128` leaves such a difference as sets an unsigned
+    /// value, so nothing can describe a signed one. GNU as for RISC-V refuses
+    /// the expression, as llvm-mc does; GNU as for MSP430 folds it and writes
+    /// a number its own linker may then make wrong.
+    fn refuses_signed_leb128_difference(&self) -> bool {
+        false
+    }
+
+    /// Whether a relaxing linker may change the size of the sequence this
+    /// fixup belongs to, so that the distance across it is not known until
+    /// the link.
+    ///
+    /// Only a target that folds some differences of labels and defers others
+    /// reads this; the ones that defer every difference of labels in code,
+    /// MSP430 among them, need nothing of the sort. For RISC-V it is a fixup
+    /// the object itself marks as the linker's to rewrite, a branch or jump
+    /// left to the linker for the same reason, and the alignment
+    /// `R_RISCV_ALIGN` hands over.
+    fn moves_code(&self, _kind: &crate::section::FixupKind) -> bool {
+        false
+    }
+
+    /// The field a call frame address advance goes in, for a target whose
+    /// linker works the advance out: `bits` of a `size`-byte field hold it,
+    /// the rest being the `DW_CFA_advance_loc` opcode it shares its first
+    /// byte with.
+    ///
+    /// RISC-V is the one target that has these. The advance is a difference
+    /// of two labels, so the relocation is the first of a
+    /// [`difference_relocs`](Architecture::difference_relocs) pair, and it
+    /// sets the field rather than adding to it: `R_RISCV_SET6` for the
+    /// six bits packed beside the opcode, `R_RISCV_SET8` and its relatives
+    /// for the wider forms.
+    fn cfa_advance_field(&self, _size: u8, _bits: u8) -> Option<crate::section::FixupKind> {
+        None
     }
 
     /// Whether a relocation against a global symbol defined in this object

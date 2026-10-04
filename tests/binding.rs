@@ -304,10 +304,12 @@ glob:   nop
 #[cfg(feature = "riscv")]
 #[test]
 fn riscv_relocates_differences_it_cannot_fold_as_pairs() {
-    // llvm-mc names a label at `.text+8` where rsasm names the section with
-    // an addend of 8, and `base` and `other` likewise; the linker reads both
-    // the same way. The `R_RISCV_RELAX` after the call is the mark GNU as
-    // puts beside a relocation a linker may rewrite; a difference gets none.
+    // Both halves of each pair name their label rather than its section and
+    // an offset, as GNU as does: a linker that deletes bytes moves the labels
+    // it knows and leaves an offset into a section alone. The label at the
+    // `.` is the assembler's own, which llvm-mc calls `.Ltmp0` and GNU as
+    // `.L0 `. The `R_RISCV_RELAX` after the call is the mark GNU as puts
+    // beside a relocation a linker may rewrite; a difference gets none.
     let asm = assemble_for(
         "riscv64",
         "        .globl  glob
@@ -327,11 +329,11 @@ other:  .byte   0
             reloc(0, 19, "glob", 0),
             reloc(0, 51, "", 0),
             reloc(8, 35, "ext", 0),
-            reloc(8, 39, ".text", 8),
-            reloc(12, 35, ".text", 0),
+            reloc(8, 39, ".L(anonymous)", 0),
+            reloc(12, 35, "base", 0),
             reloc(12, 39, "uweak", 0),
-            reloc(16, 34, ".data", 0),
-            reloc(16, 38, ".text", 0),
+            reloc(16, 34, "other", 0),
+            reloc(16, 38, "base", 0),
         ]
     );
     assert_eq!(

@@ -62,7 +62,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the exclusives and the LSE atomics, pointer authentication, memory tagging, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 23365 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3227 |
-| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 574 |
+| RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 582 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 880 |
 | SPARC V8 / V9 | `sparc` `sparcv9` | llvm-mc | 344 |
@@ -309,9 +309,16 @@ form by form and in random whole programs as well.
   the source wrote itself with `%got_pcrel_hi`, which is read here too — an
   `R_RISCV_ALIGN` hands an alignment in code to the linker with the padding it
   may delete, and a reference to a label in the same section is relocated
-  rather than resolved, since the linker may shorten what lies between.
-  `.option relax`, `.option norelax` and `.option push`/`.option pop` turn all
-  of that off and on again for the statements they cover
+  rather than resolved, since the linker may shorten what lies between. So is
+  a *difference* of two labels with something shortenable between them: an
+  `R_RISCV_ADD`/`R_RISCV_SUB` pair at the field, chosen by its width, an
+  `R_RISCV_SET_ULEB128`/`R_RISCV_SUB_ULEB128` pair in a `.uleb128`, and the
+  same in the line table's address advances, the `.eh_frame` and
+  `.debug_frame` advances (`R_RISCV_SET6` and its relatives) and the ranges a
+  frame table and `.debug_aranges` record. A difference across code nothing
+  can shorten is folded, as llvm-mc folds it. `.option relax`, `.option
+  norelax` and `.option push`/`.option pop` turn all of that off and on again
+  for the statements they cover
 - diagnostics with source snippets that name the real limit, and assembly that
   continues past the first error
 
@@ -388,20 +395,13 @@ form by form and in random whole programs as well.
 - MSP430: the large memory model (`-ml`), the interrupt-state `NOP`
   warnings and insertion, the silicon errata options, assembly-time
   relaxation (`-mQ`), and `.profiler`, `.refsym` and `.cpu`
-- RISC-V: the distances a relaxing linker may change that rsasm still folds.
-  Every reference to a *label* is relocated, so nothing the linker shortens
-  can invalidate one of those, but a *difference* of two labels is not: GNU as
-  leaves one to the linker as an `R_RISCV_ADD`/`R_RISCV_SUB` pair, an
-  `R_RISCV_SET_ULEB128`/`R_RISCV_SUB_ULEB128` pair in a `.uleb128`, and writes
-  the line table's address advances the same way, where rsasm writes the
-  number it computed, as llvm-mc does without `-mattr=+relax`. A difference
-  that spans a sequence the linker shortens is then wrong in the linked
-  program; `.option norelax` over such a span is the way round it until this
-  is done. `.attribute arch` writes
+- RISC-V: `.attribute arch` writes
   the ISA string as the source gave it, where GNU as reads it and writes back what it
   makes of it, so a string that leaves an implied extension out is not
   expanded, and neither it nor `.option arch` changes which instructions are
-  accepted
+  accepted. `-mno-relax` has no counterpart on the command line, there being
+  no per-target options there; `.option norelax` says the same thing for the
+  statements it covers
 - thread-local storage on the other targets: the symbols and sections are
   right everywhere, and every target with a thread-local model reads the
   access-model operands. SPARC's data operators — `%r_disp32()`, `%r_plt32()`
@@ -995,6 +995,15 @@ through the GOT whatever the encoding byte says, and an AArch64 CIE's data
 alignment is -8 there against ELF's -4, since Darwin alone gives
 `CalleeSaveStackSlotSize` the width a saved register really has.
 
+A target whose linker deletes instructions cannot write a distance as a
+number. On MSP430 every address advance in the line table is a 16-bit field
+the linker fills in, as GNU as writes them; on RISC-V only the advances whose
+span the linker may shorten are, and the frame tables go the same way — an
+advance left to the linker keeps its `DW_CFA_advance_loc` opcode and has the
+bits beside it set by an `R_RISCV_SET6`, `SET8`, `SET16` or `SET32`, and the
+range an FDE or `.debug_aranges` records is an `R_RISCV_ADD`/`R_RISCV_SUB`
+pair.
+
 Four differences remain:
 
 - GNU as gives a `view -0` row an address of its own wherever its frag
@@ -1319,7 +1328,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,675 of 8,675 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 40,618 of 40,618 match across twenty-three target variants. For RISC-V
+  supports. 40,626 of 40,626 match across twenty-three target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things; llvm-mc runs
   with `+relax` there, because relaxation is on in rsasm as it is in GNU as,
@@ -1375,7 +1384,7 @@ is what hid them from rsasm for as long as it did.
   both assemblers' objects, alignment and all. Two more rows link
   [PE/COFF](#pecoff) objects into an image with GNU ld for mingw, where what
   a link has to get right is `@IMGREL`, `.secrel32` and `.secidx` and the
-  addend a COFF relocation keeps in its field. 294 of 294 match across
+  addend a COFF relocation keeps in its field. 298 of 298 match across
   twenty-nine variants.
 - `tools/nasm-diff/run.sh` against NASM 2.16.03, for the `nasm` dialect: whole
   programs compared as flat binaries, as ELF objects, relocations and global

@@ -186,7 +186,101 @@ impl Assembler {
             );
             return false;
         }
+        self.note_moving_code();
         true
+    }
+
+    /// Records where a relaxing linker may delete bytes, now that the
+    /// offsets are settled; see [`Assembler::code_moves_between`].
+    ///
+    /// Nothing is recorded for a target whose linker shortens nothing, nor
+    /// for a flat image, which has no linker, so the scan costs those
+    /// nothing beyond the walk itself.
+    fn note_moving_code(&mut self) {
+        self.moving_code.clear();
+        self.moving_code.resize(self.sections.len(), Vec::new());
+        self.aligning_code.clear();
+        self.aligning_code.resize(self.sections.len(), Vec::new());
+        if !self.options.relocatable {
+            return;
+        }
+        for si in 0..self.sections.len() {
+            let mut at = Vec::new();
+            let mut aligns = Vec::new();
+            for fi in 0..self.sections[si].frags.len() {
+                let arch = self.frag_arch(si, fi).0;
+                let frag = &self.sections[si].frags[fi];
+                match &frag.kind {
+                    FragKind::Bytes { variants, chosen } => {
+                        for f in &variants[*chosen].fixups {
+                            if arch.moves_code(&f.kind) {
+                                at.push(frag.offset + f.offset as u64);
+                            }
+                        }
+                    }
+                    FragKind::Align { align, .. } if *align > 1 => aligns.push(fi as u32),
+                    _ => {}
+                }
+            }
+            at.sort_unstable();
+            self.moving_code[si] = at;
+            self.aligning_code[si] = aligns;
+        }
+    }
+
+    /// Whether a relaxing linker may delete bytes between two offsets of one
+    /// section, so that the distance between labels there is the linker's to
+    /// work out rather than this file's.
+    ///
+    /// The range is half-open: an instruction starting where the second label
+    /// stands is past the distance, and one starting at the first label is
+    /// within it. That is where llvm-mc draws the line too, which walks the
+    /// fragments between the two symbols and folds the difference only where
+    /// none of them is one the linker may rewrite.
+    pub(crate) fn code_moves_between(&self, section: SectionId, from: u64, to: u64) -> bool {
+        let (lo, hi) = (from.min(to), from.max(to));
+        let Some(at) = self.moving_code.get(section.0 as usize) else {
+            return false;
+        };
+        at.partition_point(|&o| o < lo) < at.partition_point(|&o| o < hi)
+    }
+
+    /// Whether the distance between two fragments of one section is one a
+    /// reference leaves room to relocate although it turns out to be known.
+    ///
+    /// GNU as writes every address advance of a line table in code as a
+    /// 16-bit field for the linker; llvm-mc writes one wherever it cannot see
+    /// through the fragments between the two rows while it chooses the shape
+    /// of the advance, which an alignment in a section the linker may relax
+    /// stops it doing: how much that alignment pads is settled only once the
+    /// code before it is. The field then holds the distance after all, and no
+    /// relocation goes with it.
+    ///
+    /// Only a section that has something for the linker to shorten is
+    /// affected, since otherwise the alignment is settled before the advance
+    /// is; and the fragments are counted rather than the bytes, because an
+    /// alignment that pads nothing still sits between two rows.
+    pub(crate) fn code_uncertain_between(&self, section: SectionId, from: u32, to: u32) -> bool {
+        let si = section.0 as usize;
+        if self.moving_code.get(si).is_none_or(|m| m.is_empty()) {
+            return false;
+        }
+        let Some(at) = self.aligning_code.get(si) else {
+            return false;
+        };
+        let (lo, hi) = (from.min(to), from.max(to));
+        at.partition_point(|&f| f < lo) < at.partition_point(|&f| f < hi)
+    }
+
+    /// The same, for two labels of one section, as a difference of symbols
+    /// names them: their values are addresses, which in a flat image is not
+    /// where the fragments were counted from.
+    fn code_moves_for(&self, section: SectionId, plus: SymbolId, minus: SymbolId) -> bool {
+        let base = self.section(section).addr as i64;
+        let (Some(p), Some(m)) = (self.symbol_addr(plus), self.symbol_addr(minus)) else {
+            return false;
+        };
+        self.code_moves_between(section, (p - base) as u64, (m - base) as u64)
     }
 
     /// Refuses data that had to be padded to reach its boundary; see
@@ -1753,7 +1847,7 @@ impl Assembler {
                     && ps.is_some_and(|s| {
                         let flags = asm.section(s).flags;
                         let arch = asm.frag_arch(section.0 as usize, fi).0;
-                        arch.defers_difference(kind, &flags)
+                        arch.defers_difference(kind, &flags, asm.code_moves_for(s, p, m))
                     })
             };
             if ps.is_some() && (ps == ms || !self.options.relocatable) && !deferred(self) {
@@ -1815,6 +1909,15 @@ impl Assembler {
                         } if self.options.relocatable => {
                             let value = *value;
                             relocs.extend(self.uleb128_relocations(value, id, fi, frag_off));
+                            continue;
+                        }
+                        FragKind::Leb128 {
+                            value,
+                            signed: true,
+                            ..
+                        } if self.options.relocatable => {
+                            let (value, span) = (*value, self.sections[si].frags[fi].span);
+                            self.refuse_signed_leb128_difference(value, id, fi, span);
                             continue;
                         }
                         _ => continue,
@@ -2033,6 +2136,44 @@ impl Assembler {
         self.relocs = relocs;
     }
 
+    /// Reports a `.sleb128` of a difference the linker would have to work
+    /// out, on a target that refuses one; see
+    /// [`Architecture::refuses_signed_leb128_difference`].
+    fn refuse_signed_leb128_difference(
+        &mut self,
+        value: ExprRef,
+        section: SectionId,
+        fi: usize,
+        span: Span,
+    ) {
+        let Ok(v) = self.eval(value) else {
+            return;
+        };
+        let (Some(plus), Some(minus)) = (v.plus, v.minus) else {
+            return;
+        };
+        let (ps, ms) = (self.symbol_section(plus), self.symbol_section(minus));
+        let Some(sec) = ps.filter(|_| ps == ms) else {
+            return;
+        };
+        let flags = self.section(sec).flags;
+        let moves = self.code_moves_for(sec, plus, minus);
+        let arch = self.frag_arch(section.0 as usize, fi).0;
+        if !arch.refuses_signed_leb128_difference()
+            || arch.uleb128_difference_relocs(&flags, moves).is_none()
+        {
+            return;
+        }
+        self.diags.emit(
+            crate::diag::Diagnostic::error(
+                span,
+                "this distance is not known until the link, and a `.sleb128` has no \
+                 relocation for one",
+            )
+            .with_help("write it as a `.uleb128`, or put `.option norelax` over the code between the two labels"),
+        );
+    }
+
     /// The relocations that leave a `.uleb128` of a difference of labels to
     /// the linker, on a target that has them; see
     /// [`Architecture::uleb128_difference_relocs`]. The field keeps the value
@@ -2058,13 +2199,29 @@ impl Assembler {
         };
         let flags = self.section(sec).flags;
         let si = section.0 as usize;
-        let Some((sub, set)) = self.frag_arch(si, fi).0.uleb128_difference_relocs(&flags) else {
+        let moves = self.code_moves_for(sec, plus, minus);
+        let Some((sub, set)) = self
+            .frag_arch(si, fi)
+            .0
+            .uleb128_difference_relocs(&flags, moves)
+        else {
             return Vec::new();
         };
-        let kind = FixupKind::data(0);
+        // Both halves name their label, as a data pair's do; see
+        // `Assembler::build_relocation`.
+        let kind = FixupKind::data(0).with_reloc_symbol(RelocSymbol::Symbol);
         let mut out = Vec::new();
-        for (target, mut reloc) in [(minus, sub), (plus, set)] {
-            let mut addend = v.addend;
+        // GNU as for MSP430 converts the subtrahend's fixup first and gives
+        // both halves whatever the expression added; the RISC-V references
+        // write the half that sets the field first and leave the subtrahend's
+        // addend at zero, as the halves of a data pair do. These pairs exist
+        // nowhere else, so one flag tells the two shapes apart.
+        let halves = if self.frag_arch(si, fi).0.difference_subtrahend_first() {
+            [(minus, sub, v.addend), (plus, set, v.addend)]
+        } else {
+            [(plus, set, v.addend), (minus, sub, 0)]
+        };
+        for (target, mut reloc, mut addend) in halves {
             let symbol =
                 self.relocation_symbol(target, &kind, si, fi, false, &mut addend, &mut reloc);
             out.push(Relocation {
@@ -2171,8 +2328,16 @@ impl Assembler {
         let mut subtrahend = None;
         if let (Some(_), Some(minus), false, true) =
             (v.plus, v.minus, kind.pcrel, self.options.relocatable)
-            && let Some((add, sub)) = self.frag_arch(si, fi).0.difference_relocs(kind.size)
+            && let Some((add, sub)) = self.frag_arch(si, fi).0.difference_relocs(&kind)
         {
+            // Both halves name their label rather than its section and an
+            // offset: a linker that deletes bytes moves the labels after them
+            // and adjusts the symbols it knows, and leaves an offset into a
+            // section as it found it, so the pair would then stand for the
+            // distance as it was before the link. GNU as says the same for
+            // every local relocation on the targets that have these pairs,
+            // with `TC_FORCE_RELOCATION_LOCAL`.
+            kind.reloc_symbol = RelocSymbol::Symbol;
             let mut addend = 0;
             let mut reloc = sub;
             let symbol =

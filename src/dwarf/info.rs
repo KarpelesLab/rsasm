@@ -459,7 +459,16 @@ impl Assembler {
         for &s in &segs {
             let end = self.section(s).size;
             self.address(&mut b, (s, 0), 0, ptr);
-            b.int(end, ptr as usize);
+            // How far the code reaches is a difference of two labels in it,
+            // so a relaxing linker between them is the one that knows it.
+            if self.code_moves_between(s, 0, end) {
+                let last = (s, self.section(s).frags.len() as u32);
+                let e = self.difference_expr(((s, 0), 0), (last, 0));
+                let kind = self.abs_kind(ptr);
+                b.fixup(ptr, e, kind);
+            } else {
+                b.int(end, ptr as usize);
+            }
         }
         b.int(0, ptr as usize);
         b.int(0, ptr as usize);

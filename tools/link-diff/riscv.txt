@@ -214,3 +214,45 @@ helper:
         .p2align 3
         ret
         .p2align 3, 0
+
+=== a difference of two labels across a call a relaxing link shortens
+# This is what the `R_RISCV_ADD`/`R_RISCV_SUB` and
+# `R_RISCV_SET_ULEB128`/`SUB_ULEB128` pairs exist for. Each field below holds
+# a distance spanning a `call` pair, which `--relax` turns into one
+# instruction, so the distance is four bytes shorter in the linked program
+# than in either object; a file that folded it would be wrong by exactly
+# that. The `.size` and the jump table of `target - table` entries are the
+# shapes real code writes. `c - b` spans nothing a linker can shorten, so
+# rsasm folds it where GNU as leaves it to the linker, and the linked image
+# is the same either way.
+--- a.s
+        .text
+        .globl  _start
+_start:
+a:      call    helper
+b:      nop
+c:      ret
+        .size   _start, . - _start
+        .p2align 4, 0
+        .data
+        .globl  spans
+spans:  .byte   b - a
+        .half   b - a
+        .word   b - a
+        .dword  b - a
+        .word   c - a
+        .word   c - b
+        .uleb128 b - a
+        .uleb128 c - a
+        .size   spans, . - spans
+        .section .rodata
+        .globl  table
+table:  .word   a - table
+        .word   b - table
+        .word   c - table
+--- b.s
+        .text
+        .globl  helper
+helper: call    _start
+        ret
+        .p2align 4, 0
