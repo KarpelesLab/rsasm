@@ -211,7 +211,7 @@ impl Assembler {
             // has that second meaning, so the other spellings go straight
             // to the assignment.
             ".set" if Self::is_set_option(&cur) => false,
-            ".set" | ".equ" | ".equiv" => self.dir_set(&mut cur, span, text == ".equiv"),
+            ".set" | ".equ" | ".equiv" => self.dir_set(&mut cur, span, text == ".equiv", 0),
             ".size" => self.dir_size(&mut cur, span),
             ".type" => self.dir_type(&mut cur, span),
             ".comm" => self.dir_comm(&mut cur, span, false, SymType::Object),
@@ -300,6 +300,12 @@ impl Assembler {
                 cur.set_pos(cur.all().len());
                 true
             }
+            // A target may spell `.set` again to put a mark of its own on the
+            // alias; see `Architecture::alias_directive`. It comes last so
+            // that no backend can take a name this table already uses.
+            _ if let Some(flags) = self.arch.alias_directive(&text) => {
+                self.dir_set(&mut cur, span, false, flags)
+            }
             _ => false,
         };
 
@@ -384,11 +390,14 @@ impl Assembler {
             sections,
             cur: section,
             sm,
+            implicit_it_at,
             ..
         } = self;
         let dialect = options.dialect;
         let bit_dot = arch.bit_addressing();
         let upper_modifiers = arch.uppercase_modifiers();
+        let implicit_it = options.implicit_it;
+        let implicit_it_here = implicit_it_at.is_some_and(|(s, _)| s == *section);
         let mut cx = crate::arch::AsmCtx {
             interner,
             exprs,
@@ -400,6 +409,8 @@ impl Assembler {
             format: options.format,
             bit_dot,
             upper_modifiers,
+            implicit_it,
+            implicit_it_here,
             sections,
             section: *section,
             relaxable: false,
@@ -1265,7 +1276,19 @@ impl Assembler {
         rest.len() == 1 && matches!(rest[0].kind, TokKind::Ident(_))
     }
 
-    pub(crate) fn dir_set(&mut self, cur: &mut Cursor<'_>, span: Span, once_only: bool) -> bool {
+    /// `.set name, value`, and the spellings that mean the same.
+    ///
+    /// `flags` are the target flags the directive puts on the alias on top of
+    /// the ones its value carries; see [`Architecture::alias_directive`].
+    ///
+    /// [`Architecture::alias_directive`]: crate::arch::Architecture::alias_directive
+    pub(crate) fn dir_set(
+        &mut self,
+        cur: &mut Cursor<'_>,
+        span: Span,
+        once_only: bool,
+        flags: u8,
+    ) -> bool {
         let Some((name, nspan)) = self.expect_name(cur) else {
             return true;
         };
@@ -1306,9 +1329,19 @@ impl Assembler {
             Some((crate::expr::ExprKind::SymId(s), _)) => Some(s),
             _ => None,
         };
+        // A symbol plus a number also carries the source's target flags onto
+        // the alias: that is GNU as's `copy_symbol_attributes`, which
+        // `pseudo_set` calls for a value that is `O_symbol` and which on ARM
+        // assigns the Thumb marks, so an alias of a Thumb function is one
+        // too. A difference of labels or a number is not `O_symbol` and
+        // carries nothing. The source is the symbol as written, not what it
+        // may itself be an alias of, since that is the symbol GNU as's
+        // expression holds.
+        let mut inherited = 0;
         if let Some(src) = head.filter(|s| *s != id) {
             let from = self.symbols.get(src);
             let (size, defined) = (from.size, from.is_defined());
+            inherited = from.target_flags;
             let plain = self
                 .eval_ref(e)
                 .is_ok_and(|v| v.plus == Some(src) && v.minus.is_none() && v.addend == 0);
@@ -1317,6 +1350,7 @@ impl Assembler {
             sym.size_from = (!defined && plain).then_some(src);
         }
         let sym = self.symbols.get_mut(id);
+        sym.target_flags = inherited | flags;
         sym.value = SymbolValue::Expr(e);
         sym.def_span = nspan;
         sym.redefinable = !once_only;

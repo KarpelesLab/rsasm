@@ -31,6 +31,15 @@
 //! and it is what makes `.word _GLOBAL_OFFSET_TABLE_ - (1b + 8)` next to an
 //! `add rn, pc, rn` load the GOT's address.
 //!
+//! Three suffixes name a word whose meaning the platform ABI rather than the
+//! assembler settles. `(SBREL)` is the offset from the static base a register
+//! holds in code built with `-msingle-pic-base`. `(TARGET1)` and `(TARGET2)`
+//! are the two words the ABI leaves a platform to define — on GNU systems the
+//! first links as `R_ARM_ABS32` and the second as `R_ARM_GOT_PREL` — which is
+//! what lets one C++ runtime source serve platforms that want an absolute
+//! `.init_array` entry and ones that want a relative one. All three are
+//! `.word` and `.long` suffixes only, as the GOT ones are.
+//!
 //! # Thread-local operands
 //!
 //! The access models are data suffixes like the GOT ones: `(TLSGD)`,
@@ -56,7 +65,8 @@
 //! its mapping symbols and its interworking — but not for what it accepts.
 //! Two things it refuses are assembled here, and llvm-mc, which writes the
 //! same object rsasm does for both, is the reference for them instead.
-//! A third is a field GNU as fills in differently, and wrongly.
+//! Two more are places GNU as writes bytes that are not the program the
+//! source states.
 //!
 //! * A branch to a *local* label in another section that is an odd number of
 //!   halfwords into Thumb code. GNU as's `arm_fix_adjustable` relocates such
@@ -75,6 +85,22 @@
 //!   none of the three, so the line is a syntax error there; once the layout
 //!   is known it is an ordinary number, and rsasm puts it in the pool. The
 //!   case is in `tools/mc-diff/arm-programs.txt`.
+//! * A `.arm` or a `.thumb` in the middle of an `it` block that
+//!   `-mimplicit-it` made up. GNU as keeps `now_pred` per section rather than
+//!   per instruction set, so the block spans the switch and the A32
+//!   instructions after it are counted into it. Two things follow, both of
+//!   them bytes no architecture can mean: the `it`'s mask grows to cover an
+//!   A32 instruction, which leaves the Thumb instruction that was meant to
+//!   be the block's second one outside it and assembled unconditionally
+//!   (`addeq r0, r1, r2` becomes an `adds`); and an A32 instruction whose
+//!   condition the open block cannot hold makes
+//!   `new_automatic_it_block` write a Thumb `it` halfword, and a `$t`
+//!   mapping symbol, into the middle of ARM code, so that every A32
+//!   instruction after it is two bytes off a word boundary. A made-up block
+//!   ends at the switch here, which leaves each instruction set predicated
+//!   the way it predicates itself. Neither assembler is a reference for the
+//!   other, so the case is in `tests/arm_gas.rs` rather than in a corpus,
+//!   and `tools/fuzz/arm-programs.py` does not write one.
 //! * The offset of a T32 coprocessor transfer on coprocessor 9 with P set
 //!   and W clear — `ldc p9, c1, [r0, #8]`, and every `ldc`, `stc` and label
 //!   form of that shape. `md_apply_fix` tells the half-precision
@@ -96,10 +122,10 @@
 //! reading, and is `.word sym + 4` here. `.4byte` and `.int` are plain
 //! four-byte directives in GNU as, which gives the suffix only to `.word` and
 //! `.long`, and take it here. A suffix GNU as knows but this backend has no
-//! relocation for — `(TARGET1)`, `(TARGET2)`, `(SBREL)`, and the FDPIC ones,
-//! which GNU as itself refuses outside an FDPIC object — is refused as
-//! unrecognised. And `sym(GOT) - label` is refused, as is the difference with
-//! any other suffix and `.tlsdescseq sym - label`: none of their relocations
+//! relocation for — the FDPIC ones, which GNU as itself refuses outside an
+//! FDPIC object — is refused as unrecognised. And `sym(GOT) - label` is
+//! refused, as is the difference with any other suffix and
+//! `.tlsdescseq sym - label`: none of their relocations
 //! has a PC-relative counterpart for the difference to become, and GNU as,
 //! which makes the fixup PC-relative regardless, writes the field's own
 //! address into the field.
@@ -129,7 +155,7 @@ use crate::lexer::{Punct, TokKind};
 use crate::section::{FixupKind, LinkValue, Variant};
 use crate::source::Span;
 use crate::symbol::SymType;
-use insn::{Mnem, Width};
+use insn::{AL, Mnem, Width};
 use operand::Operand;
 
 pub const NAMES: &[&str] = &["arm", "thumb"];
@@ -178,6 +204,9 @@ const DATA_SUFFIXES: &[&str] = &[
     "got",
     "got_prel",
     "gotoff",
+    "sbrel",
+    "target1",
+    "target2",
     "plt",
     "tlsgd",
     "tlsldm",
@@ -611,8 +640,11 @@ impl Architecture for Arm {
 
     /// GNU as's `arm_frob_label`: a label remembers whether it was defined in
     /// Thumb code, and the first after `.thumb_func` in a code section, other
-    /// than a `.L` local, is a Thumb function.
+    /// than a `.L` local, is a Thumb function. A label is also where an `it`
+    /// block the assembler made up ends, since it is a place a branch may
+    /// land.
     fn label_flags(&self, state: &mut ArchState, name: &str, in_code: bool) -> u8 {
+        thumb::close_implicit_it(state);
         let mut flags = 0;
         if state.bits == THUMB_BITS {
             flags |= LABEL_THUMB;
@@ -622,6 +654,14 @@ impl Architecture for Arm {
             state.private &= !PENDING_THUMB_FUNC;
         }
         flags
+    }
+
+    /// GNU as's `s_thumb_set`: `.thumb_set alias, value` is `.set` with the
+    /// alias marked as a Thumb function, so that the symbol table holds its
+    /// value with the low bit set and `STT_FUNC` — whatever the value was
+    /// written as, and whichever instruction set the code around it is in.
+    fn alias_directive(&self, name: &str) -> Option<u8> {
+        (name == ".thumb_set").then_some(LABEL_THUMB | LABEL_THUMB_FUNC)
     }
 
     /// A Thumb function is `STT_FUNC`, and its address has the low bit set so
@@ -819,10 +859,10 @@ impl Architecture for Arm {
             span: req.span,
         };
         if cx.state.bits == THUMB_BITS {
-            thumb::assemble(cx, &ins)
-        } else {
-            encode::assemble(cx, &ins)
+            return thumb::assemble(cx, &ins);
         }
+        arm_outside_it(cx, &ins);
+        encode::assemble(cx, &ins)
     }
 
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
@@ -891,6 +931,35 @@ impl Architecture for Arm {
             }
             _ => false,
         }
+    }
+}
+
+/// Runs the `it` state machine over an A32 instruction, which GNU as does so
+/// that source written for both instruction sets can be told where Thumb
+/// would need a block.
+///
+/// An A32 instruction carries its own condition and needs no block, so
+/// `handle_pred_state` reports one outside a block with `as_tsktsk` rather
+/// than refusing the line, and only in the two modes that do not accept it;
+/// see [`crate::assembler::ImplicitIt`]. A written `it` emits nothing here (see
+/// [`encode::assemble`]) but still opens a block, and an instruction it
+/// covers says nothing. The conditions GNU as checks against the block are a
+/// separate matter, which this backend does not check in either instruction
+/// set.
+fn arm_outside_it(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) {
+    let it = thumb::itstate(cx);
+    if it & 0xf != 0 {
+        thumb::advance_itstate(cx);
+        return;
+    }
+    if ins.cond_written && ins.cond != AL && !cx.implicit_it.allows_arm() {
+        cx.diags.warning(
+            ins.span,
+            format!(
+                "`{}` is conditional outside an `it` block, which Thumb would not allow",
+                ins.text
+            ),
+        );
     }
 }
 
@@ -1020,10 +1089,14 @@ fn tls_descseq(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
 /// Switches between ARM and Thumb, as GNU as's `.arm` and `.thumb` do: the
 /// section's alignment is raised to two bytes, and ARM code after Thumb
 /// starts on a word boundary, padded with zeros rather than no-ops.
+///
+/// An `it` block the assembler made up also ends here; see
+/// [`thumb::close_implicit_it`].
 fn set_mode(cx: &mut AsmCtx<'_>, thumb: bool) {
     if (cx.state.bits == THUMB_BITS) == thumb {
         return;
     }
+    thumb::close_implicit_it(cx.state);
     cx.state.bits = if thumb { THUMB_BITS } else { 32 };
     if !thumb {
         cx.requests.push(Request::AlignZero(4));

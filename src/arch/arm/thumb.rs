@@ -17,7 +17,7 @@ use super::insn::{AL, Mnem, Transfer, Width};
 use super::operand::{Index, Mem, MemOffset, Operand, OperandKind, Shift, ShiftAmt};
 use super::reg::{self, Reg};
 use super::{Insn, encode, reloc};
-use crate::arch::AsmCtx;
+use crate::arch::{ArchState, AsmCtx, Request};
 use crate::expr::ExprRef;
 use crate::section::{Fixup, FixupKind, LinkValue, Variant};
 use crate::source::Span;
@@ -121,12 +121,65 @@ fn sets_flags16(ins: &Insn<'_>) -> bool {
 /// mask of the ones after it below.
 const IT_SHIFT: u32 = 8;
 
-fn itstate(cx: &AsmCtx<'_>) -> u8 {
+pub(super) fn itstate(cx: &AsmCtx<'_>) -> u8 {
     (cx.state.private >> IT_SHIFT) as u8
 }
 
 fn set_itstate(cx: &mut AsmCtx<'_>, it: u8) {
     cx.state.private = (cx.state.private & !(0xff << IT_SHIFT)) | ((it as u64) << IT_SHIFT);
+}
+
+/// Where the block GNU as's `-mimplicit-it` makes up lives in the same word,
+/// above the ITSTATE: GNU as's `now_pred` in its `AUTOMATIC_PRED_BLOCK`
+/// state, less the pointer to the `it` instruction itself, which the core
+/// keeps (see [`Request::ImplicitIt`]).
+const AUTO_SHIFT: u32 = 16;
+/// The twelve bits [`AUTO_SHIFT`] names, with the top one saying a block is
+/// open at all.
+const AUTO_BITS: u64 = 0xfff;
+const AUTO_OPEN: u64 = 0x800;
+
+/// An `it` block made up for a conditional instruction, as `now_pred` holds
+/// one while it is open.
+#[derive(Copy, Clone)]
+struct Auto {
+    /// `now_pred.cc`, the condition the block was opened with.
+    cond: u8,
+    /// `now_pred.mask`, the four bits its `it` instruction carries now.
+    mask: u8,
+    /// `now_pred.block_length`, how many instructions are in the block.
+    len: u8,
+}
+
+fn auto(state: &ArchState) -> Option<Auto> {
+    let bits = (state.private >> AUTO_SHIFT) & AUTO_BITS;
+    (bits & AUTO_OPEN != 0).then_some(Auto {
+        cond: (bits & 0xf) as u8,
+        mask: ((bits >> 4) & 0xf) as u8,
+        len: ((bits >> 8) & 7) as u8,
+    })
+}
+
+fn set_auto(state: &mut ArchState, block: Option<Auto>) {
+    let bits = match block {
+        Some(a) => {
+            AUTO_OPEN | u64::from(a.cond) | (u64::from(a.mask) << 4) | (u64::from(a.len) << 8)
+        }
+        None => 0,
+    };
+    state.private = (state.private & !(AUTO_BITS << AUTO_SHIFT)) | (bits << AUTO_SHIFT);
+}
+
+/// GNU as's `force_automatic_it_block_close`, which a label calls through
+/// `arm_frob_label`: a label is a branch target, so a block nobody wrote
+/// must not reach past it.
+pub(super) fn close_implicit_it(state: &mut ArchState) {
+    set_auto(state, None);
+}
+
+/// The halfword `output_it_inst` writes.
+fn it_word(cond: u8, mask: u8) -> u16 {
+    0xbf00 | (u16::from(cond) << 4) | u16::from(mask & 0xf)
 }
 
 /// Whether an instruction leaves its `it` block by changing the PC, which
@@ -135,6 +188,22 @@ fn is_branch(ins: &Insn<'_>) -> bool {
     matches!(ins.mnem, Mnem::B | Mnem::Bl | Mnem::Bx | Mnem::Blx)
         || (matches!(ins.mnem, Mnem::Mov | Mnem::Add | Mnem::Ldr)
             && ins.ops.first().and_then(|op| op.reg()) == Some(reg::PC))
+}
+
+/// The ITSTATE an `it` whose letters are `pattern` leaves behind, for the
+/// condition `cond`.
+///
+/// The letters are relative to the condition: a `t` repeats it, so with an
+/// odd condition every letter bit flips, and the end bit does not.
+pub(super) fn it_state_for(cond: u8, pattern: u8) -> u8 {
+    let end = pattern & pattern.wrapping_neg();
+    let letters = pattern & !end & 0xf;
+    let mask = if cond & 1 != 0 {
+        letters ^ (0xf & !(end | (end - 1)))
+    } else {
+        letters
+    } | end;
+    (cond << 4) | mask
 }
 
 /// `it`, `itt`, `ite` and the rest. `pattern` holds the letters after the
@@ -148,17 +217,22 @@ fn it_block(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, pattern: u8) -> Option<Vec<Vari
         cx.error(op.span, "expected a condition code");
         return None;
     };
-    // The letters are relative to the condition: a `t` repeats it, so with
-    // an odd condition every letter bit flips, and the end bit does not.
-    let end = pattern & pattern.wrapping_neg();
-    let letters = pattern & !end & 0xf;
-    let mask = if cond & 1 != 0 {
-        letters ^ (0xf & !(end | (end - 1)))
-    } else {
-        letters
-    } | end;
-    set_itstate(cx, (cond << 4) | mask);
-    Some(narrow(0xbf00 | ((cond as u16) << 4) | mask as u16))
+    let it = it_state_for(cond, pattern);
+    set_itstate(cx, it);
+    Some(narrow(it_word(it >> 4, it)))
+}
+
+/// Takes one instruction off the open block, for a caller that does not
+/// predicate from it: see [`super::arm_outside_it`].
+pub(super) fn advance_itstate(cx: &mut AsmCtx<'_>) {
+    let it = itstate(cx);
+    set_itstate(cx, it_advance(it));
+}
+
+/// Opens the block a written `it` in ARM code names, which emits nothing of
+/// its own; see [`super::arm_outside_it`].
+pub(super) fn open_arm_it(cx: &mut AsmCtx<'_>, cond: u8, pattern: u8) {
+    set_itstate(cx, it_state_for(cond, pattern));
 }
 
 /// The ITSTATE after one instruction of a block: the mask shifts into the
@@ -211,13 +285,17 @@ fn no_encoding(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 /// The checks are GNU as's: an instruction in a block must carry the block's
 /// condition, or its inverse where the block says `e`; one that changes the
 /// PC must be the block's last; and an `al` block allows no instruction at
-/// all. Outside a block only a branch may carry a condition, as GNU as's
-/// default `-mimplicit-it=arm` has it: no block is made up for Thumb code.
-/// The instruction is then encoded without its condition, which the block
-/// supplies.
+/// all. The instruction is then encoded without its condition, which the
+/// block supplies.
+///
+/// Outside a block only a branch may carry a condition, unless the mode asks
+/// for one to be made up; see [`implicit_it`].
 pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let it = itstate(cx);
     if let Mnem::It(pattern) = ins.mnem {
+        // A written `it` ends a block that was made up, which is what GNU
+        // as's `IT_INSN` case does before it starts the manual one.
+        set_auto(cx.state, None);
         if it & 0xf != 0 {
             cx.error(
                 ins.span,
@@ -228,7 +306,7 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         return it_block(cx, ins, pattern);
     }
     if it & 0xf == 0 {
-        return encode_insn(cx, ins);
+        return implicit_it(cx, ins);
     }
     set_itstate(cx, it_advance(it));
     let expected = it >> 4;
@@ -270,6 +348,167 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         ..*ins
     };
     encode_insn(cx, &inner)
+}
+
+/// Whether an instruction is one a condition means nothing to and that an
+/// `it` block may hold all the same: GNU as's `NEUTRAL_IT_INSN`, which of
+/// the instructions this backend has is `nop`, `bkpt`, `hlt` and `udf`.
+/// Inside a made-up block one of these extends it, taking the block's own
+/// condition.
+fn neutral(ins: &Insn<'_>) -> bool {
+    matches!(ins.mnem, Mnem::Ext(at)
+        if matches!(super::table::FORMS[at as usize].name, "nop" | "bkpt" | "hlt" | "udf"))
+}
+
+/// Whether a condition on this instruction is one only an `it` block can
+/// supply, so that GNU as either refuses the line or makes a block up for
+/// it.
+///
+/// `b<cond>` is the one instruction that carries its own condition in Thumb
+/// — GNU as's single `IF_INSIDE_IT_LAST_INSN` — and a condition on a
+/// [`neutral`] instruction is dropped rather than predicating anything.
+fn needs_it(ins: &Insn<'_>) -> bool {
+    ins.cond_written && ins.cond != AL && !matches!(ins.mnem, Mnem::B) && !neutral(ins)
+}
+
+/// Whether a condition may join a block opened with `cc`: GNU as's
+/// `now_pred_compatible`, which takes the condition itself or its inverse.
+fn compatible(cond: u8, cc: u8) -> bool {
+    cond & !1 == cc & !1
+}
+
+/// Puts the halfword of a made-up `it` in front of every encoding of the
+/// instruction it predicates, carrying the fixups along with the bytes.
+///
+/// GNU as emits the `it` as an instruction of its own; one fragment holding
+/// both writes the same bytes and keeps the instruction's PC-relative
+/// fixups measured from their own halfword, which is where they belong.
+fn with_it(word: u16, variants: Vec<Variant>) -> Vec<Variant> {
+    variants
+        .into_iter()
+        .map(|mut v| {
+            let mut bytes = word.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&v.bytes);
+            v.bytes = bytes;
+            for f in &mut v.fixups {
+                f.offset += 2;
+            }
+            v
+        })
+        .collect()
+}
+
+/// The instruction as it is encoded inside a block: the condition comes from
+/// the `it` rather than from the instruction, which also decides which
+/// 16-bit forms fit (see [`sets_flags16`]).
+fn inside_it<'o>(ins: &Insn<'o>) -> Insn<'o> {
+    Insn {
+        cond: AL,
+        cond_written: false,
+        in_it: true,
+        ..*ins
+    }
+}
+
+/// Assembles an instruction that no written `it` block covers, making one up
+/// where [`crate::assembler::ImplicitIt`] asks for it.
+///
+/// This is GNU as's `handle_pred_state` in its `OUTSIDE_PRED_BLOCK` and
+/// `AUTOMATIC_PRED_BLOCK` states. A conditional instruction with nothing
+/// open gets an `it` of its own in front of it, and each instruction after
+/// that widens the `it`'s mask instead of getting one: the block takes the
+/// condition or its inverse, holds at most four instructions, and ends at
+/// the first instruction that cannot be in it — one that is unconditional,
+/// one whose condition is neither the block's nor its inverse, one that
+/// changes the PC, a written `it`, or a label, which `Arm::label_flags`
+/// closes it for.
+///
+/// Where the mode does not ask for a block, nothing here applies and the
+/// instruction is encoded as it was written, which is where the encoders
+/// refuse a condition they have no block for.
+///
+/// A made-up block does not outlive a section switch, as GNU as's does:
+/// `now_pred` is part of each section's state there, while here it is the
+/// backend's own and the fragment the core remembers is one section's. A
+/// section left and come back to continues its block only if no block was
+/// made up in between.
+fn implicit_it(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    let Some(block) = auto(cx.state).filter(|_| cx.implicit_it_here) else {
+        if !needs_it(ins) || !cx.implicit_it.makes_thumb_block() {
+            return encode_insn(cx, ins);
+        }
+        return open_it(cx, ins);
+    };
+    if neutral(ins) {
+        // GNU as's `NEUTRAL_IT_INSN`: the instruction joins with the block's
+        // own condition, so the letter is always a `t`, and a fifth one ends
+        // the block instead.
+        if block.len >= 4 {
+            set_auto(cx.state, None);
+            return encode_insn(cx, ins);
+        }
+        return widen_it(cx, ins, block, block.cond, false);
+    }
+    let cond = if ins.cond_written { ins.cond } else { AL };
+    // An instruction that changes the PC leaves the block, so it is the last
+    // one in it.
+    let last = is_branch(ins);
+    if block.len < 4 && compatible(cond, block.cond) {
+        return widen_it(cx, ins, block, cond, last);
+    }
+    set_auto(cx.state, None);
+    if !needs_it(ins) {
+        return encode_insn(cx, ins);
+    }
+    open_it(cx, ins)
+}
+
+/// GNU as's `new_automatic_it_block`: an `it` with the instruction's
+/// condition and a mask of one instruction, in front of the instruction
+/// itself.
+fn open_it(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
+    let block = Auto {
+        cond: ins.cond,
+        mask: 0x8,
+        len: 1,
+    };
+    let variants = encode_insn(cx, &inside_it(ins))?;
+    // A branch is the only instruction in the block it ends.
+    set_auto(cx.state, (!is_branch(ins)).then_some(block));
+    cx.requests.push(Request::ImplicitIt);
+    Some(with_it(it_word(block.cond, block.mask), variants))
+}
+
+/// GNU as's `now_pred_add_mask`: one more instruction in the block, whose
+/// letter is a `t` where `cond` has the block's parity and an `e` where it
+/// does not, and the end bit after it.
+fn widen_it(
+    cx: &mut AsmCtx<'_>,
+    ins: &Insn<'_>,
+    block: Auto,
+    cond: u8,
+    last: bool,
+) -> Option<Vec<Variant>> {
+    let len = block.len + 1;
+    let bit = |mask: u8, value: u8, n: u32| (mask & !(1 << n)) | (value << n);
+    let mask = bit(
+        bit(block.mask & 0xf, cond & 1, 5 - u32::from(len)),
+        1,
+        4 - u32::from(len),
+    );
+    let variants = encode_insn(cx, &inside_it(ins))?;
+    set_auto(
+        cx.state,
+        (!last).then_some(Auto {
+            cond: block.cond,
+            mask,
+            len,
+        }),
+    );
+    cx.requests.push(Request::ImplicitItMask(
+        it_word(block.cond, mask).to_le_bytes(),
+    ));
+    Some(variants)
 }
 
 fn encode_insn(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {

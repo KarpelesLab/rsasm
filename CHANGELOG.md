@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- ARM: make up the `it` block a conditional Thumb instruction needs, as GNU
+  as's `-mimplicit-it` does, with the option spelled the same
+- ARM: read `.thumb_set`, and carry a symbol's Thumb marks onto a `.set`
+  alias of it
+- ARM: take a difference of labels as the number an eight-byte `vldr` literal
+  pool entry has to be, where GNU as's parser folds one
+- ARM: read the `(SBREL)`, `(TARGET1)` and `(TARGET2)` data suffixes
+
 ## [0.1.3](https://github.com/KarpelesLab/rsasm/compare/v0.1.2...v0.1.3) - 2026-09-21
 
 ### Other

@@ -1261,3 +1261,45 @@ fn:     bx      lr
 === refused: a suffix the backend does not know, in data
         .syntax unified
         .word   sym(FOOBAR)
+=== refused: an FDPIC suffix, which GNU as takes only in an FDPIC object
+        .syntax unified
+        .word   sym(FUNCDESC), sym(GOTFUNCDESC), sym(GOTOFFFUNCDESC)
+=== the words the platform ABI defines
+        .syntax unified
+        .text
+        .globl  glob
+loc:    bx      lr
+glob:   bx      lr
+        .word   ext(TARGET1), ext(TARGET2), ext(SBREL)
+        .word   ext(TARGET1) + 4, ext(SBREL) - 8
+        .word   loc(SBREL), glob(TARGET2)
+        .long   ext(target1), ext(target2), ext(sbrel)
+=== thumb_set marks the alias as a thumb function
+        .syntax unified
+        .thumb
+tfun:   bx      lr
+        .arm
+afun:   bx      lr
+        .globl  galias
+        .thumb_set galias, tfun
+        .thumb_set alias, tfun
+        .thumb_set offset, tfun + 4
+        .thumb_set fromarm, afun
+        .thumb_set number, 0x100
+        .set    plain, tfun
+        .set    ofalias, alias
+        .word   alias, galias
+=== an eight-byte literal holding a difference of labels
+        @ GNU as's expression parser folds the difference as it reads the
+        @ line, so `parse_big_immediate` has the number an eight-byte entry
+        @ must be; a difference it cannot fold is a syntax error there.
+        .syntax unified
+        .fpu    neon-vfpv4
+        .text
+l0:     nop
+l1:     vldr    d0, =l1-l0
+        vldr    d1, =l1-l0
+        vldr    d2, =4
+        ldr     r0, =4
+        vldr    d3, =l0-l1
+        .ltorg

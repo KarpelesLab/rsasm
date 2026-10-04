@@ -1187,6 +1187,41 @@ fn a_doubleword_pool_entry_takes_two_slots() {
     assert!(errors_for("arm", "vldr q0, =1").contains("not a `q` one"));
 }
 
+/// The number an eight-byte entry has to be is whatever GNU as's expression
+/// parser has folded to one, so a difference of labels a fixed distance apart
+/// counts: `l1-l0` with an `l0` behind it is the distance, and one with an
+/// alignment in between, or with an `l1` still to come, is the syntax error
+/// GNU as reports. The fold also feeds the move a number is loaded with
+/// instead of a pool entry, and the sharing: a folded difference is signed
+/// where a written number is not, so the two never share a pair.
+#[test]
+fn a_doubleword_pool_entry_holding_a_difference_of_labels() {
+    enc(
+        "l0: nop\nl1: vldr d0, =l1-l0\nvldr d1, =l1-l0\nvldr d2, =4\nldr r0, =4\n.ltorg\n",
+        "00 f0 20 e3 03 0b 9f ed 02 1b 9f ed 03 2b 9f ed 04 00 a0 e3 \
+         00 00 00 00 04 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00",
+    );
+    enc(
+        "l0: nop\nl1: vldr d0, =l0-l1\n.ltorg\n",
+        "00 f0 20 e3 01 0b 1f ed fc ff ff ff ff ff ff ff",
+    );
+    enc(
+        "l0: nop\nl1: vldr d0, =l1-l0+1\n.ltorg\n",
+        "00 f0 20 e3 01 0b 1f ed 05 00 00 00 00 00 00 00",
+    );
+    // A difference that is zero once folded is a `vmov.i64` of zero, which is
+    // what the fold being ahead of the move means.
+    enc(
+        "l0: nop\nl1: vldr d0, =l1-l0-4\n",
+        "00 f0 20 e3 30 0e 80 f2",
+    );
+    // What no fold reaches is refused, as GNU as refuses it.
+    let e = errors_for("arm", "vldr d0, =l2-l1\nl1: nop\nl2: nop\n.ltorg\n");
+    assert!(e.contains("invalid type for literal pool"), "{e}");
+    let e = errors_for("arm", "l0: nop\n.align 4\nl1: vldr d0, =l1-l0\n.ltorg\n");
+    assert!(e.contains("invalid type for literal pool"), "{e}");
+}
+
 /// The same in Thumb, where the pool is reached from the PC rounded down to a
 /// word and a `vldr` may stand in an `it` block.
 #[test]

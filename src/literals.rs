@@ -224,6 +224,23 @@ impl Assembler {
                         .retain(|&(v, t, _)| (v, t) != (vendor, tag));
                     self.attr_overrides.push((vendor, tag, value));
                 }
+                // The statement's own bytes are already in the section's last
+                // fragment: the requests run after it is pushed, and only
+                // `AlignCode` is carried out in front of it.
+                Request::ImplicitIt => {
+                    let frag = self.cur_section().next_frag_index().saturating_sub(1);
+                    self.implicit_it_at = Some((self.cur, frag));
+                }
+                Request::ImplicitItMask(bytes) => {
+                    if let Some((_, frag)) = self.implicit_it_at.filter(|&(s, _)| s == self.cur)
+                        && let Some(f) = self.cur_section().frags.get_mut(frag as usize)
+                        && let FragKind::Bytes { variants, .. } = &mut f.kind
+                    {
+                        for v in variants.iter_mut().filter(|v| v.bytes.len() >= bytes.len()) {
+                            v.bytes[..bytes.len()].copy_from_slice(&bytes);
+                        }
+                    }
+                }
                 Request::Mark {
                     expr,
                     kind,

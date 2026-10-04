@@ -61,7 +61,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the exclusives and the LSE atomics, pointer authentication, memory tagging, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 23365 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3222 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3227 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 574 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 880 |
@@ -229,17 +229,23 @@ form by form and in random whole programs as well.
   `{vex}`, `{vex3}` and `{evex}` pseudo-prefixes
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`) down to the four-byte slots GNU as keeps them in -- the byte and
-  halfword loads take an entry as well, and `vldr d0, =x` takes two slots and
-  aligns the pool to eight, while a number a `mov`, `mvn`, `movw`, `vmov.i64`,
-  `vmov.f32` or `vmov.f64` can hold is moved instead of loaded --
+  halfword loads take an entry as well, `vldr d0, =x` takes two slots and
+  aligns the pool to eight, that eight-byte entry taking a difference of
+  labels GNU as's parser folds to a number as readily as a written one, and a
+  number a `mov`, `mvn`, `movw`, `vmov.i64`, `vmov.f32` or `vmov.f64` can
+  hold is moved instead of loaded --
   the PC-relative loads that name a label rather than a pool entry
   (`ldr r0, label`, the byte, halfword, doubleword and preload forms, and in
   ARM state the stores as well), which in Thumb pick between a 16-bit form
   reaching a word-aligned label 1020 bytes ahead and a 32-bit one reaching
   4095 bytes either way,
-  `adr` and `adrl`, `it` blocks, `.thumb_func` and calls between
+  `adr` and `adrl`, `it` blocks -- written, or made up for a conditional
+  instruction that has none of its own as `-mimplicit-it` asks, each
+  instruction after the first widening the `it` it joins --
+  `.thumb_func`, `.thumb_set` and calls between
   the two instruction sets, the position-independent operands
-  (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`,
+  (`.word sym(GOT)`, `(GOTOFF)`, `(GOT_PREL)`, `(PLT)`, `(SBREL)`,
+  `(TARGET1)`, `(TARGET2)`,
   `.word _GLOBAL_OFFSET_TABLE_`, `bl sym(PLT)`, and
   `movw`/`movt` with `:lower16:` and `:upper16:`, absolute or measured
   against a label), the thread-local ones (`.word sym(TLSGD)` and the other
@@ -340,13 +346,11 @@ form by form and in random whole programs as well.
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,
   `.cfi_inline_lsda`, `.cfi_fde_data` and llvm-mc's `.cfi_llvm_*`), and
   `.debug_macro`/`.debug_names`
-- ARM: `-mimplicit-it`, so a conditional Thumb instruction needs an `it` block
-  of its own, as with GNU as's default; `.thumb_set`; 8-byte (VFP) literal
-  pool entries; the relocation suffixes past the GOT, PLT and thread-local
-  ones -- `(TARGET1)`, `(TARGET2)` and `(SBREL)`, which GNU as reads and
-  rsasm refuses as unrecognised; and
-  the divided Thumb syntax GNU as reads without
-  `.syntax unified` (rsasm reads Thumb as unified syntax either way)
+- ARM: the divided Thumb syntax GNU as reads without `.syntax unified`
+  (rsasm reads Thumb as unified syntax either way), which also means
+  `.syntax divided` is accepted and ignored rather than changing how an
+  operand is read, and that `-mimplicit-it=never` and `=thumb` warn about a
+  conditional ARM instruction where GNU as would not have in divided source
 - ARM vectors: the floating-point immediate of `vmov.f32 s0, #1.0` and
   `vmov.f64 d0, #0.5`, which needs a literal this assembler's GAS-dialect
   lexer does not read (`vcmp.f32 s0, 0` against the integer zero works);
@@ -568,6 +572,11 @@ rsasm [options] <input.s>...
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
                      ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
+      --mimplicit-it=<m>
+                     ARM: when a conditional Thumb instruction with no `it`
+                     block of its own gets one made up for it -- never, arm
+                     (default), thumb or always -- spelled as GNU as spells
+                     it, `-mimplicit-it=<m>`, as well
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling
       --base <addr>  base address for `bin` and `ihex` output

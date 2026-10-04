@@ -37,6 +37,56 @@ pub struct Relocation {
     pub desc: RelocDesc,
 }
 
+/// When a conditional Thumb instruction with no `it` block of its own gets
+/// one made up for it: GNU as's `-mimplicit-it`.
+///
+/// A32 carries a condition in every instruction and T32 takes it from an
+/// `it` block, so source written to assemble for both leaves the block to
+/// the assembler. The four modes are GNU as's, and each says what becomes of
+/// a conditional instruction that stands outside a block in each instruction
+/// set: it is accepted, accepted with a warning, or an error. Only Thumb code
+/// can have the block made up; ARM code needs none, so a mode that does not
+/// accept the instruction there warns rather than refusing it.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[non_exhaustive]
+pub enum ImplicitIt {
+    /// `never`: a warning in ARM code, an error in Thumb code.
+    Never,
+    /// `arm`, the default: accepted in ARM code, an error in Thumb code.
+    #[default]
+    Arm,
+    /// `thumb`: a warning in ARM code, and in Thumb code the `it` is made up.
+    Thumb,
+    /// `always`: accepted in ARM code, and in Thumb code the `it` is made up.
+    Always,
+}
+
+impl ImplicitIt {
+    /// The mode `-mimplicit-it=` names, as GNU as's `arm_parse_it_mode`
+    /// spells the four.
+    pub fn from_name(name: &str) -> Option<ImplicitIt> {
+        Some(match name {
+            "never" => ImplicitIt::Never,
+            "arm" => ImplicitIt::Arm,
+            "thumb" => ImplicitIt::Thumb,
+            "always" => ImplicitIt::Always,
+            _ => return None,
+        })
+    }
+
+    /// Whether a conditional Thumb instruction outside a block gets an `it`
+    /// made up for it rather than being refused.
+    pub fn makes_thumb_block(self) -> bool {
+        matches!(self, ImplicitIt::Thumb | ImplicitIt::Always)
+    }
+
+    /// Whether a conditional ARM instruction outside a block is left alone
+    /// rather than warned about.
+    pub fn allows_arm(self) -> bool {
+        matches!(self, ImplicitIt::Arm | ImplicitIt::Always)
+    }
+}
+
 /// How a source file is read and what is made of it.
 ///
 /// Built with [`Options::new`] and the `with_*` methods; the struct is
@@ -80,6 +130,9 @@ pub struct Options {
     /// output leaves this at its default, since `relocatable` already says
     /// there is no object.
     pub(crate) format: crate::output::Format,
+    /// Whether a conditional Thumb instruction with no `it` block of its own
+    /// gets one made up for it, which only the ARM backend reads.
+    pub(crate) implicit_it: ImplicitIt,
 }
 
 impl Default for Options {
@@ -93,6 +146,7 @@ impl Default for Options {
             dwarf_version: None,
             debug_source: false,
             format: crate::output::Format::Elf,
+            implicit_it: ImplicitIt::Arm,
         }
     }
 }
@@ -169,6 +223,13 @@ impl Options {
         self
     }
 
+    /// When a conditional Thumb instruction with no `it` block of its own
+    /// gets one made up for it; see [`ImplicitIt`].
+    pub fn with_implicit_it(mut self, mode: ImplicitIt) -> Options {
+        self.implicit_it = mode;
+        self
+    }
+
     /// Whether relocations are emitted; see [`Options::with_relocatable`].
     pub fn relocatable(&self) -> bool {
         self.relocatable
@@ -207,6 +268,11 @@ impl Options {
     /// The object format being written.
     pub fn format(&self) -> crate::output::Format {
         self.format
+    }
+
+    /// When an `it` block is made up for a conditional Thumb instruction.
+    pub fn implicit_it(&self) -> ImplicitIt {
+        self.implicit_it
     }
 }
 
@@ -367,6 +433,12 @@ pub struct Assembler {
     /// later pool in it is aligned to eight as well. See
     /// [`crate::literals`].
     pub(crate) literal_pool_align: HashMap<SectionId, u64>,
+    /// Where the `it` a [`Request::ImplicitIt`] marked went, as the section
+    /// and the fragment holding its halfword, so that an instruction joining
+    /// its block can have the mask written again; see [`ImplicitIt`].
+    ///
+    /// [`Request::ImplicitIt`]: crate::arch::Request::ImplicitIt
+    pub(crate) implicit_it_at: Option<(SectionId, u32)>,
     /// The mapping symbols of the finished object; see the crate's `mapping`
     /// module. Not API.
     #[doc(hidden)]
@@ -436,6 +508,7 @@ impl Assembler {
             relocs_by_fragment: Vec::new(),
             literal_pools: HashMap::new(),
             literal_pool_align: HashMap::new(),
+            implicit_it_at: None,
             mapping_symbols: Vec::new(),
             nasm: crate::nasm::State::default(),
             coff: crate::coff::State::default(),
@@ -2195,11 +2268,14 @@ impl Assembler {
             sections,
             cur,
             sm,
+            implicit_it_at,
             ..
         } = self;
         let dialect = options.dialect;
         let bit_dot = arch.bit_addressing();
         let upper_modifiers = arch.uppercase_modifiers();
+        let implicit_it = options.implicit_it;
+        let implicit_it_here = implicit_it_at.is_some_and(|(s, _)| s == *cur);
         let mut cx = AsmCtx {
             interner,
             exprs,
@@ -2211,6 +2287,8 @@ impl Assembler {
             format: options.format,
             bit_dot,
             upper_modifiers,
+            implicit_it,
+            implicit_it_here,
             sections,
             section: *cur,
             relaxable: false,
