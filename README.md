@@ -362,7 +362,7 @@ form by form and in random whole programs as well.
   have and this does not is whole extensions rather than stray forms, each a
   family with its own operand grammar: FEAT_MOPS's 132 `cpyf`, `cpy`, `set`
   and `setg` prologue/main/epilogue forms with their non-temporal and
-  unprivileged suffixes; FEAT_LSFE's 72 floating-point atomics (`ldfadd`,
+  unprivileged suffixes; FEAT_LSFE's 60 floating-point atomics (`ldfadd`,
   `ldfmaxnm`, `stbfmin` and the rest); FEAT_CMPBR's 30 register compare-and-
   branches (`cbeq`, `cbbhi`, `cbhlt`); FEAT_GCS's guarded control stack
   (`gcspushm`, `gcspopcx`, `gcsstr`); FEAT_D128's `mrrs`, `msrr`, `sysp` and
