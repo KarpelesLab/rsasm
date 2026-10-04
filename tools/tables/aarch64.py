@@ -71,6 +71,8 @@ sbfiz ubfiz bfi sxtb sxth sxtw uxtb uxth lsl lsr asr ror lslv lsrv asrv rorv
 extr mul mneg smull umull smnegl umnegl smulh umulh madd msub smaddl umaddl
 smsubl umsubl sdiv udiv rbit rev rev16 rev32 rev64 clz cls csel csinc csinv
 csneg cset csetm cinc cinv cneg ccmp ccmn
+bfc ctz rmif setf8 setf16 cfinv axflag xaflag udf wfet wfit maddpt msubpt
+ld64b st64b st64bv st64bv0 rprfm
 """.split())
 
 # The loads and stores among them, which the backend also encodes for the
@@ -2087,7 +2089,8 @@ def write_corpus(forms, directory):
         "gp": "# The groups the table covers whole because no SIMD mnemonic shares\n"
               "# them: the load/store exclusives, the acquire/release accesses, the\n"
               "# atomics, the pointer-authentication instructions that name a register,\n"
-              "# and memory tagging.\n"
+              "# memory tagging, the CRC32 checksums, the unprivileged loads and\n"
+              "# stores, and the byte and halfword unscaled acquire-release accesses.\n"
               "#\n"
               "# GNU as takes the zero register in either half of the 128-bit value a\n"
               "# FEAT_THE `rcw<op>p` names (`rcwswpp xzr, x1, [x2]`) and llvm-mc does\n"

@@ -6,6 +6,13 @@
 //! zero register, `lsl #n` is a `ubfm`, `mov` is one of four different
 //! instructions depending on its operands). Writing those rewrites out is
 //! clearer than a table that would need an escape hatch for each of them.
+//!
+//! The forms that are one each rather than a family are here for the same
+//! reason: each of them constrains an operand in a way a measured row could
+//! not say. `ld64b` names the first of eight consecutive registers, so only
+//! an even one up to `x22` will do; `bfc` computes one immediate from the
+//! other and bounds their sum; `rprfm` reads a name or a number scattered
+//! over six bits of the word; and `udf` has no opcode bits at all.
 
 use super::encode::{const_in_range, field, logical_imm, word, word_fixup};
 use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp, TlsLdst};
@@ -247,6 +254,7 @@ fn pcrel(
 pub(crate) fn handwritten(mnemonic: &str) -> bool {
     mnemonic
         .strip_prefix("b.")
+        .or_else(|| mnemonic.strip_prefix("bc."))
         .is_some_and(|c| reg::cond(c).is_some())
         || mnemonic
             .strip_prefix('b')
@@ -371,6 +379,24 @@ pub(crate) fn handwritten(mnemonic: &str) -> bool {
                 | "smstart"
                 | "smstop"
                 | "zero"
+                | "bfc"
+                | "ctz"
+                | "rmif"
+                | "setf8"
+                | "setf16"
+                | "cfinv"
+                | "axflag"
+                | "xaflag"
+                | "udf"
+                | "wfet"
+                | "wfit"
+                | "maddpt"
+                | "msubpt"
+                | "ld64b"
+                | "st64b"
+                | "st64bv"
+                | "st64bv0"
+                | "rprfm"
         )
         || loads(mnemonic)
         // The system instructions and the aliases of `hint`, whose names are
@@ -425,17 +451,23 @@ pub fn assemble(
         span: req.span,
     };
 
-    // `b.<cond>` and the `b<cond>` spelling GNU as also accepts.
+    // `b.<cond>` and the `b<cond>` spelling GNU as also accepts, and
+    // `bc.<cond>`, which neither reference spells without the dot.
+    if let Some(rest) = mnemonic.strip_prefix("bc.")
+        && let Some(c) = reg::cond(rest)
+    {
+        return branch_cond(cx, &i, c, true);
+    }
     if let Some(rest) = mnemonic.strip_prefix("b.")
         && let Some(c) = reg::cond(rest)
     {
-        return branch_cond(cx, &i, c);
+        return branch_cond(cx, &i, c, false);
     }
     if let Some(rest) = mnemonic.strip_prefix('b')
         && rest.len() == 2
         && let Some(c) = reg::cond(rest)
     {
-        return branch_cond(cx, &i, c);
+        return branch_cond(cx, &i, c, false);
     }
 
     match mnemonic {
@@ -453,7 +485,7 @@ pub fn assemble(
 
         "sbfm" | "ubfm" | "bfm" => bitfield_raw(cx, &i),
         "sbfx" | "ubfx" | "bfxil" => bitfield_extract(cx, &i),
-        "sbfiz" | "ubfiz" | "bfi" => bitfield_insert(cx, &i),
+        "sbfiz" | "ubfiz" | "bfi" | "bfc" => bitfield_insert(cx, &i),
         "sxtb" | "sxth" | "sxtw" | "uxtb" | "uxth" => extend(cx, &i),
         "lsl" | "lsr" | "asr" | "ror" => shift(cx, &i),
         "lslv" | "lsrv" | "asrv" | "rorv" => shift_reg(cx, &i, mnemonic.trim_end_matches('v')),
@@ -462,10 +494,12 @@ pub fn assemble(
         "mul" | "mneg" | "smull" | "umull" | "smnegl" | "umnegl" | "smulh" | "umulh" => {
             mul_alias(cx, &i)
         }
-        "madd" | "msub" | "smaddl" | "umaddl" | "smsubl" | "umsubl" => madd(cx, &i),
+        "madd" | "msub" | "smaddl" | "umaddl" | "smsubl" | "umsubl" | "maddpt" | "msubpt" => {
+            madd(cx, &i)
+        }
         "sdiv" | "udiv" => div(cx, &i),
 
-        "rbit" | "rev" | "rev16" | "rev32" | "rev64" | "clz" | "cls" => dp1(cx, &i),
+        "rbit" | "rev" | "rev16" | "rev32" | "rev64" | "clz" | "cls" | "ctz" => dp1(cx, &i),
 
         "csel" | "csinc" | "csinv" | "csneg" => csel(cx, &i),
         "cset" | "csetm" => cset(cx, &i),
@@ -491,10 +525,15 @@ pub fn assemble(
         | "ldur" | "stur" | "ldurb" | "sturb" | "ldurh" | "sturh" | "ldursb" | "ldursh"
         | "ldursw" | "prfm" | "prfum" => ldst(cx, &i),
         "ldp" | "stp" | "ldpsw" | "ldnp" | "stnp" => ldst_pair(cx, &i),
+        "ld64b" | "st64b" | "st64bv" | "st64bv0" => ldst64b(cx, &i),
+        "rprfm" => rprfm(cx, &i),
 
         "hint" => hint(cx, &i),
         "dmb" | "dsb" | "isb" | "clrex" => barrier(cx, &i),
         "svc" | "hvc" | "smc" | "brk" | "hlt" | "dcps1" | "dcps2" | "dcps3" => exception(cx, &i),
+        "udf" => udf(cx, &i),
+        "wfet" | "wfit" => wfxt(cx, &i),
+        "rmif" | "setf8" | "setf16" | "cfinv" | "axflag" | "xaflag" => flags(cx, &i),
         "mrs" => mrs(cx, &i),
         "msr" => msr(cx, &i),
         "sys" | "sysl" => sys_raw(cx, &i),
@@ -1190,7 +1229,7 @@ const BITFIELD: u32 = 0x1300_0000;
 fn bitfield_opc(mnemonic: &str) -> u32 {
     match mnemonic {
         "sbfm" | "sbfx" | "sbfiz" | "asr" | "sxtb" | "sxth" | "sxtw" => 0,
-        "bfm" | "bfxil" | "bfi" => 1,
+        "bfm" | "bfxil" | "bfi" | "bfc" => 1,
         _ => 2,
     }
 }
@@ -1240,14 +1279,28 @@ fn bitfield_extract(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant
 /// `sbfiz`/`ubfiz`/`bfi`: insert `width` bits *at* `lsb`, which rotates the
 /// source down rather than up, so `immr` counts backwards from the register
 /// width.
+///
+/// `bfc` is the same insert reading the zero register, so it clears the field
+/// instead of filling it and names one operand fewer.
 fn bitfield_insert(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
-    i.arity(cx, &[4]).then_some(())?;
+    let clear = i.mnemonic == "bfc";
+    i.arity(cx, if clear { &[3] } else { &[4] }).then_some(())?;
     let rd = i.gpr(cx, 0)?;
-    let rn = i.gpr(cx, 1)?;
-    i.same_width(cx, &[rd, rn])?;
+    let rn = if clear {
+        Reg {
+            class: rd.class,
+            num: 31,
+            sp: false,
+        }
+    } else {
+        let rn = i.gpr(cx, 1)?;
+        i.same_width(cx, &[rd, rn])?;
+        rn
+    };
+    let at = usize::from(!clear);
     let width_bits = if rd.class == RegClass::X { 64 } else { 32 };
-    let lsb = i.imm(cx, 2, 0, width_bits - 1, "the bit position")?;
-    let width = i.imm(cx, 3, 1, width_bits - lsb, "the field width")?;
+    let lsb = i.imm(cx, at + 1, 0, width_bits - 1, "the bit position")?;
+    let width = i.imm(cx, at + 2, 1, width_bits - lsb, "the field width")?;
     emit_bitfield(
         rd,
         rn,
@@ -1369,6 +1422,10 @@ fn madd_bits(mnemonic: &str) -> Option<(u32, u32, bool)> {
     Some(match mnemonic {
         "madd" | "mul" => (0, 0, false),
         "msub" | "mneg" => (0, 1, false),
+        // FEAT_CPA's checked forms, which carry a pointer's upper bits
+        // through the arithmetic and so exist only at 64 bits.
+        "maddpt" => (3, 0, false),
+        "msubpt" => (3, 1, false),
         "smaddl" | "smull" => (1, 0, true),
         "smsubl" | "smnegl" => (1, 1, true),
         "smulh" => (2, 0, true),
@@ -1444,6 +1501,10 @@ fn madd(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         }
     } else {
         i.same_width(cx, &[rd, rn, rm, ra])?;
+        if i.mnemonic.ends_with("pt") && rd.class != RegClass::X {
+            cx.error(i.span, format!("`{}` is 64-bit only", i.mnemonic));
+            return None;
+        }
     }
     emit_madd(rd, rn, rm, ra.num, op31, o0)
 }
@@ -1463,7 +1524,8 @@ fn div(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         | field(rd.num as u32, 0, 5))
 }
 
-/// The one-source data-processing group: bit and byte reversal, counting.
+/// The one-source data-processing group: bit and byte reversal, counting
+/// leading zeros or sign bits, and counting trailing zeros.
 fn dp1(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     i.arity(cx, &[2]).then_some(())?;
     let rd = i.gpr(cx, 0)?;
@@ -1497,7 +1559,11 @@ fn dp1(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             3
         }
         "clz" => 4,
-        _ => 5,
+        "cls" => 5,
+        // FEAT_CSSC added the count-trailing-zeros that completes the group;
+        // its `abs`, `cnt` and the min/max forms share their mnemonics with
+        // SIMD and SVE, and so are the generated table's.
+        _ => 6,
     };
     one(field(rd.sf(), 31, 1)
         | 0x5ac0_0000
@@ -1614,12 +1680,20 @@ fn branch(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
     pcrel(cx, base, e, kind, i.ops[0].span)
 }
 
-fn branch_cond(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, cond: u8) -> Option<Vec<Variant>> {
+/// `b.<cond>`, and FEAT_HBC's `bc.<cond>`, which is the same branch with the
+/// hint that the condition's outcome is consistent: one bit apart, and the
+/// same 19-bit field and relocation.
+fn branch_cond(
+    cx: &mut AsmCtx<'_>,
+    i: &Insn<'_, '_>,
+    cond: u8,
+    consistent: bool,
+) -> Option<Vec<Variant>> {
     i.arity(cx, &[1]).then_some(())?;
     let e = i.pcrel_expr(cx, 0)?;
     pcrel(
         cx,
-        0x5400_0000 | field(cond as u32, 0, 4),
+        0x5400_0000 | field(u32::from(consistent), 4, 1) | field(cond as u32, 0, 4),
         e,
         encode::fixup_b19(),
         i.ops[0].span,
@@ -2250,6 +2324,119 @@ fn ldst_pair(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         | field(rt.num as u32, 0, 5))
 }
 
+/// The `[Xn|SP]` of an access that addresses through a base register and
+/// nothing else. The zero register is not one of these: the field reads 31
+/// as the stack pointer.
+///
+/// `zero_offset` says whether an explicit `#0` may be written there. GNU as
+/// reads one in the 64-byte accesses and llvm-mc refuses it; neither reads
+/// one in `rprfm`.
+fn base_only(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, at: usize, zero_offset: bool) -> Option<Reg> {
+    let mem = i.mem(cx, at)?;
+    let plain = match mem.kind {
+        MemKind::Offset(None) => true,
+        MemKind::Offset(Some(e)) => zero_offset && cx.constant(e) == Some(0),
+        _ => false,
+    };
+    if !plain {
+        cx.error(
+            mem.span,
+            format!("`{}` addresses through a base register only", i.mnemonic),
+        );
+        return None;
+    }
+    i.no_zr(cx, mem.base)?;
+    if mem.base.class != RegClass::X {
+        cx.error(mem.span, "an address register is 64-bit");
+        return None;
+    }
+    Some(mem.base)
+}
+
+/// FEAT_LS64's 64-byte accesses, which move 512 bits through eight
+/// consecutive registers named by the first of them. Only an even register
+/// up to `x22` can start such a run, which is what both references demand:
+/// `x22` leaves `x29` as the last of the eight, and the odd numbering is not
+/// encodable at all.
+fn ldst64b(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    let status = matches!(i.mnemonic, "st64bv" | "st64bv0");
+    i.arity(cx, if status { &[3] } else { &[2] })
+        .then_some(())?;
+    let rs = if status {
+        let rs = i.gpr(cx, 0)?;
+        if rs.class != RegClass::X {
+            cx.error(i.ops[0].span, "the status register is 64-bit");
+            return None;
+        }
+        u32::from(rs.num)
+    } else {
+        31
+    };
+    let at = usize::from(status);
+    let rt = i.gpr(cx, at)?;
+    if rt.class != RegClass::X || rt.num % 2 != 0 || rt.num > 22 {
+        cx.error(
+            i.ops[at].span,
+            format!(
+                "`{}` transfers eight registers, so it starts at an even `x` register up to `x22`",
+                i.mnemonic
+            ),
+        );
+        return None;
+    }
+    let base = base_only(cx, i, at + 1, true)?;
+    let opcode = match i.mnemonic {
+        "ld64b" => 0xd0,
+        "st64b" => 0x90,
+        "st64bv" => 0xb0,
+        _ => 0xa0,
+    };
+    one(0xf820_0000
+        | field(rs, 16, 5)
+        | field(opcode, 8, 8)
+        | field(base.num as u32, 5, 5)
+        | field(rt.num as u32, 0, 5))
+}
+
+/// FEAT_RPRFM's range prefetch: an operation, the stride that follows it and
+/// the address it starts from.
+///
+/// The operation is a six-bit number whose halves are far apart in the word,
+/// or one of the four names the architecture has given values so far; the
+/// unnamed values are written as numbers, as both references print them.
+fn rprfm(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[3]).then_some(())?;
+    let op = i.op(0)?;
+    let value = match op.word() {
+        Some(n) => match cx.name(n).to_ascii_lowercase().as_str() {
+            "pldkeep" => 0,
+            "pstkeep" => 1,
+            "pldstrm" => 4,
+            "pststrm" => 5,
+            text => {
+                cx.error(
+                    op.span,
+                    format!("`{text}` is not a range prefetch operation"),
+                );
+                return None;
+            }
+        },
+        None => i.imm(cx, 0, 0, 63, "a range prefetch operation")?,
+    } as u32;
+    let rm = i.gpr(cx, 1)?;
+    if rm.class != RegClass::X {
+        cx.error(i.ops[1].span, "the stride register is 64-bit");
+        return None;
+    }
+    let base = base_only(cx, i, 2, false)?;
+    one(0xf8a0_4818
+        | field(rm.num as u32, 16, 5)
+        | field(value >> 5, 15, 1)
+        | field((value >> 3) & 3, 12, 2)
+        | field(base.num as u32, 5, 5)
+        | field(value & 7, 0, 3))
+}
+
 // ---- system ----------------------------------------------------------------
 
 /// `hint #n`, the instruction every no-operand alias in the generated table
@@ -2460,6 +2647,84 @@ fn exception(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         _ => 0xd4a0_0003,
     };
     one(base | field(imm, 5, 16))
+}
+
+/// `udf #imm16`, the word the architecture promises will never decode.
+///
+/// Nothing in it is an opcode: the sixteen bits of the immediate are the low
+/// half of the word and the high half is zero, so `udf #0` assembles to four
+/// zero bytes.
+fn udf(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1]).then_some(())?;
+    let imm = i.imm(cx, 0, 0, 0xffff, "an undefined-instruction number")? as u32;
+    one(field(imm, 0, 16))
+}
+
+/// FEAT_WFxT's `wfet` and `wfit`, which wait as `wfe` and `wfi` do but give
+/// up when the register's timeout passes. Their operand is why they are not
+/// aliases of `hint` like the rest of that group.
+fn wfxt(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1]).then_some(())?;
+    let rd = i.gpr(cx, 0)?;
+    if rd.class != RegClass::X {
+        cx.error(
+            i.ops[0].span,
+            format!("`{}` takes a 64-bit register", i.mnemonic),
+        );
+        return None;
+    }
+    let base = if i.mnemonic == "wfet" {
+        0xd503_1000
+    } else {
+        0xd503_1020
+    };
+    one(base | field(rd.num as u32, 0, 5))
+}
+
+/// FEAT_FlagM and FEAT_FlagM2, which read and write the condition flags
+/// directly: `rmif` rotates a register into them under a mask, `setf8` and
+/// `setf16` set them from a narrow result, and the other three rearrange
+/// what is already there. They share a feature rather than an operand shape,
+/// so each is written out here.
+fn flags(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    match i.mnemonic {
+        "rmif" => {
+            i.arity(cx, &[3]).then_some(())?;
+            let rn = i.gpr(cx, 0)?;
+            if rn.class != RegClass::X {
+                cx.error(i.ops[0].span, "`rmif` rotates a 64-bit register");
+                return None;
+            }
+            let rotate = i.imm(cx, 1, 0, 63, "the rotation")? as u32;
+            let mask = i.imm(cx, 2, 0, 15, "the flag mask")? as u32;
+            one(0xba00_0400 | field(rotate, 15, 6) | field(rn.num as u32, 5, 5) | mask)
+        }
+        "setf8" | "setf16" => {
+            i.arity(cx, &[1]).then_some(())?;
+            let rn = i.gpr(cx, 0)?;
+            if rn.class != RegClass::W {
+                cx.error(
+                    i.ops[0].span,
+                    format!("`{}` reads a 32-bit register", i.mnemonic),
+                );
+                return None;
+            }
+            let base = if i.mnemonic == "setf8" {
+                0x3a00_080d
+            } else {
+                0x3a00_480d
+            };
+            one(base | field(rn.num as u32, 5, 5))
+        }
+        _ => {
+            i.arity(cx, &[0]).then_some(())?;
+            one(match i.mnemonic {
+                "cfinv" => 0xd500_401f,
+                "axflag" => 0xd500_405f,
+                _ => 0xd500_403f,
+            })
+        }
+    }
 }
 
 fn mrs(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {

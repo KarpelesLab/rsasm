@@ -2,6 +2,13 @@
 #
 # Immediates are mostly written without the usual `#` sigil, which both
 # assemblers accept; the SIMD and SVE corpora (aarch64-*-words.txt) write it.
+#
+# Two general-purpose forms this corpus cannot hold, because only one
+# reference reads them. GNU as reads an explicit zero offset in the 64-byte
+# accesses (`ld64b x0, [x1, #0]`), where llvm-mc takes the base register
+# alone; rsasm follows GNU as, and `tests/aarch64.rs` has the bytes. The
+# other way round, llvm-mc assembles `setf8` with no register at all as
+# `setf8 w0`, which GNU as refuses and rsasm refuses with it.
 
 # ---- add / subtract, immediate ----
 add x0, x1, 0
@@ -186,6 +193,11 @@ bfxil x0, x1, 4, 8
 sbfiz x0, x1, 4, 8
 ubfiz w0, w1, 3, 9
 bfi x0, x1, 4, 8
+bfc x0, 4, 8
+bfc w0, 0, 32
+bfc w0, 31, 1
+bfc x0, 63, 1
+bfc wzr, 3, 7
 lsl x0, x1, 3
 lsl w0, w1, 31
 lsr w0, w1, 5
@@ -227,6 +239,10 @@ smulh x0, x1, x2
 umulh x0, x1, x2
 sdiv x0, x1, x2
 udiv w0, w1, w2
+maddpt x0, x1, x2, x3
+maddpt xzr, xzr, xzr, xzr
+msubpt x0, x1, x2, x3
+msubpt x30, x29, x28, x27
 
 # ---- one-source data processing ----
 rbit x0, x1
@@ -238,6 +254,9 @@ rev16 x0, x1
 rev32 x0, x1
 clz x0, x1
 cls w0, w1
+ctz x0, x1
+ctz w0, w1
+ctz xzr, xzr
 
 # ---- conditional ----
 csel x0, x1, x2, eq
@@ -370,6 +389,49 @@ msr fpcr, x0
 msr daifset, 2
 msr daifclr, 3
 msr spsel, 0
+wfet x0
+wfet x30
+wfet xzr
+wfit x1
+wfit xzr
+# The word the architecture promises will never decode, whose immediate is
+# the whole of it.
+udf 0
+udf 1
+udf 65535
+
+# ---- the condition flags, read and written directly ----
+rmif x0, 0, 0
+rmif x0, 1, 2
+rmif x30, 63, 15
+rmif xzr, 32, 8
+setf8 w0
+setf8 wzr
+setf16 w30
+setf16 w1
+cfinv
+axflag
+xaflag
+
+# ---- the 64-byte accesses and the range prefetch ----
+# Eight consecutive registers named by the first of them, which has to be
+# even and no higher than x22.
+ld64b x0, [x1]
+ld64b x22, [sp]
+ld64b x8, [x8]
+st64b x0, [x1]
+st64b x22, [x30]
+st64bv x0, x2, [x1]
+st64bv xzr, x22, [sp]
+st64bv0 x5, x0, [x1]
+st64bv0 xzr, x22, [x30]
+rprfm pldkeep, x1, [x2]
+rprfm pstkeep, x1, [x2]
+rprfm pldstrm, x30, [sp]
+rprfm pststrm, xzr, [x0]
+rprfm 0, x1, [x2]
+rprfm 2, x1, [x2]
+rprfm 63, x1, [x2]
 
 # ---- a little SIMD ----
 add v0.4s, v1.4s, v2.4s

@@ -8,8 +8,10 @@ and by rsasm. That reaches every form llvm-mc can print, operands of every
 value included, with no table of forms written for the fuzzer: a table
 written from the same understanding as the backend's would share its
 mistakes. The general-purpose groups the encoding table covers -- the
-exclusives, the atomics, pointer authentication and memory tagging -- are
-fuzzed with them, and come from the words that land nowhere in particular.
+exclusives, the atomics, pointer authentication, memory tagging, the
+checksums and the unscaled loads and stores -- are fuzzed with them, as are
+the one-off forms the handwritten encoder owns, and come from the words that
+land nowhere in particular.
 Some cases are then mutated into likely-invalid ones — a lane index or shift
 one past its range, a register of the wrong width, an arrangement swapped
 for another — so that what rsasm refuses is checked too.
@@ -169,13 +171,15 @@ def run_mc_results(lines):
 # ---------------------------------------------------------------------------
 
 def interesting(text, word=None):
-    """A line worth fuzzing: SIMD, floating point, SVE or one of the
-    general-purpose groups the table covers, and not a branch."""
+    """A line worth fuzzing: SIMD, floating point, SVE, one of the
+    general-purpose groups the table covers or one of the one-off
+    general-purpose forms the handwritten encoder owns, and not a branch."""
     try:
         mn, atoms = a64.parse_line(text)
     except ValueError:
         return False
-    if mn.startswith("b.") or mn in ("b", "bl", "adrp", "cbz", "cbnz", "tbz", "tbnz") or \
+    if mn.startswith("b.") or mn.startswith("bc.") or \
+            mn in ("b", "bl", "adrp", "cbz", "cbnz", "tbz", "tbnz") or \
             (mn == "adr" and "z" not in text):
         return False
     if re.search(r"\bza|zt0|vgx|\bpn\d", text):
@@ -186,6 +190,7 @@ def interesting(text, word=None):
         return False
     kinds = {a.kind[0] for a in atoms}
     return (word is not None and (word >> 25) & 0xf == 0b0010) or a64.gp_group(mn) or \
+        a64.gp_single(mn) or \
         bool(kinds & {"v", "vidx", "vidxa", "s", "z", "zidx", "p", "pm", "pz", "vlist",
                          "vlistidx", "zlist", "plist", "fimm"})
 

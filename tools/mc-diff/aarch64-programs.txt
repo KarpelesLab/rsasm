@@ -26,6 +26,29 @@ top:
         b.gt    top
         b.le    bottom
         b.al    top
+        b.nv    bottom
+bottom:
+        nop
+
+=== conditional branches with a consistency hint
+# FEAT_HBC's `bc.<cond>`, one bit from `b.<cond>` and the same field.
+top:
+        bc.eq   top
+        bc.ne   bottom
+        bc.lt   top
+        bc.ge   bottom
+        bc.hi   top
+        bc.ls   bottom
+        bc.hs   top
+        bc.lo   bottom
+        bc.mi   top
+        bc.pl   bottom
+        bc.vs   top
+        bc.vc   bottom
+        bc.gt   top
+        bc.le   bottom
+        bc.al   top
+        bc.nv   bottom
 bottom:
         nop
 
