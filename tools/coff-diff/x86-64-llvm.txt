@@ -179,3 +179,133 @@ f:      ret
         .long   1
         .section .data$d,"dw",associative,f
         .long   f
+# A prologue with nothing to undo, whose `UNWIND_INFO` is still padded to the
+# eight bytes the structure takes at the least.
+=== seh nothing to undo
+        .text
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      nop
+        .seh_endprologue
+        ret
+        .seh_endproc
+# Unwind data for a function that is not in `.text`. llvm-mc gives every other
+# text section a `.xdata` and `.pdata` of its own under the same COFF name, so
+# that a COMDAT function's unwind data can be associated with it and dropped
+# with the copy it describes; a section that only has a selection of its own
+# (`.linkonce`, which keys on the section's symbol) leaves them ordinary.
+=== seh in a comdat section
+        .section .text$f,"xr",discard,f
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      pushq   %rbp
+        .seh_pushreg %rbp
+        .seh_endprologue
+        popq    %rbp
+        ret
+        .seh_endproc
+=== seh in two comdat sections and the main one
+        .section .text$f,"xr",discard,f
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      pushq   %rbp
+        .seh_pushreg %rbp
+        .seh_endprologue
+        popq    %rbp
+        ret
+        .seh_endproc
+        .section .text$g,"xr",discard,g
+        .globl  g
+        .def    g; .scl 2; .type 32; .endef
+        .seh_proc g
+g:      subq    $40, %rsp
+        .seh_stackalloc 40
+        .seh_endprologue
+        addq    $40, %rsp
+        ret
+        .seh_endproc
+        .text
+        .globl  h
+        .def    h; .scl 2; .type 32; .endef
+        .seh_proc h
+h:      pushq   %rbx
+        .seh_pushreg %rbx
+        .seh_endprologue
+        popq    %rbx
+        ret
+        .seh_endproc
+=== seh in a plain section of its own and a linkonce one
+        .section .mytext,"xr"
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      pushq   %rbp
+        .seh_pushreg %rbp
+        .seh_endprologue
+        popq    %rbp
+        ret
+        .seh_endproc
+        .section .other,"xr"
+        .linkonce discard
+        .globl  g
+        .def    g; .scl 2; .type 32; .endef
+        .seh_proc g
+g:      pushq   %rbx
+        .seh_pushreg %rbx
+        .seh_endprologue
+        popq    %rbx
+        ret
+        .seh_endproc
+        .text
+        .globl  h
+        .def    h; .scl 2; .type 32; .endef
+        .seh_proc h
+h:      nop
+        .seh_endprologue
+        ret
+        .seh_endproc
+=== seh twice in one comdat section
+        .section .text$f,"xr",discard,f
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      nop
+        .seh_endprologue
+        ret
+        .seh_endproc
+        .globl  f2
+        .def    f2; .scl 2; .type 32; .endef
+        .seh_proc f2
+f2:     nop
+        .seh_endprologue
+        ret
+        .seh_endproc
+=== seh handler data in a comdat section
+        .section .text$f,"xr",discard,f
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      pushq   %rbp
+        .seh_pushreg %rbp
+        .seh_endprologue
+        .seh_handler __C_specific_handler, @except
+        .seh_handlerdata
+        .long   1
+        .section .text$f,"xr",discard,f
+        popq    %rbp
+        ret
+        .seh_endproc
+=== a section created after a comdat function's unwind data
+        .section .text$f,"xr",discard,f
+        .globl  f
+        .def    f; .scl 2; .type 32; .endef
+        .seh_proc f
+f:      nop
+        .seh_endprologue
+        ret
+        .seh_endproc
+        .section .late,"dr"
+        .long   1

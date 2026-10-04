@@ -324,10 +324,15 @@ form by form and in random whole programs as well.
   string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
-- in PE/COFF objects: CodeView debug information, unwind data for ARM64 (its
-  `.seh_*` directives are refused), i386 `.safeseh`, and unwind data for a
-  function in a COMDAT section, which needs `.xdata` and `.pdata` sections
-  associated with it (refused)
+- in PE/COFF objects: CodeView debug information (`.cv_file`, `.cv_loc`, the
+  `.cv_fpo_*` family), which is not a dialect of DWARF but a format of its own
+  -- subsections of `.debug$S` and `.debug$T` with a string table and file
+  checksums of their own; and unwind data for ARM64, whose `.seh_*` directives
+  are a different set from x86-64's and whose records are a packed word where
+  one will do and an extended one with epilogue scopes where it will not. Both
+  are refused with the reason. i386's `.safeseh` is refused for a reason of
+  its own: GNU as, the reference for x86 PE objects here, has no such
+  directive, so there is nothing to check an implementation of it against
 - in Mach-O objects: 32-bit machines (i386, armv7), thread-local variables
   (`@TLVP`, `@TLVPPAGE`), compact unwind, which llvm-mc writes beside
   `__eh_frame` on arm64 and which makes `.cfi_*` an error there, indirect
@@ -1032,7 +1037,12 @@ What the source can say:
   `.seh_setframe`, `.seh_savereg`, `.seh_savexmm`, `.seh_pushframe`,
   `.seh_handler`, `.seh_handlerdata`, `.seh_endprologue` and `.seh_endproc`
   write `.xdata` and `.pdata`, counting the prologue from the final lengths
-  of its instructions
+  of its instructions. A function outside `.text` gets a pair of its own under
+  the same COFF name, and one in a COMDAT section an associative COMDAT keyed
+  on that section's symbol, so that the linker keeps or drops the unwind data
+  with the copy of the code it describes. Those sections are numbered after
+  every section that is not associative, since MSVC's linker cannot read a
+  forward reference
 - DWARF: `.file` and `.loc` write the `.debug_*` sections, `.cfi_*` writes
   `.eh_frame` or `.debug_frame`, and `-g` describes the source; see
   [Debug information](#debug-information). A function can carry both

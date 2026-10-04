@@ -76,6 +76,9 @@ impl State {
 /// long an instruction is until relaxation has settled; the unwind data is
 /// built from their addresses in [`Assembler::emit_coff_unwind`].
 struct Proc {
+    /// The section the function is in, which decides where its unwind data
+    /// goes; see [`Assembler::coff_unwind_section`].
+    section: SectionId,
     begin: SymbolId,
     end: Option<SymbolId>,
     /// Where the prologue ends, which is its size.
@@ -119,9 +122,16 @@ const UNW_FLAG_UHANDLER: u8 = 2;
 /// The length of a block's `UNWIND_INFO`: a four-byte header, the unwind
 /// codes in two-byte slots padded to a whole number of four-byte words, and
 /// the handler's address if it has one.
+///
+/// A prologue with nothing to undo and no handler still takes eight bytes,
+/// which is the smallest the structure can be.
 fn unwind_info_size(p: &Proc) -> usize {
     let slots: usize = p.codes.iter().map(|c| 1 + c.extra.len()).sum();
-    4 + slots.next_multiple_of(2) * 2 + if p.handler.is_some() { 4 } else { 0 }
+    let handler = if p.handler.is_some() { 4 } else { 0 };
+    if slots == 0 && handler == 0 {
+        return 8;
+    }
+    4 + slots.next_multiple_of(2) * 2 + handler
 }
 
 /// Whether `name` is one of the directives this module handles.
@@ -265,10 +275,15 @@ impl Assembler {
             ".secrel32" => self.coff_reloc_data(cur, span, RelocClass::SectionRelative, 4),
             ".secidx" => self.coff_reloc_data(cur, span, RelocClass::SectionIndex, 2),
             // `.safeseh` lists an i386 handler in `.sxdata` by its symbol
-            // table index, a field no relocation describes.
+            // table index, a field no relocation describes. GNU as, which is
+            // what checks the x86 PE objects rsasm writes, has no such
+            // directive at all, so there is no reference to write it against.
             ".safeseh" => {
-                self.diags
-                    .error(span, "`.safeseh` is not supported yet in COFF output");
+                self.diags.error(
+                    span,
+                    "`.safeseh` is llvm-mc's; GNU as, which is what rsasm's x86 PE/COFF \
+                     objects are checked against, has no such directive",
+                );
                 cur.set_pos(cur.all().len());
             }
             _ => self.seh_directive(name, cur, span),
@@ -442,7 +457,9 @@ impl Assembler {
             self.diags.error(
                 span,
                 format!(
-                    "`{name}` writes x86-64 unwind data, which an object for `{}` cannot hold",
+                    "`{name}` writes x86-64 unwind data; `{}` has unwind data of its own, \
+                     with its own directives and a packed or extended record rather than \
+                     x86-64's unwind codes, which rsasm does not write yet",
                     self.target().name()
                 ),
             );
@@ -510,7 +527,8 @@ impl Assembler {
             return;
         }
         let size = unwind_info_size(p);
-        let xdata = self.coff_unwind_section(".xdata");
+        let text = p.section;
+        let xdata = self.coff_unwind_section(".xdata", text);
         self.set_section(xdata);
         self.push_unwind_align(xdata, span);
         let at = self.cur_section().push(crate::section::Fragment::new(
@@ -555,24 +573,9 @@ impl Assembler {
                 .error(span, "`.seh_proc` inside another `.seh_proc` block");
             return;
         }
-        // llvm-mc gives a function in a COMDAT section unwind data in
-        // `.xdata` and `.pdata` sections of their own, associated with it, so
-        // they are discarded together; one object would need two sections of
-        // each name for that, which rsasm cannot have yet.
-        if self
-            .coff
-            .sections
-            .get(&self.cur)
-            .is_some_and(|i| i.comdat.is_some())
-        {
-            self.diags.error(
-                span,
-                "unwind data for a function in a COMDAT section is not supported yet",
-            );
-            return;
-        }
         let begin = self.anon_label(span);
         self.coff.open = Some(Proc {
+            section: self.cur,
             begin,
             end: None,
             prologue_end: None,
@@ -596,6 +599,12 @@ impl Assembler {
                 .error(span, "this `.seh_proc` block has no `.seh_endprologue`");
         }
         p.end = Some(end);
+        // llvm-mc writes the unwind information as the block ends, so the
+        // `.xdata` section exists from here; only the runtime function table
+        // waits for the end of the file. That is the order the sections come
+        // out in.
+        let text = p.section;
+        self.coff_unwind_section(".xdata", text);
         self.coff.procs.push(p);
     }
 
@@ -765,13 +774,49 @@ impl Assembler {
         }
     }
 
-    /// `.xdata` and `.pdata` as llvm-mc creates them: read-only data, aligned
-    /// to four bytes.
-    fn coff_unwind_section(&mut self, name: &str) -> SectionId {
-        let n = self.interner.intern(name);
+    /// The `.xdata` or `.pdata` holding the unwind data of a function in
+    /// `text`: read-only data aligned to four bytes, as llvm-mc creates it.
+    ///
+    /// Only a function in `.text` itself uses the one section of that name.
+    /// Every other text section gets a pair of its own under the same COFF
+    /// name (`MCStreamer::getAssociatedXDataSection`), so that a COMDAT
+    /// function's unwind data can be an associative COMDAT and be dropped
+    /// with the copy it describes. The sections are told apart in the
+    /// assembler by the text section's name after a NUL, which no source can
+    /// spell; see `crate::coff::section_name`.
+    fn coff_unwind_section(&mut self, name: &str, text: SectionId) -> SectionId {
         let flags = crate::section::SectionFlags::rodata();
+        let own = self.interner.get(self.section(text).name) != ".text";
+        let n = if own {
+            let text_name = self.interner.get(self.section(text).name).to_string();
+            self.interner.intern(&format!("{name}\u{0}{text_name}"))
+        } else {
+            self.interner.intern(name)
+        };
         let id = self.get_or_create_section(n, SectionKind::Progbits, flags, 4);
         self.section_mut(id).align = self.section(id).align.max(4);
+        // A COMDAT text section hands its key symbol on; a section that is
+        // only unique -- `.linkonce`, which keys on the section's own symbol,
+        // or a plain section of another name -- leaves the unwind data an
+        // ordinary section.
+        let key = self
+            .coff
+            .sections
+            .get(&text)
+            .and_then(|i| i.comdat)
+            .and_then(|c| c.symbol);
+        if let Some(sym) = key {
+            let characteristics =
+                coff::default_characteristics(name, SectionKind::Progbits, &flags)
+                    | coff::SCN_LNK_COMDAT;
+            self.coff.sections.entry(id).or_insert(SectionInfo {
+                characteristics,
+                comdat: Some(Comdat {
+                    selection: coff::SELECT_ASSOCIATIVE,
+                    symbol: Some(sym),
+                }),
+            });
+        }
         id
     }
 
@@ -787,14 +832,17 @@ impl Assembler {
         if procs.is_empty() {
             return false;
         }
-        let xdata = self.coff_unwind_section(".xdata");
-        let pdata = self.coff_unwind_section(".pdata");
         // The image-relative fields of `.pdata` and of a handler's address
         // are four-byte data fields; their class is what makes them
         // image-relative. See `coff_reloc_data`.
         let imgrel = self.target().data_reloc(4, false).unwrap_or(0);
+        // The unwind information of every function first, then every runtime
+        // function table entry, as llvm-mc writes them: a function with a
+        // `.pdata` of its own has its `.xdata` before any of them.
+        let mut unwinds = Vec::with_capacity(procs.len());
         for p in &procs {
             let span = p.span;
+            let xdata = self.coff_unwind_section(".xdata", p.section);
             let info = self.unwind_info(p);
             let at = match p.info_at {
                 Some(frag) => {
@@ -827,11 +875,15 @@ impl Assembler {
                     at
                 }
             };
-            let unwind = self.dwarf_label(at, span);
+            unwinds.push(self.dwarf_label(at, span));
+        }
 
-            // The runtime function table entry: where the code starts and
-            // ends, and where its unwind information is, all as addresses
-            // relative to the image base.
+        // The runtime function table entry of each: where the code starts and
+        // ends, and where its unwind information is, all as addresses
+        // relative to the image base.
+        for (p, unwind) in procs.iter().zip(unwinds) {
+            let span = p.span;
+            let pdata = self.coff_unwind_section(".pdata", p.section);
             let mut b = crate::dwarf::emit::Blob::new(self.target().endian());
             for sym in [p.begin, p.end.unwrap_or(p.begin), unwind] {
                 let e = self.exprs.alloc(ExprKind::SymId(sym), span);
@@ -883,6 +935,9 @@ impl Assembler {
         // The array is a whole number of four-byte words.
         if !slots.is_multiple_of(2) {
             b.int(0, 2);
+        }
+        if slots == 0 && p.handler.is_none() {
+            b.int(0, 4);
         }
         if let Some((e, _)) = p.handler {
             b.fixup(
