@@ -265,6 +265,20 @@ pub enum Request {
         tag: u32,
         value: AttrValue,
     },
+    /// The bytes this statement emits start with an `it` instruction the
+    /// backend made up for a conditional Thumb instruction that had no block
+    /// of its own; see [`crate::assembler::ImplicitIt`]. The core remembers
+    /// which fragment they went into, because the `it`'s mask says how many
+    /// instructions the block covers and every instruction that joins it has
+    /// to write the halfword again.
+    ImplicitIt,
+    /// Writes the halfword of the `it` the last [`Request::ImplicitIt`]
+    /// marked, which another instruction joining its block has widened. It
+    /// goes into every variant of that fragment, since layout has yet to
+    /// pick one, and is dropped where the fragment is not in this section:
+    /// GNU as keeps its `it` state per section, so the block does not
+    /// outlive one.
+    ImplicitItMask([u8; 2]),
 }
 
 /// One value in an ELF build-attributes section.
@@ -608,6 +622,12 @@ pub struct AsmCtx<'a> {
     /// [`Architecture::uppercase_modifiers`] for the active backend, which
     /// decides whether `x@tlsgd` names a relocation modifier at all.
     pub upper_modifiers: bool,
+    /// When a conditional Thumb instruction with no `it` block of its own
+    /// gets one made up for it, which only the ARM backend reads.
+    pub implicit_it: crate::assembler::ImplicitIt,
+    /// Whether the `it` a [`Request::ImplicitIt`] made up is in this section,
+    /// and so still a block this section's next instruction may join.
+    pub implicit_it_here: bool,
     /// Read-only: what has been emitted so far, for
     /// [`AsmCtx::fixed_distance`].
     pub sections: &'a [crate::section::Section],
@@ -795,8 +815,10 @@ impl AsmCtx<'_> {
 /// symbol on either side of a sum, so without this the first would be an
 /// error. AArch64 folds a PC-relative target the same way, which decides
 /// what the field holds: `adr x0, b - a` is the number `b - a`, taken as the
-/// offset a number written there would be.
-#[cfg(any(feature = "x86", feature = "aarch64"))]
+/// offset a number written there would be. ARM folds a `vldr`'s `=expr`,
+/// where the fold decides whether the line assembles at all: an eight-byte
+/// pool entry has to be a number.
+#[cfg(any(feature = "x86", feature = "aarch64", feature = "arm"))]
 pub(crate) fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
     use crate::expr::{BinOp, ExprKind};
     let node = cx.exprs.get(e).clone();
@@ -830,7 +852,7 @@ pub(crate) fn fold_differences(cx: &mut AsmCtx<'_>, e: ExprRef) -> ExprRef {
 
 /// Where a label an expression names was defined, or where `.` is, with the
 /// order it was defined in; see [`AsmCtx::fixed_label_distance`].
-#[cfg(any(feature = "x86", feature = "aarch64"))]
+#[cfg(any(feature = "x86", feature = "aarch64", feature = "arm"))]
 fn expr_label_position(cx: &AsmCtx<'_>, e: ExprRef) -> Option<(SectionId, u32, u32)> {
     use crate::expr::ExprKind;
     let node = cx.exprs.get(e);
@@ -1570,6 +1592,14 @@ pub trait Architecture {
     /// `in_code` whether its section is executable.
     fn label_flags(&self, _state: &mut ArchState, _name: &str, _in_code: bool) -> u8 {
         0
+    }
+
+    /// Whether `name` is a directive the target spells instead of `.set`, and
+    /// the [`Architecture::label_flags`] bits it puts on the alias: ARM's
+    /// `.thumb_set`, whose alias is a Thumb function however its value was
+    /// written, so that a call through it lands in Thumb state.
+    fn alias_directive(&self, _name: &str) -> Option<u8> {
+        None
     }
 
     /// The type and value an ELF symbol table gives a symbol with these

@@ -181,7 +181,7 @@ impl Assembler {
                     let id = self.symbols.intern(n, span);
                     self.macho.set_constants.insert(id);
                 }
-                self.dir_set(cur, span, text == ".equiv")
+                self.dir_set(cur, span, text == ".equiv", 0)
             }
             _ => false,
         }

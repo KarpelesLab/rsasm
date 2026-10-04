@@ -207,15 +207,11 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
         Ext(at) => super::generic::assemble(cx, ins, at),
         // ARM instructions carry their own conditions, so GNU as takes an
         // `it` in ARM code for source shared with Thumb, and emits nothing.
-        It(_) => {
+        It(pattern) => {
             arity(cx, ins, &[1])?;
-            if ops[0]
-                .word
-                .as_deref()
-                .and_then(super::insn::condition)
-                .is_none()
-            {
-                cx.error(ops[0].span, "expected a condition code");
+            match ops[0].word.as_deref().and_then(super::insn::condition) {
+                Some(cond) => super::thumb::open_arm_it(cx, cond, pattern),
+                None => cx.error(ops[0].span, "expected a condition code"),
             }
             None
         }

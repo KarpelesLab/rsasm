@@ -1021,3 +1021,13 @@ f:      nop
 === refused: a suffix the backend does not know, in data
         .syntax unified
         .word   sym(FOOBAR)
+=== thumb_set marks the alias as a thumb function
+        .syntax unified
+        .thumb
+tfun:   bx      lr
+        .globl  galias
+        .thumb_set galias, tfun
+        .thumb_set alias, tfun
+        .thumb_set number, 0x100
+        .set    ofalias, alias
+        .word   alias, galias

@@ -25,6 +25,21 @@ pub const GOT_BREL: u32 = 26;
 /// GOT's own address.
 pub const GOT_PREL: u32 = 96;
 
+/// `sym(SBREL)`: the symbol's offset from the static base, `S + A - B(S)`,
+/// which is how position-independent code with a dedicated base register
+/// (`-msingle-pic-base`) reaches a datum. `readelf` prints it as
+/// `R_ARM_SBREL32`.
+pub const SBREL32: u32 = 9;
+/// `sym(TARGET1)`: a word the platform ABI may link as either `R_ARM_ABS32`
+/// or `R_ARM_REL32`, which the C++ runtime's `.init_array` entries use so
+/// that one source serves both choices. `readelf` prints it as
+/// `R_ARM_TARGET1`.
+pub const TARGET1: u32 = 38;
+/// `sym(TARGET2)`: the platform ABI's second such word, which on GNU
+/// systems is `R_ARM_GOT_PREL` and which the exception tables' personality
+/// routine references use. `readelf` prints it as `R_ARM_TARGET2`.
+pub const TARGET2: u32 = 41;
+
 // The thread-local relocations. Each names the variable itself, never its
 // section, and GNU as marks the variable `STT_TLS` for any of them.
 
@@ -100,6 +115,9 @@ pub fn modifier(name: &str, size: u8, pcrel: bool) -> Option<u32> {
         "got" => GOT_BREL,
         "got_prel" => GOT_PREL,
         "gotoff" => GOTOFF32,
+        "sbrel" => SBREL32,
+        "target1" => TARGET1,
+        "target2" => TARGET2,
         "plt" => ABS32,
         "tlsgd" => TLS_GD32,
         "tlsldm" => TLS_LDM32,

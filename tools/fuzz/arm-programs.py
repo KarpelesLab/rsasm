@@ -8,7 +8,8 @@ data between and after the code, labels on it, `.arm`/`.thumb`/`.code 16`
 switches, `.thumb_func`, section and subsection switches, `.macro` and
 `.rept` bodies that load and flush, `adr`, `adrl`, the PC-relative loads
 and coprocessor transfers that name a label instead of a pool entry, `it`
-blocks and branches that relax. It is assembled by `arm-none-eabi-as` with
+blocks and branches that relax, and conditional instructions with no `it`
+block of their own. It is assembled by `arm-none-eabi-as` with
 the flags `tools/xas-diff/run.sh` uses for its `arm` and `thumb` keys, and
 by rsasm, and the two objects are compared whole with `tools/mc-diff/canon.sh --full`:
 every allocated section's header and bytes, `e_flags`, every symbol -- the
@@ -41,6 +42,12 @@ A case is:
               what the assembler that refused said, and `known_object` the
               one that shows in the object itself.
 
+Each program also picks one of the four `-mimplicit-it` modes, which both
+assemblers are given, and writes conditional instructions with no `it` block
+wherever the mode makes one up for them: an `it` nobody wrote is one more
+thing that decides where the instructions after it go, and so where a pool
+entry's load reaches from.
+
 `--mutations` (default 0.15) is the fraction of programs given something
 meant to be refused: a pool out of reach, a `=` on a store or an `ldrd`, an
 over-wide literal, an eight-byte entry that is not a number.
@@ -67,6 +74,17 @@ CANON = os.path.join(ROOT, "tools", "mc-diff", "canon.sh")
 # The flags tools/xas-diff/run.sh gives its `arm` and `thumb` keys.
 FLAGS = ["-march=armv7ve", "-mfpu=neon-vfpv4"]
 TARGETS = {"arm": FLAGS, "thumb": FLAGS + ["-mthumb"]}
+
+# The `-mimplicit-it` modes, spelled the same for both assemblers. Only
+# `thumb` and `always` make an `it` up for a conditional Thumb instruction;
+# the other two refuse it, and `never` and `thumb` warn about one in ARM code,
+# which neither assembler counts as a refusal.
+IT_MODES = ["never", "arm", "thumb", "always"]
+
+# The conditions a generated instruction may carry. Two that are each other's
+# inverse and two that are not, since a made-up block holds a condition and
+# its inverse and ends at anything else.
+CONDS = ["eq", "ne", "gt", "cs"]
 
 # What rsasm refuses where GNU as does not, matched against rsasm's message.
 # Each is a difference this fuzzer is not about:
@@ -156,20 +174,21 @@ def rsasm_error_line(text):
     return "?"
 
 
-def assemble(source, target, workdir):
+def assemble(source, target, workdir, it_mode="arm"):
     """(gas, rsasm), each a dict with ok, text (the canonical object or the
     first error), line (where it complained) and log."""
     src = os.path.join(workdir, "in.s")
     with open(src, "w") as f:
         f.write(source)
     out = {}
-    rc, log = run([GAS] + TARGETS[target] + ["-o", "ref.o", "in.s"], workdir)
+    it = [f"-mimplicit-it={it_mode}"]
+    rc, log = run([GAS] + TARGETS[target] + it + ["-o", "ref.o", "in.s"], workdir)
     if rc == 0 and "Error" not in log:
         out["gas"] = dict(ok=True, text=canon(os.path.join(workdir, "ref.o")), log=log)
     else:
         line, msg = first_error(log, True)
         out["gas"] = dict(ok=False, text=msg, line=line, log=log)
-    rc, log = run([RSASM, "-a", target, "-o", "rs.o", "in.s"], workdir)
+    rc, log = run([RSASM, "-a", target] + it + ["-o", "rs.o", "in.s"], workdir)
     if rc == 0:
         out["rsasm"] = dict(ok=True, text=canon(os.path.join(workdir, "rs.o")), log=log)
     elif rc == 1:
@@ -232,6 +251,11 @@ class Program:
         self.rng = rng
         self.target = target
         self.thumb = target == "thumb"
+        # Where the statements so far have left the instruction set, which
+        # `.arm` and `.thumb` move, and which decides whether a conditional
+        # instruction needs a block.
+        self.in_thumb = self.thumb
+        self.it_mode = rng.choice(IT_MODES)
         self.skip = set(skip)
         self.mutation = None
         self.stmts = []
@@ -264,6 +288,13 @@ class Program:
         # counter is: leaving a section and coming back finds it where it was.
         self.dirty = {}
         self.gen(mutate)
+
+    @property
+    def implicit_cond(self):
+        """Whether a conditional instruction with no `it` block stands here:
+        in ARM code always, and in Thumb code only where the mode makes a
+        block up for it."""
+        return not self.in_thumb or self.it_mode in ("thumb", "always")
 
     @property
     def after_data(self):
@@ -459,6 +490,18 @@ class Program:
             ])
         if r < 0.65 and self.thumb:
             return "it eq\n\tmoveq " + self.reg() + ", " + self.reg()
+        if r < 0.78 and self.implicit_cond:
+            c = rng.choice(CONDS)
+            return rng.choice([
+                f"mov{c} {self.reg()}, {self.reg()}",
+                f"add{c} {self.reg()}, {self.reg()}, {self.reg()}",
+                f"adds{c} {self.reg()}, {self.reg()}, {self.reg()}",
+                f"ldr{c} {self.reg()}, ={self.value()}",
+                f"b{c} {self.code_label()}",
+                f"bl{c} {self.code_label()}",
+                f"bx{c} lr",
+                f"ldr{c} {self.reg()}, [{self.reg(True)}]",
+            ])
         return rng.choice([
             "nop", "bx lr", f"mov {self.reg()}, {self.reg()}",
             f"add {self.reg()}, {self.reg()}, #{rng.randrange(256)}",
@@ -494,6 +537,7 @@ class Program:
             self.macros.append("lit")
         if self.thumb and rng.random() < 0.3:
             self.stmts.append(".thumb_func")
+            self.in_thumb = True
         n = rng.randrange(6, 30)
         todo = list(self.labels)
         rng.shuffle(todo)
@@ -515,7 +559,9 @@ class Program:
 
     def place(self, name):
         if self.thumb and self.exec_section and self.rng.random() < 0.2:
+            # `.thumb_func` switches to Thumb as well as naming a function.
             self.stmts.append(".thumb_func")
+            self.in_thumb = True
         self.where[name] = self.section
         if self.after_data:
             self.misaligned.add(name)
@@ -552,8 +598,21 @@ class Program:
             self.after_data = not stmt.startswith((".align", ".balign", ".p2align"))
             return stmt
         if r < 0.9 and "state" not in self.skip:
-            return rng.choice([".arm", ".thumb", ".code 16", ".code 32",
+            stmt = rng.choice([".arm", ".thumb", ".code 16", ".code 32",
                                ".align 2\n\t.arm", ".thumb"])
+            self.in_thumb = stmt.endswith((".thumb", ".code 16"))
+            # A label ends an `it` block the assembler made up, in both
+            # assemblers, and one is put here so that no made-up block spans
+            # the switch: GNU as's is per section rather than per instruction
+            # set, and a block that reaches into ARM code has it counting A32
+            # instructions into the `it` and writing the halfword in among
+            # them, which leaves the instructions after it off a word
+            # boundary. The ARM backend's module documentation says why rsasm
+            # ends the block instead, and nothing either assembler writes
+            # there says anything about pools.
+            if self.it_mode in ("thumb", "always"):
+                stmt = f"9:\n\t{stmt}"
+            return stmt
         if "sections" in self.skip:
             return self.data()
         if r < 0.99 or "subsec" in self.skip:
@@ -714,7 +773,7 @@ def reduce(prog, kind, target, workdir):
     i = len(stmts) - 1
     while i >= 0:
         trial = stmts[:i] + stmts[i + 1:]
-        g, r = assemble(prog.source(trial), target, workdir)
+        g, r = assemble(prog.source(trial), target, workdir, prog.it_mode)
         if classify(g, r) == ("rsasm", kind):
             stmts = trial
         i -= 1
@@ -726,14 +785,15 @@ def run_case(job):
     rng = random.Random(seed)
     prog = Program(rng, target, mutate, skip)
     with tempfile.TemporaryDirectory() as d:
-        g, r = assemble(prog.source(), target, d)
+        g, r = assemble(prog.source(), target, d, prog.it_mode)
         cls, detail = classify(g, r)
         shown = prog.source()
         if cls == "rsasm":
             shown = prog.source(reduce(prog, detail, target, d))
-            g, r = assemble(shown, target, d)
+            g, r = assemble(shown, target, d, prog.it_mode)
     return dict(seed=seed, target=target, cls=cls, detail=detail,
-                mutation=prog.mutation, source=shown, gas=g, rsasm=r)
+                mutation=prog.mutation, source=shown, gas=g, rsasm=r,
+                it_mode=prog.it_mode)
 
 
 def diff_text(a, b, limit=40):
@@ -778,7 +838,8 @@ def fuzz(args):
     if groups:
         print("  findings: " + ", ".join(f"{d} [{t}] {n}" for (d, t), n in groups.most_common()))
     for f in findings[: args.limit]:
-        print(f"--- [{f['target']}] seed {f['seed']}: {f['detail']}"
+        print(f"--- [{f['target']} -mimplicit-it={f['it_mode']}] seed {f['seed']}:"
+              f" {f['detail']}"
               + (f" (mutation: {f['mutation']})" if f["mutation"] else ""))
         print("    " + f["source"].rstrip().replace("\n", "\n    "))
         g, r = f["gas"], f["rsasm"]
@@ -796,7 +857,7 @@ def fuzz(args):
 def check(args):
     source = open(args.file).read()
     with tempfile.TemporaryDirectory() as d:
-        g, r = assemble(source, args.target, d)
+        g, r = assemble(source, args.target, d, args.implicit_it)
     cls, detail = classify(g, r)
     print(cls + (f" ({detail})" if detail else ""))
     if cls != "agree":
@@ -823,6 +884,7 @@ def main():
     z.add_argument("--progress", type=int, default=0, help="report every N programs")
     c = sub.add_parser("check", help="compare one program")
     c.add_argument("--target", choices=sorted(TARGETS), default="arm")
+    c.add_argument("--implicit-it", choices=IT_MODES, default="arm")
     c.add_argument("file")
     args = ap.parse_args()
     if not os.path.exists(GAS):

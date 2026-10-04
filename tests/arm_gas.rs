@@ -9,6 +9,7 @@
 
 mod common;
 use common::*;
+use rsasm::assembler::{Assembler, ImplicitIt, Options};
 
 /// The mapping symbols of an assembled source, as `(section, offset, name)`.
 fn mapping(arch: &str, src: &str) -> Vec<(String, u64, &'static str)> {
@@ -363,6 +364,53 @@ fn calls_between_arm_and_thumb() {
     assert!(syms.contains(&("plain".into(), 0x44, 0x00)), "{syms:?}");
 }
 
+/// `.thumb_set` is `.set` with the alias marked as a Thumb function, so its
+/// value carries the low bit a call through it needs and its type is
+/// `STT_FUNC` — whatever the value was written as, and whichever instruction
+/// set the code around it is in. A plain `.set` of a symbol carries the
+/// source's marks onto the alias, which is GNU as's `copy_symbol_attributes`,
+/// so an alias of an alias is a Thumb function too.
+#[test]
+fn thumb_set_marks_the_alias_as_a_thumb_function() {
+    let asm = assemble_for(
+        "arm",
+        "        .thumb
+tfun:   bx      lr
+        .arm
+afun:   bx      lr
+        .globl  galias
+        .thumb_set galias, tfun
+        .thumb_set alias, tfun
+        .thumb_set offset, tfun + 4
+        .thumb_set fromarm, afun
+        .thumb_set number, 0x100
+        .set    plain, tfun
+        .set    ofalias, alias
+",
+    );
+    assert!(
+        !asm.diags.has_errors(),
+        "{}",
+        asm.diags.render(&asm.sm, false)
+    );
+    let syms = symbols(&asm);
+    let want = [
+        ("alias", 1, 0x02),
+        ("offset", 5, 0x02),
+        ("fromarm", 5, 0x02),
+        ("number", 0x101, 0x02),
+        ("plain", 0, 0x00),
+        ("ofalias", 1, 0x02),
+        ("galias", 1, 0x12),
+    ];
+    for (name, value, info) in want {
+        assert!(
+            syms.contains(&(name.into(), value, info)),
+            "{name}: {syms:?}"
+        );
+    }
+}
+
 /// Only an unconditional `bl` is a call; a conditional one is a jump, which
 /// into Thumb is the linker's to make reach.
 #[test]
@@ -501,6 +549,157 @@ fn it_block_mistakes_are_refused() {
     assert!(e.contains("not allowed in an `it` block"), "{e}");
 }
 
+/// The bytes and the diagnostics of a source assembled with
+/// `-mimplicit-it=<mode>`: a mode that does not make a block up warns in ARM
+/// code rather than refusing the line, so both are worth looking at.
+fn implicit_it(arch: &str, mode: ImplicitIt, src: &str) -> (String, String) {
+    let a = rsasm::arch::lookup(arch).expect("backend in this build");
+    let mut asm = Assembler::new(a, Options::new().with_implicit_it(mode));
+    asm.assemble_str("test.s", src);
+    asm.finish();
+    let diags = asm.diags.render(&asm.sm, false);
+    if asm.diags.has_errors() {
+        return (String::new(), diags);
+    }
+    (hex(&asm.section_bytes(rsasm::section::SectionId(0))), diags)
+}
+
+/// The `it` block GNU as makes up for a conditional Thumb instruction that
+/// has none of its own, and how the instructions after it join that block
+/// rather than getting one each.
+#[test]
+fn an_implicit_it_block_is_made_up_and_grown() {
+    let bytes = |src| implicit_it("thumb", ImplicitIt::Thumb, src).0;
+    // One instruction is `it`; a second with the same condition makes it
+    // `itt`, and one with the inverse makes it `ite`.
+    assert_eq!(bytes("moveq r0, r1\n"), "08 bf 08 46");
+    assert_eq!(
+        bytes("addeq r0, r1, r2\naddeq r0, r1, r2\n"),
+        "04 bf 88 18 88 18"
+    );
+    assert_eq!(
+        bytes("addeq r0, r1, r2\naddne r0, r1, r2\n"),
+        "0c bf 88 18 88 18"
+    );
+    assert_eq!(
+        bytes("addne r0, r1, r2\naddeq r0, r1, r2\n"),
+        "14 bf 88 18 88 18"
+    );
+    // Four is a block's limit, so a fifth starts another.
+    let five = "addeq r0, r1, r2\n".repeat(5);
+    assert_eq!(bytes(&five), "01 bf 88 18 88 18 88 18 88 18 08 bf 88 18");
+    // The letters follow each instruction's own condition, and the width
+    // follows the block: the 16-bit `add` of three low registers sets the
+    // flags outside a block and not inside one.
+    assert_eq!(
+        bytes("addeq r0, r1, r2\naddne r3, r4, r5\naddeq r6, r7, r8\n"),
+        "0a bf 88 18 63 19 07 eb 08 06"
+    );
+    // A `nop`, a `bkpt` and a `udf` mean nothing to a condition, so they
+    // join with the block's own and keep it open.
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nnop\naddeq r0, r1, r2\n"),
+        "02 bf 88 18 00 bf 88 18"
+    );
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nbkpt 1\nudf #2\naddeq r0, r1, r2\n"),
+        "01 bf 88 18 01 be 02 de 88 18"
+    );
+    // Anything else unconditional ends the block, and so does a label, a
+    // written `it`, and an instruction whose condition is neither the
+    // block's nor its inverse.
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nadd r0, r1, r2\naddeq r0, r1, r2\n"),
+        "08 bf 88 18 01 eb 02 00 08 bf 88 18"
+    );
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nlbl:\naddeq r0, r1, r2\n"),
+        "08 bf 88 18 08 bf 88 18"
+    );
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nit ne\naddne r3, r4, r5\n"),
+        "08 bf 88 18 18 bf 63 19"
+    );
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nbgt lbl\nlbl: nop\n"),
+        "08 bf 88 18 ff dc 00 bf"
+    );
+    // A conditional branch needs no block of its own, and joins one that is
+    // open as its last instruction: inside it the branch is the encoding
+    // with no condition field.
+    assert_eq!(
+        bytes("addeq r0, r1, r2\nbeq lbl\naddeq r0, r1, r2\nlbl: nop\n"),
+        "04 bf 88 18 01 e0 08 bf 88 18 00 bf"
+    );
+    // An instruction with only a 32-bit encoding, and a literal load, are
+    // predicated the same way.
+    assert_eq!(bytes("addseq r0, r1, r2\n"), "08 bf 11 eb 02 00");
+    assert_eq!(
+        bytes("ldreq r0, =0x12345678\n.ltorg\n"),
+        "08 bf 00 48 78 56 34 12"
+    );
+}
+
+/// What each mode makes of a conditional instruction that has no block, in
+/// each instruction set. Only Thumb can have one made up; ARM code needs
+/// none, so the modes that do not accept it there warn instead.
+#[test]
+fn the_implicit_it_modes() {
+    for mode in [ImplicitIt::Never, ImplicitIt::Arm] {
+        let (_, e) = implicit_it("thumb", mode, "addeq r0, r1, r2\n");
+        assert!(e.contains("takes an `it` block"), "{e}");
+    }
+    for mode in [ImplicitIt::Thumb, ImplicitIt::Always] {
+        let (b, e) = implicit_it("thumb", mode, "addeq r0, r1, r2\n");
+        assert_eq!(b, "08 bf 88 18");
+        assert_eq!(e, "");
+    }
+    for mode in [ImplicitIt::Never, ImplicitIt::Thumb] {
+        let (b, e) = implicit_it("arm", mode, "addeq r0, r1, r2\n");
+        assert_eq!(b, "02 00 81 00");
+        assert!(e.contains("conditional outside an `it` block"), "{e}");
+    }
+    for mode in [ImplicitIt::Arm, ImplicitIt::Always] {
+        let (b, e) = implicit_it("arm", mode, "addeq r0, r1, r2\n");
+        assert_eq!(b, "02 00 81 00");
+        assert_eq!(e, "");
+    }
+    // The warning is about a block, so an `it` in ARM code silences it, and
+    // an instruction with no condition never had one to warn about.
+    let (_, e) = implicit_it("arm", ImplicitIt::Never, "it eq\naddeq r0, r1, r2\n");
+    assert_eq!(e, "");
+    let (_, e) = implicit_it("arm", ImplicitIt::Never, "add r0, r1, r2\n");
+    assert_eq!(e, "");
+    let (_, e) = implicit_it(
+        "arm",
+        ImplicitIt::Never,
+        "itt eq\naddeq r0, r1, r2\naddeq r3, r4, r5\naddeq r6, r7, r8\n",
+    );
+    assert!(e.contains("conditional outside an `it` block"), "{e}");
+    assert_eq!(e.matches("conditional outside").count(), 1, "{e}");
+}
+
+/// A made-up block ends where the instruction set changes, which is a
+/// deliberate difference from GNU as: `now_pred` is part of each section's
+/// state there rather than each instruction set's, so GNU as counts the A32
+/// instruction after a `.arm` into the block and leaves the Thumb
+/// instruction after that outside it and unconditional. The bytes here are
+/// each instruction's own, so only where the `it` instructions fall is
+/// asserted.
+#[test]
+fn an_implicit_it_block_ends_at_an_instruction_set_switch() {
+    let (b, _) = implicit_it(
+        "thumb",
+        ImplicitIt::Always,
+        "addeq r0, r1, r2\n.arm\naddeq r0, r1, r2\n.thumb\naddeq r0, r1, r2\n",
+    );
+    // `it eq` is `bf08`, so each Thumb instruction has one of its own and
+    // the A32 word between them is predicated by its own condition field.
+    assert_eq!(b.matches("08 bf").count(), 2, "{b}");
+    assert!(b.starts_with("08 bf 88 18 "), "{b}");
+    assert!(b.contains(" 02 00 81 00 08 bf 88 18"), "{b}");
+}
+
 // ---- the position-independent operands ---------------------------------------
 
 /// The relocations of an assembled source, as `(offset, type, addend)`.
@@ -523,6 +722,9 @@ const R_ARM_JUMP24: u32 = 29;
 const R_ARM_GOTOFF32: u32 = 24;
 const R_ARM_BASE_PREL: u32 = 25;
 const R_ARM_GOT_BREL: u32 = 26;
+const R_ARM_SBREL32: u32 = 9;
+const R_ARM_TARGET1: u32 = 38;
+const R_ARM_TARGET2: u32 = 41;
 const R_ARM_GOT_PREL: u32 = 96;
 const R_ARM_MOVW_ABS_NC: u32 = 43;
 const R_ARM_MOVT_ABS: u32 = 44;
@@ -616,6 +818,39 @@ fn the_halves_of_an_address() {
     );
 }
 
+/// The three words whose meaning the platform ABI settles rather than the
+/// assembler: the static-base offset, and the two the ABI leaves a platform
+/// to define. GNU as reads them in `.word` and `.long` only, as it reads the
+/// GOT suffixes.
+#[test]
+fn the_abi_defined_words() {
+    let src = "        .word sym(TARGET1)
+        .word sym(target2)
+        .long sym(SBREL)
+        .word sym(TARGET1) + 4
+";
+    assert_eq!(
+        relocs("arm", src),
+        vec![
+            (0, R_ARM_TARGET1, 0),
+            (4, R_ARM_TARGET2, 0),
+            (8, R_ARM_SBREL32, 0),
+            (12, R_ARM_TARGET1, 4),
+        ]
+    );
+    assert_eq!(
+        hex(&text_for("arm", src)),
+        "00 00 00 00 00 00 00 00 00 00 00 00 04 00 00 00"
+    );
+    // The suffix goes nowhere else, and no difference has a relocation.
+    let e = errors_for("arm", " .short sym(SBREL)\n");
+    assert!(e.contains("`(sbrel)` is not a relocation modifier"), "{e}");
+    let e = errors_for("arm", " bl sym(TARGET1)\n");
+    assert!(e.contains("unrecognized relocation suffix"), "{e}");
+    let e = errors_for("arm", " .word sym(SBREL) - .\n");
+    assert!(e.contains("no relocation for a difference"), "{e}");
+}
+
 /// A half of a difference against a label in the same section is the
 /// PC-relative pair, whose addend makes up for the field's own address.
 #[test]
@@ -662,7 +897,7 @@ fn the_relocation_operands_gnu_as_refuses() {
     assert!(e.contains("`(got)` is not a relocation modifier"), "{e}");
     let e = errors_for("arm", " .word sym(GoT)\n");
     assert!(e.contains("unrecognized relocation suffix"), "{e}");
-    let e = errors_for("arm", " .word sym(TARGET1)\n");
+    let e = errors_for("arm", " .word sym(GOTFUNCDESC)\n");
     assert!(e.contains("unrecognized relocation suffix"), "{e}");
     let e = errors_for("arm", " movw r0, #:upper16:sym\n");
     assert!(e.contains("`:upper16:` is not allowed in `movw`"), "{e}");

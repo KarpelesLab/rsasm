@@ -1,7 +1,7 @@
 //! The `rsasm` command line driver.
 
 use rsasm::arch;
-use rsasm::assembler::{Assembler, Options};
+use rsasm::assembler::{Assembler, ImplicitIt, Options};
 use rsasm::lexer::Dialect;
 use rsasm::output::{self, Format};
 use std::path::PathBuf;
@@ -24,6 +24,11 @@ options:
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
                      ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
+      --mimplicit-it=<m>
+                     ARM: when a conditional Thumb instruction with no `it`
+                     block of its own gets one made up for it -- never, arm
+                     (default), thumb or always -- spelled as GNU as spells
+                     it, `-mimplicit-it=<m>`, as well
   -I <dir>           add <dir> to the .include search path
   -D <sym>[=<val>]   define <sym> before assembling (default value 1)
       --base <addr>  base address for `bin` and `ihex` output (default 0)
@@ -214,6 +219,17 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             }
             "-shared" => a.link.shared = true,
             "-pie" => a.link.pie = true,
+            // GNU as's spelling, which is the one build systems pass, with
+            // the long form the other options here have.
+            _ if let Some(v) = arg
+                .strip_prefix("-mimplicit-it=")
+                .or_else(|| arg.strip_prefix("--mimplicit-it=")) =>
+            {
+                let mode = ImplicitIt::from_name(v).ok_or_else(|| {
+                    format!("unknown implicit IT mode `{v}`; expected never, arm, thumb or always")
+                })?;
+                edit(&mut a.options, |o| o.with_implicit_it(mode));
+            }
             _ if arg.starts_with("-l") && arg.len() > 2 => {
                 a.link.libraries.push(arg[2..].to_string());
             }

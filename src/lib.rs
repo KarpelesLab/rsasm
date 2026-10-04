@@ -38,8 +38,8 @@
 //!   [`options`](assembler::Assembler::options) and
 //!   [`target`](assembler::Assembler::target).
 //! * [`assembler::Options`], built with
-//!   [`Options::new`](assembler::Options::new) and its `with_*` methods, and
-//!   [`output::Format`].
+//!   [`Options::new`](assembler::Options::new) and its `with_*` methods, the
+//!   values those take ([`assembler::ImplicitIt`]), and [`output::Format`].
 //! * [`arch::lookup`], [`arch::available`], [`arch::default_arch`], and the
 //!   [`arch::Architecture`] trait together with the types its methods take
 //!   and return. Backends live inside this crate, but the trait is the

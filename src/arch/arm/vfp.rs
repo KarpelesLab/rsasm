@@ -10,6 +10,13 @@
 //! becomes the VFP `vmov.f32` or `vmov.f64` of that immediate — `fconsts`
 //! and `fconstd` under their old names, which is how GNU as writes them.
 //!
+//! "A number" is whatever GNU as's expression parser has folded to one by
+//! the time `parse_big_immediate` reads it, so a difference of labels a
+//! fixed distance apart counts: `vldr d0, =l1-l0` with an `l0` behind it is
+//! the distance, and one with an alignment in between, or with an `l1` still
+//! to come, is the syntax error GNU as reports. [`crate::arch::fold_differences`]
+//! is the same fold, so the same lines assemble here.
+//!
 //! The load itself is a coprocessor load from the PC, reaching 1020 bytes
 //! either way in steps of four, which is a quarter of what `ldr` reaches.
 //! `vldr sN, label` is that same load with the offset naming the label
@@ -131,6 +138,12 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
     let OperandKind::Literal(e) = op.kind else {
         return None;
     };
+    // GNU as's expression parser folds a difference of labels as it reads
+    // the line, so `parse_big_immediate` sees a number where the two are a
+    // fixed distance apart and an eight-byte entry is allowed; `e` itself
+    // stays the expression the source wrote, which is what decides whether
+    // the entry is shared.
+    let folded = crate::arch::fold_differences(cx, e);
     if ins.set_flags {
         cx.error(ins.span, format!("`{}` cannot set the flags", ins.text));
         return None;
@@ -180,7 +193,7 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
     // A number GNU as can move instead is moved. `vmov.i64` comes first,
     // and only for a `d` register; the VFP immediate after it, for either
     // width.
-    if let Some(value) = cx.constant(e) {
+    if let Some(value) = cx.constant(folded) {
         if !single {
             let mut lo = value as u32;
             let mut hi = (value as u64 >> 32) as u32;
@@ -223,13 +236,13 @@ pub(super) fn literal_load(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Va
     // Otherwise it is a pool entry: four bytes for a single, eight for a
     // double, which `add_to_lit_pool` takes only as a number.
     let value = if single {
-        let constant = super::encode::literal_constant(cx, &op, e)?;
-        match cx.constant(e) {
+        let constant = super::encode::literal_constant(cx, &op, folded)?;
+        match cx.constant(folded) {
             Some(v) if constant.is_some() => Literal::Const(v),
             _ => Literal::Expr(e),
         }
     } else {
-        match cx.constant(e) {
+        match cx.constant(folded) {
             Some(v) => Literal::Const(v),
             None => {
                 cx.error(op.span, "invalid type for literal pool");
