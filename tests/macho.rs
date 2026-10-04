@@ -736,12 +736,62 @@ _f:
     );
 }
 
-/// llvm-mc writes a compact unwind word beside `__eh_frame` on arm64,
-/// which rsasm does not; half a description is worse than none.
+/// A standard frame pointer prologue on arm64, which the compact unwind word
+/// `UNWIND_ARM64_MODE_FRAME` describes on its own: `__LD,__compact_unwind`
+/// alone, with no frame table beside it, and the one relocation naming the
+/// section the function is in, as a compact unwind entry's does.
 #[cfg(feature = "aarch64")]
 #[test]
-fn arm64_call_frame_information_is_refused() {
-    let err = macho_for("aarch64", "\t.cfi_startproc\n\tret\n\t.cfi_endproc\n")
-        .expect_err("should be refused");
-    assert!(err.contains("compact unwind"), "{err}");
+fn arm64_compact_unwind_describes_a_frame() {
+    let src = r#"	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_f
+_f:
+	.cfi_startproc
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	mov	x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+"#;
+    assert_object(
+        "aarch64",
+        src,
+        &[
+            "cf fa ed fe 0c 00 00 01 00 00 00 00 01 00 00 00",
+            "03 00 00 00 50 01 00 00 00 00 00 00 00 00 00 00",
+            "19 00 00 00 e8 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "30 00 00 00 00 00 00 00 70 01 00 00 00 00 00 00",
+            "30 00 00 00 00 00 00 00 07 00 00 00 07 00 00 00",
+            "02 00 00 00 00 00 00 00 5f 5f 74 65 78 74 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "10 00 00 00 00 00 00 00 70 01 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 04 00 80 00 00 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 63 6f 6d 70 61 63",
+            "74 5f 75 6e 77 69 6e 64 5f 5f 4c 44 00 00 00 00",
+            "00 00 00 00 00 00 00 00 10 00 00 00 00 00 00 00",
+            "20 00 00 00 00 00 00 00 80 01 00 00 03 00 00 00",
+            "a0 01 00 00 01 00 00 00 00 00 00 02 00 00 00 00",
+            "00 00 00 00 00 00 00 00 02 00 00 00 18 00 00 00",
+            "a8 01 00 00 03 00 00 00 d8 01 00 00 10 00 00 00",
+            "0b 00 00 00 50 00 00 00 00 00 00 00 02 00 00 00",
+            "02 00 00 00 01 00 00 00 03 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "fd 7b bf a9 fd 03 00 91 fd 7b c1 a8 c0 03 5f d6",
+            "00 00 00 00 00 00 00 00 10 00 00 00 00 00 00 04",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 01 00 00 06 0a 00 00 00 0e 01 00 00",
+            "00 00 00 00 00 00 00 00 04 00 00 00 0e 02 00 00",
+            "10 00 00 00 00 00 00 00 01 00 00 00 0f 01 00 00",
+            "00 00 00 00 00 00 00 00 00 5f 66 00 6c 74 6d 70",
+            "31 00 6c 74 6d 70 30 00",
+        ],
+    );
 }

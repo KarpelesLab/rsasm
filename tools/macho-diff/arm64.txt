@@ -88,6 +88,18 @@ ldr x0, [x0, :gottprel_lo12:_v]
 adrp x0, :tlsdesc:_v
 ldr x1, [x0, :tlsdesc_lo12:_v]
 .tlsdesccall _v;blr x1
+# ---- thread-local variables, which Darwin reaches through a descriptor ----
+adrp x0, _v@TLVPPAGE
+ldr x0, [x0, _v@TLVPPAGEOFF]
+adrp x0, _v@TLVPPAGE;ldr x0, [x0, _v@TLVPPAGEOFF]
+ldr w0, [x0, _v@TLVPPAGEOFF]
+add x0, x0, _v@TLVPPAGEOFF
+adrp x0, _v@TLVPPAGE+8
+ldr x0, [x0, _v@TLVPPAGEOFF+8]
+adrp x0, _v@TLVPPAGEOFF
+ldr x0, [x0, _v@TLVPPAGE]
+.quad _v@TLVP
+.quad _v@TLVPPAGE
 # ---- data ----
 .quad _ext
 .long _ext

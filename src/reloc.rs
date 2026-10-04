@@ -56,6 +56,18 @@ pub enum RelocClass {
     /// instruction of such a sequence (`.tlsdesccall`) rather than an access
     /// of its own.
     ThreadLocal,
+    /// The address of a thread-local variable's descriptor, which Darwin's
+    /// loader fills in for each thread: `sym@TLVP` on x86-64, and
+    /// `sym@TLVPPAGE` with `sym@TLVPPAGEOFF` on arm64. Only Mach-O has one;
+    /// ELF names a place in the thread's block instead, which is
+    /// [`RelocClass::ThreadLocal`].
+    ThreadVariable,
+    /// The page of that descriptor, relative to the page of the field:
+    /// `sym@TLVPPAGE`.
+    ThreadVariablePage,
+    /// The low twelve bits of it, completing a
+    /// [`RelocClass::ThreadVariablePage`].
+    ThreadVariablePageOff,
     /// The target itself, in a 32-bit field the CPU sign-extends to 64 bits:
     /// an x86-64 displacement, or a 64-bit operation's immediate. ELF calls it
     /// `R_X86_64_32S`; Mach-O has no relocation for it.

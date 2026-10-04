@@ -23,8 +23,9 @@ use super::emit::Blob;
 use super::{Flavor, Pos};
 use crate::assembler::Assembler;
 use crate::cursor::Cursor;
-use crate::expr::ExprRef;
+use crate::expr::{BinOp, ExprKind, ExprRef};
 use crate::lexer::{Punct, TokKind};
+use crate::output::macho;
 use crate::reloc::RelocClass;
 use crate::section::{SectionFlags, SectionId};
 use crate::source::Span;
@@ -451,18 +452,137 @@ impl Assembler {
         };
         let (eh, debug) = (self.dwarf.cfi.eh_frame, self.dwarf.cfi.debug_frame);
         let ptr = self.target().pointer_bytes(&self.target().initial_state());
-        if eh {
+        // Mach-O's compact unwind table, which stands where the frame table
+        // would and comes before it in the object. Only `.eh_frame` has one:
+        // it is the linker that reads it, and `.debug_frame` is for a
+        // debugger.
+        let mut in_eh_frame = vec![true; self.dwarf.cfi.fdes.len()];
+        if eh && let Some((table, words)) = self.compact_unwind_words() {
+            self.emit_compact_unwind(&table, &words, ptr);
+            if table.without_eh_frame {
+                for (keep, word) in in_eh_frame.iter_mut().zip(&words) {
+                    *keep = *word == table.dwarf_only;
+                }
+            }
+        }
+        if eh && in_eh_frame.contains(&true) {
             match target.flavor {
                 Flavor::Gnu => self.gnu_frames(&target, &cfi, true, ptr),
-                Flavor::Llvm => self.llvm_frames(&target, &cfi, true, ptr),
+                Flavor::Llvm => self.llvm_frames(&target, &cfi, true, ptr, &in_eh_frame),
             }
         }
         if debug {
+            // A compact word never keeps a frame out of `.debug_frame`.
+            let all = vec![true; self.dwarf.cfi.fdes.len()];
             match target.flavor {
                 Flavor::Gnu => self.gnu_frames(&target, &cfi, false, ptr),
-                Flavor::Llvm => self.llvm_frames(&target, &cfi, false, ptr),
+                Flavor::Llvm => self.llvm_frames(&target, &cfi, false, ptr, &all),
             }
         }
+    }
+
+    /// The compact unwind word of every frame, where the object has a compact
+    /// unwind table at all.
+    ///
+    /// A word of the table's `dwarf_only` is the machine's way of saying that
+    /// this frame's shape is one no word can describe, and that the linker has
+    /// to read the frame table for it.
+    fn compact_unwind_words(&mut self) -> Option<(crate::output::macho::CompactUnwind, Vec<u32>)> {
+        if self.options.format != crate::output::Format::MachO {
+            return None;
+        }
+        let table = crate::output::macho::Cpu::for_arch(self.target())?.compact_unwind()?;
+        let fdes = std::mem::take(&mut self.dwarf.cfi.fdes);
+        let words = fdes
+            .iter()
+            .map(|fde| {
+                let insns: Vec<Insn> = fde.insns.iter().map(|(_, i)| i.clone()).collect();
+                let canonical = self.canonical_personality(fde);
+                self.target()
+                    .macho_compact_unwind(&insns, canonical)
+                    .unwrap_or(table.dwarf_only)
+            })
+            .collect();
+        self.dwarf.cfi.fdes = fdes;
+        Some((table, words))
+    }
+
+    /// Whether a frame's personality routine is one of the two Darwin's
+    /// compact unwind table keeps a slot for, a frame with none included.
+    ///
+    /// `MCAsmBackend::isDarwinCanonicalPersonality` leaves out
+    /// `___gcc_personality_v0`, common as it is elsewhere, on the grounds
+    /// that Darwin hardly uses it.
+    fn canonical_personality(&self, fde: &Fde) -> bool {
+        let Some((_, e)) = fde.personality else {
+            return true;
+        };
+        let Some(sym) = self.eval_ref(e).ok().and_then(|v| v.plus) else {
+            return true;
+        };
+        matches!(
+            self.interner.get(self.symbols.get(sym).name),
+            "___gxx_personality_v0" | "___objc_personality_v0"
+        )
+    }
+
+    /// Writes `__LD,__compact_unwind`: for each frame its function, that
+    /// function's length, the compact word, and the personality routine and
+    /// language-specific data area the linker is to record with it.
+    ///
+    /// A frame left to the frame table still has an entry, saying so, but
+    /// with neither pointer: the linker will read both out of the frame table
+    /// instead.
+    fn emit_compact_unwind(
+        &mut self,
+        table: &crate::output::macho::CompactUnwind,
+        words: &[u32],
+        ptr: u8,
+    ) {
+        let endian = self.target().endian();
+        let flags = SectionFlags {
+            alloc: true,
+            ..SectionFlags::default()
+        };
+        let sec = self.dwarf_section(".compact_unwind", flags, 0, ptr as u64);
+        let mut b = Blob::new(endian);
+        let fdes = std::mem::take(&mut self.dwarf.cfi.fdes);
+        for (fde, &word) in fdes.iter().zip(words) {
+            let dwarf = word == table.dwarf_only;
+            let begin = self.pos_expr(fde.start, 0);
+            let kind = self.abs_kind(ptr);
+            b.fixup(ptr, begin, kind);
+            let start = self.pos_offset(fde.start);
+            let end = fde.end.map_or(start, |p| self.pos_offset(p));
+            b.int(end - start, 4);
+            let lsda = fde.lsda.filter(|_| !dwarf);
+            let has_lsda = if lsda.is_some() {
+                macho::UNWIND_HAS_LSDA
+            } else {
+                0
+            };
+            b.int(u64::from(word | has_lsda), 4);
+            match fde.personality.filter(|_| !dwarf) {
+                Some((_, e)) => {
+                    let kind = self.abs_kind(ptr);
+                    b.fixup(ptr, e, kind);
+                }
+                None => b.int(0, ptr as usize),
+            }
+            // The data area's field is as wide as its encoding makes it,
+            // which can leave the entry short of the thirty-two bytes the
+            // linker reads; llvm-mc writes it that way too.
+            let size = encoding_size(fde.lsda.map_or(0, |(enc, _)| enc), ptr);
+            match lsda {
+                Some((_, e)) => {
+                    let kind = self.abs_kind(size);
+                    b.fixup(size, e, kind);
+                }
+                None => b.int(0, size as usize),
+            }
+        }
+        self.dwarf.cfi.fdes = fdes;
+        self.push_blob(sec, b, Span::DUMMY);
     }
 
     /// The section a frame table goes into.
@@ -591,6 +711,33 @@ impl Assembler {
         } else {
             RelocClass::Plain
         }
+    }
+
+    /// Writes the field of an FDE that holds the distance to a symbol: the
+    /// function the frame describes, or its language-specific data area.
+    ///
+    /// Mach-O's arm64 relocations are all external, so a distance there is
+    /// the difference of the symbol and the field — a `SUBTRACTOR` pair
+    /// naming the field's own position — rather than one PC-relative entry.
+    /// `MCAsmInfo::getExprForFDESymbol` subtracts in the same way, and
+    /// x86-64 is left with a number the writer works out; see
+    /// [`macho::Cpu::resolves_frame_address`].
+    fn fde_pointer(&mut self, b: &mut Blob, at: Pos, enc: u8, e: ExprRef, ptr: u8) -> u8 {
+        let relocated = self.options.format == crate::output::Format::MachO
+            && enc & 0x70 == DW_EH_PE_PCREL
+            && !macho::Cpu::for_arch(self.target()).is_some_and(macho::Cpu::resolves_frame_address);
+        if !relocated {
+            self.encoded_pointer(b, enc, e, ptr, RelocClass::FrameSymbol);
+            return encoding_size(enc, ptr);
+        }
+        let size = encoding_size(enc, ptr);
+        let here = self.pos_expr(at, b.len());
+        let diff = self
+            .exprs
+            .alloc(ExprKind::Binary(BinOp::Sub, e, here), Span::DUMMY);
+        let kind = self.abs_kind(size);
+        b.fixup(size, diff, kind);
+        size
     }
 
     /// Writes a pointer field in encoding `enc`, relocated against `e`.
@@ -874,12 +1021,15 @@ impl Assembler {
 
     // ---- llvm-mc -----------------------------------------------------------
 
+    /// `keep` says which frames this table describes, which in a Mach-O
+    /// object is only those the compact unwind table left to it.
     fn llvm_frames(
         &mut self,
         target: &super::DwarfTarget,
         cfi: &super::CfiTarget,
         eh: bool,
         ptr: u8,
+        keep: &[bool],
     ) {
         let endian = self.target().endian();
         let unit = target.min_insn_length as u64;
@@ -890,7 +1040,15 @@ impl Assembler {
         let mut b = Blob::new(endian);
 
         // FDEs grouped by the CIE they need, in `CIEKey` order.
-        let mut fdes = self.dwarf.cfi.fdes.clone();
+        let mut fdes: Vec<Fde> = self
+            .dwarf
+            .cfi
+            .fdes
+            .iter()
+            .zip(keep)
+            .filter(|&(_, &k)| k)
+            .map(|(f, _)| f.clone())
+            .collect();
         let key = |asm: &Assembler, f: &Fde| {
             let per_name = f
                 .personality
@@ -1012,14 +1170,7 @@ impl Assembler {
             let end = fde.end.map_or(start, |p| self.pos_offset(p));
             let begin = self.pos_expr(fde.start, 0);
             let size = if eh {
-                self.encoded_pointer(
-                    &mut b,
-                    cfi.fde_encoding,
-                    begin,
-                    ptr,
-                    RelocClass::FrameSymbol,
-                );
-                encoding_size(cfi.fde_encoding, ptr)
+                self.fde_pointer(&mut b, base, cfi.fde_encoding, begin, ptr)
             } else {
                 let kind = self.abs_kind(ptr);
                 b.fixup(ptr, begin, kind);
@@ -1032,7 +1183,7 @@ impl Assembler {
                     .map_or(0, |(enc, _)| encoding_size(enc, ptr) as u64);
                 b.uleb(lsize);
                 if let Some((enc, e)) = fde.lsda {
-                    self.encoded_pointer(&mut b, enc, e, ptr, RelocClass::FrameSymbol);
+                    self.fde_pointer(&mut b, base, enc, e, ptr);
                 }
             }
             cfa = initial_cfa;

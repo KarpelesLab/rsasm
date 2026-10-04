@@ -918,6 +918,10 @@ impl Assembler {
             frag: pos.1,
         };
         sym.def_span = span;
+        // A label the assembler makes for itself is defined after everything
+        // the source defined, which is what decides which atom of a Mach-O
+        // section it belongs to when several labels sit at one position.
+        self.symbols.mark_defined(id);
         id
     }
 }

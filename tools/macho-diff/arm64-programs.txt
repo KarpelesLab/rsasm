@@ -241,3 +241,89 @@ _other:
 	.quad	_c2
 	.section	__TEXT,__text,regular,pure_instructions
 	b	_other
+=== a thread-local variable and the descriptor it is reached through
+	.section	__DATA,__thread_data,thread_local_regular
+	.p2align	3
+_v$tlv$init:
+	.quad	42
+	.section	__DATA,__thread_vars,thread_local_variables
+	.globl	_v
+_v:
+	.quad	__tlv_bootstrap
+	.quad	0
+	.quad	_v$tlv$init
+	.tbss	_w$tlv$init, 8, 3
+	.section	__DATA,__thread_vars,thread_local_variables
+	.globl	_w
+_w:
+	.quad	__tlv_bootstrap
+	.quad	0
+	.quad	_w$tlv$init
+	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_f
+_f:
+	adrp	x0, _v@TLVPPAGE
+	ldr	x0, [x0, _v@TLVPPAGEOFF]
+	ldr	x1, [x0]
+	blr	x1
+	adrp	x0, _w@TLVPPAGE
+	ldr	x0, [x0, _w@TLVPPAGEOFF]
+	ldr	x1, [x0]
+	blr	x1
+	ret
+=== the thread-local sections by their shorthands
+	.tdata
+	.quad	1
+	.tlv
+	.quad	2
+	.thread_init_func
+	.quad	_f
+	.section	__DATA,__thread_ptr,thread_local_variable_pointers
+	.quad	0
+	.text
+_f:
+	ret
+=== indirect symbols for pointers and stubs
+	.section	__DATA,__nl_symbol_ptr,non_lazy_symbol_pointers
+	.p2align	3
+	.indirect_symbol _ext
+L_ext$non_lazy_ptr:
+	.quad	0
+	.indirect_symbol _here
+L_here$non_lazy_ptr:
+	.quad	0
+	.indirect_symbol _abs
+L_abs$non_lazy_ptr:
+	.quad	0
+	.section	__DATA,__la_symbol_ptr,lazy_symbol_pointers
+	.p2align	3
+	.indirect_symbol _lazy
+L_lazy$lazy_ptr:
+	.quad	0
+	.indirect_symbol _ext
+L_ext$lazy_ptr:
+	.quad	0
+	.section	__TEXT,__stubs,symbol_stubs,none,12
+	.indirect_symbol _stubbed
+L_stubbed$stub:
+	.space	12
+	.text
+_here:
+	ret
+_abs = 17
+=== an indirect symbol where the section takes none
+	.data
+	.indirect_symbol _ext
+	.quad	0
+=== an indirect symbol that is an assembler-local label
+	.section	__DATA,__nl_symbol_ptr,non_lazy_symbol_pointers
+	.indirect_symbol L_ext
+	.quad	0
+=== the deployment target and the linker's options
+	.macosx_version_min 10, 15, 4 sdk_version 11, 0
+	.linker_option "-lSystem"
+	.linker_option "-framework", "CoreFoundation"
+	.text
+	.globl	_f
+_f:
+	ret

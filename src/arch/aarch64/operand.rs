@@ -971,13 +971,15 @@ fn immediate(cx: &mut AsmCtx<'_>, toks: &[Token]) -> Option<(Option<RelocOp>, Ex
     }
     // Darwin spells `:lo12:sym` as `sym@PAGEOFF`, `:got_lo12:sym` as
     // `sym@GOTPAGEOFF` and `:got:sym` as `sym@GOTPAGE`; `sym@PAGE` is what
-    // `adrp` takes anyway. The modifier stays on the expression, so the
-    // relocation can still be told which spelling it came from.
+    // `adrp` takes anyway. `sym@TLVPPAGEOFF` is the low bits of a
+    // thread-local variable's descriptor, which goes in the field `:lo12:`
+    // goes in. The modifier stays on the expression, so the relocation can
+    // still be told which spelling it came from.
     if op.is_none()
         && let Some(m) = cx.find_modifier_for(e)
     {
         op = match cx.name(m) {
-            "pageoff" => Some(RelocOp::Lo12),
+            "pageoff" | "tlvppageoff" => Some(RelocOp::Lo12),
             "gotpageoff" => Some(RelocOp::GotLo12),
             "gotpage" => Some(RelocOp::Got),
             _ => None,

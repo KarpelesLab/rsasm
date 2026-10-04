@@ -1,7 +1,12 @@
-# The line table, in the shapes tools/dwarf-diff checks for an ELF object,
-# written in Darwin's assembly. There are no frames here: llvm-mc writes a
-# compact unwind word beside `__eh_frame` on arm64, so rsasm refuses `.cfi_*`
-# rather than describe a frame half way (see tests/macho.rs).
+# The line table and the frame table, in the shapes tools/dwarf-diff checks
+# for an ELF object, written in Darwin's assembly.
+#
+# A frame on arm64 is described twice: once as a compact unwind word in
+# `__LD,__compact_unwind`, which the linker reads first, and in
+# `__TEXT,__eh_frame` only where the word says the shape is one it cannot
+# describe. The frame cases below walk through the shapes the word has --
+# a frame pointer prologue, a frameless stack adjustment, each pair of
+# callee-saved registers -- and the ones that fall back to the frame table.
 === one row
 	.file 1 "a.c"
 	.text
@@ -140,3 +145,440 @@ _g:
 	.text
 	nop
 	ret
+=== a frame pointer prologue
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	mov	x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+=== a frame pointer prologue and saved registers
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	stp	x20, x19, [sp, #-32]!
+	.cfi_def_cfa_offset 32
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	stp	x29, x30, [sp, #16]
+	add	x29, sp, #16
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	ldp	x29, x30, [sp, #16]
+	ldp	x20, x19, [sp], #32
+	ret
+	.cfi_endproc
+=== a frame with no instructions
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	ret
+	.cfi_endproc
+=== a frameless stack adjustment
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	sub	sp, sp, #32
+	.cfi_def_cfa_offset 32
+	add	sp, sp, #32
+	ret
+	.cfi_endproc
+=== a stack adjustment that is not a multiple of sixteen
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	sub	sp, sp, #24
+	.cfi_def_cfa_offset 24
+	add	sp, sp, #24
+	ret
+	.cfi_endproc
+=== the largest stack adjustment a word can hold
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 65520
+	ret
+	.cfi_endproc
+=== a stack adjustment too large for a word
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 65536
+	ret
+	.cfi_endproc
+=== every pair of callee-saved registers
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 96
+	.cfi_offset w19, -8
+	.cfi_offset w20, -16
+	.cfi_offset w21, -24
+	.cfi_offset w22, -32
+	.cfi_offset w23, -40
+	.cfi_offset w24, -48
+	.cfi_offset w25, -56
+	.cfi_offset w26, -64
+	.cfi_offset w27, -72
+	.cfi_offset w28, -80
+	.cfi_offset b8, -88
+	.cfi_offset b9, -96
+	.cfi_offset b10, -104
+	.cfi_offset b11, -112
+	.cfi_offset b12, -120
+	.cfi_offset b13, -128
+	.cfi_offset b14, -136
+	.cfi_offset b15, -144
+	ret
+	.cfi_endproc
+=== register pairs out of order
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 32
+	.cfi_offset w21, -8
+	.cfi_offset w22, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	ret
+	.cfi_endproc
+=== registers that are not a pair
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset w19, -8
+	.cfi_offset w21, -16
+	ret
+	.cfi_endproc
+=== one register of a pair
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset w19, -8
+	ret
+	.cfi_endproc
+=== a gap between two saved registers
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 32
+	.cfi_offset w19, -8
+	.cfi_offset w20, -24
+	ret
+	.cfi_endproc
+=== the frame pointer saved before the CFA names it
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	mov	x29, sp
+	.cfi_def_cfa w29, 16
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+=== a CFA register that is not the frame pointer
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_def_cfa w19, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	ret
+	.cfi_endproc
+=== two stack adjustments
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	sub	sp, sp, #16
+	.cfi_def_cfa_offset 16
+	sub	sp, sp, #16
+	.cfi_def_cfa_offset 32
+	add	sp, sp, #32
+	ret
+	.cfi_endproc
+=== a register moved to the frame pointer
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	mov	x29, sp
+	.cfi_def_cfa_register w29
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+=== instructions no word can describe
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_escape 0x08, 0x1f
+	ret
+	.cfi_endproc
+_g:
+	.cfi_startproc
+	.cfi_remember_state
+	.cfi_restore_state
+	ret
+	.cfi_endproc
+_h:
+	.cfi_startproc
+	pacibsp
+	.cfi_negate_ra_state
+	ret
+	.cfi_endproc
+=== a signal frame and a simple one
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_signal_frame
+	ret
+	.cfi_endproc
+_g:
+	.cfi_startproc simple
+	ret
+	.cfi_endproc
+=== a personality routine and a data area
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gxx_personality_v0
+	.cfi_lsda 16, Lexception0
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	mov	x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+	.section __TEXT,__gcc_except_tab
+Lexception0:
+	.byte 0xff
+=== a data area narrower than a pointer
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___objc_personality_v0
+	.cfi_lsda 27, Lexception0
+	.cfi_def_cfa_offset 16
+	ret
+	.cfi_endproc
+	.section __TEXT,__gcc_except_tab
+Lexception0:
+	.byte 0xff
+=== a personality routine with no slot of its own
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, _myperson
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	mov	x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+=== a personality routine with no slot, and nothing to describe
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, _myperson
+	ret
+	.cfi_endproc
+=== one frame in the compact table and one in the frame table
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_escape 0x08, 0x1f
+	ret
+	.cfi_endproc
+	.globl _g
+_g:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	ret
+	.cfi_endproc
+=== a frame in a section of its own
+	.section __TEXT,__mytext,regular,pure_instructions
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_escape 0x08, 0x1f
+	ret
+	.cfi_endproc
+=== a frame in a function with no linker-visible label
+	.text
+L_f:
+	.cfi_startproc
+	.cfi_escape 0x08, 0x1f
+	ret
+	.cfi_endproc
+=== every instruction
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	nop
+	.cfi_def_cfa_offset 24
+	.cfi_offset 19, -24
+	.cfi_offset 20, 16
+	.space 100
+	.cfi_rel_offset 21, 8
+	.cfi_adjust_cfa_offset 8
+	.cfi_def_cfa 29, 16
+	.cfi_def_cfa 31, -8
+	.space 300
+	.cfi_remember_state
+	.cfi_def_cfa_register 31
+	.cfi_register 19, 20
+	.cfi_same_value 22
+	.cfi_restore 19
+	.cfi_undefined 23
+	.space 70000
+	.cfi_restore_state
+	.cfi_adjust_cfa_offset -8
+	.cfi_val_offset 19, -16
+	.cfi_escape 0x2e, 0x10
+	.cfi_def_cfa_offset -16
+	nop
+	.cfi_endproc
+=== frames that need their own CIEs
+	.text
+_f:
+	.cfi_startproc
+	.cfi_undefined 5
+	nop
+	.cfi_endproc
+_g:
+	.cfi_startproc
+	.cfi_signal_frame
+	.cfi_undefined 5
+	nop
+	.cfi_endproc
+_h:
+	.cfi_startproc
+	.cfi_personality 0x9b, _pers
+	.cfi_lsda 0x1b, Llsda
+	.cfi_undefined 5
+	nop
+	.cfi_endproc
+_k:
+	.cfi_startproc simple
+	.cfi_return_column 5
+	.cfi_def_cfa 31, 0
+	.cfi_undefined 6
+	nop
+	.cfi_endproc
+	.section __TEXT,__other
+_n:
+	.cfi_startproc
+	.cfi_personality 0x3, _pers
+	.cfi_lsda 0x0, Llsda
+	.cfi_undefined 5
+	nop
+	nop
+	.cfi_endproc
+	.section __DATA,__data
+Llsda:	.long 0
+=== frames that share a CIE
+	.text
+_f:
+	.cfi_startproc
+	nop
+	.cfi_undefined 5
+	nop
+	.cfi_endproc
+_g:
+	.cfi_startproc
+	nop
+	.cfi_undefined 6
+	nop
+	.cfi_endproc
+=== debug_frame only
+	.cfi_sections .debug_frame
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	nop
+	.cfi_def_cfa_offset 16
+	nop
+	.cfi_endproc
+=== both frame sections
+	.cfi_sections .eh_frame, .debug_frame
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	nop
+	.cfi_def_cfa_offset 16
+	.cfi_offset w29, -16
+	nop
+	.cfi_endproc
+=== lines and frames together
+	.file 1 "a.c"
+	.text
+	.globl _f
+_f:
+	.loc 1 3 0
+	.cfi_startproc
+	stp	x29, x30, [sp, #-16]!
+	.cfi_def_cfa_offset 16
+	mov	x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.loc 1 4 5 prologue_end
+	nop
+	.loc 1 5 1 epilogue_begin
+	ldp	x29, x30, [sp], #16
+	ret
+	.cfi_endproc
+=== frames too | -g
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	nop
+	.cfi_def_cfa_offset 16
+	ret
+	.cfi_endproc

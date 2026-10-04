@@ -5,7 +5,11 @@
 //! mean nothing to an ELF object, and `.align 3` means eight bytes here but
 //! three on x86 ELF.
 
-use super::{BuildVersion, N_ALT_ENTRY, N_NO_DEAD_STRIP, N_WEAK_DEF, N_WEAK_REF, SectionInfo};
+use super::{
+    BuildVersion, LC_BUILD_VERSION, LC_VERSION_MIN_IPHONEOS, LC_VERSION_MIN_MACOSX,
+    LC_VERSION_MIN_TVOS, LC_VERSION_MIN_WATCHOS, N_ALT_ENTRY, N_NO_DEAD_STRIP, N_WEAK_DEF,
+    N_WEAK_REF, SectionInfo,
+};
 use crate::assembler::Assembler;
 use crate::cursor::Cursor;
 use crate::lexer::{Punct, TokKind};
@@ -31,7 +35,9 @@ impl Assembler {
             return id;
         }
         // A section llvm-mc knows from the start keeps what it knows of it.
-        let (ty, attrs, reserved2) = match super::precreated(segment, section) {
+        let cpu = super::Cpu::for_arch(self.target());
+        let known = cpu.and_then(|cpu| super::precreated(cpu, segment, section));
+        let (ty, attrs, reserved2) = match known {
             Some((ty, attrs)) => (ty, attrs, 0),
             None => info.unwrap_or((super::S_REGULAR, 0, 0)),
         };
@@ -101,26 +107,9 @@ impl Assembler {
     /// a Mach-O object. Returns whether it was one.
     pub(crate) fn macho_directive(&mut self, text: &str, cur: &mut Cursor<'_>, span: Span) -> bool {
         match text {
-            // An arm64 frame is described twice in a Mach-O object: in
-            // `__TEXT,__eh_frame` and again as a compact unwind word in
-            // `__LD,__compact_unwind`, which rsasm does not write. Half a
-            // description is worse than none, since the linker reads the
-            // compact one first.
-            _ if text.starts_with(".cfi_")
-                && matches!(super::Cpu::for_arch(self.target()), Some(super::Cpu::Arm64)) =>
-            {
-                self.diags.error(
-                    span,
-                    format!(
-                        "`{text}` needs the compact unwind information llvm-mc writes beside \
-                         `__eh_frame` on arm64, which rsasm does not write into Mach-O objects yet"
-                    ),
-                );
-                cur.set_pos(cur.all().len());
-                true
-            }
             ".section" => self.macho_dir_section(cur, span),
             ".zerofill" => self.macho_dir_zerofill(cur, span),
+            ".tbss" => self.macho_dir_tbss(cur, span),
             ".lcomm" => self.macho_dir_lcomm(cur, span),
             ".comm" => self.macho_dir_comm(cur, span),
             // Darwin counts `.align` in bits on every machine.
@@ -161,6 +150,12 @@ impl Assembler {
                 true
             }
             ".build_version" => self.macho_dir_build_version(cur, span),
+            ".macosx_version_min" => self.macho_dir_version_min(cur, span, LC_VERSION_MIN_MACOSX),
+            ".ios_version_min" => self.macho_dir_version_min(cur, span, LC_VERSION_MIN_IPHONEOS),
+            ".tvos_version_min" => self.macho_dir_version_min(cur, span, LC_VERSION_MIN_TVOS),
+            ".watchos_version_min" => self.macho_dir_version_min(cur, span, LC_VERSION_MIN_WATCHOS),
+            ".linker_option" => self.macho_dir_linker_option(cur, span),
+            ".indirect_symbol" => self.macho_dir_indirect_symbol(cur, span),
             ".data_region" => self.macho_dir_data_region(cur, span),
             ".end_data_region" => {
                 match self.macho.data_regions.last_mut() {
@@ -386,6 +381,21 @@ impl Assembler {
         true
     }
 
+    /// `.tbss symbol,size[,align]`: zero-filled space in
+    /// `__DATA,__thread_bss`, where the initial value of a thread-local
+    /// variable that starts at zero is kept.
+    fn macho_dir_tbss(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        let Some((name, nspan)) = self.expect_name(cur) else {
+            return true;
+        };
+        let Some((size, align)) = self.macho_size_align(cur, span) else {
+            return true;
+        };
+        let id = self.macho_section("__DATA", "__thread_bss", None);
+        self.macho_reserve(id, name, nspan, size, align);
+        true
+    }
+
     /// `.lcomm symbol,size[,align]`: zero-filled space in `__DATA,__bss`.
     fn macho_dir_lcomm(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
         let Some((name, nspan)) = self.expect_name(cur) else {
@@ -489,11 +499,123 @@ impl Assembler {
             sdk = v;
         }
         self.macho.build_version = Some(BuildVersion {
+            command: LC_BUILD_VERSION,
             platform,
             minos,
             sdk,
         });
         true
+    }
+
+    /// `.macosx_version_min MAJOR, MINOR[, UPDATE] [sdk_version ...]`, and
+    /// the same for iOS, tvOS and watchOS: the deployment target in the
+    /// `LC_VERSION_MIN_*` command that came before `LC_BUILD_VERSION`.
+    fn macho_dir_version_min(&mut self, cur: &mut Cursor<'_>, span: Span, command: u32) -> bool {
+        let Some(minos) = self.macho_version(cur, span) else {
+            return true;
+        };
+        let mut sdk = 0;
+        if let Some(n) = cur.peek().ident()
+            && self.interner.get(n) == "sdk_version"
+        {
+            cur.advance();
+            let Some(v) = self.macho_version(cur, span) else {
+                return true;
+            };
+            sdk = v;
+        }
+        self.macho.build_version = Some(BuildVersion {
+            command,
+            platform: 0,
+            minos,
+            sdk,
+        });
+        true
+    }
+
+    /// `.linker_option "word"[, "word"...]`: one `LC_LINKER_OPTION` holding
+    /// arguments for the linker, such as `"-lfoo"` or `"-framework", "Bar"`.
+    fn macho_dir_linker_option(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        let mut words = Vec::new();
+        loop {
+            let tok = cur.peek();
+            let TokKind::Str(i) = tok.kind else {
+                self.diags
+                    .error(tok.span, "expected a string in `.linker_option`");
+                cur.set_pos(cur.all().len());
+                return true;
+            };
+            cur.advance();
+            words.push(String::from_utf8_lossy(self.pool.get(i)).into_owned());
+            if cur.eat_punct(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        if !cur.at_end() {
+            self.diags
+                .error(span, "expected `,` or the end of the line");
+            cur.set_pos(cur.all().len());
+            return true;
+        }
+        self.macho.linker_options.push(words);
+        true
+    }
+
+    /// `.indirect_symbol name`: the symbol whose address the pointer or stub
+    /// that follows stands for, which goes in the indirect symbol table the
+    /// `LC_DYSYMTAB` points at.
+    fn macho_dir_indirect_symbol(&mut self, cur: &mut Cursor<'_>, span: Span) -> bool {
+        let section = self.cur;
+        let ty = self.macho.sections.get(&section).map_or(0, |i| i.ty);
+        if !matches!(
+            ty,
+            super::S_NON_LAZY_SYMBOL_POINTERS
+                | super::S_LAZY_SYMBOL_POINTERS
+                | super::S_THREAD_LOCAL_VARIABLE_POINTERS
+                | super::S_SYMBOL_STUBS
+        ) {
+            self.diags.error(
+                span,
+                "an indirect symbol belongs in a symbol pointer or stub section, such as \
+                 `__DATA,__nl_symbol_ptr`",
+            );
+            cur.set_pos(cur.all().len());
+            return true;
+        }
+        let Some((name, nspan)) = self.expect_name(cur) else {
+            return true;
+        };
+        if super::is_temporary(self.interner.get(name)) {
+            self.diags.error(
+                nspan,
+                "an indirect symbol has to be one the linker can see, not an \
+                 assembler-local label",
+            );
+            return true;
+        }
+        self.macho.indirect_symbols.push((section, name));
+        true
+    }
+
+    /// Interns the symbol of every `.indirect_symbol`, once the source has
+    /// been read; see [`super::State::indirect_bound`].
+    pub(crate) fn macho_bind_indirect_symbols(&mut self) {
+        let named = std::mem::take(&mut self.macho.indirect_symbols);
+        // llvm-mc creates the symbols of the pointers that are not lazy
+        // first, which is what decides the two orders a symbol named by both
+        // kinds of pointer could have.
+        for lazy_pass in [false, true] {
+            for &(section, name) in &named {
+                let ty = self.macho.sections.get(&section).map_or(0, |i| i.ty);
+                let lazy = matches!(ty, super::S_LAZY_SYMBOL_POINTERS | super::S_SYMBOL_STUBS);
+                if lazy != lazy_pass {
+                    continue;
+                }
+                let id = self.symbols.intern(name, Span::DUMMY);
+                self.macho.indirect_bound.push((section, id));
+            }
+        }
+        self.macho.indirect_symbols = named;
     }
 
     /// `MAJOR, MINOR[, UPDATE]`, packed as Mach-O stores a version.
