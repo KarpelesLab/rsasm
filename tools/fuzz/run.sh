@@ -26,6 +26,13 @@
 # target/oracles) for the cross assemblers, and llvm-mc on PATH. A fuzzer
 # whose reference is missing fails rather than being skipped, so a CI image
 # that loses one cannot read as a pass.
+#
+# FUZZ_JOBS caps the workers each fuzzer spreads its cases over, for a machine
+# that is doing something else as well: a fuzzer left to itself takes all the
+# cores but two, and several of them in a row take them repeatedly. It reaches
+# only the fuzzers that have a `--jobs` option, which is why it is asked for
+# rather than passed blindly, and it changes nothing about what is compared --
+# the cases come from the seed and the count.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -124,8 +131,12 @@ while IFS='|' read -r name count extra; do
   # A fuzzer that hangs would otherwise sit there until the whole job times
   # out, with nothing in the log to say which one it was. Killed at the
   # deadline it writes no summary line, so it reads as "did not finish".
+  jobs=
+  if [ -n "${FUZZ_JOBS:-}" ] && "$script" fuzz --help 2>/dev/null | grep -q -- --jobs; then
+    jobs="--jobs $FUZZ_JOBS"
+  fi
   # shellcheck disable=SC2086
-  timeout "${FUZZ_TIMEOUT:-1800}" "$script" fuzz --seed "$seed" --count "$n" $extra \
+  timeout "${FUZZ_TIMEOUT:-1800}" "$script" fuzz --seed "$seed" --count "$n" $extra $jobs \
     > "$log" 2>&1
   status=$?
   cat "$log"
