@@ -252,8 +252,8 @@ impl Architecture for Msp430 {
         reloc::data(self.isa, size, pcrel)
     }
 
-    fn difference_relocs(&self, size: u8) -> Option<(u32, u32)> {
-        reloc::difference(self.isa, size)
+    fn difference_relocs(&self, kind: &FixupKind) -> Option<(u32, u32)> {
+        reloc::difference(self.isa, kind.size)
     }
 
     fn difference_subtrahend_first(&self) -> bool {
@@ -266,7 +266,7 @@ impl Architecture for Msp430 {
     /// linker may relax the code between them. Numbered local labels are no
     /// exception: GNU as's test for its own labels (`S_IS_GAS_LOCAL`) looks
     /// for a name ending in `\001` or `\002`, and theirs end in a digit.
-    fn defers_difference(&self, kind: &FixupKind, symbols_in: &SectionFlags) -> bool {
+    fn defers_difference(&self, kind: &FixupKind, symbols_in: &SectionFlags, _moves: bool) -> bool {
         symbols_in.exec && Some(kind.reloc) == reloc::data(self.isa, kind.size, false)
     }
 
@@ -280,7 +280,11 @@ impl Architecture for Msp430 {
 
     /// `msp430_insert_uleb128_fixes`: a `.uleb128` of a difference GNU as
     /// could not fold, which in one section means one of code labels.
-    fn uleb128_difference_relocs(&self, symbols_in: &SectionFlags) -> Option<(u32, u32)> {
+    fn uleb128_difference_relocs(
+        &self,
+        symbols_in: &SectionFlags,
+        _moves: bool,
+    ) -> Option<(u32, u32)> {
         symbols_in.exec.then(|| reloc::uleb128(self.isa))
     }
 

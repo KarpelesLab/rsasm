@@ -6,8 +6,10 @@
 //!
 //! What relaxation adds is `riscv64-elf-as`'s instead, since llvm-mc and GNU
 //! as disagree about part of it (see tools/mc-diff/riscv64-relocs.txt): the
-//! `R_RISCV_RELAX` marks, and the `R_RISCV_ALIGN` an alignment in relaxable
-//! code leaves behind, are what `riscv64-elf-as -march=rv64gc` writes.
+//! `R_RISCV_RELAX` marks, the `R_RISCV_ALIGN` an alignment in relaxable code
+//! leaves behind, and the pairs a difference of two labels is left to the
+//! linker as are what `riscv64-elf-as -march=rv64gc` writes. Which
+//! differences it folds is llvm-mc's; the tests say so where it matters.
 
 #![cfg(feature = "riscv")]
 
@@ -1311,4 +1313,164 @@ fn got_pcrel_hi_addresses_the_got_slot() {
         ".word %got_pcrel_hi(ext)",
         "expected an expression",
     );
+}
+
+// The relocation pairs a difference of two labels is left to the linker as.
+const ADD8: u32 = 33;
+const ADD16: u32 = 34;
+const ADD32: u32 = 35;
+const ADD64: u32 = 36;
+const SUB8: u32 = 37;
+const SUB16: u32 = 38;
+const SUB32: u32 = 39;
+const SUB64: u32 = 40;
+const SET_ULEB128: u32 = 60;
+const SUB_ULEB128: u32 = 61;
+
+/// A relaxing linker deletes instructions, so the distance between two labels
+/// with one between them is its to work out: the field is left empty and a
+/// pair of relocations at it names the two labels, `R_RISCV_ADD*` on the one
+/// added and `R_RISCV_SUB*` on the one subtracted, chosen by the width of the
+/// field. Both halves name the label rather than its section and an offset,
+/// which a linker that deletes bytes does not adjust.
+///
+/// The pairs below are `riscv64-elf-as`'s. A difference across code nothing
+/// can shorten is folded here and by llvm-mc, and left to the linker by GNU
+/// as, which defers every difference of labels in a code section; the two
+/// agree on the number once the linker has run, which tools/link-diff
+/// checks. `.size` is folded by both references, a symbol's size being no
+/// field a relocation can name.
+#[test]
+fn a_difference_across_relaxable_code_is_left_to_the_linker() {
+    let src = "\
+        a: nop\n\
+        b: call far\n\
+        c: .byte c - b\n\
+        .half c - b\n\
+        .word c - b\n\
+        .dword c - b\n\
+        .uleb128 c - b\n\
+        .word b - a\n\
+        .uleb128 b - a\n\
+        .size a, c - a\n";
+    // Every field the linker fills in is left empty, except the `.uleb128`s:
+    // it has no width there to add into, so it replaces what this file worked
+    // out, which stays in the field. The two folded fields hold the two bytes
+    // of the `nop`.
+    enc64(
+        src,
+        "01 00 97 00 00 00 e7 80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 \
+         00 08 02 00 00 00 02",
+    );
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x02, CALL_PLT, "far", 0),
+            relax(0x02),
+            rel(0x0a, ADD8, "@0xa", 0),
+            rel(0x0a, SUB8, "@0x2", 0),
+            rel(0x0b, ADD16, "@0xa", 0),
+            rel(0x0b, SUB16, "@0x2", 0),
+            rel(0x0d, ADD32, "@0xa", 0),
+            rel(0x0d, SUB32, "@0x2", 0),
+            rel(0x11, ADD64, "@0xa", 0),
+            rel(0x11, SUB64, "@0x2", 0),
+            rel(0x19, SET_ULEB128, "@0xa", 0),
+            rel(0x19, SUB_ULEB128, "@0x2", 0),
+        ]
+    );
+    // Whatever the expression adds goes with the symbol it is added to, and
+    // the subtrahend carries nothing; a difference the other way round only
+    // swaps which label each half names.
+    let src = "a: nop\nb: call far\nc: .word c - b + 4\n.word b - c\n";
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x02, CALL_PLT, "far", 0),
+            relax(0x02),
+            rel(0x0a, ADD32, "@0xa", 4),
+            rel(0x0a, SUB32, "@0x2", 0),
+            rel(0x0e, ADD32, "@0x2", 0),
+            rel(0x0e, SUB32, "@0xa", 0),
+        ]
+    );
+    // A difference whose labels are in a code section, written into a data
+    // section, is the linker's just the same: what decides it is where the
+    // labels are, not where the field is.
+    let src = "a: nop\nb: call far\nc: .data\n.word c - b\n.uleb128 c - b\n";
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x02, CALL_PLT, "far", 0),
+            relax(0x02),
+            rel(0x00, ADD32, "@0xa", 0),
+            rel(0x00, SUB32, "@0x2", 0),
+            rel(0x04, SET_ULEB128, "@0xa", 0),
+            rel(0x04, SUB_ULEB128, "@0x2", 0),
+        ]
+    );
+    // The same on RV32.
+    let src = "a: nop\nb: call far\nc: .word c - b\n.uleb128 c - b\n";
+    assert_eq!(
+        relocs_of(&assemble_for("riscv32", src)),
+        vec![
+            rel(0x02, CALL_PLT, "far", 0),
+            relax(0x02),
+            rel(0x0a, ADD32, "@0xa", 0),
+            rel(0x0a, SUB32, "@0x2", 0),
+            rel(0x0e, SET_ULEB128, "@0xa", 0),
+            rel(0x0e, SUB_ULEB128, "@0x2", 0),
+        ]
+    );
+}
+
+/// The padding an `R_RISCV_ALIGN` hands to the linker is as much a part of
+/// what it may delete as a `call` is, so a difference across an alignment is
+/// deferred too. `.option norelax` leaves the code alone, so a difference
+/// under it is this file's to work out; GNU as defers that one all the same.
+#[test]
+fn what_the_linker_cannot_shorten_leaves_a_difference_folded() {
+    // The relocations and the bytes here are `riscv64-elf-as`'s.
+    let src = "a: nop\n.align 3\nb: nop\n.word b - a\n.uleb128 b - a\n";
+    enc64(src, "01 00 01 00 13 00 00 00 01 00 00 00 00 00 08");
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![
+            rel(0x02, ALIGN, "", 6),
+            rel(0x0a, ADD32, "@0x8", 0),
+            rel(0x0a, SUB32, "@0x0", 0),
+            rel(0x0e, SET_ULEB128, "@0x8", 0),
+            rel(0x0e, SUB_ULEB128, "@0x0", 0),
+        ]
+    );
+    // An alignment no wider than an instruction is settled here, so nothing
+    // in the span can move.
+    let src = "a: nop\n.align 1\nb: nop\n.word b - a\n.uleb128 b - a\n";
+    enc64(src, "01 00 01 00 02 00 00 00 02");
+    assert_eq!(relocs_of(&assemble_for("riscv64", src)), vec![]);
+    // Under `.option norelax` the `call` pair stays two instructions, and the
+    // distance across it is a number.
+    let src = ".option norelax\na: call far\nb: .word b - a\n.uleb128 b - a\n";
+    assert_eq!(
+        relocs_of(&assemble_for("riscv64", src)),
+        vec![rel(0x00, CALL_PLT, "far", 0)]
+    );
+    // Two labels in a section that holds no code at all.
+    let src = ".data\na: .word 0\nb: .word b - a\n.uleb128 b - a\n";
+    assert_eq!(relocs_of(&assemble_for("riscv64", src)), vec![]);
+}
+
+/// A `.sleb128` has no pair to leave a difference to the linker with: the one
+/// a `.uleb128` uses sets an unsigned value. Both references refuse the
+/// expression — GNU as calls it a non-constant `.sleb128` and llvm-mc one
+/// that is not absolute — and a difference they can fold is a number as
+/// usual.
+#[test]
+fn a_signed_leb128_of_a_distance_only_the_linker_knows_is_refused() {
+    rejects(
+        "riscv64",
+        "a: call far\nb: .sleb128 b - a\n",
+        "not known until the link",
+    );
+    enc64("a: nop\nb: .sleb128 b - a\n.sleb128 a - b\n", "01 00 02 7e");
 }

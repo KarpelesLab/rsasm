@@ -14,7 +14,26 @@
 # and as a reference out of the file leaves it; GNU as fills a branch or a
 # jump in with the distance as it stands, which no linker reads.
 # `R_RISCV_ALIGN` does not appear below because these sections align nothing
-# wider than an instruction; tests/riscv.rs covers it.
+# wider than an instruction; tests/riscv.rs covers it, and the two references
+# part company over it in a section with nothing to relax, where GNU as
+# writes the marker and llvm-mc pads to the boundary itself.
+#
+# A difference of two labels in one section is the other thing relaxation
+# changes, and the one place the references differ in how much they leave to
+# the linker. Both write a difference the linker may have to work out as a
+# pair of relocations at the field: `R_RISCV_ADD8` to `ADD64` on the symbol
+# added and the matching `SUB` on the one subtracted, and
+# `R_RISCV_SET_ULEB128` with `R_RISCV_SUB_ULEB128` in a `.uleb128`, which has
+# no fixed width for a linker to add into and so keeps the value this file
+# computed. What they fold differs: GNU as defers every difference of labels
+# in a code section, and every `.uleb128` of a difference wherever the labels
+# are, whether or not anything between them can move and even under `.option
+# norelax`, while llvm-mc looks at what lies between the two labels and folds
+# the difference where none of it is an instruction a linker may rewrite.
+# rsasm follows llvm-mc: a difference GNU as defers and this folds is one the
+# linker would have worked out to the same number, which tools/link-diff
+# checks by linking the same program from both assemblers' objects with
+# `--relax`.
 
 === la and lla of an external symbol relocate both halves
         la      a0, ext
@@ -333,6 +352,55 @@ base:   nop
         .quad   ext - base
         .data
 other:  .long   base - other
+
+=== a difference across a call is the linker's, one across plain code is not
+        .text
+a:      nop
+b:      call    far
+c:      .byte   c - b
+        .half   c - b
+        .word   c - b
+        .dword  c - b
+        .uleb128 c - b
+        .word   b - a
+        .uleb128 b - a
+        .word   c - a + 4
+        .word   a - c
+        .size   a, c - a
+        .data
+        .word   c - b
+        .uleb128 c - a
+e:      .word   0
+f:      .word   f - e
+        .uleb128 f - e
+
+# A `.sleb128` has no pair to leave a difference to the linker with: the one
+# a `.uleb128` uses sets an unsigned value. Both references refuse the
+# expression rather than write a number the link would make wrong, and a
+# `.sleb128` of a difference they can fold is a number as usual.
+=== refused: a .sleb128 of a difference only the linker knows
+        .text
+a:      call    far
+b:      .sleb128 b - a
+
+=== a .sleb128 of a difference the file can fold
+        .text
+a:      nop
+b:      .sleb128 b - a
+        .sleb128 a - b
+
+# `.option norelax` leaves the code between the labels alone, so the distance
+# is this file's to work out; GNU as defers it all the same.
+=== a difference across a call that cannot be relaxed is folded
+        .text
+        .option norelax
+a:      call    far
+b:      .word   b - a
+        .uleb128 b - a
+        .option relax
+c:      call    far
+d:      .word   d - c
+        .uleb128 d - c
 
 === the build attributes of a plain object
         .globl f

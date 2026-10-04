@@ -22,7 +22,14 @@ pub const ALIGN: u32 = 43;
 pub const RVC_BRANCH: u32 = 44;
 pub const RVC_JUMP: u32 = 45;
 pub const RELAX: u32 = 51;
+pub const SUB6: u32 = 52;
+pub const SET6: u32 = 53;
+pub const SET8: u32 = 54;
+pub const SET16: u32 = 55;
+pub const SET32: u32 = 56;
 pub const PCREL32: u32 = 57;
+pub const SET_ULEB128: u32 = 60;
+pub const SUB_ULEB128: u32 = 61;
 pub const TLSDESC_HI20: u32 = 62;
 pub const TLSDESC_LOAD_LO12: u32 = 63;
 pub const TLSDESC_ADD_LO12: u32 = 64;
@@ -86,16 +93,57 @@ pub fn deferred_when_relaxed(reloc: u32) -> Option<bool> {
     }
 }
 
-/// `R_RISCV_ADD8` to `R_RISCV_ADD64`, and the matching `SUB`s: a field that
-/// holds one symbol minus another, in two relocations at the same offset.
-pub fn difference(size: u8) -> Option<(u32, u32)> {
-    Some(match size {
-        1 => (33, 37),
-        2 => (34, 38),
-        4 => (35, 39),
-        8 => (36, 40),
-        _ => return None,
+pub const ADD8: u32 = 33;
+pub const ADD16: u32 = 34;
+pub const ADD32: u32 = 35;
+pub const ADD64: u32 = 36;
+pub const SUB8: u32 = 37;
+pub const SUB16: u32 = 38;
+pub const SUB32: u32 = 39;
+pub const SUB64: u32 = 40;
+
+/// The pair of relocations a field holding one symbol minus another is
+/// written as, both at the field's offset, the adding one first.
+///
+/// `R_RISCV_ADD8` to `R_RISCV_ADD64` with the matching `SUB`s add to what the
+/// field already holds, which is what every data field wants. A field whose
+/// other bits are not the linker's to touch is written with the `SET` family
+/// instead, which replaces only the bits the relocation names: a
+/// `DW_CFA_advance_loc` keeps its opcode in the two bits above the six that
+/// `R_RISCV_SET6` sets, and the wider call frame advances use `R_RISCV_SET8`,
+/// `SET16` and `SET32` for the symmetry rather than out of need. Each `SET`
+/// pairs with the plain `SUB` of its width, except the six-bit one, which has
+/// `R_RISCV_SUB6` of its own.
+pub fn difference(kind: &crate::section::FixupKind) -> Option<(u32, u32)> {
+    Some(match kind.reloc {
+        SET6 => (SET6, SUB6),
+        SET8 => (SET8, SUB8),
+        SET16 => (SET16, SUB16),
+        SET32 => (SET32, SUB32),
+        _ => match kind.size {
+            1 => (ADD8, SUB8),
+            2 => (ADD16, SUB16),
+            4 => (ADD32, SUB32),
+            8 => (ADD64, SUB64),
+            _ => return None,
+        },
     })
+}
+
+/// Whether a relaxing linker may change the size of the sequence this fixup
+/// belongs to, so that a distance measured across it is the linker's to work
+/// out rather than this file's.
+///
+/// It is what the object itself says: a fixup marked with `R_RISCV_RELAX`,
+/// which is the permission a linker acts on; a branch or jump displacement,
+/// which [`deferred_when_relaxed`] already leaves to the linker for the same
+/// reason; and `R_RISCV_ALIGN`, where the linker takes padding back. Each of
+/// those is only so under `.option relax`, since that is what put the mark
+/// there, so `.option norelax` folds a difference as it leaves the code
+/// alone. Data is not code, so a `.word` of an address between the two
+/// labels is no obstacle.
+pub fn moves_code(kind: &crate::section::FixupKind) -> bool {
+    kind.marker_reloc == RELAX || kind.relocated_when_relaxed || kind.reloc == ALIGN
 }
 
 /// The relocation for an `n`-byte data reference.

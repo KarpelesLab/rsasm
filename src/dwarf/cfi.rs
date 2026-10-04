@@ -496,6 +496,38 @@ impl Assembler {
         }
     }
 
+    /// An address advance a relaxing linker is to work out, for a target that
+    /// has a field for one; false where it has none, and the caller writes
+    /// the distance as it stands.
+    ///
+    /// The form is still chosen by the distance as the file sees it, which is
+    /// all either reference has to choose by, and the operand is left empty
+    /// and relocated as the difference of labels at the two positions.
+    fn deferred_advance(&mut self, b: &mut Blob, from: Pos, to: Pos, unit: u64) -> bool {
+        let delta = self.pos_offset(to).saturating_sub(self.pos_offset(from));
+        let scaled = delta / unit.max(1);
+        let (opcode, size, bits) = if scaled < 0x40 {
+            (DW_CFA_ADVANCE_LOC, 1u8, 6u8)
+        } else if scaled <= 0xff {
+            (DW_CFA_ADVANCE_LOC1, 1, 8)
+        } else if scaled <= 0xffff {
+            (DW_CFA_ADVANCE_LOC2, 2, 16)
+        } else {
+            (DW_CFA_ADVANCE_LOC4, 4, 32)
+        };
+        let Some(kind) = self.target().cfa_advance_field(size, bits) else {
+            return false;
+        };
+        let e = self.difference_expr((from, 0), (to, 0));
+        b.u8(opcode);
+        if bits == 6 {
+            b.fixup_written(1, e, kind);
+        } else {
+            b.fixup(size, e, kind);
+        }
+        true
+    }
+
     /// Writes an instruction whose relative forms have been resolved.
     fn write_insn(b: &mut Blob, insn: &Insn, flavor: Flavor, data_align: i64, unit: u64) {
         let factored = |o: i64| o / data_align;
@@ -1025,7 +1057,17 @@ impl Assembler {
                 b.fixup(ptr, begin, kind);
                 ptr
             };
-            b.int(end - start, size as usize);
+            // How far the function reaches is a difference of two labels in
+            // it, so a relaxing linker between them works it out, as it works
+            // out the advances below.
+            let end_pos = fde.end.unwrap_or(fde.start);
+            if self.code_moves_between(fde.start.0, start, end) {
+                let e = self.difference_expr((fde.start, 0), (end_pos, 0));
+                let kind = self.abs_kind(size);
+                b.fixup(size, e, kind);
+            } else {
+                b.int(end - start, size as usize);
+            }
             if eh {
                 let lsize = fde
                     .lsda
@@ -1037,13 +1079,19 @@ impl Assembler {
             }
             cfa = initial_cfa;
             let mut last = start;
+            let mut last_pos = fde.start;
             for (pos, insn) in &fde.insns {
                 if *insn == Insn::Mark {
                     continue;
                 }
                 let addr = self.pos_offset(*pos);
-                Self::advance(&mut b, addr.saturating_sub(last), unit);
+                if !self.code_moves_between(pos.0, last, addr)
+                    || !self.deferred_advance(&mut b, last_pos, *pos, unit)
+                {
+                    Self::advance(&mut b, addr.saturating_sub(last), unit);
+                }
                 last = addr;
+                last_pos = *pos;
                 let insn = match *insn {
                     Insn::DefCfa(r, o) => {
                         cfa = o;

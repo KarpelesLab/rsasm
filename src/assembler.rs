@@ -350,6 +350,16 @@ pub struct Assembler {
     /// The sections whose end layout rounded up to their alignment; see
     /// `Assembler::pad_section_tails`.
     pub(crate) tail_pads: Vec<SectionId>,
+    /// Per section, in order, the offsets where a relaxing linker may delete
+    /// bytes, so that a distance measured across one of them is not known
+    /// here; see `Architecture::moves_code` and
+    /// `Assembler::code_moves_between`. Settled with the layout, and empty
+    /// for every target whose linker shortens nothing.
+    pub(crate) moving_code: Vec<Vec<u64>>,
+    /// Per section, in order, the fragments that pad to an alignment, whose
+    /// size a reference settles after the shape of a line table's address
+    /// advances; see `Assembler::code_uncertain_between`.
+    pub(crate) aligning_code: Vec<Vec<u32>>,
     /// The sections whose relocations [`Arch::reloc_at`] picks by the offset
     /// of the field in its fragment rather than in the section, as llvm-mc
     /// picks them in the line tables it writes, where each sequence starts a
@@ -433,6 +443,8 @@ impl Assembler {
             ccrx_sections: HashMap::new(),
             dwarf: crate::dwarf::DwarfState::default(),
             tail_pads: Vec::new(),
+            moving_code: Vec::new(),
+            aligning_code: Vec::new(),
             relocs_by_fragment: Vec::new(),
             literal_pools: HashMap::new(),
             literal_pool_align: HashMap::new(),

@@ -103,12 +103,30 @@ impl Blob {
         self.bytes.resize(self.bytes.len() + size as usize, 0);
     }
 
+    /// A fixup over the `size` bytes just written, for a field that shares
+    /// them with something the relocation leaves alone: six bits of a
+    /// `DW_CFA_advance_loc` are the advance and two are the opcode.
+    pub fn fixup_written(&mut self, size: u8, expr: ExprRef, kind: FixupKind) {
+        let at = self.bytes.len() as u32 - size as u32;
+        self.fixups.push((at, size, expr, kind));
+    }
+
     /// Pads with `fill` to a multiple of `align`, counting from `base`.
     pub fn align(&mut self, base: u64, align: u64, fill: u8) {
         while !(base + self.len()).is_multiple_of(align) {
             self.bytes.push(fill);
         }
     }
+}
+
+/// One address advance of a line program: where it starts and ends, how far
+/// that is as this file sees it, and whether a relaxing linker is to work the
+/// distance out instead.
+struct Advance {
+    from: (Pos, u64),
+    to: (Pos, u64),
+    delta: u64,
+    defer: bool,
 }
 
 /// What every sequence of a line program is written with.
@@ -680,9 +698,22 @@ impl Assembler {
                 // address of its own, so that consumers restart the count.
                 Some(prev) if !(loc.view == Some(View::Reset) && prev == addr) => {
                     let delta = addr.saturating_sub(prev);
-                    if fixed {
-                        let from = last_at.unwrap_or(at);
-                        self.fixed_advance(b, Some(line_delta), delta, from, at, ptr);
+                    let from = last_at.unwrap_or(at);
+                    // An advance the linker may shorten is not a number this
+                    // file knows, so it goes in a field of its own for the
+                    // linker to fill in, as one does on a target that writes
+                    // every advance that way; and so does one the reference
+                    // only finds out is a number too late.
+                    let moves = self.code_moves_between(section, prev, addr);
+                    let uncertain = moves || self.code_uncertain_between(section, from.0.1, at.0.1);
+                    if fixed || uncertain {
+                        let adv = Advance {
+                            from,
+                            to: at,
+                            delta,
+                            defer: moves,
+                        };
+                        self.fixed_advance(b, Some(line_delta), &adv, ptr);
                     } else {
                         // GNU as says so once, however many rows are off.
                         if delta % min != 0 && flavor == Flavor::Gnu && !cx.unaligned {
@@ -707,12 +738,32 @@ impl Assembler {
         let end = self.sequence_end(section);
         let prev = last.unwrap_or(end);
         let delta = end.saturating_sub(prev);
-        if fixed {
-            let end_at = ((section, self.section(section).frags.len() as u32), 0);
-            let from = last_at.unwrap_or(end_at);
-            self.fixed_advance(b, None, delta, from, end_at, ptr);
+        let moves = self.code_moves_between(section, prev, end);
+        let end_at = (self.code_end_pos(section), 0);
+        let from = last_at.unwrap_or(end_at);
+        let uncertain = moves || self.code_uncertain_between(section, from.0.1, end_at.0.1);
+        if fixed || uncertain {
+            let adv = Advance {
+                from,
+                to: end_at,
+                delta,
+                defer: moves,
+            };
+            self.fixed_advance(b, None, &adv, ptr);
         } else {
             special_advance(b, None, delta / min, cx.opcode_base);
+        }
+    }
+
+    /// The position at the end of a section's code, which is where
+    /// [`Assembler::sequence_end`] measures to: past its last fragment, or at
+    /// the padding fragment where the target rounds the tail up.
+    pub(crate) fn code_end_pos(&self, section: SectionId) -> Pos {
+        let n = self.section(section).frags.len() as u32;
+        if self.tail_pads.contains(&section) && n > 0 {
+            (section, n - 1)
+        } else {
+            (section, n)
         }
     }
 
@@ -738,20 +789,26 @@ impl Assembler {
     /// GNU as's `emit_fixed_inc_line_addr`, for targets whose linker may move
     /// code: an explicit 16-bit advance, or a new address past 50000 bytes.
     /// `line_delta` of `None` ends the sequence.
-    fn fixed_advance(
-        &mut self,
-        b: &mut Blob,
-        line_delta: Option<i64>,
-        delta: u64,
-        from: (Pos, u64),
-        at: (Pos, u64),
-        ptr: u8,
-    ) {
+    ///
+    /// [`Advance::defer`] says that this particular advance is the linker's
+    /// to work out, which is what RISC-V asks for; the targets that write
+    /// every advance this way know the distance and write it.
+    ///
+    /// Past 50000 both references give up on the 16-bit field and set an
+    /// address, but only GNU as sets one: llvm-mc leaves the distance in the
+    /// `DW_LNE_set_address` operand, relocated as a difference, which reads
+    /// as an address the linker then gets wrong. GNU as is followed here.
+    fn fixed_advance(&mut self, b: &mut Blob, line_delta: Option<i64>, adv: &Advance, ptr: u8) {
         // GNU as knows how far the last row is from the end of its frag, so
-        // the advance that ends a sequence is always a number.
+        // the advance that ends a sequence is always a number, unless a
+        // relaxing linker is to work it out.
         let Some(line_delta) = line_delta else {
             b.u8(DW_LNS_FIXED_ADVANCE_PC);
-            b.int(delta, 2);
+            if adv.defer {
+                self.advance_field(b, adv.from, adv.to);
+            } else {
+                b.int(adv.delta, 2);
+            }
             b.u8(0);
             b.u8(1);
             b.u8(DW_LNE_END_SEQUENCE);
@@ -761,11 +818,11 @@ impl Assembler {
         // delta, and always writes one.
         b.u8(DW_LNS_ADVANCE_LINE);
         b.sleb(line_delta);
-        if delta > 50000 {
-            self.set_address(b, at, ptr);
+        if adv.delta > 50000 {
+            self.set_address(b, adv.to, ptr);
         } else {
             b.u8(DW_LNS_FIXED_ADVANCE_PC);
-            self.advance_field(b, from, at);
+            self.advance_field(b, adv.from, adv.to);
         }
         b.u8(DW_LNS_COPY);
     }
@@ -775,13 +832,18 @@ impl Assembler {
     /// to the number, unless the target's linker is to work it out, as GNU as
     /// for MSP430 has it do (see `Architecture::defers_difference`).
     fn advance_field(&mut self, b: &mut Blob, from: (Pos, u64), to: (Pos, u64)) {
-        let t = self.pos_expr(to.0, to.1);
-        let f = self.pos_expr(from.0, from.1);
-        let e = self
-            .exprs
-            .alloc(ExprKind::Binary(BinOp::Sub, t, f), Span::DUMMY);
+        let e = self.difference_expr(from, to);
         let kind = self.abs_kind(2);
         b.fixup(2, e, kind);
+    }
+
+    /// The distance between two positions, as the difference of labels at
+    /// them, which is what a field a relaxing linker fills in holds.
+    pub(crate) fn difference_expr(&mut self, from: (Pos, u64), to: (Pos, u64)) -> ExprRef {
+        let t = self.pos_expr(to.0, to.1);
+        let f = self.pos_expr(from.0, from.1);
+        self.exprs
+            .alloc(ExprKind::Binary(BinOp::Sub, t, f), Span::DUMMY)
     }
 }
 

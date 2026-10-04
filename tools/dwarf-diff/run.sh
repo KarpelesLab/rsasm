@@ -40,13 +40,12 @@
 # files from GCC (x86) and Clang (every target whose code it assembles), see
 # compiler.sh. A snippet using `.cfi_*` is skipped for a target whose
 # reference has no CFI, and one that aligns code for a target marked `relax`,
-# whose alignment in code is the linker's: RISC-V writes the worst-case
-# padding and an `R_RISCV_ALIGN` there, and llvm-mc without `-mattr=+relax`
-# pads to the boundary, so the addresses a line table advances by differ. The
-# marker itself is checked in tests/riscv.rs and tools/link-diff, and
-# `+relax` is not the answer here because llvm-mc then writes the line
-# table's own advances as `R_RISCV_ADD`/`R_RISCV_SUB` pairs, which rsasm does
-# not (see README.md). Both assemblers run in the same scratch directory,
+# whose alignment in code is the linker's: RISC-V hands an alignment wider
+# than an instruction to the linker with an `R_RISCV_ALIGN`, as GNU as does,
+# and llvm-mc writes one only where the alignment follows an instruction, so
+# after data the two pad differently and every address a line table advances
+# by differs with them. The marker itself is checked in tests/riscv.rs and
+# tools/link-diff. Both assemblers run in the same scratch directory,
 # which a DWARF 5 table without `.file 0` names, and both are told to call
 # themselves the reference in the compilation unit, through the
 # DEBUG_PRODUCER variable llvm-mc reads and rsasm reads for this.
@@ -79,8 +78,8 @@ i386|i386|xas x86_64-elf-as --32||cfi
 aarch64|aarch64|mc aarch64||cfi
 arm|arm|mc armv7||cfi
 thumb|thumb|mc thumbv7||cfi
-riscv32|riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c||cfi relax
-riscv64|riscv64|mc riscv64 -mattr=+m,+a,+f,+d,+c||cfi relax
+riscv32|riscv32|mc riscv32 -mattr=+m,+a,+f,+d,+c,+relax||cfi relax
+riscv64|riscv64|mc riscv64 -mattr=+m,+a,+f,+d,+c,+relax||cfi relax
 powerpc|powerpc|mc powerpc||cfi
 powerpc64|powerpc64|mc powerpc64||cfi
 powerpc64le|powerpc64le|mc powerpc64le||cfi

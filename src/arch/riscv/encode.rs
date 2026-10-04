@@ -363,6 +363,26 @@ pub fn kind_align() -> FixupKind {
         .relocated_in_objects()
 }
 
+/// The field a call frame address advance goes in, where a relaxing linker
+/// is to work the advance out; see `Architecture::cfa_advance_field`.
+///
+/// `DW_CFA_advance_loc` packs six bits of advance into the byte that carries
+/// its opcode, so the relocation there replaces those six bits and leaves the
+/// other two alone. The wider forms have an operand of their own, and take
+/// the whole field.
+pub fn kind_cfa_advance(size: u8, bits: u8) -> Option<FixupKind> {
+    Some(match (size, bits) {
+        (1, 6) => FixupKind::data(1)
+            .with_field(6, 1)
+            .with_reloc(reloc::SET6)
+            .scatter(|word, value| (word & !0x3f) | (value as u64 & 0x3f)),
+        (1, 8) => FixupKind::data(1).with_reloc(reloc::SET8),
+        (2, 16) => FixupKind::data(2).with_reloc(reloc::SET16),
+        (4, 32) => FixupKind::data(4).with_reloc(reloc::SET32),
+        _ => return None,
+    })
+}
+
 /// The `auipc`/`jalr` pair of `call`, patched as one eight-byte field.
 ///
 /// llvm-mc 22 writes `R_RISCV_CALL_PLT` whether or not the source said

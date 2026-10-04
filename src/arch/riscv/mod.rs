@@ -210,8 +210,53 @@ impl Architecture for Riscv {
         reloc::data(size, pcrel)
     }
 
-    fn difference_relocs(&self, size: u8) -> Option<(u32, u32)> {
-        reloc::difference(size)
+    fn difference_relocs(&self, kind: &crate::section::FixupKind) -> Option<(u32, u32)> {
+        reloc::difference(kind)
+    }
+
+    /// A relaxing linker deletes instructions, so a distance across one is
+    /// not known here. Both references keep such a difference as its two
+    /// symbols; what they disagree on is how hard they look. GNU as defers
+    /// every difference of two labels in a code section
+    /// (`TC_FORCE_RELOCATION_SUB_SAME` tests `SEC_CODE` and nothing else),
+    /// whether or not anything between them can be shortened and even under
+    /// `.option norelax`, while llvm-mc walks what lies between the two
+    /// labels and folds the difference where none of it is an instruction a
+    /// linker may rewrite. rsasm follows llvm-mc, the reference its RISC-V
+    /// objects are compared against: a difference GNU as defers and this
+    /// folds is one the linker would have worked out to the same number, so
+    /// the linked program is the same either way.
+    fn defers_difference(
+        &self,
+        kind: &crate::section::FixupKind,
+        _symbols_in: &crate::section::SectionFlags,
+        code_moves: bool,
+    ) -> bool {
+        code_moves && reloc::difference(kind).is_some()
+    }
+
+    /// The same for a `.uleb128`, which has no fixed width for a linker to
+    /// add into and so is set outright. The value this file computed stays in
+    /// the field, in as many bytes as it needs, which is what both references
+    /// leave there.
+    fn uleb128_difference_relocs(
+        &self,
+        _symbols_in: &crate::section::SectionFlags,
+        code_moves: bool,
+    ) -> Option<(u32, u32)> {
+        code_moves.then_some((reloc::SUB_ULEB128, reloc::SET_ULEB128))
+    }
+
+    fn refuses_signed_leb128_difference(&self) -> bool {
+        true
+    }
+
+    fn moves_code(&self, kind: &crate::section::FixupKind) -> bool {
+        reloc::moves_code(kind)
+    }
+
+    fn cfa_advance_field(&self, size: u8, bits: u8) -> Option<crate::section::FixupKind> {
+        encode::kind_cfa_advance(size, bits)
     }
 
     fn modifier_reloc(&self, name: &str, size: u8, pcrel: bool) -> Option<u32> {
