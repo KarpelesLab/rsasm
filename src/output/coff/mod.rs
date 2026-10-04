@@ -520,14 +520,13 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     // one, so that it never points forward at the section it goes with
     // (`WinCOFFWriter::assignSectionNumbers`, which says MSVC's linker cannot
     // read a forward reference).
-    let associative = |asm: &Assembler, id: &SectionId| {
+    order.sort_by_key(|id| {
         asm.coff
             .sections
             .get(id)
             .and_then(|i| i.comdat)
             .is_some_and(|c| c.selection == SELECT_ASSOCIATIVE)
-    };
-    order.sort_by_key(|id| associative(asm, id));
+    });
     for id in order {
         number += 1;
         secs.push(out_section(asm, id, number));

@@ -487,13 +487,15 @@ impl Assembler {
     /// A word of the table's `dwarf_only` is the machine's way of saying that
     /// this frame's shape is one no word can describe, and that the linker has
     /// to read the frame table for it.
-    fn compact_unwind_words(&mut self) -> Option<(crate::output::macho::CompactUnwind, Vec<u32>)> {
+    fn compact_unwind_words(&self) -> Option<(macho::CompactUnwind, Vec<u32>)> {
         if self.options.format != crate::output::Format::MachO {
             return None;
         }
-        let table = crate::output::macho::Cpu::for_arch(self.target())?.compact_unwind()?;
-        let fdes = std::mem::take(&mut self.dwarf.cfi.fdes);
-        let words = fdes
+        let table = macho::Cpu::for_arch(self.target())?.compact_unwind()?;
+        let words = self
+            .dwarf
+            .cfi
+            .fdes
             .iter()
             .map(|fde| {
                 let insns: Vec<Insn> = fde.insns.iter().map(|(_, i)| i.clone()).collect();
@@ -503,7 +505,6 @@ impl Assembler {
                     .unwrap_or(table.dwarf_only)
             })
             .collect();
-        self.dwarf.cfi.fdes = fdes;
         Some((table, words))
     }
 
@@ -533,12 +534,7 @@ impl Assembler {
     /// A frame left to the frame table still has an entry, saying so, but
     /// with neither pointer: the linker will read both out of the frame table
     /// instead.
-    fn emit_compact_unwind(
-        &mut self,
-        table: &crate::output::macho::CompactUnwind,
-        words: &[u32],
-        ptr: u8,
-    ) {
+    fn emit_compact_unwind(&mut self, table: &macho::CompactUnwind, words: &[u32], ptr: u8) {
         let endian = self.target().endian();
         let flags = SectionFlags {
             alloc: true,

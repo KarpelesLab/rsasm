@@ -1183,9 +1183,11 @@ reads one 32-bit word out of `__LD,__compact_unwind` and goes to
 `__TEXT,__eh_frame` only where that word says the frame is a shape no word
 can describe, so a frame described in one of the two alone is described
 wrongly. On arm64, where llvm-mc writes the table for every triple, rsasm
-writes it too: a 32-byte entry per `.cfi_startproc` holding the function,
-its length, the word, and the personality routine and language-specific data
-area the `.cfi_personality` and `.cfi_lsda` of that frame named.
+writes it too: an entry per `.cfi_startproc` holding the function, its
+length, the word, and the personality routine and language-specific data area
+that frame's `.cfi_personality` and `.cfi_lsda` named. The entry is the
+thirty-two bytes the linker reads, unless a `.cfi_lsda` encoding narrower
+than a pointer leaves it short, which is what llvm-mc writes there too.
 
 The word is `DarwinAArch64AsmBackend::generateCompactUnwindEncoding`'s, which
 reads the directives in the order a compiler writes them:
@@ -1198,7 +1200,9 @@ reads the directives in the order a compiler writes them:
   the pair before it.
 - `UNWIND_ARM64_MODE_FRAMELESS` with the stack adjustment of the frame's one
   `.cfi_def_cfa_offset`, counted in sixteen-byte units and up to 65,520
-  bytes; a frame with no directives at all is this with no adjustment.
+  bytes. A frame with no directives at all is this with no adjustment, and
+  that answer comes before the personality routine is looked at, so even a
+  routine with no slot of its own leaves it alone.
 - `UNWIND_ARM64_MODE_DWARF` for everything else — a second stack adjustment,
   a `.cfi_def_cfa_register`, registers saved out of order or alone, an
   escape, a state change, a personality routine other than
@@ -1212,13 +1216,14 @@ something rsasm reads from a triple, so there is none to write; the frame
 table alone is what llvm-mc writes for `x86_64-apple-macos`, and what the
 harness compares against.
 
-`tools/macho-diff/run.sh` compares 1,695 cases against llvm-mc 22: single
-statements and whole programs in Clang's style of its own, line tables and
-frame tables, and the `tools/mc-diff` corpora for both machines, every
-instruction of which has to come out the same in a Mach-O object. Every header
-and load command, section, symbol and relocation matches, and each of the
-1,630 objects both assemblers write is identical byte for byte; the other 65
-cases are refused by both.
+`tools/macho-diff/run.sh` compares 1,772 cases against llvm-mc 22: single
+statements and whole programs in Clang's style of its own, line tables, frame
+tables and compact unwind tables, and the `tools/mc-diff` corpora for both
+machines, every instruction of which has to come out the same in a Mach-O
+object. Every header and load command, section, symbol and relocation
+matches, and each of the 1,692 objects both assemblers write is identical
+byte for byte; the other 80 cases are refused by both.
+
 Three differences remain, and the corpora leave them out:
 
 - x86-64 instructions are encoded as GNU as encodes them, in either format, so
@@ -1384,13 +1389,13 @@ is what hid them from rsasm for as long as it did.
   characteristics and bytes, every symbol with its auxiliary records, every
   relocation — from single statements, hand-written programs and Clang's
   output, and against GNU as 2.47 for mingw as relocations with the addends
-  their fields hold. 295 of 295 comparisons match. `tools/oracles/build.sh`
+  their fields hold. 302 of 302 comparisons match. `tools/oracles/build.sh`
   builds GNU as for mingw alongside the other cross assemblers.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,653 of 1,653 match, and every object both write
-  is also identical byte for byte.
+  those of `tools/mc-diff`. 1,772 of 1,772 match, and every object both
+  assemblers write is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
 instructions, in all three modes and both syntaxes, some of them deliberately
