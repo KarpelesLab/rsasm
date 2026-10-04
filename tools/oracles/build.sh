@@ -92,7 +92,25 @@ jobs=$(nproc 2>/dev/null || echo 4)
 wanted="${*:-$BINUTILS_TARGETS vasm vasm-6502 vasm-z80 cc65 asl sdas nasm}"
 
 fetch() { # url dest sha256
-  [ -s "$2" ] || { echo "fetching $1"; curl -fsSL --retry 3 -o "$2.part" "$1" && mv "$2.part" "$2"; }
+  if [ ! -s "$2" ]; then
+    echo "fetching $1"
+    if ! curl -fsSL --retry 3 --connect-timeout 20 -o "$2.part" "$1"; then
+      # Upstream goes down: vasm's host was unreachable for all of
+      # 2026-10-04, which failed every job that needed any reference at all,
+      # because one archive it could not fetch stops the whole build. The
+      # Internet Archive keeps a copy, and the checksum below is what makes
+      # reading from a mirror no weaker than reading from the source --
+      # whatever arrives is either the pinned archive or a hard failure.
+      echo "  unreachable; trying the Internet Archive" >&2
+      curl -fsSL --retry 2 --connect-timeout 20 -o "$2.part" \
+        "https://web.archive.org/web/2026id_/$1" || {
+        rm -f "$2.part"
+        echo "neither $1 nor the Internet Archive's copy could be fetched" >&2
+        exit 1
+      }
+    fi
+    mv "$2.part" "$2"
+  fi
   local got
   got=$(sha256sum "$2" | cut -d' ' -f1)
   if [ "$got" != "$3" ]; then
