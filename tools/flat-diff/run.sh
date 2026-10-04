@@ -92,7 +92,9 @@ command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found; skipping"
 command -v llvm-readelf > /dev/null || { echo "llvm-readelf not found; skipping" >&2; exit 0; }
 
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --bin rsasm || exit 1
-rsasm="$root/target/debug/rsasm"
+built_root=$root
+. "$here/../built.sh"
+rsasm=$(built rsasm) || exit 1
 
 pass=0
 fail=0

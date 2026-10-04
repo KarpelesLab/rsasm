@@ -164,8 +164,10 @@ command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found" >&2; exit
 command -v llvm-readobj > /dev/null || { echo "llvm-readobj not found" >&2; exit 0; }
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump --bin rsasm ||
   exit 1
-hexdump="$root/target/debug/examples/hexdump"
-rsasm="$root/target/debug/rsasm"
+built_root=$root
+. "$here/../built.sh"
+hexdump=$(built examples/hexdump) || exit 1
+rsasm=$(built rsasm) || exit 1
 
 pass=0
 fail=0

@@ -50,6 +50,7 @@ avr-elf-ld and avr-elf-objcopy from tools/oracles/build.sh.
 
 import collections
 import os
+import builtpath
 import random
 import re
 import struct
@@ -59,7 +60,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 BIN = os.path.join(ORACLES, "bin")
 

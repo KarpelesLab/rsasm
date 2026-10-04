@@ -67,7 +67,9 @@ msp430x|xas msp430-elf-as -mcpu=430x|.text
 
 command -v llvm-objcopy > /dev/null || { echo "llvm-objcopy not found" >&2; exit 0; }
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --example hexdump || exit 1
-hexdump="$root/target/debug/examples/hexdump"
+built_root=$root
+. "$here/../built.sh"
+hexdump=$(built examples/hexdump) || exit 1
 
 pass=0
 fail=0

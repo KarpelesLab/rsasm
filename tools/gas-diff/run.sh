@@ -45,8 +45,10 @@ else
   exit 0
 fi
 cargo build --quiet --manifest-path "$root/Cargo.toml" --example hexdump --bin rsasm || exit 1
-hexdump="$root/target/debug/examples/hexdump"
-rsasm="$root/target/debug/rsasm"
+built_root=$root
+. "$here/../built.sh"
+hexdump=$(built examples/hexdump) || exit 1
+rsasm=$(built rsasm) || exit 1
 
 # Set per corpus by `configure`.
 gasflags=--64

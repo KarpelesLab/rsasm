@@ -48,7 +48,9 @@ case "$(llvm-mc --version)" in
   *) echo "warning: the corpora were verified against LLVM 22; expect version drift" >&2 ;;
 esac
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --bin rsasm || exit 1
-rsasm="$root/target/debug/rsasm"
+built_root=$root
+. "$here/../built.sh"
+rsasm=$(built rsasm) || exit 1
 
 pass=0
 fail=0

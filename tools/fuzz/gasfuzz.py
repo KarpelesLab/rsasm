@@ -35,6 +35,7 @@ With one reference there are no splits: a case is `agree`, `deviation` or
 
 import collections
 import os
+import builtpath
 import re
 import struct
 import subprocess
@@ -44,7 +45,7 @@ from concurrent.futures import ThreadPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 LLVM_MC = os.environ.get("LLVM_MC", "llvm-mc")
 BINUTILS_SRC = os.path.join(ORACLES, "src", "binutils-2.47")
 

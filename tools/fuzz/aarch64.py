@@ -40,6 +40,7 @@ import argparse
 import collections
 import multiprocessing
 import os
+import builtpath
 import random
 import re
 import struct
@@ -53,7 +54,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools", "tables"))
 
 import a64  # noqa: E402
 
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 GAS = os.environ.get("GAS") or (
     os.path.join(ORACLES, "bin", "aarch64-elf-as")

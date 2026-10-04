@@ -22,7 +22,8 @@
 # fuzzer: the same seed and count give the same cases, and the fuzzer's own
 # report names the case.
 #
-# Environment: RSASM (default target/debug/rsasm), RSASM_ORACLES (default
+# Environment: RSASM (default: the `rsasm` cargo built, wherever a cargo
+# configuration put it), RSASM_ORACLES (default
 # target/oracles) for the cross assemblers, and llvm-mc on PATH. A fuzzer
 # whose reference is missing fails rather than being skipped, so a CI image
 # that loses one cannot read as a pass.
@@ -104,8 +105,15 @@ if [ -n "$list" ]; then
   exit 0
 fi
 
-[ -x "${RSASM:-$root/target/debug/rsasm}" ] || {
-  echo "no rsasm at ${RSASM:-$root/target/debug/rsasm}; run cargo build --all-features --bin rsasm" >&2
+built_root=$root
+. "$here/../built.sh"
+# Resolved once and exported: the fuzzers default to the same path of their
+# own accord, and a build directory a cargo configuration moved would leave
+# them reading a binary from an older checkout.
+RSASM=$(built rsasm) || exit 1
+export RSASM
+[ -x "$RSASM" ] || {
+  echo "no rsasm at $RSASM; run cargo build --all-features --bin rsasm" >&2
   exit 1
 }
 

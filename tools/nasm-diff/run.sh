@@ -32,7 +32,9 @@ nasm="$bin/nasm"
 "$nasm" -v | grep -q "version 2\.16\.03" || { echo "REF-MISSING: $nasm is not NASM 2.16.03" >&2; exit 1; }
 command -v readelf > /dev/null || { echo "readelf not found" >&2; exit 0; }
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --bin rsasm || exit 1
-rsasm="$root/target/debug/rsasm"
+built_root=$root
+. "$here/../built.sh"
+rsasm=$(built rsasm) || exit 1
 
 pass=0
 fail=0

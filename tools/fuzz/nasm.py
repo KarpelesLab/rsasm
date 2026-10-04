@@ -81,6 +81,7 @@ import collections
 import concurrent.futures
 import difflib
 import os
+import builtpath
 import random
 import re
 import struct
@@ -90,7 +91,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 NASM = os.environ.get("NASM", os.path.join(ORACLES, "bin", "nasm"))
 COFF_CANON = os.path.join(ROOT, "tools", "coff-diff", "canon.sh")

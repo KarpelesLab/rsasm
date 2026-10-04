@@ -75,6 +75,7 @@ import argparse
 import collections
 import concurrent.futures
 import os
+import builtpath
 import random
 import subprocess
 import sys
@@ -82,7 +83,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 BIN = os.path.join(ORACLES, "bin")
 

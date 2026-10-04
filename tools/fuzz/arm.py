@@ -47,6 +47,7 @@ the binutils source; GAS and LLVM_MC override the assemblers.
 
 import collections
 import os
+import builtpath
 import random
 import re
 import struct
@@ -57,7 +58,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 GAS = os.environ.get("GAS", os.path.join(ORACLES, "bin", "arm-none-eabi-as"))
 LLVM_MC = os.environ.get("LLVM_MC", "llvm-mc")
 DIS = os.path.join(ORACLES, "src", "binutils-2.47", "opcodes", "arm-dis.c")

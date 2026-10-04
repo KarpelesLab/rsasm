@@ -50,6 +50,7 @@ GAS (default `as`), LLVM_MC (default `llvm-mc`). 16-bit mode is assembled as
 
 import collections
 import os
+import builtpath
 import random
 import re
 import struct
@@ -61,7 +62,7 @@ import simd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 # The pinned assembler, as every other fuzzer and every x86 corpus uses: a
 # host `as` is whatever the distribution ships, and an older one refuses the
 # newest extensions, which reads as a finding against rsasm rather than as the

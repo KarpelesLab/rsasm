@@ -117,7 +117,9 @@ command -v llvm-mc > /dev/null || { echo "llvm-mc not found; skipping" >&2; exit
 command -v llvm-readobj > /dev/null || { echo "llvm-readobj not found; skipping" >&2; exit 0; }
 [ -d "$bin" ] || { echo "no oracles in $bin; run tools/oracles/build.sh" >&2; exit 0; }
 cargo build --quiet --manifest-path "$root/Cargo.toml" --all-features --bin rsasm || exit 1
-rsasm="$root/target/debug/rsasm"
+built_root=$root
+. "$here/../built.sh"
+rsasm=$(built rsasm) || exit 1
 
 pass=0
 fail=0

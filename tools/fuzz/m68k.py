@@ -59,6 +59,7 @@ import argparse
 import collections
 import importlib.util
 import os
+import builtpath
 import random
 import re
 import struct
@@ -71,7 +72,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 BIN = os.path.join(ORACLES, "bin")
-RSASM = os.environ.get("RSASM", os.path.join(ROOT, "target", "debug", "rsasm"))
+RSASM = builtpath.rsasm_path(ROOT)
 BINUTILS = os.path.join(ORACLES, "src", "binutils-2.47")
 
 # The table generator, tools/tables/m68k.py, loaded by path: this script
