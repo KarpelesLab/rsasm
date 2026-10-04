@@ -303,10 +303,10 @@ impl Assembler {
             // A target may spell `.set` again to put a mark of its own on the
             // alias; see `Architecture::alias_directive`. It comes last so
             // that no backend can take a name this table already uses.
-            _ if let Some(flags) = self.arch.alias_directive(&text) => {
-                self.dir_set(&mut cur, span, false, flags)
-            }
-            _ => false,
+            _ => match self.arch.alias_directive(&text) {
+                Some(flags) => self.dir_set(&mut cur, span, false, flags),
+                None => false,
+            },
         };
 
         if handled {

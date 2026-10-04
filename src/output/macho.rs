@@ -43,7 +43,7 @@
 //! section already has an address, most of what an ELF object relocates is a
 //! number here; see the `dwarf` module. On arm64 a frame is also described by
 //! one word in `__LD,__compact_unwind`, which the linker reads in preference
-//! to the frame table; see [`CompactUnwind`].
+//! to the frame table; see `CompactUnwind` in this module.
 
 mod directives;
 mod relocations;

@@ -221,10 +221,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             "-pie" => a.link.pie = true,
             // GNU as's spelling, which is the one build systems pass, with
             // the long form the other options here have.
-            _ if let Some(v) = arg
-                .strip_prefix("-mimplicit-it=")
-                .or_else(|| arg.strip_prefix("--mimplicit-it=")) =>
-            {
+            _ if arg.starts_with("-mimplicit-it=") || arg.starts_with("--mimplicit-it=") => {
+                let v = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
                 let mode = ImplicitIt::from_name(v).ok_or_else(|| {
                     format!("unknown implicit IT mode `{v}`; expected never, arm, thumb or always")
                 })?;

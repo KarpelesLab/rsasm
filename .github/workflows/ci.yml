@@ -281,6 +281,23 @@ jobs:
             ${{ github.workspace }}/../oracles/share
           key: oracles-${{ runner.os }}-${{ hashFiles('tools/oracles/build.sh') }}
 
+      # The archives the build unpacks, kept apart from what it builds. A
+      # cache of binaries is evicted after a week of disuse and a rebuild then
+      # has to reach every upstream host again -- one of which was down for
+      # the whole of 2026-10-04, taking two jobs with it. An older entry is
+      # safe to restore because `build.sh` checks every archive against the
+      # checksum it pins, so a stale one either is the pinned source or fails
+      # loudly.
+      - name: Cache the reference sources
+        if: steps.oracles.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/../oracles/src/*.tar.*
+            ${{ github.workspace }}/../oracles/src/*.zip
+          key: oracle-src-${{ hashFiles('tools/oracles/build.sh') }}
+          restore-keys: oracle-src-
+
       - name: Build the reference assemblers
         if: steps.oracles.outputs.cache-hit != 'true'
         run: tools/oracles/build.sh
@@ -444,6 +461,23 @@ jobs:
             ${{ github.workspace }}/../oracles/bin
             ${{ github.workspace }}/../oracles/share
           key: oracles-${{ runner.os }}-${{ hashFiles('tools/oracles/build.sh') }}
+
+      # The archives the build unpacks, kept apart from what it builds. A
+      # cache of binaries is evicted after a week of disuse and a rebuild then
+      # has to reach every upstream host again -- one of which was down for
+      # the whole of 2026-10-04, taking two jobs with it. An older entry is
+      # safe to restore because `build.sh` checks every archive against the
+      # checksum it pins, so a stale one either is the pinned source or fails
+      # loudly.
+      - name: Cache the reference sources
+        if: steps.oracles.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/../oracles/src/*.tar.*
+            ${{ github.workspace }}/../oracles/src/*.zip
+          key: oracle-src-${{ hashFiles('tools/oracles/build.sh') }}
+          restore-keys: oracle-src-
 
       - name: Build the reference assemblers
         if: steps.oracles.outputs.cache-hit != 'true'
