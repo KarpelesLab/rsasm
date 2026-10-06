@@ -1868,6 +1868,80 @@ fn one_off_general_purpose_diagnostics() {
     );
 }
 
+/// FEAT_CMPBR's compare-and-branch, which puts a comparison and a branch of
+/// up to 1KB in one instruction. The condition and the width compared are
+/// both in the mnemonic, as the condition is for `b.<cond>`.
+#[test]
+fn compare_and_branch() {
+    check(&[
+        ("cbgt x1, x2, #8", "41 00 02 f4"),
+        ("cbge x1, x2, #8", "41 00 22 f4"),
+        ("cbhi x1, x2, #8", "41 00 42 f4"),
+        ("cbhs x1, x2, #8", "41 00 62 f4"),
+        ("cbeq x1, x2, #8", "41 00 c2 f4"),
+        ("cbne x1, x2, #8", "41 00 e2 f4"),
+        ("cbgt w3, w4, #-8", "c3 3f 04 74"),
+        // The four reversed comparisons, which swap the registers: `cblt x1,
+        // x2` is the `cbgt x2, x1` both references print for the word.
+        ("cblt x1, x2, #8", "42 00 01 f4"),
+        ("cble x1, x2, #8", "42 00 21 f4"),
+        ("cblo x1, x2, #8", "42 00 41 f4"),
+        ("cbls x1, x2, #8", "42 00 61 f4"),
+        // The low halfword and the low byte, which compare 32-bit names.
+        ("cbhgt w1, w2, #4", "21 c0 02 74"),
+        ("cbhlt w1, w2, #4", "22 c0 01 74"),
+        ("cbhhs w1, w2, #4", "21 c0 62 74"),
+        ("cbhls w1, w2, #4", "22 c0 61 74"),
+        ("cbheq w1, w2, #4", "21 c0 c2 74"),
+        ("cbhne w1, w2, #4", "21 c0 e2 74"),
+        ("cbbgt w1, w2, #4", "21 80 02 74"),
+        ("cbblt w1, w2, #4", "22 80 01 74"),
+        ("cbbhs w1, w2, #4", "21 80 62 74"),
+        ("cbbls w1, w2, #4", "22 80 61 74"),
+        ("cbbeq w1, w2, #4", "21 80 c2 74"),
+        ("cbbne w1, w2, #4", "21 80 e2 74"),
+        // Against a number, where it is the inclusive comparisons that have
+        // no encoding: `cbge x0, #1` is `cbgt x0, #0`, so the four of them
+        // run to 64 or down to -1 where the other six run 0 to 63.
+        ("cbgt x0, #0, #0", "00 00 00 f5"),
+        ("cbgt w5, #63, #0", "05 80 1f 75"),
+        ("cbge x0, #1, #0", "00 00 00 f5"),
+        ("cbge w5, #64, #0", "05 80 1f 75"),
+        ("cblt x0, #0, #0", "00 00 20 f5"),
+        ("cble x0, #-1, #0", "00 00 20 f5"),
+        ("cble w5, #62, #0", "05 80 3f 75"),
+        ("cbhi w5, #63, #0", "05 80 5f 75"),
+        ("cbhs x0, #1, #0", "00 00 40 f5"),
+        ("cblo x0, #0, #0", "00 00 60 f5"),
+        ("cbls w5, #62, #0", "05 80 7f 75"),
+        ("cbeq x0, #0, #0", "00 00 c0 f5"),
+        ("cbne w5, #63, #0", "05 80 ff 75"),
+        // The ends of the offset field, which is nine bits of instructions.
+        ("cbne xzr, xzr, #1020", "ff 1f ff f4"),
+        ("cbne wzr, #63, #-1024", "1f a0 ff 75"),
+    ]);
+}
+
+/// Neither reference can relocate a compare-and-branch: llvm-mc refuses a
+/// target it cannot resolve itself, and GNU as writes `R_AARCH64_NONE`, which
+/// no linker fills in. rsasm refuses it rather than branching to itself.
+#[test]
+fn compare_and_branch_diagnostics() {
+    rejects("cbgt x0, x1, elsewhere", &["no relocation exists"]);
+    rejects("cbgt x0, x1, #1024", &["out of range"]);
+    rejects("cbgt x0, x1, #3", &["not a multiple of 4"]);
+    rejects("cbgt w0, x1, #0", &["compares two registers of one width"]);
+    rejects("cbhgt x0, x1, #0", &["takes the 32-bit name"]);
+    rejects("cbbgt w0, #5, #0", &["`cbbgt` compares two registers"]);
+    rejects("cbgt sp, x1, #0", &["cannot be the stack pointer"]);
+    rejects("cbge w0, #0, #0", &["a comparison value", "1..=64"]);
+    rejects("cbls w0, #63, #0", &["a comparison value", "-1..=62"]);
+    rejects("cbgt w0, #64, #0", &["a comparison value", "0..=63"]);
+    // `cs` and `cc` name the same conditions as `hs` and `lo` after `b.`,
+    // and neither reference takes them here.
+    rejects("cbcs w0, w1, #0", &["unknown instruction `cbcs`"]);
+}
+
 /// FEAT_MOPS's memory copies and memory sets: the stage and both hints are
 /// spelled into the name, so there are 132 of them. One of each shape here,
 /// with the rest in `tools/mc-diff/aarch64.txt`.

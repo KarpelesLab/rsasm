@@ -400,6 +400,7 @@ pub(crate) fn handwritten(mnemonic: &str) -> bool {
                 | "rprfm"
         )
         || is_mops(mnemonic)
+        || cmpbr_name(mnemonic).is_some()
         || loads(mnemonic)
         // The system instructions and the aliases of `hint`, whose names are
         // in the generated tables rather than written out here.
@@ -510,6 +511,10 @@ pub fn assemble(
 
         "b" | "bl" => branch(cx, &i),
         "cbz" | "cbnz" => cbz(cx, &i),
+        _ if cmpbr_name(mnemonic).is_some() => {
+            let (size, cc) = cmpbr_name(mnemonic)?;
+            cmpbr(cx, &i, size, cc)
+        }
         "tbz" | "tbnz" => tbz(cx, &i),
         "br" | "blr" | "ret" => branch_reg(cx, &i),
         "eret" => {
@@ -2437,6 +2442,133 @@ fn rprfm(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         | field((value >> 3) & 3, 12, 2)
         | field(base.num as u32, 5, 5)
         | field(value & 7, 0, 3))
+}
+
+// ---- compare and branch ----------------------------------------------------
+
+/// The condition field of a FEAT_CMPBR comparison of two registers, and
+/// whether they swap.
+///
+/// Only six of the ten comparisons have an encoding. The other four are the
+/// same comparison the other way round, and both references read them as
+/// that: `cblt w0, w1` is `cbgt w1, w0`.
+fn cmpbr_reg_cond(cc: &str) -> Option<(u32, bool)> {
+    Some(match cc {
+        "gt" => (0, false),
+        "ge" => (1, false),
+        "hi" => (2, false),
+        "hs" => (3, false),
+        "eq" => (6, false),
+        "ne" => (7, false),
+        "lt" => (0, true),
+        "le" => (1, true),
+        "lo" => (2, true),
+        "ls" => (3, true),
+        _ => return None,
+    })
+}
+
+/// The condition field of a comparison against a number, and what the
+/// mnemonic adds to the number it is written with.
+///
+/// Here it is the inclusive comparisons that have no encoding, since the
+/// number can be moved instead: `cbge w0, #1` is `cbgt w0, #0`, which is why
+/// its range is 1 to 64 where `cbgt`'s is 0 to 63.
+fn cmpbr_imm_cond(cc: &str) -> Option<(u32, i64)> {
+    Some(match cc {
+        "gt" => (0, 0),
+        "lt" => (1, 0),
+        "hi" => (2, 0),
+        "lo" => (3, 0),
+        "eq" => (6, 0),
+        "ne" => (7, 0),
+        "ge" => (0, -1),
+        "le" => (1, 1),
+        "hs" => (2, -1),
+        "ls" => (3, 1),
+        _ => return None,
+    })
+}
+
+/// The size field and the condition name of a FEAT_CMPBR mnemonic, or `None`
+/// for a name that is not one of them.
+///
+/// `cbb<cc>` compares the low byte of two registers and `cbh<cc>` their low
+/// halfword; `cb<cc>` compares the whole of them. Neither reference takes
+/// `cs` or `cc` for `hs` and `lo` here, although both take them after `b.`.
+fn cmpbr_name(mnemonic: &str) -> Option<(u32, &str)> {
+    let rest = mnemonic.strip_prefix("cb")?;
+    let (size, cc) = match rest.len() {
+        2 => (0, rest),
+        3 => (
+            match rest.as_bytes()[0] {
+                b'b' => 0b10,
+                b'h' => 0b11,
+                _ => return None,
+            },
+            &rest[1..],
+        ),
+        _ => return None,
+    };
+    cmpbr_reg_cond(cc).map(|_| (size, cc))
+}
+
+/// FEAT_CMPBR's compare-and-branch: two registers, or a register and a
+/// six-bit number, compared and branched on in one instruction.
+///
+/// The target reaches 1KB either way, which is the narrowest branch field
+/// A64 has, and neither reference can relocate one: llvm-mc refuses a target
+/// it cannot resolve itself and GNU as writes `R_AARCH64_NONE`, which no
+/// linker fills in. [`encode::fixup_b9`] therefore has no relocation, so a
+/// target rsasm cannot resolve is an error rather than a branch to itself.
+fn cmpbr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, size: u32, cc: &str) -> Option<Vec<Variant>> {
+    i.arity(cx, &[3]).then_some(())?;
+    let rt = i.gpr(cx, 0)?;
+    let w = if i.op(1).and_then(|o| o.reg()).is_some() {
+        let (cond, swap) = cmpbr_reg_cond(cc)?;
+        let rm = i.gpr(cx, 1)?;
+        if rm.class != rt.class {
+            cx.error(
+                i.ops[1].span,
+                format!("`{}` compares two registers of one width", i.mnemonic),
+            );
+            return None;
+        }
+        if size != 0 && rt.class == RegClass::X {
+            cx.error(
+                i.ops[0].span,
+                format!(
+                    "`{}` compares part of a register, so it takes the 32-bit name",
+                    i.mnemonic
+                ),
+            );
+            return None;
+        }
+        let (first, second) = if swap { (rm, rt) } else { (rt, rm) };
+        0x7400_0000
+            | field(rt.sf(), 31, 1)
+            | field(cond, 21, 3)
+            | field(u32::from(second.num), 16, 5)
+            | field(size, 14, 2)
+            | field(u32::from(first.num), 0, 5)
+    } else {
+        if size != 0 {
+            cx.error(
+                i.ops[1].span,
+                format!("`{}` compares two registers", i.mnemonic),
+            );
+            return None;
+        }
+        let (cond, bias) = cmpbr_imm_cond(cc)?;
+        let value = i.imm(cx, 1, -bias, 63 - bias, "a comparison value")?;
+        0x7500_0000
+            | field(rt.sf(), 31, 1)
+            | field(cond, 21, 3)
+            | field((value + bias) as u32, 15, 6)
+            | field(u32::from(rt.num), 0, 5)
+    };
+    let e = i.pcrel_expr(cx, 2)?;
+    pcrel(cx, w, e, encode::fixup_b9(), i.ops[2].span)
 }
 
 // ---- memory copy and memory set --------------------------------------------

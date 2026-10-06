@@ -1,6 +1,6 @@
 # AArch64 snippets compared against GNU as, which is the other reference for
-# the families here: FEAT_MOPS is in the llvm-mc corpora as well, and
-# this is where what GNU as alone reads can go.
+# the families here: FEAT_MOPS and FEAT_CMPBR are in the llvm-mc corpora as
+# well, and this is where what GNU as alone reads can go.
 #
 # A copy or a set warns here about opening a dependency sequence without
 # ending the one before it, which is a warning about the program and not
@@ -143,3 +143,58 @@
         setgoetn  [x21]!, x22!
         setp      [x30]!, x29!, xzr
         setgp     [x0]!, x1!, xzr
+
+=== compare and branch (FEAT_CMPBR)
+top:
+        cbgt    x1, x2, bottom
+        cbge    x1, x2, bottom
+        cblt    x1, x2, bottom
+        cble    x1, x2, bottom
+        cbhi    x1, x2, bottom
+        cbhs    x1, x2, bottom
+        cblo    x1, x2, bottom
+        cbls    x1, x2, bottom
+        cbeq    x1, x2, bottom
+        cbne    x1, x2, bottom
+        cbhgt   w1, w2, bottom
+        cbhge   w1, w2, bottom
+        cbhlt   w1, w2, bottom
+        cbhle   w1, w2, bottom
+        cbhhi   w1, w2, bottom
+        cbhhs   w1, w2, bottom
+        cbhlo   w1, w2, bottom
+        cbhls   w1, w2, bottom
+        cbheq   w1, w2, bottom
+        cbhne   w1, w2, bottom
+        cbbgt   w1, w2, bottom
+        cbbge   w1, w2, bottom
+        cbblt   w1, w2, bottom
+        cbble   w1, w2, bottom
+        cbbhi   w1, w2, bottom
+        cbbhs   w1, w2, bottom
+        cbblo   w1, w2, bottom
+        cbbls   w1, w2, bottom
+        cbbeq   w1, w2, bottom
+        cbbne   w1, w2, bottom
+        cbgt    x0, #0, bottom
+        cbgt    w5, #63, top
+        cbge    x0, #1, bottom
+        cbge    w5, #64, top
+        cblt    x0, #0, bottom
+        cblt    w5, #63, top
+        cble    x0, #-1, bottom
+        cble    w5, #62, top
+        cbhi    x0, #0, bottom
+        cbhi    w5, #63, top
+        cbhs    x0, #1, bottom
+        cbhs    w5, #64, top
+        cblo    x0, #0, bottom
+        cblo    w5, #63, top
+        cbls    x0, #-1, bottom
+        cbls    w5, #62, top
+        cbeq    x0, #0, bottom
+        cbeq    w5, #63, top
+        cbne    x0, #0, bottom
+        cbne    w5, #63, top
+bottom:
+        ret

@@ -55,6 +55,10 @@ fn scatter_imm14(w: u64, v: i64) -> u64 {
     (w & !(0x3fff << 5)) | ((((v >> 2) as u64) & 0x3fff) << 5)
 }
 
+fn scatter_imm9(w: u64, v: i64) -> u64 {
+    (w & !(0x1ff << 5)) | ((((v >> 2) as u64) & 0x1ff) << 5)
+}
+
 /// `adr`: a byte offset split into a 2-bit low part and a 19-bit high part.
 fn scatter_adr(w: u64, v: i64) -> u64 {
     let v = v as u64;
@@ -96,6 +100,19 @@ pub fn fixup_got_ld_lit() -> FixupKind {
         .with_reloc(reloc::GOT_LD_PREL19)
         .with_class(RelocClass::Got)
         .link(LinkValue::LinkerOnly("a GOT entry"))
+}
+
+/// FEAT_CMPBR's `cb<cc>`: +/-1KB, the narrowest branch field A64 has.
+///
+/// It has no relocation, so a target this assembler cannot resolve itself is
+/// an error. Neither reference can relocate one either: llvm-mc refuses the
+/// line, and GNU as writes `R_AARCH64_NONE`, which leaves the branch
+/// pointing at itself for want of a relocation type the psABI has not
+/// defined.
+pub fn fixup_b9() -> FixupKind {
+    FixupKind::pcrel(4, 0)
+        .with_field(11, 4)
+        .scatter(scatter_imm9)
 }
 
 /// `tbz` / `tbnz`: +/-32KB.
