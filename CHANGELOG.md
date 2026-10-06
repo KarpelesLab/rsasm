@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ARM: take a difference of labels as the number an eight-byte `vldr` literal
   pool entry has to be, where GNU as's parser folds one
 - ARM: read the `(SBREL)`, `(TARGET1)` and `(TARGET2)` data suffixes
+- Mach-O: read the deployment target out of a Darwin target triple, and with
+  it write x86-64's compact unwind table, which llvm-mc writes from macOS
+  10.6 on
 
 ## [0.1.3](https://github.com/KarpelesLab/rsasm/compare/v0.1.2...v0.1.3) - 2026-09-21
 

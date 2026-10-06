@@ -40,8 +40,19 @@ root=$(cd "$here/../.." && pwd)
 # it shares has SIMD, SVE and SME in it, and llvm-mc enables neither for a
 # bare triple. rsasm assembles every extension its backend has, whatever the
 # object format.
+#
+# A triple naming a release of macOS is a row of its own, since the
+# deployment target changes the whole object: it writes a version load
+# command, and from 10.6 on it gives x86-64 a compact unwind table. Those
+# rows share no corpus with tools/mc-diff; the instructions are the same
+# whatever the deployment target, and the plain triples check them.
 ARCHES="
 x86-64|x86_64-apple-macos|x86_64-apple-macos|x86-64
+x86-64-10.5|x86_64-apple-macos10.5|x86_64-apple-macos10.5|
+x86-64-10.6|x86_64-apple-macos10.6|x86_64-apple-macos10.6|
+x86-64-14|x86_64-apple-macos14.1.2|x86_64-apple-macos14.1.2|
+x86-64-darwin|x86_64-apple-darwin19|x86_64-apple-darwin19|
+arm64-10.6|arm64-apple-macos10.6|arm64-apple-macos10.6|
 arm64|arm64-apple-macos|arm64-apple-macos|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
 "
 

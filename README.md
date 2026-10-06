@@ -346,9 +346,9 @@ form by form and in random whole programs as well.
   are refused with the reason. i386's `.safeseh` is refused for a reason of
   its own: GNU as, the reference for x86 PE objects here, has no such
   directive, so there is nothing to check an implementation of it against
-- in Mach-O objects: 32-bit machines (i386, armv7), and compact unwind on
-  x86-64, which llvm-mc writes only for a triple naming a macOS of 10.6 or
-  later and rsasm reads no version from a triple
+- in Mach-O objects: 32-bit machines (i386, armv7), and a deployment version
+  for a Darwin platform other than macOS, which llvm-mc reads from a triple
+  such as `arm64-apple-ios17` and writes an `LC_BUILD_VERSION` for
 - x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
   `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
   instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
@@ -579,7 +579,10 @@ rsasm [options] <input.s>...
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported),
                      or a target triple: `x86_64-apple-macos` also picks
-                     Mach-O output, `x86_64-pc-windows-msvc` PE/COFF
+                     Mach-O output, `x86_64-pc-windows-msvc` PE/COFF. A
+                     macOS version in a Darwin triple is the object's
+                     deployment target (`x86_64-apple-macos10.6`), which is
+                     what asks for a compact unwind table on x86-64
   -f, --format <fmt> output format: elf (default), elf32, elf64, coff,
                      win64, win32, macho, bin or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
@@ -1174,10 +1177,21 @@ The source is Darwin's assembly, as llvm-mc reads it for those triples:
   `__DATA,__thread_vars` (`.tlv`), and the initial value goes in
   `__DATA,__thread_data` (`.tdata`) or, where it is zero,
   `__DATA,__thread_bss`, which `.tbss symbol,size[,align]` reserves.
+- **The deployment target** is the release of the system the object is for,
+  and a macOS version in the target triple names it:
+  `-a x86_64-apple-macos10.6` writes `LC_VERSION_MIN_MACOSX`, and from macOS
+  10.14 on the newer `LC_BUILD_VERSION`, which names its platform as well. A
+  Darwin kernel version (`x86_64-apple-darwin19`) names the release that
+  shipped with it, and on arm64, which no macOS before 11.0 ran, an older
+  version is raised to that. The triple is also what decides whether the
+  object has a compact unwind table at all; see
+  [Compact unwind](#compact-unwind).
 - `.build_version` writes `LC_BUILD_VERSION` and `.macosx_version_min`,
   `.ios_version_min`, `.tvos_version_min` and `.watchos_version_min` write the
-  older `LC_VERSION_MIN_*`; the last of them wins, since llvm-mc keeps one
-  deployment target and writes it either way. `.data_region` with
+  older `LC_VERSION_MIN_*`; the last of them wins, and replaces the triple's,
+  since llvm-mc keeps one deployment target and writes it either way. What a
+  directive cannot change is the compact unwind table, which llvm-mc settles
+  before it reads a line of source. `.data_region` with
   `.end_data_region` writes `LC_DATA_IN_CODE`, `.linker_option "-lfoo"` an
   `LC_LINKER_OPTION` of arguments for the linker, and `.indirect_symbol` fills
   the indirect symbol table `LC_DYSYMTAB` points at -- one entry per pointer
@@ -1187,8 +1201,8 @@ The source is Darwin's assembly, as llvm-mc reads it for those triples:
 - **Debugging information** goes in a `__DWARF` segment of its own and in
   `__TEXT,__eh_frame`, as llvm-mc writes it; see
   [Debug information](#debug-information). On arm64 a frame is described in
-  `__LD,__compact_unwind` as well, and often only there; see
-  [Compact unwind](#compact-unwind).
+  `__LD,__compact_unwind` as well, and often only there, and on x86-64 from
+  macOS 10.6 on; see [Compact unwind](#compact-unwind).
 
 **What is left to the linker is decided by atoms, not by binding.** A Mach-O
 linker may move or drop the code from one linker-visible label to the next on
@@ -1238,18 +1252,49 @@ reads the directives in the order a compiler writes them:
   word that also puts the frame in `__TEXT,__eh_frame`, which is written for
   those frames and no others.
 
-On x86-64 llvm-mc writes the table only when the triple names a macOS of
-10.6 or later (`useCompactUnwind`), and the deployment version is not
-something rsasm reads from a triple, so there is none to write; the frame
-table alone is what llvm-mc writes for `x86_64-apple-macos`, and what the
-harness compares against.
+On x86-64 the table arrives with the deployment target: llvm-mc writes one
+only where the triple names a macOS of 10.6 or later (`useCompactUnwind`),
+the release whose linker first read one, so `-a x86_64-apple-macos` has none
+and `-a x86_64-apple-macos10.6` has. Unlike arm64's, x86-64's word never
+describes a frame on its own (`getSupportsCompactUnwindWithoutEHFrame`), so
+every frame stays in `__TEXT,__eh_frame` as well.
 
-`tools/macho-diff/run.sh` compares 1,820 cases against llvm-mc 22: single
+The word is `DarwinX86AsmBackend::generateCompactUnwindEncoding`'s, and where
+arm64 gives each pair of saved registers a bit, x86-64 writes the registers
+themselves — `%rbx`, `%r12` to `%r15` and `%rbp`, numbered 1 to 6:
+
+- `UNWIND_X86_64_MODE_RBP_FRAME` for a frame pointer prologue, which is a
+  `.cfi_def_cfa_register` naming `%rbp`. Everything before it set the frame
+  pointer up and the mode says so by itself; everything after is the
+  registers saved below it, three bits each in the order they were saved,
+  five of which is all the word has room for and the sixth of which llvm-mc
+  drops rather than give up. The lowest of them has to sit twenty-four bytes
+  below the CFA, directly under the saved frame pointer, but they may be
+  saved in any order and the ones after the first anywhere.
+- `UNWIND_X86_64_MODE_STACK_IMMD` with the stack adjustment of the frame's
+  last `.cfi_def_cfa_offset`, in eight-byte units and up to 2,040 bytes,
+  followed by the number of registers saved and which permutation of the six
+  they are — the number of an arrangement rather than the registers, which is
+  what makes six of them fit in ten bits.
+- `UNWIND_X86_64_MODE_STACK_IND` where the adjustment is larger than that:
+  the linker reads it out of the `subq` that made the frame, and the word
+  carries the offset of that instruction's immediate instead, counted past
+  the pushes that saved the registers.
+- `UNWIND_X86_64_MODE_DWARF` for everything else — a CFA register that is not
+  `%rbp`, a seventh saved register or one the word cannot name, a register
+  saved at the wrong distance below a frame pointer, a `.cfi_def_cfa`, an
+  escape, a state change, a personality routine other than
+  `___gxx_personality_v0` or `___objc_personality_v0`.
+
+A frame with no directives at all gets no word and no entry, where arm64
+gives it a frameless one; a table that would hold no entries is not written.
+
+`tools/macho-diff/run.sh` compares 1,900 cases against llvm-mc 22: single
 statements and whole programs in Clang's style of its own, line tables, frame
 tables and compact unwind tables, and the `tools/mc-diff` corpora for both
 machines, every instruction of which has to come out the same in a Mach-O
 object. Every header and load command, section, symbol and relocation
-matches, and each of the 1,740 objects both assemblers write is identical
+matches, and each of the 1,820 objects both assemblers write is identical
 byte for byte; the other 80 cases are refused by both.
 
 Three differences remain, and the corpora leave them out:
@@ -1422,7 +1467,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,772 of 1,772 match, and every object both
+  those of `tools/mc-diff`. 1,900 of 1,900 match, and every object both
   assemblers write is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random

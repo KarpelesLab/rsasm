@@ -458,7 +458,13 @@ impl Assembler {
         // debugger.
         let mut in_eh_frame = vec![true; self.dwarf.cfi.fdes.len()];
         if eh && let Some((table, words)) = self.compact_unwind_words() {
-            self.emit_compact_unwind(&table, &words, ptr);
+            // A word of zero is the machine saying the frame is of a shape
+            // the table has nothing to say about, as x86's is for a frame
+            // with no directives at all: such a frame gets no entry, and a
+            // table that would hold none is not written.
+            if words.iter().any(|&w| w != 0) {
+                self.emit_compact_unwind(&table, &words, ptr);
+            }
             if table.without_eh_frame {
                 for (keep, word) in in_eh_frame.iter_mut().zip(&words) {
                     *keep = *word == table.dwarf_only;
@@ -486,12 +492,13 @@ impl Assembler {
     ///
     /// A word of the table's `dwarf_only` is the machine's way of saying that
     /// this frame's shape is one no word can describe, and that the linker has
-    /// to read the frame table for it.
+    /// to read the frame table for it. A word of zero says the frame has no
+    /// entry in the compact table at all.
     fn compact_unwind_words(&self) -> Option<(macho::CompactUnwind, Vec<u32>)> {
         if self.options.format != crate::output::Format::MachO {
             return None;
         }
-        let table = macho::Cpu::for_arch(self.target())?.compact_unwind()?;
+        let table = self.macho.deployment.compact_unwind?;
         let words = self
             .dwarf
             .cfi
@@ -544,6 +551,9 @@ impl Assembler {
         let mut b = Blob::new(endian);
         let fdes = std::mem::take(&mut self.dwarf.cfi.fdes);
         for (fde, &word) in fdes.iter().zip(words) {
+            if word == 0 {
+                continue;
+            }
             let dwarf = word == table.dwarf_only;
             let begin = self.pos_expr(fde.start, 0);
             let kind = self.abs_kind(ptr);

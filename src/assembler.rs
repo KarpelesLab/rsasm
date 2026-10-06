@@ -133,6 +133,12 @@ pub struct Options {
     /// Whether a conditional Thumb instruction with no `it` block of its own
     /// gets one made up for it, which only the ARM backend reads.
     pub(crate) implicit_it: ImplicitIt,
+    /// The target triple the architecture and format were picked from, where
+    /// one was given. A Darwin triple says which release of the operating
+    /// system the object is for as well, and that is the one thing in it
+    /// Mach-O output still needs after the two have been settled; see
+    /// [`Options::with_target_triple`].
+    pub(crate) target_triple: Option<String>,
 }
 
 impl Default for Options {
@@ -147,6 +153,7 @@ impl Default for Options {
             debug_source: false,
             format: crate::output::Format::Elf,
             implicit_it: ImplicitIt::Arm,
+            target_triple: None,
         }
     }
 }
@@ -230,6 +237,19 @@ impl Options {
         self
     }
 
+    /// The target triple the architecture and the format were chosen from,
+    /// which both have to be given here as well.
+    ///
+    /// Only Mach-O output reads it, and only for the deployment target a
+    /// Darwin triple names: `x86_64-apple-macos10.6` writes an
+    /// `LC_VERSION_MIN_MACOSX`, and from macOS 10.6 on the linker is also
+    /// given a compact unwind table. llvm-mc takes both from the triple, so
+    /// rsasm has to have it to write the same object.
+    pub fn with_target_triple(mut self, triple: impl Into<String>) -> Options {
+        self.target_triple = Some(triple.into());
+        self
+    }
+
     /// Whether relocations are emitted; see [`Options::with_relocatable`].
     pub fn relocatable(&self) -> bool {
         self.relocatable
@@ -273,6 +293,11 @@ impl Options {
     /// When an `it` block is made up for a conditional Thumb instruction.
     pub fn implicit_it(&self) -> ImplicitIt {
         self.implicit_it
+    }
+
+    /// The target triple given, if any; see [`Options::with_target_triple`].
+    pub fn target_triple(&self) -> Option<&str> {
+        self.target_triple.as_deref()
     }
 }
 
@@ -537,6 +562,13 @@ impl Assembler {
             }
         }
         asm.cur = if asm.options.format == crate::output::Format::MachO {
+            // The target triple decides the deployment target and with it
+            // the compact unwind table, which `__TEXT,__text` and every
+            // later section is created knowing about.
+            if let Some(cpu) = crate::output::macho::Cpu::for_arch(asm.arch.as_ref()) {
+                asm.macho.deployment =
+                    crate::output::macho::Deployment::of(cpu, asm.options.target_triple.as_deref());
+            }
             asm.macho_section("__TEXT", "__text", None)
         } else {
             asm.get_or_create_section(text, SectionKind::Progbits, SectionFlags::text(), 1)

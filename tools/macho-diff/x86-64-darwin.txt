@@ -1,0 +1,5 @@
+# A deployment target named by the kernel that shipped with the release
+# rather than by the release: Darwin 19 is macOS 10.15, which is recent
+# enough for both the newer load command and the compact unwind table.
+nop
+.cfi_startproc; .cfi_def_cfa_offset 16; retq; .cfi_endproc

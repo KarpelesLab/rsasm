@@ -27,8 +27,9 @@
 //!   and it is why a Mach-O object has relocations where an ELF one has none.
 //!
 //! What is written: one `LC_SEGMENT_64` with every section; the deployment
-//! target where the source gave one, as `LC_BUILD_VERSION` or the older
-//! `LC_VERSION_MIN_*`; `LC_DATA_IN_CODE` where it marked data in code;
+//! target where the target triple or the source gave one, as
+//! `LC_BUILD_VERSION` or the older `LC_VERSION_MIN_*`;
+//! `LC_DATA_IN_CODE` where it marked data in code;
 //! `LC_SYMTAB` with `LC_DYSYMTAB`, whose three-way split of the symbol table
 //! is required, not optional, unless there are no symbols at all, and which
 //! points at the indirect symbol table `.indirect_symbol` fills; and one
@@ -41,9 +42,10 @@
 //! The debugging sections that `-g`, `.loc` and `.cfi_*` make are written here
 //! as well, in a `__DWARF` segment and in `__TEXT,__eh_frame`. Because every
 //! section already has an address, most of what an ELF object relocates is a
-//! number here; see the `dwarf` module. On arm64 a frame is also described by
-//! one word in `__LD,__compact_unwind`, which the linker reads in preference
-//! to the frame table; see `CompactUnwind` in this module.
+//! number here; see the `dwarf` module. A frame is also described by one word
+//! in `__LD,__compact_unwind`, which the linker reads in preference to the
+//! frame table: always on arm64, and on x86-64 where the deployment target
+//! is a macOS whose linker read one; see `CompactUnwind` and `Deployment`.
 
 mod directives;
 mod relocations;
@@ -76,6 +78,10 @@ pub(crate) const LC_LINKER_OPTION: u32 = 0x2d;
 pub(crate) const LC_VERSION_MIN_TVOS: u32 = 0x2f;
 pub(crate) const LC_VERSION_MIN_WATCHOS: u32 = 0x30;
 pub(crate) const LC_BUILD_VERSION: u32 = 0x32;
+
+/// `PLATFORM_MACOS`, the only platform `LC_BUILD_VERSION` is written for
+/// here; see [`Deployment`].
+pub(crate) const PLATFORM_MACOS: u32 = 1;
 
 const SEGMENT_COMMAND_64_SIZE: u32 = 72;
 const SECTION_64_SIZE: u32 = 80;
@@ -221,21 +227,6 @@ impl Cpu {
     pub(crate) fn resolves_frame_address(self) -> bool {
         self == Cpu::X86_64
     }
-
-    /// What this machine's compact unwind table looks like, where it has one;
-    /// see [`CompactUnwind`].
-    pub(crate) fn compact_unwind(self) -> Option<CompactUnwind> {
-        match self {
-            // llvm-mc writes a compact unwind table for x86-64 only when the
-            // triple names a macOS of 10.6 or later (`useCompactUnwind`), and
-            // rsasm reads no version from a triple.
-            Cpu::X86_64 => None,
-            Cpu::Arm64 => Some(CompactUnwind {
-                dwarf_only: 0x0300_0000,
-                without_eh_frame: true,
-            }),
-        }
-    }
 }
 
 /// How a Mach-O machine splits a frame between `__LD,__compact_unwind` and
@@ -257,6 +248,111 @@ pub(crate) struct CompactUnwind {
 /// `UNWIND_HAS_LSDA`: the bit the compact word carries when the entry points
 /// at a language-specific data area.
 pub(crate) const UNWIND_HAS_LSDA: u32 = 0x4000_0000;
+
+/// What a Darwin target triple says about an object beyond naming its
+/// machine: which release of the system the object is for, and whether the
+/// linker is given a compact unwind table.
+///
+/// llvm-mc settles both before it reads a line of source —
+/// `MCStreamer::emitVersionForTarget` writes the load command and
+/// `MCObjectFileInfo`'s `useCompactUnwind` decides on the table — which is
+/// why a `.macosx_version_min` in the source changes the load command
+/// without adding a table.
+#[derive(Copy, Clone, Default, Debug)]
+pub(crate) struct Deployment {
+    /// The version load command the triple asks for, where it named a
+    /// version; a directive in the source replaces it.
+    pub(crate) version: Option<BuildVersion>,
+    /// The compact unwind table the object has, where it has one; see
+    /// [`CompactUnwind`].
+    pub(crate) compact_unwind: Option<CompactUnwind>,
+}
+
+impl Deployment {
+    /// What `triple` says about an object for `cpu`. The triple is the whole
+    /// `-a` argument, since the machine is only its first component.
+    pub(crate) fn of(cpu: Cpu, triple: Option<&str>) -> Deployment {
+        // arm64 macOS begins at 11.0, and llvm-mc raises an older deployment
+        // target to it rather than name a release no arm64 Mac ever ran
+        // (`Triple::getMinimumSupportedOSVersion`).
+        let floor = match cpu {
+            Cpu::Arm64 => (11, 0, 0),
+            _ => (0, 0, 0),
+        };
+        let macos = triple.and_then(macos_version).map(|v| v.max(floor));
+        Deployment {
+            version: macos.map(|(major, minor, patch)| BuildVersion {
+                // `LC_BUILD_VERSION` names its platform and came in with the
+                // releases that needed one; before macOS 10.14 llvm-mc
+                // writes the command that does not.
+                command: if (major, minor) >= (10, 14) {
+                    LC_BUILD_VERSION
+                } else {
+                    LC_VERSION_MIN_MACOSX
+                },
+                platform: PLATFORM_MACOS,
+                minos: (major << 16) | (minor << 8) | patch,
+                sdk: 0,
+            }),
+            compact_unwind: match cpu {
+                // llvm-mc writes the table for x86-64 only from macOS 10.6
+                // on, the release whose linker first read one, and leaves
+                // every frame in the frame table as well, since the compact
+                // word alone describes a frame only on arm64.
+                Cpu::X86_64 => macos
+                    .is_some_and(|v| v >= (10, 6, 0))
+                    .then_some(CompactUnwind {
+                        dwarf_only: 0x0400_0000,
+                        without_eh_frame: false,
+                    }),
+                Cpu::Arm64 => Some(CompactUnwind {
+                    dwarf_only: 0x0300_0000,
+                    without_eh_frame: true,
+                }),
+            },
+        }
+    }
+}
+
+/// The macOS version a Darwin target triple names, in the spellings llvm-mc
+/// reads: `macos10.6` and `macosx14.1` name the release outright, and
+/// `darwin10` the kernel that shipped with it.
+///
+/// A kernel version is translated as `Triple::getMacOSXVersion` translates
+/// it, and only its major part is: macOS 10.(N-4) up to Darwin 19, N-9 from
+/// Darwin 20, and N+1 from Darwin 25, which is where macOS skipped from 15 to
+/// 26. A kernel older than Darwin 4 predates the table and is read as a
+/// release number as it stands.
+///
+/// Only macOS is read. The other Darwin platforms have deployment targets
+/// too, but a version for one of them is left out of the object rather than
+/// guessed at.
+fn macos_version(triple: &str) -> Option<(u32, u32, u32)> {
+    let lower = triple.to_ascii_lowercase();
+    let (os, version) = lower.split('-').find_map(|part| {
+        ["macosx", "macos", "darwin"]
+            .into_iter()
+            .find_map(|os| part.strip_prefix(os).map(|rest| (os, rest)))
+    })?;
+    let mut parts = version.split('.').map(|n| n.parse::<u32>());
+    let major = parts.next()?.ok()?;
+    let minor = parts.next().unwrap_or(Ok(0)).ok()?;
+    let patch = parts.next().unwrap_or(Ok(0)).ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    // A triple whose major version is zero names no release, and llvm-mc
+    // writes no version command for it.
+    if major == 0 {
+        return None;
+    }
+    Some(match (os, major) {
+        ("darwin", 4..20) => (10, major - 4, 0),
+        ("darwin", 20..25) => (major - 9, 0, 0),
+        ("darwin", 25..) => (major + 1, 0, 0),
+        _ => (major, minor, patch),
+    })
+}
 
 // ---- assembler-side state ---------------------------------------------------
 
@@ -308,6 +404,9 @@ pub(crate) struct DataRegion {
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) subsections_via_symbols: bool,
+    /// What the target triple said; see [`Deployment`]. Set once, before any
+    /// source is read, and only for Mach-O output.
+    pub(crate) deployment: Deployment,
     pub(crate) build_version: Option<BuildVersion>,
     pub(crate) sections: HashMap<SectionId, SectionInfo>,
     /// `n_desc` bits from `.weak_definition`, `.weak_reference`,
@@ -727,10 +826,14 @@ pub(crate) fn section_attribute(name: &str) -> Option<u32> {
 /// The type and attributes of a section llvm-mc knows before it reads any
 /// source, which it keeps whatever a `.section` directive naming it says.
 ///
-/// The machine decides one of them: `MCObjectFileInfo` names
-/// `__LD,__compact_unwind` only where the target has a compact unwind table,
-/// so on x86-64, where rsasm writes none, the pair is an ordinary section.
-pub(crate) fn precreated(cpu: Cpu, segment: &str, section: &str) -> Option<(u32, u32)> {
+/// The target decides one of them: `MCObjectFileInfo` names
+/// `__LD,__compact_unwind` only where the object has a compact unwind table,
+/// so without one the pair is an ordinary section.
+pub(crate) fn precreated(
+    deployment: &Deployment,
+    segment: &str,
+    section: &str,
+) -> Option<(u32, u32)> {
     Some(match (segment, section) {
         ("__TEXT", "__text") => (S_REGULAR, S_ATTR_PURE_INSTRUCTIONS),
         ("__TEXT", "__cstring") => (S_CSTRING_LITERALS, 0),
@@ -760,7 +863,9 @@ pub(crate) fn precreated(cpu: Cpu, segment: &str, section: &str) -> Option<(u32,
         ) => (S_REGULAR, S_ATTR_DEBUG),
         // The compact unwind table is read by the linker alone, and
         // dropped once it has read it.
-        ("__LD", "__compact_unwind") if cpu.compact_unwind().is_some() => (S_REGULAR, S_ATTR_DEBUG),
+        ("__LD", "__compact_unwind") if deployment.compact_unwind.is_some() => {
+            (S_REGULAR, S_ATTR_DEBUG)
+        }
         // The frame table is one item per function, which the linker keeps
         // or drops with the function it describes: coalesced, live-support,
         // and with no static symbols of its own to keep.
@@ -780,10 +885,10 @@ pub(crate) fn precreated(cpu: Cpu, segment: &str, section: &str) -> Option<(u32,
 /// `MCObjectFileInfo` names one for each debugging section it creates, and
 /// the symbol is dropped from the table again because nothing relocates
 /// against it; `__debug_aranges` is the one it creates without.
-fn has_start_symbol(cpu: Cpu, segment: &str, section: &str) -> bool {
+fn has_start_symbol(deployment: &Deployment, segment: &str, section: &str) -> bool {
     segment == "__DWARF"
         && section != "__debug_aranges"
-        && precreated(cpu, segment, section).is_some()
+        && precreated(deployment, segment, section).is_some()
 }
 
 /// Whether a linker-visible label starts an atom strictly after `from` and
@@ -941,7 +1046,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         ));
     }
 
-    let mut secs = collect_sections(asm, cpu)?;
+    let mut secs = collect_sections(asm)?;
     assign_addresses(&mut secs);
     let places = Places {
         index: secs.iter().enumerate().map(|(i, s)| (s.id, i)).collect(),
@@ -1167,7 +1272,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
 
 /// Every section of the object, in the order the source created them. Unlike
 /// ELF, Mach-O keeps a section with nothing in it.
-fn collect_sections(asm: &Assembler, cpu: Cpu) -> Result<Vec<Sec>, OutputError> {
+fn collect_sections(asm: &Assembler) -> Result<Vec<Sec>, OutputError> {
     let mut out = Vec::new();
     for s in &asm.sections {
         let name = asm.interner.get(s.name).to_string();
@@ -1179,7 +1284,7 @@ fn collect_sections(asm: &Assembler, cpu: Cpu) -> Result<Vec<Sec>, OutputError> 
         let info = asm.macho.sections.get(&s.id);
         let (ty, attrs) = match info {
             Some(i) => (i.ty, i.attrs),
-            None => precreated(cpu, segment, section).unwrap_or((S_REGULAR, 0)),
+            None => precreated(&asm.macho.deployment, segment, section).unwrap_or((S_REGULAR, 0)),
         };
         // llvm-mc marks a section that any instruction was assembled into.
         let attrs = attrs
@@ -1334,7 +1439,10 @@ fn collect_symbols(
     let mut labels = secs
         .iter()
         .enumerate()
-        .filter(|(_, s)| cpu.labels_sections() && !has_start_symbol(cpu, &s.segment, &s.section))
+        .filter(|(_, s)| {
+            cpu.labels_sections()
+                && !has_start_symbol(&asm.macho.deployment, &s.segment, &s.section)
+        })
         .map(|(i, s)| {
             let mark = asm.macho.section_marks.get(&s.id).copied().unwrap_or(0);
             let label = OutSym {
@@ -1570,7 +1678,9 @@ fn write(
 ) -> Vec<u8> {
     let strings = string_table(syms);
 
-    let version = asm.macho.build_version;
+    // The deployment target the target triple named, which a
+    // `.build_version` or `.*_version_min` in the source replaces.
+    let version = asm.macho.build_version.or(asm.macho.deployment.version);
     // An object with no symbols has no symbol table, nor the commands that
     // would describe one.
     let has_symtab = !syms.is_empty();

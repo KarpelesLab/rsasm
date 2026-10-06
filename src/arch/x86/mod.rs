@@ -353,6 +353,136 @@ impl Architecture for X86 {
         }
     }
 
+    /// The compact unwind word `__LD,__compact_unwind` holds for a frame,
+    /// which on x86 describes a frame pointer prologue, a frameless function
+    /// whose stack adjustment the word itself holds, or a frameless one whose
+    /// adjustment the word only points the linker at.
+    ///
+    /// `DarwinX86AsmBackend::generateCompactUnwindEncoding` reads the
+    /// directives a compiler writes and gives up on anything else:
+    /// `.cfi_def_cfa_register` has to name the frame pointer, each
+    /// `.cfi_offset` has to name one of the six callee-saved registers the
+    /// word can hold, and behind a frame pointer the lowest of them has to
+    /// sit directly below the saved frame pointer. Giving up means
+    /// `UNWIND_X86_MODE_DWARF`, which asks the linker for the frame table
+    /// instead. Where arm64 gives each pair of saved registers a bit of its
+    /// own, x86 writes the registers themselves -- in the order they were
+    /// saved, three bits each, behind a frame pointer, and as the number of
+    /// the permutation they form where there is none, which is what makes
+    /// six of them fit in ten bits.
+    ///
+    /// A frame with no directives at all gets a word of zero, which is no
+    /// entry in the table rather than an entry describing nothing.
+    fn macho_compact_unwind(&self, insns: &[cfi::Insn], canonical: bool) -> Option<u32> {
+        use cfi::Insn;
+
+        const MODE_BP_FRAME: u32 = 0x0100_0000;
+        const MODE_STACK_IMMD: u32 = 0x0200_0000;
+        const MODE_STACK_IND: u32 = 0x0300_0000;
+        const MODE_DWARF: u32 = 0x0400_0000;
+        // Five of the six registers is all a frame pointer's word has room
+        // for; llvm-mc drops the sixth rather than give up.
+        const BP_FRAME_REGISTERS: u32 = 0x0000_7fff;
+
+        let wide = self.bits == 64;
+        // The six registers the word can name, numbered 1 to 6 in this
+        // order, as `.cfi_offset` names them: the callee-saved ones of each
+        // ABI, and the frame pointer last.
+        let order: [u32; 6] = if wide {
+            [3, 12, 13, 14, 15, 6]
+        } else {
+            [3, 1, 2, 7, 6, 5]
+        };
+        let frame_pointer = if wide { 6 } else { 5 };
+        let word = if wide { 8i64 } else { 4 };
+
+        // `.cfi_signal_frame` is not an instruction, only a note on the
+        // frame, and llvm-mc's list of instructions never holds one.
+        let insns: Vec<&Insn> = insns.iter().filter(|i| **i != Insn::Mark).collect();
+        if insns.is_empty() {
+            return Some(0);
+        }
+        if !canonical {
+            return Some(MODE_DWARF);
+        }
+
+        let mut saved: Vec<u32> = Vec::new();
+        let mut has_fp = false;
+        let mut stack = 0i64;
+        let mut lowest = i64::MAX;
+        // The bytes of the pushes that saved the registers, which the
+        // indirect form counts to find the stack adjustment's own
+        // instruction.
+        let mut pushes = 0u32;
+        for insn in insns {
+            match *insn {
+                Insn::DefCfaRegister(reg) => {
+                    if reg != frame_pointer {
+                        return Some(MODE_DWARF);
+                    }
+                    // What came before set the frame pointer up, and the
+                    // mode says so by itself.
+                    saved.clear();
+                    lowest = i64::MAX;
+                    has_fp = true;
+                }
+                // The last adjustment is the frame's size; the ones before
+                // it described the prologue on its way there.
+                Insn::DefCfaOffset(by) => stack = by,
+                Insn::Offset(reg, at) => {
+                    if saved.len() == order.len() {
+                        return Some(MODE_DWARF);
+                    }
+                    saved.push(reg);
+                    lowest = lowest.min(at.abs());
+                    pushes += if wide && (12..=15).contains(&reg) {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                _ => return Some(MODE_DWARF),
+            }
+        }
+        let Some(numbers) = saved
+            .iter()
+            .map(|r| order.iter().position(|o| o == r).map(|i| i as u32 + 1))
+            .collect::<Option<Vec<u32>>>()
+        else {
+            return Some(MODE_DWARF);
+        };
+        let count = numbers.len() as u32;
+
+        if has_fp {
+            // A register saved anywhere but in the run directly below the
+            // saved frame pointer, which is itself below the return address,
+            // is one the word cannot place.
+            if count != 0 && lowest != 3 * word {
+                return Some(MODE_DWARF);
+            }
+            let regs = numbers
+                .iter()
+                .enumerate()
+                .fold(0, |w, (i, n)| w | (n << (3 * i)));
+            return Some(MODE_BP_FRAME | (count << 16) | (regs & BP_FRAME_REGISTERS));
+        }
+
+        let size = stack / word;
+        let registers = (count << 10) | compact_unwind_permutation(&numbers);
+        Some(match u8::try_from(size) {
+            // The adjustment fits the word, in units of a pointer.
+            Ok(size) => MODE_STACK_IMMD | (u32::from(size) << 16) | registers,
+            // It does not, so the linker reads it out of the `sub` that made
+            // the frame, which it finds by the offset the word carries
+            // instead -- past the function's pushes, and past the two or
+            // three bytes of the `sub`'s own opcode.
+            Err(_) => {
+                let at = if wide { 3 } else { 2 } + pushes;
+                MODE_STACK_IND | (at << 16) | ((count + 1) << 13) | registers
+            }
+        })
+    }
+
     fn is_mnemonic(&self, name: &str) -> bool {
         insn::is_mnemonic(name) || prefix_kind(name).is_some()
     }
@@ -400,6 +530,38 @@ impl Architecture for X86 {
             }
             _ => false,
         }
+    }
+}
+
+/// The ten bits a frameless compact unwind word gives the registers it
+/// saved, which hold their order rather than the registers themselves.
+///
+/// There are six registers the word can name and at most six saved, so there
+/// are 1,956 possibilities and ten bits is enough for a number of one of
+/// them. `encodeCompactUnwindRegistersWithoutFrame` arrives at that number
+/// by renumbering each register by how many of the ones saved before it are
+/// lower -- which leaves one fewer choice at each step -- and reading the
+/// result as a number whose digits run in a radix of their own.
+fn compact_unwind_permutation(numbers: &[u32]) -> u32 {
+    // The registers sit at the end of six slots, so that the digits of a
+    // shorter list are the last digits of a longer one's.
+    let mut slots = [0u32; 6];
+    let first = slots.len() - numbers.len();
+    slots[first..].copy_from_slice(numbers);
+    let mut digit = [0u32; 6];
+    for i in first..slots.len() {
+        let lower = (first..i).filter(|&j| slots[j] < slots[i]).count() as u32;
+        digit[i] = slots[i] - lower - 1;
+    }
+    let d = digit;
+    match numbers.len() {
+        6 => 120 * d[0] + 24 * d[1] + 6 * d[2] + 2 * d[3] + d[4],
+        5 => 120 * d[1] + 24 * d[2] + 6 * d[3] + 2 * d[4] + d[5],
+        4 => 60 * d[2] + 12 * d[3] + 3 * d[4] + d[5],
+        3 => 20 * d[3] + 4 * d[4] + d[5],
+        2 => 5 * d[4] + d[5],
+        1 => d[5],
+        _ => 0,
     }
 }
 
