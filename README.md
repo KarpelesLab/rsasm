@@ -1268,7 +1268,7 @@ something rsasm reads from a triple, so there is none to write; the frame
 table alone is what llvm-mc writes for `x86_64-apple-macos`, and what the
 harness compares against.
 
-`tools/macho-diff/run.sh` compares 1,820 cases against llvm-mc 22: single
+`tools/macho-diff/run.sh` compares 1,999 cases against llvm-mc 22: single
 statements and whole programs in Clang's style of its own, line tables, frame
 tables and compact unwind tables, and the `tools/mc-diff` corpora for both
 machines, every instruction of which has to come out the same in a Mach-O
@@ -1362,7 +1362,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
   16-bit mode, in AT&T and Intel syntax. 8,675 of 8,675 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 40,830 of 40,830 match across twenty-three target variants. For RISC-V
+  supports. 42,093 of 42,093 match across twenty-three target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things; llvm-mc runs
   with `+relax` there, because relaxation is on in rsasm as it is in GNU as,
@@ -1381,7 +1381,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,704 of 25,704 match across fifty-seven
+  from checksum-pinned sources. 25,654 of 25,654 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
@@ -1446,7 +1446,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,820 of 1,820 match, and every object both
+  those of `tools/mc-diff`. 1,999 of 1,999 match, and every object both
   assemblers write is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
