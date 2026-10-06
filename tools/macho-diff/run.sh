@@ -36,13 +36,14 @@ root=$(cd "$here/../.." && pwd)
 # arch | rsasm target | llvm triple | the machine's corpus in tools/mc-diff
 #      [| the flags llvm-mc needs for that corpus]
 #
-# The arm64 flags are the ones tools/mc-diff passes for `aarch64`: the corpus
-# it shares has SIMD, SVE and SME in it, and llvm-mc enables neither for a
-# bare triple. rsasm assembles every extension its backend has, whatever the
+# The arm64 flags are the ones tools/mc-diff passes for `aarch64`, copied
+# exactly: the corpus it shares has SIMD, SVE, SME, the memory copies and the
+# floating-point atomics in it, and llvm-mc enables none of them for a bare
+# triple. rsasm assembles every extension its backend has, whatever the
 # object format.
 ARCHES="
 x86-64|x86_64-apple-macos|x86_64-apple-macos|x86-64
-arm64|arm64-apple-macos|arm64-apple-macos|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+rcpc,+rand,+memtag,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+tme,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1
+arm64|arm64-apple-macos|arm64-apple-macos|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+lse128,+lsui,+rcpc,+rand,+mte,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1,+lsfe,+lscp,+mops,+mops-go,+cmpbr,+sve2p2,+sve2p3,+gcs,+ite,+tev,+poe2
 "
 
 for tool in llvm-mc llvm-readobj llvm-objdump; do
