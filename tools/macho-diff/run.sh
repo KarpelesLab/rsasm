@@ -29,6 +29,10 @@
 # A case both assemblers refuse counts as a match: Mach-O has no relocation
 # for a good many things ELF can express (`adr` to another atom, a 32-bit
 # absolute address on x86-64), and refusing those is part of what is checked.
+#
+# tools/macho-diff/<arch>-skip.txt, where there is one, lists lines of the
+# shared corpus that are not compared at all, and says why; the count is
+# printed with the arch's.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -41,8 +45,21 @@ root=$(cd "$here/../.." && pwd)
 # floating-point atomics in it, and llvm-mc enables none of them for a bare
 # triple. rsasm assembles every extension its backend has, whatever the
 # object format.
+#
+# A triple naming a release of macOS is a row of its own, since the
+# deployment target changes the whole object: it writes a version load
+# command, and from 10.6 on it gives x86-64 a compact unwind table. Those
+# rows share no corpus with tools/mc-diff; the instructions are the same
+# whatever the deployment target, and the plain triples check them.
 ARCHES="
 x86-64|x86_64-apple-macos|x86_64-apple-macos|x86-64
+i386|i386-apple-macos|i386-apple-macos|i386
+i386-10.6|i386-apple-macos10.6|i386-apple-macos10.6|
+x86-64-10.5|x86_64-apple-macos10.5|x86_64-apple-macos10.5|
+x86-64-10.6|x86_64-apple-macos10.6|x86_64-apple-macos10.6|
+x86-64-14|x86_64-apple-macos14.1.2|x86_64-apple-macos14.1.2|
+x86-64-darwin|x86_64-apple-darwin19|x86_64-apple-darwin19|
+arm64-10.6|arm64-apple-macos10.6|arm64-apple-macos10.6|
 arm64|arm64-apple-macos|arm64-apple-macos|aarch64|-mattr=+v9.5a,+sve2,+sve2p1,+sve2-aes,+sve2-sha3,+sve2-sm4,+sve2-bitperm,+sve-aes2,+sve-b16b16,+sve-bfscale,+sve-f16f32mm,+crypto,+dotprod,+i8mm,+fullfp16,+bf16,+lse,+lse128,+lsui,+rcpc,+rand,+mte,+pauth,+fp16fml,+flagm,+sb,+ssbs,+predres,+ls64,+f64mm,+f32mm,+jsconv,+complxnum,+rcpc3,+cssc,+the,+d128,+lut,+faminmax,+fp8,+fp8fma,+fp8dot2,+fp8dot4,+sme,+sme2,+sme2p1,+lsfe,+lscp,+mops,+mops-go,+cmpbr,+sve2p2,+sve2p3,+gcs,+ite,+tev,+poe2
 "
 
@@ -65,6 +82,7 @@ export DEBUG_PRODUCER=reference
 pass=0
 fail=0
 identical=0
+skipped=0
 
 compare() { # arch, rsasm target, triple, flags, name, source, case flag
   local arch=$1 target=$2 triple=$3 flags=$4 name=$5 src=$6 flag=${7-} m r d mcflag
@@ -133,19 +151,24 @@ snippets() { # file, arch, rsasm target, triple, flags
   return 0
 }
 
-# Runs `compare` over each line of a file.
+# Runs `compare` over each line of a file, leaving out the lines the
+# machine's skip file names.
 lines() { # file, arch, rsasm target, triple, flags
-  local file=$1 line
+  local file=$1 skip="$here/$2-skip.txt" line
   shift
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     case "$line" in \#*) continue ;; esac
+    if [ -f "$skip" ] && grep -qxF -- "$line" "$skip"; then
+      skipped=$((skipped + 1))
+      continue
+    fi
     compare "$@" "$line" "$(printf '%s\n' "$line" | tr ';' '\n')"
   done < "$file"
 }
 
 run_arch() { # arch, rsasm target, triple, mc-diff corpus, llvm-mc flags
-  local arch=$1 mc="$root/tools/mc-diff/$4" before=$((pass + fail)) own
+  local arch=$1 mc="$root/tools/mc-diff/$4" before=$((pass + fail)) own left=$skipped
   set -- "$1" "$2" "$3" "${5-}"
   [ -f "$here/$arch.txt" ] && lines "$here/$arch.txt" "$@"
   [ -f "$here/$arch-programs.txt" ] && snippets "$here/$arch-programs.txt" "$@"
@@ -156,7 +179,8 @@ run_arch() { # arch, rsasm target, triple, mc-diff corpus, llvm-mc flags
   # every reference in it relocated as llvm-mc relocates it there.
   [ -f "$mc.txt" ] && lines "$mc.txt" "$@"
   [ -f "$mc-programs.txt" ] && snippets "$mc-programs.txt" "$@"
-  echo "[$arch] $own cases, and $((pass + fail - before - own)) from tools/mc-diff"
+  echo "[$arch] $own cases, and $((pass + fail - before - own)) from tools/mc-diff$(
+    [ "$skipped" -gt "$left" ] && echo ", $((skipped - left)) of it skipped")"
 }
 
 wanted="${*:-}"
@@ -169,4 +193,5 @@ while IFS='|' read -r arch target triple mc flags; do
 done <<< "$ARCHES"
 
 echo "--- $pass matched, $fail differed ($identical of the objects byte for byte)"
+[ "$skipped" -gt 0 ] && echo "    $skipped lines of the shared corpora skipped; see <arch>-skip.txt"
 [ "$fail" -eq 0 ]

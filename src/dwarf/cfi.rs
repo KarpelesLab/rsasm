@@ -392,7 +392,10 @@ impl Assembler {
         };
         let span = a.span.to(b.span);
         let text = self.sm.span_text(span).to_ascii_lowercase();
-        match self.arch.dwarf_register(&self.arch_state, &text) {
+        match self
+            .arch
+            .dwarf_register(&self.arch_state, self.options.format, &text)
+        {
             Some(r) => Some(r),
             None => {
                 self.diags.error(span, "bad register expression");
@@ -458,7 +461,13 @@ impl Assembler {
         // debugger.
         let mut in_eh_frame = vec![true; self.dwarf.cfi.fdes.len()];
         if eh && let Some((table, words)) = self.compact_unwind_words() {
-            self.emit_compact_unwind(&table, &words, ptr);
+            // A word of zero is the machine saying the frame is of a shape
+            // the table has nothing to say about, as x86's is for a frame
+            // with no directives at all: such a frame gets no entry, and a
+            // table that would hold none is not written.
+            if words.iter().any(|&w| w != 0) {
+                self.emit_compact_unwind(&table, &words, ptr);
+            }
             if table.without_eh_frame {
                 for (keep, word) in in_eh_frame.iter_mut().zip(&words) {
                     *keep = *word == table.dwarf_only;
@@ -486,12 +495,13 @@ impl Assembler {
     ///
     /// A word of the table's `dwarf_only` is the machine's way of saying that
     /// this frame's shape is one no word can describe, and that the linker has
-    /// to read the frame table for it.
+    /// to read the frame table for it. A word of zero says the frame has no
+    /// entry in the compact table at all.
     fn compact_unwind_words(&self) -> Option<(macho::CompactUnwind, Vec<u32>)> {
         if self.options.format != crate::output::Format::MachO {
             return None;
         }
-        let table = macho::Cpu::for_arch(self.target())?.compact_unwind()?;
+        let table = self.macho.deployment.compact_unwind?;
         let words = self
             .dwarf
             .cfi
@@ -544,6 +554,9 @@ impl Assembler {
         let mut b = Blob::new(endian);
         let fdes = std::mem::take(&mut self.dwarf.cfi.fdes);
         for (fde, &word) in fdes.iter().zip(words) {
+            if word == 0 {
+                continue;
+            }
             let dwarf = word == table.dwarf_only;
             let begin = self.pos_expr(fde.start, 0);
             let kind = self.abs_kind(ptr);
@@ -642,6 +655,28 @@ impl Assembler {
             b.fixup(size, e, kind);
         }
         true
+    }
+
+    /// `insn` with its registers numbered as `.debug_frame` numbers them;
+    /// see [`crate::arch::Architecture::dwarf_debug_register`].
+    ///
+    /// Only the sections llvm-mc writes need this: the targets whose frames
+    /// follow GNU as are all ELF ones, where the exception tables and the
+    /// debugging ones number the registers alike.
+    fn debug_frame_insn(&self, insn: &Insn) -> Insn {
+        let map = |reg: u32| self.target().dwarf_debug_register(self.options.format, reg);
+        match *insn {
+            Insn::DefCfa(r, o) => Insn::DefCfa(map(r), o),
+            Insn::DefCfaRegister(r) => Insn::DefCfaRegister(map(r)),
+            Insn::Offset(r, o) => Insn::Offset(map(r), o),
+            Insn::RelOffset(r, o) => Insn::RelOffset(map(r), o),
+            Insn::ValOffset(r, o) => Insn::ValOffset(map(r), o),
+            Insn::Register(a, b) => Insn::Register(map(a), map(b)),
+            Insn::Restore(r) => Insn::Restore(map(r)),
+            Insn::Undefined(r) => Insn::Undefined(map(r)),
+            Insn::SameValue(r) => Insn::SameValue(map(r)),
+            ref other => other.clone(),
+        }
     }
 
     /// Writes an instruction whose relative forms have been resolved.
@@ -1175,7 +1210,12 @@ impl Assembler {
                                 Insn::DefCfa(_, o) | Insn::DefCfaOffset(o) => cfa = *o,
                                 _ => {}
                             }
-                            Self::write_insn(&mut b, insn, Flavor::Llvm, data_align, unit);
+                            let insn = if eh {
+                                insn.clone()
+                            } else {
+                                self.debug_frame_insn(insn)
+                            };
+                            Self::write_insn(&mut b, &insn, Flavor::Llvm, data_align, unit);
                         }
                     }
                     b.align(0, if eh { 4 } else { ptr as u64 }, 0);
@@ -1254,6 +1294,11 @@ impl Assembler {
                     }
                     Insn::RelOffset(r, o) => Insn::Offset(r, o - cfa),
                     ref other => other.clone(),
+                };
+                let insn = if eh {
+                    insn
+                } else {
+                    self.debug_frame_insn(&insn)
                 };
                 Self::write_insn(&mut b, &insn, Flavor::Llvm, data_align, unit);
             }

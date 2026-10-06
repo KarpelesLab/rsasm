@@ -1,0 +1,12 @@
+# The deployment target of a macOS 10.6 triple, and what the source can say
+# about it afterwards. The triple's version is the one llvm-mc writes where
+# the source names none, and a directive replaces it -- but not the compact
+# unwind table, which the triple alone decides.
+nop
+.cfi_startproc; .cfi_def_cfa_offset 16; retq; .cfi_endproc
+.macosx_version_min 10, 7; nop
+.macosx_version_min 10, 15; nop
+.build_version macos, 13, 0; nop
+.build_version macos, 14, 0 sdk_version 14, 4; nop
+.ios_version_min 7, 0; nop
+.macosx_version_min 10, 7; .cfi_startproc; .cfi_def_cfa_offset 16; retq; .cfi_endproc

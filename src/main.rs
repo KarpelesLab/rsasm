@@ -16,7 +16,10 @@ options:
   -o <file>          write output to <file> (default: a.out)
   -a, --arch <name>  target architecture (default: the host, if supported),
                      or a target triple: `x86_64-apple-macos` also picks
-                     Mach-O output, `x86_64-pc-windows-msvc` PE/COFF
+                     Mach-O output, `x86_64-pc-windows-msvc` PE/COFF. A
+                     macOS version in a Darwin triple is the object's
+                     deployment target (`x86_64-apple-macos10.6`), which is
+                     what asks for a compact unwind table on x86-64
   -f, --format <fmt> output format: elf (default), elf32, elf64, coff,
                      win64, win32, macho, bin or ihex
   -s, --syntax <s>   initial operand syntax: att (default) or intel
@@ -291,6 +294,10 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             a.format = Format::for_target(rest);
         }
         a.arch = Some(cpu.to_string());
+        // A Darwin triple says which macOS the object is for, which decides
+        // its version load command and whether the linker is given a
+        // compact unwind table; see `rsasm::output::macho`.
+        edit(&mut a.options, |o| o.with_target_triple(name));
     }
     if a.format == Format::MachO {
         edit(&mut a.options, |o| o.with_format(Format::MachO));

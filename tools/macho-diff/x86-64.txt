@@ -206,6 +206,9 @@ _a = 5
 _f: ret;_a = _f
 _f: ret;_a = _f + 1;.globl _a
 .set _a, 0x1234
+_f: ret;.set _a, _f
+_f: ret;nop;.set _a, _f + 1
+_f: ret;nop;.globl _a;.set _a, _f + 1
 _Lnot_temp: ret
 lfoo: ret
 Lfoo: ret

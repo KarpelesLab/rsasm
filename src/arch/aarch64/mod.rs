@@ -264,7 +264,12 @@ impl Architecture for AArch64 {
     /// The AAPCS64 DWARF numbering of the names llvm-mc accepts: `x`/`w`
     /// registers 0-30, the stack pointer and zero register both 31, and a
     /// vector register as 64 up by whichever width names it.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         match name {
             "sp" | "wsp" | "xzr" | "wzr" => return Some(31),
             "fp" => return Some(29),

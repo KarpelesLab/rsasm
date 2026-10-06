@@ -200,7 +200,12 @@ impl Architecture for SuperH {
     /// GNU as's `sh_regname_to_dw2regnum`, for the names it accepts: `r0`-`r15`,
     /// `pr` 17, `gbr` 19, `mach` 20, `macl` 21, `fpul` 23 and `fr0`-`fr15`
     /// from 25. Not `sp`.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         match name {
             "pr" => Some(17),
             "gbr" => Some(19),

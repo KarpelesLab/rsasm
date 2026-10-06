@@ -1,0 +1,8 @@
+# A deployment target recent enough for the load command that names its
+# platform: from macOS 10.14 on llvm-mc writes `LC_BUILD_VERSION` where it
+# wrote `LC_VERSION_MIN_MACOSX` before, and the triple's third component
+# reaches the object as well.
+nop
+.cfi_startproc; .cfi_def_cfa_offset 16; retq; .cfi_endproc
+.macosx_version_min 10, 7; nop
+.section __LD,__compact_unwind; .quad 0

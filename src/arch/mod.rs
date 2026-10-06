@@ -1798,6 +1798,18 @@ pub trait Architecture {
         None
     }
 
+    /// The number `.debug_frame` gives a register a `.cfi_*` directive
+    /// named, where that is not the number the unwinding tables give it.
+    ///
+    /// A register in a `.cfi_*` directive is read in the numbering the
+    /// exception tables use, and llvm-mc maps it back when it writes
+    /// `.debug_frame` (`MCRegisterInfo::getDwarfRegNumFromDwarfEHRegNum`).
+    /// The default is the number as it stands, which is right for every
+    /// target with one numbering; Darwin's i386 is the one here with two.
+    fn dwarf_debug_register(&self, _format: crate::output::Format, reg: u32) -> u32 {
+        reg
+    }
+
     /// Where the line table row of an instruction goes, as a distance back
     /// from the instruction's end, given its smallest encoding; `None`, the
     /// default, puts it at the start.
@@ -1813,7 +1825,17 @@ pub trait Architecture {
     /// The DWARF register number of a register named in a `.cfi_*`
     /// directive, lowercased and spelled as the source wrote it, with any
     /// prefix such as `%` or `$` still on.
-    fn dwarf_register(&self, _state: &ArchState, _name: &str) -> Option<u32> {
+    ///
+    /// The object format is part of the question, as it is for
+    /// [`Architecture::dwarf`]: a target's unwinding numbers are whatever the
+    /// ABI that reads them says, and Darwin's i386 numbers two of the
+    /// registers differently from the psABI.
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        _name: &str,
+    ) -> Option<u32> {
         None
     }
 

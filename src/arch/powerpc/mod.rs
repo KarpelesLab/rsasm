@@ -215,7 +215,12 @@ impl Architecture for PowerPc {
     /// The ELF ABI's DWARF numbering of the names llvm-mc accepts, with or
     /// without `%`: `r0`-`r31`, `f0`-`f31` from 32, `lr` 65, `ctr` 66,
     /// `cr0`-`cr7` from 68 and `v0`-`v31` from 77.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         let name = name.strip_prefix('%').unwrap_or(name);
         match name {
             "lr" => return Some(65),

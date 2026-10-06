@@ -1,0 +1,8 @@
+# A deployment target older than the macOS whose linker first read a compact
+# unwind table. The version load command is written and the table is not,
+# whatever the source says afterwards: llvm-mc settles the table from the
+# triple before it reads a line.
+nop
+.cfi_startproc; .cfi_def_cfa_offset 16; retq; .cfi_endproc
+.macosx_version_min 10, 6; .cfi_startproc; .cfi_def_cfa_offset 16; retq; .cfi_endproc
+.section __LD,__compact_unwind; .quad 0

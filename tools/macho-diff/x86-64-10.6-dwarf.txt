@@ -1,0 +1,701 @@
+# The frame table of an object whose deployment target is a macOS that reads
+# a compact unwind table -- 10.6, the first of them.
+#
+# A frame on x86-64 is described twice over: as a compact unwind word in
+# `__LD,__compact_unwind`, which the linker reads first, and in
+# `__TEXT,__eh_frame`, which it reads where the word tells it to and which is
+# written for every frame either way, since x86-64's word alone does not
+# describe one. The cases walk the shapes the word has -- a frame pointer
+# prologue, a frameless adjustment the word holds, a frameless one the word
+# only points at -- the callee-saved registers each form holds, and the
+# shapes that fall back to the frame table.
+=== a frame pointer prologue
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	popq	%rbp
+	retq
+	.cfi_endproc
+=== a frame pointer prologue that saves one register
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%rbx
+	.cfi_offset %rbx, -24
+	popq	%rbx
+	popq	%rbp
+	retq
+	.cfi_endproc
+=== a frame pointer prologue that saves two
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%rbx
+	.cfi_offset %rbx, -24
+	pushq	%r12
+	.cfi_offset %r12, -32
+	retq
+	.cfi_endproc
+=== a frame pointer prologue that saves five, in the word's own order
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %rbx, -24
+	.cfi_offset %r12, -32
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -48
+	.cfi_offset %r15, -56
+	retq
+	.cfi_endproc
+=== a frame pointer prologue that saves five, in reverse
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %r15, -24
+	.cfi_offset %r14, -32
+	.cfi_offset %r13, -40
+	.cfi_offset %r12, -48
+	.cfi_offset %rbx, -56
+	retq
+	.cfi_endproc
+=== a frame pointer prologue that saves six, one more than the word holds
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %rbx, -24
+	.cfi_offset %r12, -32
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -48
+	.cfi_offset %r15, -56
+	.cfi_offset %rbp, -64
+	retq
+	.cfi_endproc
+=== a frame pointer prologue whose saved registers leave a gap below it
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %rbx, -32
+	retq
+	.cfi_endproc
+=== a frame pointer prologue with a gap between the saved registers
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %rbx, -24
+	.cfi_offset %r12, -40
+	retq
+	.cfi_endproc
+=== a frame pointer prologue whose saved registers run upwards
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %rbx, -32
+	.cfi_offset %r12, -24
+	retq
+	.cfi_endproc
+=== a frame pointer prologue that saves a register twice over
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	.cfi_offset %rbx, -24
+	.cfi_offset %r12, -24
+	retq
+	.cfi_endproc
+=== a frame pointer with nothing saved below it
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_register %rbp
+	retq
+	.cfi_endproc
+=== a frame pointer that is not rbp
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_register %rbx
+	retq
+	.cfi_endproc
+=== a stack adjustment after the frame pointer
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	.cfi_def_cfa_register %rbp
+	nop
+	.cfi_def_cfa_offset 32
+	retq
+	.cfi_endproc
+=== a frameless stack adjustment
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 32
+	addq	$24, %rsp
+	retq
+	.cfi_endproc
+=== a frameless stack adjustment of nothing
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 0
+	retq
+	.cfi_endproc
+=== two frameless stack adjustments
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	subq	$8, %rsp
+	.cfi_def_cfa_offset 16
+	subq	$16, %rsp
+	.cfi_def_cfa_offset 32
+	retq
+	.cfi_endproc
+=== the largest frameless adjustment the word holds
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 2040
+	retq
+	.cfi_endproc
+=== one byte more than the word holds
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 2048
+	retq
+	.cfi_endproc
+=== an adjustment the linker reads out of the instruction
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	subq	$4096, %rsp
+	.cfi_def_cfa_offset 4104
+	retq
+	.cfi_endproc
+=== the same, behind a push the word has to count
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	subq	$4096, %rsp
+	.cfi_def_cfa_offset 4112
+	retq
+	.cfi_endproc
+=== the same, behind pushes of the registers that need a prefix
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	.cfi_offset %r15, -16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	.cfi_offset %r14, -24
+	subq	$8192, %rsp
+	.cfi_def_cfa_offset 8216
+	retq
+	.cfi_endproc
+=== the same, behind all six
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	.cfi_offset %r12, -24
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -40
+	.cfi_offset %r15, -48
+	.cfi_offset %rbp, -56
+	nop
+	.cfi_def_cfa_offset 4096
+	retq
+	.cfi_endproc
+=== a frameless function that saves one register
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	popq	%rbx
+	retq
+	.cfi_endproc
+=== a frameless function that saves the frame pointer as a register
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	popq	%rbp
+	retq
+	.cfi_endproc
+=== a frameless function that saves two in order
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	pushq	%r12
+	.cfi_def_cfa_offset 24
+	.cfi_offset %r12, -24
+	retq
+	.cfi_endproc
+=== a frameless function that saves two out of order
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	.cfi_offset %r15, -16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	.cfi_offset %r14, -24
+	retq
+	.cfi_endproc
+=== a frameless function whose three saved registers permute
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%r12
+	.cfi_def_cfa_offset 16
+	.cfi_offset %r12, -16
+	pushq	%rbx
+	.cfi_offset %rbx, -24
+	pushq	%r14
+	.cfi_offset %r14, -32
+	retq
+	.cfi_endproc
+=== a frameless function whose four saved registers permute
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 40
+	.cfi_offset %rbp, -16
+	.cfi_offset %r13, -24
+	.cfi_offset %rbx, -32
+	.cfi_offset %r15, -40
+	retq
+	.cfi_endproc
+=== a frameless function whose five saved registers permute
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 48
+	.cfi_offset %r14, -16
+	.cfi_offset %rbp, -24
+	.cfi_offset %rbx, -32
+	.cfi_offset %r15, -40
+	.cfi_offset %r12, -48
+	retq
+	.cfi_endproc
+=== a frameless function whose six saved registers permute
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 56
+	.cfi_offset %r13, -16
+	.cfi_offset %rbx, -24
+	.cfi_offset %rbp, -32
+	.cfi_offset %r15, -40
+	.cfi_offset %r12, -48
+	.cfi_offset %r14, -56
+	retq
+	.cfi_endproc
+=== a frameless function that saves all six in order
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 56
+	.cfi_offset %rbx, -16
+	.cfi_offset %r12, -24
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -40
+	.cfi_offset %r15, -48
+	.cfi_offset %rbp, -56
+	retq
+	.cfi_endproc
+=== a frameless function that saves one more than the word can name
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -16
+	.cfi_offset %r12, -24
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -40
+	.cfi_offset %r15, -48
+	.cfi_offset %rbp, -56
+	.cfi_offset %rax, -64
+	retq
+	.cfi_endproc
+=== a frameless function that saves a register the word cannot name
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rax, -16
+	retq
+	.cfi_endproc
+=== a frameless function that saves the return address
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_offset 16, -8
+	retq
+	.cfi_endproc
+=== a frameless function whose saved registers leave gaps
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 24
+	.cfi_offset %rbx, -64
+	.cfi_offset %r12, -200
+	retq
+	.cfi_endproc
+=== a frame with no directives at all
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	nop
+	.cfi_endproc
+=== a frame with no directives and a personality routine
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gcc_personality_v0
+	nop
+	.cfi_endproc
+=== a frame the table leaves out between two it describes
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+	.globl _g
+_g:
+	.cfi_startproc
+	nop
+	.cfi_endproc
+	.globl _h
+_h:
+	.cfi_startproc
+	.cfi_def_cfa_offset 32
+	retq
+	.cfi_endproc
+=== a CFA that names a register and an offset at once
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa %rbp, 16
+	retq
+	.cfi_endproc
+=== an adjustment relative to the one before it
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	nop
+	.cfi_adjust_cfa_offset 8
+	retq
+	.cfi_endproc
+=== an offset relative to the CFA offset
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_rel_offset %rbx, 0
+	retq
+	.cfi_endproc
+=== a register whose value is its old one
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_same_value %rbx
+	retq
+	.cfi_endproc
+=== a register held in another
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_register %rbx, %r12
+	retq
+	.cfi_endproc
+=== a register whose value is the offset itself
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_val_offset %rbx, -16
+	retq
+	.cfi_endproc
+=== a register that cannot be recovered
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_undefined %rbx
+	retq
+	.cfi_endproc
+=== a register restored to the CIE's rule
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_restore %rbx
+	retq
+	.cfi_endproc
+=== a state saved and brought back
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_remember_state
+	.cfi_restore_state
+	retq
+	.cfi_endproc
+=== an escape
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_escape 0x08
+	retq
+	.cfi_endproc
+=== a signal frame, which is a note rather than an instruction
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_signal_frame
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+=== a return column, which is a note as well
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_return_column %rbx
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+=== a personality routine the table keeps a slot for
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gxx_personality_v0
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+=== the other one it keeps a slot for
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___objc_personality_v0
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+=== a personality routine it keeps no slot for
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gcc_personality_v0
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+=== a language-specific data area
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gxx_personality_v0
+	.cfi_lsda 16, Lexception0
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	popq	%rbp
+	retq
+	.cfi_endproc
+	.section __TEXT,__gcc_except_tab
+Lexception0:
+	.byte 0xff
+=== a data area in an encoding narrower than a pointer
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gxx_personality_v0
+	.cfi_lsda 27, Lexception0
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+	.section __TEXT,__gcc_except_tab
+Lexception0:
+	.byte 0xff
+=== a data area on a frame the word leaves to the frame table
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gxx_personality_v0
+	.cfi_lsda 16, Lexception0
+	.cfi_def_cfa_offset 16
+	.cfi_escape 0x08
+	retq
+	.cfi_endproc
+	.section __TEXT,__gcc_except_tab
+Lexception0:
+	.byte 0xff
+=== a whole function as clang writes it
+	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_main
+	.p2align	4, 0x90
+_main:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	subq	$16, %rsp
+	movl	$0, -4(%rbp)
+	leaq	L_.str(%rip), %rdi
+	callq	_printf
+	xorl	%eax, %eax
+	addq	$16, %rsp
+	popq	%rbp
+	retq
+	.cfi_endproc
+	.section	__TEXT,__cstring,cstring_literals
+L_.str:
+	.asciz	"hello\n"
+	.subsections_via_symbols
+=== frames in the compact table alongside a line table | -g
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	popq	%rbp
+	retq
+	.cfi_endproc
+=== a frame in the debug frame table, which has no compact word
+	.text
+	.cfi_sections .debug_frame
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc
+=== a frame in both frame tables
+	.text
+	.cfi_sections .eh_frame, .debug_frame
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	retq
+	.cfi_endproc

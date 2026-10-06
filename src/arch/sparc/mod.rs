@@ -184,7 +184,12 @@ impl Architecture for Sparc {
     /// DWARF numbers the integer registers as the encoding does, and the
     /// floating-point ones from 32 — by name, so V9's `%f62` is 94 even
     /// though the encoding gives it the field value 31.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         let r = reg::lookup(name.strip_prefix('%')?)?;
         match r.class {
             reg::RegClass::Int => Some(r.num as u32),

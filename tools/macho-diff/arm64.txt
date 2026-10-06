@@ -163,6 +163,8 @@ nop;.p2align 3;ret
 _a = 5
 .set _a, 5
 _f: ret;_a = _f + 4
+_f: ret;.set _a, _f
+_f: ret;nop;.set _a, _f + 4
 Lfoo: ret
 .subsections_via_symbols
 .build_version macos, 14, 0

@@ -1,0 +1,249 @@
+# i386's compact unwind table, which a deployment target of macOS 10.6 or
+# later asks for as it does on x86-64.
+#
+# The word is the same algorithm with narrower units: a four-byte stack slot,
+# so the adjustment reaches 1,020 bytes rather than 2,040 and a frame
+# pointer's saved registers sit twelve bytes below the CFA, and the six
+# registers the word can name are the ones the 32-bit ABI preserves. The
+# entry is twenty bytes rather than thirty-two.
+#
+# A CIE cannot name a personality routine at all here: Darwin's CIE reaches
+# one through the GOT, a 32-bit object has no relocation for a GOT entry, and
+# llvm-mc leaves the distance to the routine itself -- which it writes as a
+# difference of two symbols and so refuses for a routine the object does not
+# define, which is every routine a compiler names. Both assemblers refuse it.
+=== a frame pointer prologue
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	movl	%esp, %ebp
+	.cfi_def_cfa_register %ebp
+	popl	%ebp
+	retl
+	.cfi_endproc
+=== a frame pointer prologue that saves one register
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	.cfi_def_cfa_register %ebp
+	.cfi_offset %ebx, -12
+	retl
+	.cfi_endproc
+=== a frame pointer prologue that saves five
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	.cfi_def_cfa_register %ebp
+	.cfi_offset %ecx, -12
+	.cfi_offset %edx, -16
+	.cfi_offset %edi, -20
+	.cfi_offset %esi, -24
+	.cfi_offset %ebp, -28
+	retl
+	.cfi_endproc
+=== a frame pointer prologue whose saved register leaves a gap below it
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	.cfi_def_cfa_register %ebp
+	.cfi_offset %ebx, -16
+	retl
+	.cfi_endproc
+=== a frame pointer that is not ebp
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_register %esp
+	retl
+	.cfi_endproc
+=== a frameless stack adjustment
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	subl	$16, %esp
+	.cfi_def_cfa_offset 20
+	addl	$16, %esp
+	retl
+	.cfi_endproc
+=== the largest frameless adjustment the word holds
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 1020
+	retl
+	.cfi_endproc
+=== one slot more than the word holds
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 1024
+	retl
+	.cfi_endproc
+=== an adjustment the linker reads out of the instruction
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	subl	$4096, %esp
+	.cfi_def_cfa_offset 4100
+	retl
+	.cfi_endproc
+=== the same, behind a push the word has to count
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushl	%ebx
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebx, -8
+	subl	$4096, %esp
+	.cfi_def_cfa_offset 4104
+	retl
+	.cfi_endproc
+=== a frameless function that saves one register
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushl	%ebx
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebx, -8
+	popl	%ebx
+	retl
+	.cfi_endproc
+=== a frameless function whose three saved registers permute
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushl	%edx
+	.cfi_def_cfa_offset 8
+	.cfi_offset %edx, -8
+	pushl	%ebx
+	.cfi_offset %ebx, -12
+	pushl	%esi
+	.cfi_offset %esi, -16
+	retl
+	.cfi_endproc
+=== a frameless function whose six saved registers permute
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 28
+	.cfi_offset %edi, -8
+	.cfi_offset %ebx, -12
+	.cfi_offset %ebp, -16
+	.cfi_offset %esi, -20
+	.cfi_offset %ecx, -24
+	.cfi_offset %edx, -28
+	retl
+	.cfi_endproc
+=== a frameless function that saves all six in order
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 28
+	.cfi_offset %ebx, -8
+	.cfi_offset %ecx, -12
+	.cfi_offset %edx, -16
+	.cfi_offset %edi, -20
+	.cfi_offset %esi, -24
+	.cfi_offset %ebp, -28
+	retl
+	.cfi_endproc
+=== a frameless function that saves a register the word cannot name
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 8
+	.cfi_offset %eax, -8
+	retl
+	.cfi_endproc
+=== a frame with no directives at all
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	nop
+	.cfi_endproc
+=== an escape
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_def_cfa_offset 8
+	.cfi_escape 0x08
+	retl
+	.cfi_endproc
+=== a personality routine, which neither assembler can name here
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_personality 155, ___gxx_personality_v0
+	.cfi_def_cfa_offset 8
+	retl
+	.cfi_endproc
+=== a language-specific data area
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	.cfi_lsda 16, Lexception0
+	.cfi_def_cfa_offset 8
+	retl
+	.cfi_endproc
+	.section __TEXT,__gcc_except_tab
+Lexception0:
+	.byte 0xff
+=== a whole function as clang writes it
+	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_main
+	.align	4, 0x90
+_main:
+	.cfi_startproc
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	movl	%esp, %ebp
+	.cfi_def_cfa_register %ebp
+	subl	$8, %esp
+	movl	$0, -4(%ebp)
+	addl	$8, %esp
+	popl	%ebp
+	retl
+	.cfi_endproc
+	.subsections_via_symbols
+=== frames in the compact table alongside a line table | -g
+	.text
+	.globl _f
+_f:
+	.cfi_startproc
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	movl	%esp, %ebp
+	.cfi_def_cfa_register %ebp
+	popl	%ebp
+	retl
+	.cfi_endproc

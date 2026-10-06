@@ -154,6 +154,12 @@ impl Architecture for X86 {
     /// relative to the field -- and `@TLVP`, the address of a thread-local
     /// variable's descriptor, which llvm-mc takes in a RIP-relative operand
     /// and nowhere else. A branch cannot go through either.
+    ///
+    /// i386 has `@TLVP` alone, and takes it in an absolute operand instead,
+    /// since the machine has no PC-relative addressing: `movl _v@TLVP, %eax`
+    /// where the descriptor's address is known at link time, and
+    /// `movl _v@TLVP-L0$pb(%eax), %ecx` where position-independent code has
+    /// to reach it through a base register.
     fn modifier_class(
         &self,
         name: &str,
@@ -165,6 +171,9 @@ impl Architecture for X86 {
             ("gotpcrel", RelocClass::GotLoad) if self.bits == 64 => Some(RelocClass::GotLoad),
             ("gotpcrel", _) if self.bits == 64 => Some(RelocClass::Got),
             ("tlvp", _) if self.bits == 64 && kind.pcrel && kind.size == 4 => {
+                Some(RelocClass::ThreadVariable)
+            }
+            ("tlvp", _) if self.bits == 32 && !kind.pcrel && kind.size == 4 => {
                 Some(RelocClass::ThreadVariable)
             }
             _ => None,
@@ -266,11 +275,16 @@ impl Architecture for X86 {
                 eh_frame_align: 8,
                 cie_version: 1,
             },
+            // The stack pointer is register 5 in Darwin's i386 numbering
+            // and 4 in the psABI's; see `dwarf_register`.
             _ => CfiTarget {
                 data_align: -4,
                 ra_column: 8,
-                initial: vec![cfi::Insn::DefCfa(4, 4), cfi::Insn::Offset(8, -4)],
-                fde_encoding: 0x1b,
+                initial: vec![
+                    cfi::Insn::DefCfa(if macho { 5 } else { 4 }, 4),
+                    cfi::Insn::Offset(8, -4),
+                ],
+                fde_encoding: if macho { 0x10 } else { 0x1b },
                 eh_frame_align: 4,
                 cie_version: 1,
             },
@@ -283,8 +297,17 @@ impl Architecture for X86 {
     }
 
     /// GNU as's `dw2_regnum` table, for the names it accepts in each class:
-    /// the psABI numbering, which differs between the two.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    /// the psABI numbering, which differs between the two word sizes.
+    ///
+    /// Darwin's i386 unwinding numbers two of them its own way, swapping
+    /// `%esp` and `%ebp` (LLVM's `DWARFFlavour::X86_32_DarwinEH`), and
+    /// numbers the rest as the psABI does.
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         let name = name.strip_prefix('%').unwrap_or(name);
         // `%st(0)` and `%st` are the same register.
         let name = match name.replace(' ', "").as_str() {
@@ -333,8 +356,16 @@ impl Architecture for X86 {
         const GPR: [&str; 10] = [
             "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip", "eflags",
         ];
+        const GPR_DARWIN: [&str; 10] = [
+            "eax", "ecx", "edx", "ebx", "ebp", "esp", "esi", "edi", "eip", "eflags",
+        ];
+        let gpr = if format == crate::output::Format::MachO {
+            &GPR_DARWIN
+        } else {
+            &GPR
+        };
         const SEG: [&str; 6] = ["es", "cs", "ss", "ds", "fs", "gs"];
-        if let Some(i) = GPR.iter().position(|r| *r == name) {
+        if let Some(i) = gpr.iter().position(|r| *r == name) {
             return Some(i as u32);
         }
         if let Some(i) = SEG.iter().position(|r| *r == name) {
@@ -351,6 +382,154 @@ impl Architecture for X86 {
                 .or_else(|| vector(7).map(|n| 21 + n))
                 .or_else(|| numbered_register(name, "mm", 7).map(|n| 29 + n))
                 .or_else(|| numbered_register(name, "k", 7).map(|n| 93 + n)),
+        }
+    }
+
+    /// The compact unwind word `__LD,__compact_unwind` holds for a frame,
+    /// which on x86 describes a frame pointer prologue, a frameless function
+    /// whose stack adjustment the word itself holds, or a frameless one whose
+    /// adjustment the word only points the linker at.
+    ///
+    /// `DarwinX86AsmBackend::generateCompactUnwindEncoding` reads the
+    /// directives a compiler writes and gives up on anything else:
+    /// `.cfi_def_cfa_register` has to name the frame pointer, each
+    /// `.cfi_offset` has to name one of the six callee-saved registers the
+    /// word can hold, and behind a frame pointer the lowest of them has to
+    /// sit directly below the saved frame pointer. Giving up means
+    /// `UNWIND_X86_MODE_DWARF`, which asks the linker for the frame table
+    /// instead. Where arm64 gives each pair of saved registers a bit of its
+    /// own, x86 writes the registers themselves -- in the order they were
+    /// saved, three bits each, behind a frame pointer, and as the number of
+    /// the permutation they form where there is none, which is what makes
+    /// six of them fit in ten bits.
+    ///
+    /// A frame with no directives at all gets a word of zero, which is no
+    /// entry in the table rather than an entry describing nothing.
+    fn macho_compact_unwind(&self, insns: &[cfi::Insn], canonical: bool) -> Option<u32> {
+        use cfi::Insn;
+
+        const MODE_BP_FRAME: u32 = 0x0100_0000;
+        const MODE_STACK_IMMD: u32 = 0x0200_0000;
+        const MODE_STACK_IND: u32 = 0x0300_0000;
+        const MODE_DWARF: u32 = 0x0400_0000;
+        // Five of the six registers is all a frame pointer's word has room
+        // for; llvm-mc drops the sixth rather than give up.
+        const BP_FRAME_REGISTERS: u32 = 0x0000_7fff;
+
+        let wide = self.bits == 64;
+        // The six registers the word can name, numbered 1 to 6 in this
+        // order, as `.cfi_offset` names them: the callee-saved ones of each
+        // ABI, and the frame pointer last. A 32-bit number is Darwin's,
+        // which is the only numbering a compact unwind table is read in; see
+        // [`X86::dwarf_register`].
+        let order: [u32; 6] = if wide {
+            [3, 12, 13, 14, 15, 6]
+        } else {
+            [3, 1, 2, 7, 6, 4]
+        };
+        let frame_pointer = if wide { 6 } else { 4 };
+        // The stack slot a saved register takes, which is also the unit the
+        // word counts a stack adjustment in.
+        let slot = if wide { 8i64 } else { 4 };
+
+        // `.cfi_signal_frame` is not an instruction, only a note on the
+        // frame, and llvm-mc's list of instructions never holds one.
+        let insns: Vec<&Insn> = insns.iter().filter(|i| **i != Insn::Mark).collect();
+        if insns.is_empty() {
+            return Some(0);
+        }
+        if !canonical {
+            return Some(MODE_DWARF);
+        }
+
+        let mut saved: Vec<u32> = Vec::new();
+        let mut has_fp = false;
+        let mut stack = 0i64;
+        let mut lowest = i64::MAX;
+        // The bytes of the pushes that saved the registers, which the
+        // indirect form counts to find the stack adjustment's own
+        // instruction.
+        let mut pushes = 0u32;
+        for insn in insns {
+            match *insn {
+                Insn::DefCfaRegister(reg) => {
+                    if reg != frame_pointer {
+                        return Some(MODE_DWARF);
+                    }
+                    // What came before set the frame pointer up, and the
+                    // mode says so by itself.
+                    saved.clear();
+                    lowest = i64::MAX;
+                    has_fp = true;
+                }
+                // The last adjustment is the frame's size; the ones before
+                // it described the prologue on its way there.
+                Insn::DefCfaOffset(by) => stack = by,
+                Insn::Offset(reg, at) => {
+                    if saved.len() == order.len() {
+                        return Some(MODE_DWARF);
+                    }
+                    saved.push(reg);
+                    lowest = lowest.min(at.abs());
+                    pushes += if wide && (12..=15).contains(&reg) {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                _ => return Some(MODE_DWARF),
+            }
+        }
+        let Some(numbers) = saved
+            .iter()
+            .map(|r| order.iter().position(|o| o == r).map(|i| i as u32 + 1))
+            .collect::<Option<Vec<u32>>>()
+        else {
+            return Some(MODE_DWARF);
+        };
+        let count = numbers.len() as u32;
+
+        if has_fp {
+            // A register saved anywhere but in the run directly below the
+            // saved frame pointer, which is itself below the return address,
+            // is one the word cannot place.
+            if count != 0 && lowest != 3 * slot {
+                return Some(MODE_DWARF);
+            }
+            let regs = numbers
+                .iter()
+                .enumerate()
+                .fold(0, |w, (i, n)| w | (n << (3 * i)));
+            return Some(MODE_BP_FRAME | (count << 16) | (regs & BP_FRAME_REGISTERS));
+        }
+
+        let size = stack / slot;
+        let registers = (count << 10) | compact_unwind_permutation(&numbers);
+        Some(match u8::try_from(size) {
+            // The adjustment fits in the eight bits the word has for it.
+            Ok(size) => MODE_STACK_IMMD | (u32::from(size) << 16) | registers,
+            // It does not, so the linker reads it out of the `sub` that made
+            // the frame. The word carries the offset of that instruction's
+            // immediate, past the pushes that saved the registers and past
+            // the two or three bytes of opcode before it, and how many slots
+            // those pushes took, which the `sub` does not account for.
+            Err(_) => {
+                let at = if wide { 3 } else { 2 } + pushes;
+                MODE_STACK_IND | (at << 16) | ((count + 1) << 13) | registers
+            }
+        })
+    }
+
+    /// The same swap of `%esp` and `%ebp` as [`X86::dwarf_register`], which
+    /// takes a Darwin i386 register back to the number the psABI gives it.
+    fn dwarf_debug_register(&self, format: crate::output::Format, reg: u32) -> u32 {
+        if self.bits != 32 || format != crate::output::Format::MachO {
+            return reg;
+        }
+        match reg {
+            4 => 5,
+            5 => 4,
+            _ => reg,
         }
     }
 
@@ -401,6 +580,38 @@ impl Architecture for X86 {
             }
             _ => false,
         }
+    }
+}
+
+/// The ten bits a frameless compact unwind word gives the registers it
+/// saved, which hold their order rather than the registers themselves.
+///
+/// There are six registers the word can name and at most six saved, so there
+/// are 1,956 possibilities and ten bits is enough for a number of one of
+/// them. `encodeCompactUnwindRegistersWithoutFrame` arrives at that number
+/// by renumbering each register by how many of the ones saved before it are
+/// lower -- which leaves one fewer choice at each step -- and reading the
+/// result as a number whose digits run in a radix of their own.
+fn compact_unwind_permutation(numbers: &[u32]) -> u32 {
+    // The registers sit at the end of six slots, so that the digits of a
+    // shorter list are the last digits of a longer one's.
+    let mut slots = [0u32; 6];
+    let first = slots.len() - numbers.len();
+    slots[first..].copy_from_slice(numbers);
+    let mut digit = [0u32; 6];
+    for i in first..slots.len() {
+        let lower = (first..i).filter(|&j| slots[j] < slots[i]).count() as u32;
+        digit[i] = slots[i] - lower - 1;
+    }
+    let d = digit;
+    match numbers.len() {
+        6 => 120 * d[0] + 24 * d[1] + 6 * d[2] + 2 * d[3] + d[4],
+        5 => 120 * d[1] + 24 * d[2] + 6 * d[3] + 2 * d[4] + d[5],
+        4 => 60 * d[2] + 12 * d[3] + 3 * d[4] + d[5],
+        3 => 20 * d[3] + 4 * d[4] + d[5],
+        2 => 5 * d[4] + d[5],
+        1 => d[5],
+        _ => 0,
     }
 }
 

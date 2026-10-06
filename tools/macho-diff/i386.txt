@@ -1,0 +1,65 @@
+# Single statements in a 32-bit Mach-O object: what each reference to a
+# symbol this file does not define comes out as, and the directives whose
+# meaning is Darwin's. A line may hold several statements separated by `;`.
+#
+# The relocation is `GENERIC_RELOC_VANILLA` for all but the `@TLVP` lines --
+# a 32-bit object has one relocation for everything a field can hold -- and
+# what differs is the width, whether the entry is PC-relative and what the
+# field is left holding.
+calll _u
+jmp _u
+jne _u
+movl _u, %eax
+movl $_u, %eax
+leal _u, %eax
+leal _u+16, %eax
+pushl $_u
+.long _u
+.long _u+4
+.long _u-4
+.short _u
+.byte _u
+.quad _u
+.long _u; .long _u+8
+movl _v@TLVP, %eax
+movl _v@TLVP, %ecx
+.text; .globl _f; _f: nop
+.text; .private_extern _f; .globl _f; _f: nop
+.text; .weak_definition _f; .globl _f; _f: nop
+.text; .weak_reference _f; .long _f
+.text; .no_dead_strip _f; .globl _f; _f: nop
+.globl _f; .alt_entry _f; .text; _g: nop; _f: nop
+.comm _c,8,3
+.comm _c,1
+.lcomm _l,4,2
+.zerofill __DATA,__bss,_z,16,4
+.zerofill __DATA,__bss,_z,16
+.text; .set _a, 5
+.text; _a = 5
+.text; .globl _a; .set _a, 5
+.text; _f: retl; .set _a, _f
+.text; _f: retl; nop; .set _a, _f+1
+.text; _f: retl; nop; .globl _a; .set _a, _f+1
+.linker_option "-lfoo"
+.linker_option "-framework", "CoreFoundation"
+.subsections_via_symbols
+.macosx_version_min 10, 7
+.build_version macos, 13, 0
+.section __DATA,__foo
+.section __TEXT,__cstring,cstring_literals
+.section __TEXT,__text,regular,pure_instructions
+.section __TEXT,__stub,symbol_stubs,none,16
+.section __DATA,__nl_symbol_ptr,non_lazy_symbol_pointers
+.cstring; .asciz "hi"
+.literal4; .long 1
+.literal8; .quad 1
+.literal16; .quad 1; .quad 2
+.const; .long 1
+.const_data; .long 1
+.mod_init_func; .long 0
+.data; .align 3; .long 1
+.text; .align 4; nop
+.text; .p2align 4, 0x90; nop
+.tdata; .long 1
+.tlv; .long 0; .long 0; .long 0
+.tbss _t, 4, 2

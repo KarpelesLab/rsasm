@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ARM: take a difference of labels as the number an eight-byte `vldr` literal
   pool entry has to be, where GNU as's parser folds one
 - ARM: read the `(SBREL)`, `(TARGET1)` and `(TARGET2)` data suffixes
+- Mach-O: read the deployment target out of a Darwin target triple, and with
+  it write x86-64's compact unwind table, which llvm-mc writes from macOS
+  10.6 on
+- Mach-O: 32-bit objects for i386, with the narrower structures, Mach-O's
+  generic relocations and the scattered records a difference of symbols and a
+  reference into a symbol need
+- Mach-O: mark a `.set` alias of a position inside a label as not to be
+  dead-stripped, as llvm-mc does
 - AArch64: FEAT_MOPS's 132 memory copies and memory sets, whose stage and
   hints are spelled into the mnemonic, from `cpyfp` to `setgoptn`
 - AArch64: FEAT_LSFE's 60 floating-point atomics -- `ldfadd` to `stbfminnml`

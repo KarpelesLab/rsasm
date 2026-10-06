@@ -1,0 +1,5 @@
+# A deployment target older than any macOS an arm64 Mac ran. llvm-mc raises
+# it to 11.0, the release the architecture came in with, rather than name one
+# no such machine could load; arm64 has its compact unwind table either way.
+nop
+.cfi_startproc; .cfi_def_cfa_offset 16; ret; .cfi_endproc

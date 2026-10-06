@@ -1,0 +1,7 @@
+# The deployment target of a 32-bit macOS 10.6 triple: the version load
+# command is the same one x86-64 gets, and the compact unwind table comes
+# with it.
+nop
+.cfi_startproc; .cfi_def_cfa_offset 8; retl; .cfi_endproc
+.macosx_version_min 10, 7; nop
+.section __LD,__compact_unwind; .long 0

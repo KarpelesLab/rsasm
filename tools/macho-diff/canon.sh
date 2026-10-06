@@ -139,6 +139,9 @@ llvm-readobj --relocations --expand-relocs "$obj" | ${AWK:-awk} '
   $1 == "Type:" { type = $2 }
   $1 == "Symbol:" { target = $2 }
   $1 == "Section:" && off != "" { target = ($2 == "-" ? "addend=" paren($0) : "section=" $2) }
+  # A scattered record, which only a 32-bit object has, carries the address
+  # the field was worked out against instead of naming a symbol or a section.
+  $1 == "Value:" && off != "" { target = "value=" tolower($2) }
   $1 == "}" && off != "" {
     printf "reloc %s %s pcrel=%s len=%s %s %s\n", sect, off, pcrel, len, type, target
     off = ""

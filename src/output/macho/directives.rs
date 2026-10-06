@@ -35,8 +35,7 @@ impl Assembler {
             return id;
         }
         // A section llvm-mc knows from the start keeps what it knows of it.
-        let cpu = super::Cpu::for_arch(self.target());
-        let known = cpu.and_then(|cpu| super::precreated(cpu, segment, section));
+        let known = super::precreated(&self.macho.deployment, segment, section);
         let (ty, attrs, reserved2) = match known {
             Some((ty, attrs)) => (ty, attrs, 0),
             None => info.unwrap_or((super::S_REGULAR, 0, 0)),
