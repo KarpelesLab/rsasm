@@ -1,0 +1,289 @@
+# CodeView debugging information: the `.cv_*` directives and the `.debug$S`
+# subsection stream they write, against llvm-mc alone. No GNU as reads a
+# `.cv_*` directive at all, so there is no second opinion to take here.
+#
+# Every subsection is checked where the stream usually is, in a `.debug$S`
+# section, and also in `.text`, which is where llvm-mc puts it when nothing
+# switched sections: the file checksum table pads each entry to an alignment
+# of the section rather than of the subsection, so where the subsection
+# starts matters.
+=== string table offsets
+        .cv_string "hello"
+        .cv_string "world"
+        .cv_string "hello"
+        .cv_stringtable
+=== a file name is a string table entry
+        .cv_file 1 "a.c"
+        .cv_string "a.c"
+        .cv_stringtable
+=== a string written after the table still enters it
+        .cv_file 1 "a.c"
+        .cv_stringtable
+        .cv_string "zz"
+=== a second string table is empty
+        .cv_file 1 "a.c"
+        .cv_stringtable
+        .cv_stringtable
+=== the string table pads to four bytes of the section
+        .section .debug$S,"dr"
+        .byte   1
+        .cv_file 1 "ab.c"
+        .cv_stringtable
+# With no file declared llvm-mc writes no checksum subsection at all, and a
+# string table that is the empty string the offsets count from.
+=== both tables with nothing in them
+        .cv_filechecksums
+        .cv_stringtable
+=== file checksums, with none to write
+        .cv_file 1 "a.c"
+        .cv_filechecksums
+        .cv_stringtable
+=== an MD5 checksum
+        .cv_file 1 "C:\\src\\t.c" "00112233445566778899AABBCCDDEEFF" 1
+        .cv_filechecksums
+        .cv_stringtable
+=== a SHA1 and a SHA256 checksum
+        .cv_file 1 "a.c" "0011223344556677889900112233445566778899" 2
+        .cv_file 2 "b.c" "00112233445566778899001122334455667788990011223344556677889900aa" 3
+        .cv_filechecksums
+        .cv_stringtable
+# llvm-mc neither checks the kind against the checksum's length nor the kind
+# itself, and it narrows the kind to a byte, which turns 256 into "no
+# checksum" and drops the bytes with it.
+=== a checksum of the wrong length, and a kind of its own
+        .cv_file 1 "a.c" "00112233445566778899aabbccddee" 1
+        .cv_file 2 "b.c" "00112233445566778899aabbccddeeff" 9
+        .cv_file 3 "c.c" "0011" 256
+        .cv_filechecksums
+        .cv_stringtable
+# An odd number of hexadecimal digits leaves the first one as the low half of
+# the first byte, as llvm's `fromHex` reads it.
+=== an odd number of checksum digits
+        .cv_file 1 "a.c" "001" 1
+        .cv_filechecksums
+=== an entry with no checksum asks for no alignment
+        .section .debug$S,"dr"
+        .cv_file 1 "a.c"
+        .cv_filechecksums
+=== an entry with a checksum aligns the section
+        .section .debug$S,"dr"
+        .cv_file 1 "a.c" "00112233445566778899aabbccddeeff" 1
+        .cv_filechecksums
+=== checksum entries alternating between the two forms
+        .cv_file 1 "aaa.c"
+        .cv_file 2 "b.c" "00112233445566778899aabbccddeeff" 1
+        .cv_file 3 "cc.c"
+        .cv_filechecksums
+        .cv_stringtable
+=== a checksum table that does not start on a four-byte boundary
+        .section .debug$S,"dr"
+        .byte   1
+        .cv_file 1 "a.c" "00112233445566778899aabbccddeeff" 1
+        .cv_file 2 "b.c" "00112233445566778899aabbccddeeff" 1
+        .cv_filechecksumoffset 2
+        .cv_filechecksums
+=== where a file's entry is in the checksum table
+        .cv_file 1 "a.c"
+        .cv_file 2 "bb.c"
+        .cv_filechecksumoffset 2
+        .cv_filechecksumoffset 1
+        .cv_filechecksums
+=== a line table
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 10 0
+        nop
+        .cv_loc 0 1 11 0
+        ret
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== columns, statements and a prologue end
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 10 3 is_stmt 1
+        nop
+        .cv_loc 0 1 11 4 prologue_end
+        nop
+        .cv_loc 0 1 12 5 is_stmt 0
+        ret
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+        .cv_stringtable
+=== a column past sixteen bits is no column
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 1 65535
+        nop
+        .cv_loc 0 1 2 65536
+        nop
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== a row with no line
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1
+        nop
+        .cv_loc 0 1 7
+        nop
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+# A `.cv_loc` makes its row where it stands rather than at the next
+# instruction, so two in a row make two rows at one address.
+=== two rows at one address
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 7 0
+        .cv_loc 0 1 8 0
+        nop
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== a row before the function's first label, and one after its last
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+        .cv_loc 0 1 7 0
+f:
+        nop
+fend:
+        .cv_loc 0 1 9 0
+        nop
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== rows on data
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 7 0
+        .byte   1
+        .cv_loc 0 1 8 0
+        .byte   2
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== a block for each run of rows that share a file
+        .cv_file 1 "a.c"
+        .cv_file 2 "b.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 10 0
+        nop
+        .cv_loc 0 2 20 0
+        nop
+        .cv_loc 0 1 30 0
+        ret
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+        .cv_stringtable
+=== a function with no rows is a header alone
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        nop
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== a function id no .cv_func_id introduced has no rows either
+        .cv_file 1 "a.c"
+f:
+        nop
+fend:
+        .cv_linetable 7, f, fend
+=== a second line table of the same function writes it again
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 7 0
+        nop
+fend:
+        .cv_linetable 0, f, fend
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== each function id keeps its own rows
+        .cv_func_id 3
+        .cv_func_id 1
+        .cv_file 1 "a.c"
+f:
+        .cv_loc 3 1 5 0
+        nop
+        .cv_loc 1 1 6 0
+        nop
+fend:
+        .cv_linetable 1, f, fend
+        .cv_linetable 3, f, fend
+        .cv_filechecksums
+# A function named by a label the symbol table does not keep is relocated
+# against its section, with the label's offset in the field; the section index
+# has no room for an offset and holds zero.
+=== a function named by a private label
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+        nop
+.Lf:
+        .cv_loc 0 1 1 0
+        nop
+.Lend:
+        .cv_linetable 0, .Lf, .Lend
+        .cv_filechecksums
+# A file number skipped leaves a hole that only the checksum table minds; the
+# string table has the name either way.
+=== a file number skipped
+        .cv_file 1 "a.c"
+        .cv_file 3 "b.c"
+        .cv_stringtable
+# A code size cannot be a number when the two labels are in different
+# sections, so llvm-mc relocates the field and leaves it holding a distance to
+# the field rather than a length. rsasm leaves it to the same machinery and
+# lands in the same place.
+=== a function whose end is in another section
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 1 0
+        nop
+        .section .other,"xr"
+fend:
+        nop
+        .text
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+=== a stream in .debug$S
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+        .text
+        .globl  main
+        .def    main; .scl 2; .type 32; .endef
+main:
+        .cv_loc 0 1 3 1
+        nop
+        .cv_loc 0 1 4 5
+        ret
+.Lmain_end:
+        .section .debug$S,"dr"
+        .long   4
+        .cv_linetable 0, main, .Lmain_end
+        .cv_filechecksums
+        .cv_stringtable
+=== rows in a section of their own
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+        .section .text$f,"xr"
+f:
+        .cv_loc 0 1 1 0
+        nop
+        .cv_loc 0 1 2 0
+        ret
+fend:
+        .section .debug$S,"dr"
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+        .cv_stringtable

@@ -66,6 +66,10 @@ impl Assembler {
         self.bind_section_names();
         self.report_undefined_locals();
         self.check_cc_bare_labels();
+        // The CodeView string table is placed where `.cv_stringtable` asked
+        // for it and filled in here, since a `.cv_string` after that
+        // directive still enters it.
+        self.finish_codeview();
         self.pad_section_tails();
         self.add_attributes_section();
         // Which references a Mach-O object resolves depends on where its
