@@ -26,6 +26,13 @@ MATTR = ",".join([
     "+jsconv", "+complxnum", "+rcpc3", "+cssc", "+the", "+d128", "+lut",
     "+faminmax", "+fp8", "+fp8fma", "+fp8dot2", "+fp8dot4", "+sme", "+sme2",
     "+sme2p1",
+    # FEAT_LSFE's floating-point atomics, FEAT_LSCP's acquire-release pair,
+    # and the SVE2.2 and SVE2.3 additions.
+    "+lsfe", "+lscp", "+sve2p2", "+sve2p3",
+    # The two extensions the handwritten encoder owns, which the fuzzer still
+    # has to be able to put through llvm-mc: FEAT_MOPS, with the
+    # granule-only sets of FEAT_MOPS_GO, and FEAT_CMPBR.
+    "+mops", "+mops-go", "+cmpbr",
 ])
 
 TRIPLE = "aarch64"
@@ -61,6 +68,9 @@ GP_GROUPS = re.compile(r"""
   | rcw s? (cas|clr|set|swp) p? (a|l|al)?
     # FEAT_LRCPC's acquiring load and FEAT_LRCPC3's ordered pair.
   | ldapr [bh]? | ldiapp | stilp
+    # FEAT_LSCP's acquire-release pair, which is two doublewords at the base
+    # register and nothing else: no offset, and no 32-bit form.
+  | ldap p? | stlp
     # The pointer-authentication instructions that name a register. The
     # spellings with a fixed modifier -- `paciasp`, `paciaz`, `pacia1716`,
     # `xpaclri` -- are `hint` encodings and separate mnemonics to both

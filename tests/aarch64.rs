@@ -1988,6 +1988,39 @@ fn memory_copy_diagnostics() {
     rejects("setgop [x0]!, x1!, x2", &["takes 2 operand"]);
 }
 
+/// FEAT_LSFE's floating-point atomics and FEAT_LSCP's acquire-release pair,
+/// which the generated table gained with the rest of the general-purpose
+/// groups. A `ldf<op>` returns the old value and a `stf<op>` discards it,
+/// which is the same word with the zero register in the result.
+#[test]
+fn floating_point_atomics_and_the_ordered_pair() {
+    check(&[
+        ("ldfadd h0, h1, [x2]", "41 00 20 7c"),
+        ("ldfadd s0, s1, [x2]", "41 00 20 bc"),
+        ("ldfadd d0, d1, [x2]", "41 00 20 fc"),
+        ("ldfadda s0, s1, [x2]", "41 00 a0 bc"),
+        ("ldfaddl s0, s1, [x2]", "41 00 60 bc"),
+        ("ldfaddal s31, s30, [sp]", "fe 03 ff bc"),
+        ("ldfmax d0, d1, [x2]", "41 40 20 fc"),
+        ("ldfmin h0, h1, [x2]", "41 50 20 7c"),
+        ("ldfmaxnm s0, s1, [x2]", "41 60 20 bc"),
+        ("ldfminnm s0, s1, [x2]", "41 70 20 bc"),
+        ("stfadd s0, [x1]", "3f 80 20 bc"),
+        ("stfaddl d31, [sp]", "ff 83 7f fc"),
+        ("stfmaxnm h0, [x1]", "3f e0 20 7c"),
+        // The BFloat16 flavour, which has a halfword form and no other.
+        ("ldbfadd h0, h1, [x2]", "41 00 20 3c"),
+        ("ldbfminnmal h31, h30, [sp]", "fe 73 ff 3c"),
+        ("stbfadd h0, [x1]", "3f 80 20 3c"),
+        ("stbfminnml h31, [sp]", "ff f3 7f 3c"),
+        // FEAT_LSCP, which is a pair of doublewords at the base register:
+        // no offset, and no 32-bit form.
+        ("ldap x0, x1, [x2]", "40 58 41 d9"),
+        ("ldapp x30, x29, [sp]", "fe 7b 5d d9"),
+        ("stlp x0, x1, [x2]", "40 58 01 d9"),
+    ]);
+}
+
 /// The general-purpose groups the generated table gained with the one-off
 /// forms: the CRC32 checksums, the unprivileged loads and stores, and the
 /// byte, halfword and signed-word members of the unscaled acquire-release

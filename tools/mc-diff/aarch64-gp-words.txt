@@ -253,6 +253,12 @@ ldaddlb wzr, wzr, [sp]
 ldaddlh w0, w0, [x0]
 ldaddlh w16, w14, [x24]
 ldaddlh wzr, wzr, [sp]
+ldap x0, x0, [x0]
+ldap x26, x23, [x21]
+ldap xzr, xzr, [sp]
+ldapp x0, x0, [x0]
+ldapp x25, x26, [x27]
+ldapp xzr, xzr, [sp]
 ldapr w0, [x0]
 ldapr w0, [x0], #4
 ldapr w20, [x24]
@@ -1266,6 +1272,9 @@ stllrb wzr, [sp]
 stllrh w0, [x0]
 stllrh w11, [x30]
 stllrh wzr, [sp]
+stlp x0, x0, [x0]
+stlp x2, x18, [x13]
+stlp xzr, xzr, [sp]
 stlr w0, [x0, #-4]!
 stlr w0, [x0]
 stlr w1, [x1, #-4]!
@@ -1557,6 +1566,18 @@ subg x10, x1, #992, #4
 subp x0, x0, x0
 subp x27, x26, x18
 subp xzr, sp, sp
+subp z0.b, p0/m, z0.b, z0.b
+subp z0.d, p0/m, z0.d, z0.d
+subp z0.h, p0/m, z0.h, z0.h
+subp z0.s, p0/m, z0.s, z0.s
+subp z1.s, p5/m, z1.s, z0.s
+subp z10.d, p0/m, z10.d, z10.d
+subp z30.b, p7/m, z30.b, z4.b
+subp z31.b, p7/m, z31.b, z31.b
+subp z31.d, p7/m, z31.d, z31.d
+subp z31.h, p7/m, z31.h, z31.h
+subp z31.s, p7/m, z31.s, z31.s
+subp z9.h, p2/m, z9.h, z2.h
 subps x0, x0, x0
 subps x7, x1, x13
 subps xzr, sp, sp
