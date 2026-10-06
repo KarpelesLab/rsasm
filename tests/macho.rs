@@ -17,8 +17,19 @@ use rsasm::output::{self, Format};
 /// Assembles `src` for `arch` as a Mach-O object.
 #[allow(dead_code)]
 fn macho_for(arch: &str, src: &str) -> Result<Vec<u8>, String> {
+    macho_for_triple(arch, None, src)
+}
+
+/// The same, for a target triple naming a deployment version: what it names
+/// decides the object's version load command and whether the linker is given
+/// a compact unwind table.
+#[allow(dead_code)]
+fn macho_for_triple(arch: &str, triple: Option<&str>, src: &str) -> Result<Vec<u8>, String> {
     let a = arch::lookup(arch).unwrap_or_else(|| panic!("no `{arch}` backend in this build"));
-    let options = Options::new().with_format(Format::MachO);
+    let mut options = Options::new().with_format(Format::MachO);
+    if let Some(triple) = triple {
+        options = options.with_target_triple(triple);
+    }
     let mut asm = Assembler::new(a, options);
     asm.assemble_str("test.s", src);
     if !asm.finish() || asm.diags.has_errors() {
@@ -40,7 +51,17 @@ fn unhex(lines: &[&str]) -> Vec<u8> {
 /// showing where the two first differ otherwise.
 #[allow(dead_code)]
 fn assert_object(arch: &str, src: &str, expected: &[&str]) {
-    let got = macho_for(arch, src).unwrap_or_else(|e| panic!("assembly failed:\n{e}"));
+    assert_bytes(macho_for(arch, src), expected);
+}
+
+/// The same, for a target triple naming a deployment version.
+#[allow(dead_code)]
+fn assert_object_for(arch: &str, triple: &str, src: &str, expected: &[&str]) {
+    assert_bytes(macho_for_triple(arch, Some(triple), src), expected);
+}
+
+fn assert_bytes(object: Result<Vec<u8>, String>, expected: &[&str]) {
+    let got = object.unwrap_or_else(|e| panic!("assembly failed:\n{e}"));
     let want = unhex(expected);
     if got != want {
         let at = got
@@ -933,6 +954,380 @@ L_lazy$lazy_ptr:
             "07 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00",
             "01 00 00 00 01 00 01 00 00 00 00 00 00 00 00 00",
             "00 5f 6c 61 7a 79 00 5f 65 78 74 00 00 00 00 00",
+        ],
+    );
+}
+
+/// Every shape a 32-bit relocation takes: the ordinary record naming a
+/// section or a symbol, the scattered one carrying an address, and the
+/// `SECTDIFF` and `PAIR` a difference of symbols needs.
+#[cfg(feature = "x86")]
+#[test]
+fn i386_relocation_kinds() {
+    let src = r#"	.text
+	.globl	_f
+_f:
+	calll	_u
+	calll	_g
+	movl	_d, %eax
+	retl
+	.section	__TEXT,__other
+	.globl	_g
+_g:
+	nop
+	.data
+_d:
+	.long	1
+_e:
+	.long	_d
+	.long	_d+4
+	.long	_u
+	.long	_u+4
+	.long	_e-_d
+	.long	_f-_d
+"#;
+    assert_object(
+        "i386",
+        src,
+        &[
+            "ce fa ed fe 07 00 00 00 03 00 00 00 01 00 00 00",
+            "03 00 00 00 6c 01 00 00 00 00 00 00 01 00 00 00",
+            "04 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 2d 00 00 00 88 01 00 00",
+            "2d 00 00 00 07 00 00 00 07 00 00 00 03 00 00 00",
+            "00 00 00 00 5f 5f 74 65 78 74 00 00 00 00 00 00",
+            "00 00 00 00 5f 5f 54 45 58 54 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 10 00 00 00 88 01 00 00",
+            "00 00 00 00 b8 01 00 00 03 00 00 00 00 04 00 80",
+            "00 00 00 00 00 00 00 00 5f 5f 6f 74 68 65 72 00",
+            "00 00 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 10 00 00 00 01 00 00 00",
+            "98 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 04 00 00 00 00 00 00 00 00 00 00 5f 5f 64 61",
+            "74 61 00 00 00 00 00 00 00 00 00 00 5f 5f 44 41",
+            "54 41 00 00 00 00 00 00 00 00 00 00 11 00 00 00",
+            "1c 00 00 00 99 01 00 00 00 00 00 00 d0 01 00 00",
+            "06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "02 00 00 00 18 00 00 00 00 02 00 00 05 00 00 00",
+            "3c 02 00 00 10 00 00 00 0b 00 00 00 50 00 00 00",
+            "00 00 00 00 02 00 00 00 02 00 00 00 02 00 00 00",
+            "04 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 e8 fb ff ff ff e8 06 00",
+            "00 00 a1 11 00 00 00 c3 90 01 00 00 00 11 00 00",
+            "00 15 00 00 00 00 00 00 00 04 00 00 00 04 00 00",
+            "00 ef ff ff ff 00 00 00 0b 00 00 00 03 00 00 04",
+            "06 00 00 00 02 00 00 05 01 00 00 00 04 00 00 0d",
+            "18 00 00 a2 00 00 00 00 00 00 00 a1 11 00 00 00",
+            "10 00 00 00 04 00 00 0c 0c 00 00 00 04 00 00 0c",
+            "08 00 00 a0 11 00 00 00 04 00 00 00 03 00 00 04",
+            "0d 00 00 00 0e 03 00 00 11 00 00 00 0a 00 00 00",
+            "0e 03 00 00 15 00 00 00 07 00 00 00 0f 01 00 00",
+            "00 00 00 00 04 00 00 00 0f 02 00 00 10 00 00 00",
+            "01 00 00 00 01 00 00 00 00 00 00 00 00 5f 75 00",
+            "5f 67 00 5f 66 00 5f 65 00 5f 64 00",
+        ],
+    );
+}
+
+/// A C `main` calling `printf` through the PIC base, as clang writes it
+/// for a 32-bit target.
+#[cfg(feature = "x86")]
+#[test]
+fn i386_hello_as_clang_writes_it() {
+    let src = r#"	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_main
+	.align	4, 0x90
+_main:
+	pushl	%ebp
+	movl	%esp, %ebp
+	subl	$8, %esp
+	calll	L0$pb
+L0$pb:
+	popl	%eax
+	leal	L_.str-L0$pb(%eax), %eax
+	movl	%eax, (%esp)
+	calll	_printf
+	xorl	%eax, %eax
+	addl	$8, %esp
+	popl	%ebp
+	retl
+	.section	__TEXT,__cstring,cstring_literals
+L_.str:
+	.asciz	"Hello from rsasm!\n"
+.subsections_via_symbols
+"#;
+    assert_object(
+        "i386",
+        src,
+        &[
+            "ce fa ed fe 07 00 00 00 03 00 00 00 01 00 00 00",
+            "03 00 00 00 28 01 00 00 00 20 00 00 01 00 00 00",
+            "c0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 34 00 00 00 44 01 00 00",
+            "34 00 00 00 07 00 00 00 07 00 00 00 02 00 00 00",
+            "00 00 00 00 5f 5f 74 65 78 74 00 00 00 00 00 00",
+            "00 00 00 00 5f 5f 54 45 58 54 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 21 00 00 00 44 01 00 00",
+            "04 00 00 00 78 01 00 00 03 00 00 00 00 04 00 80",
+            "00 00 00 00 00 00 00 00 5f 5f 63 73 74 72 69 6e",
+            "67 00 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 21 00 00 00 13 00 00 00",
+            "65 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "02 00 00 00 00 00 00 00 00 00 00 00 02 00 00 00",
+            "18 00 00 00 90 01 00 00 02 00 00 00 a8 01 00 00",
+            "10 00 00 00 0b 00 00 00 50 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 01 00 00 00 01 00 00 00",
+            "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 55 89 e5 83 ec 08 e8 00 00 00 00 58",
+            "8d 80 16 00 00 00 89 04 24 e8 e6 ff ff ff 31 c0",
+            "83 c4 08 5d c3 48 65 6c 6c 6f 20 66 72 6f 6d 20",
+            "72 73 61 73 6d 21 0a 00 16 00 00 00 01 00 00 0d",
+            "0e 00 00 a4 21 00 00 00 00 00 00 a1 0b 00 00 00",
+            "01 00 00 00 0f 01 00 00 00 00 00 00 07 00 00 00",
+            "01 00 00 00 00 00 00 00 00 5f 6d 61 69 6e 00 5f",
+            "70 72 69 6e 74 66 00 00",
+        ],
+    );
+}
+
+/// A thread-local variable's descriptor, reached both directly and through
+/// the PIC base.
+#[cfg(feature = "x86")]
+#[test]
+fn i386_thread_local_variable() {
+    let src = r#"	.section	__DATA,__thread_data,thread_local_regular
+_v$tlv$init:
+	.long	42
+	.section	__DATA,__thread_vars,thread_local_variables
+	.globl	_v
+_v:
+	.long	__tlv_bootstrap
+	.long	0
+	.long	_v$tlv$init
+	.text
+	.globl	_f
+_f:
+	movl	_v@TLVP, %eax
+	calll	*(%eax)
+	calll	L0$pb
+L0$pb:
+	popl	%eax
+	movl	_v@TLVP-L0$pb(%eax), %ecx
+	retl
+"#;
+    assert_object(
+        "i386",
+        src,
+        &[
+            "ce fa ed fe 07 00 00 00 03 00 00 00 01 00 00 00",
+            "03 00 00 00 6c 01 00 00 00 00 00 00 01 00 00 00",
+            "04 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 24 00 00 00 88 01 00 00",
+            "24 00 00 00 07 00 00 00 07 00 00 00 03 00 00 00",
+            "00 00 00 00 5f 5f 74 65 78 74 00 00 00 00 00 00",
+            "00 00 00 00 5f 5f 54 45 58 54 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 14 00 00 00 88 01 00 00",
+            "00 00 00 00 ac 01 00 00 02 00 00 00 00 04 00 80",
+            "00 00 00 00 00 00 00 00 5f 5f 74 68 72 65 61 64",
+            "5f 64 61 74 61 00 00 00 5f 5f 44 41 54 41 00 00",
+            "00 00 00 00 00 00 00 00 14 00 00 00 04 00 00 00",
+            "9c 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "11 00 00 00 00 00 00 00 00 00 00 00 5f 5f 74 68",
+            "72 65 61 64 5f 76 61 72 73 00 00 00 5f 5f 44 41",
+            "54 41 00 00 00 00 00 00 00 00 00 00 18 00 00 00",
+            "0c 00 00 00 a0 01 00 00 00 00 00 00 bc 01 00 00",
+            "02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 00",
+            "02 00 00 00 18 00 00 00 cc 01 00 00 04 00 00 00",
+            "fc 01 00 00 24 00 00 00 0b 00 00 00 50 00 00 00",
+            "00 00 00 00 01 00 00 00 01 00 00 00 02 00 00 00",
+            "03 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 a1 00 00 00 00 ff 10 e8",
+            "00 00 00 00 58 8b 88 07 00 00 00 c3 2a 00 00 00",
+            "00 00 00 00 00 00 00 00 14 00 00 00 0f 00 00 00",
+            "02 00 00 5d 01 00 00 00 02 00 00 5c 08 00 00 00",
+            "02 00 00 04 00 00 00 00 03 00 00 0c 04 00 00 00",
+            "0e 02 00 00 14 00 00 00 20 00 00 00 0f 01 00 00",
+            "00 00 00 00 01 00 00 00 0f 03 00 00 18 00 00 00",
+            "10 00 00 00 01 00 00 00 00 00 00 00 00 5f 76 00",
+            "5f 76 24 74 6c 76 24 69 6e 69 74 00 5f 5f 74 6c",
+            "76 5f 62 6f 6f 74 73 74 72 61 70 00 5f 66 00 00",
+        ],
+    );
+}
+
+/// A line table and a frame table in a 32-bit object: four-byte addresses,
+/// relocations naming a section apiece, and Darwin's own i386 register
+/// numbering in the frame table.
+#[cfg(feature = "x86")]
+#[test]
+fn i386_debug_and_frame_sections() {
+    let src = r#"	.file	1 "a.c"
+	.text
+	.globl	_f
+_f:
+	.cfi_startproc
+	.loc	1 1 0
+	pushl	%ebp
+	.cfi_def_cfa_offset 8
+	.cfi_offset %ebp, -8
+	movl	%esp, %ebp
+	.cfi_def_cfa_register %ebp
+	.loc	1 2 0
+	popl	%ebp
+	retl
+	.cfi_endproc
+"#;
+    assert_object(
+        "i386",
+        src,
+        &[
+            "ce fa ed fe 07 00 00 00 03 00 00 00 01 00 00 00",
+            "03 00 00 00 6c 01 00 00 00 00 00 00 01 00 00 00",
+            "04 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 6f 00 00 00 88 01 00 00",
+            "6f 00 00 00 07 00 00 00 07 00 00 00 03 00 00 00",
+            "00 00 00 00 5f 5f 74 65 78 74 00 00 00 00 00 00",
+            "00 00 00 00 5f 5f 54 45 58 54 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 05 00 00 00 88 01 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 04 00 80",
+            "00 00 00 00 00 00 00 00 5f 5f 65 68 5f 66 72 61",
+            "6d 65 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 08 00 00 00 34 00 00 00",
+            "90 01 00 00 02 00 00 00 00 00 00 00 00 00 00 00",
+            "0b 00 00 68 00 00 00 00 00 00 00 00 5f 5f 64 65",
+            "62 75 67 5f 6c 69 6e 65 00 00 00 00 5f 5f 44 57",
+            "41 52 46 00 00 00 00 00 00 00 00 00 3c 00 00 00",
+            "33 00 00 00 c4 01 00 00 00 00 00 00 f8 01 00 00",
+            "01 00 00 00 00 00 00 02 00 00 00 00 00 00 00 00",
+            "02 00 00 00 18 00 00 00 00 02 00 00 01 00 00 00",
+            "0c 02 00 00 04 00 00 00 0b 00 00 00 50 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00",
+            "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 55 89 e5 5d c3 00 00 00",
+            "14 00 00 00 00 00 00 00 01 7a 52 00 01 7c 08 01",
+            "10 0c 05 04 88 01 00 00 18 00 00 00 1c 00 00 00",
+            "d8 ff ff ff 05 00 00 00 00 41 0e 08 84 02 42 0d",
+            "04 00 00 00 2f 00 00 00 04 00 1b 00 00 00 01 01",
+            "01 fb 0e 0d 00 01 01 01 01 00 00 00 01 00 00 01",
+            "00 61 2e 63 00 00 00 00 00 00 05 02 00 00 00 00",
+            "01 3d 02 02 00 01 01 00 28 00 00 00 01 00 00 04",
+            "01 00 00 00 0f 01 00 00 00 00 00 00 00 5f 66 00",
+        ],
+    );
+}
+
+/// The compact unwind table a macOS 10.6 deployment target asks for: a
+/// frame pointer prologue, a frameless function whose saved registers the
+/// word permutes, and one no word can describe.
+#[cfg(feature = "x86")]
+#[test]
+fn x86_64_compact_unwind_describes_a_frame() {
+    let src = r#"	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_f
+_f:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%rbx
+	.cfi_offset %rbx, -24
+	popq	%rbx
+	popq	%rbp
+	retq
+	.cfi_endproc
+	.globl	_g
+_g:
+	.cfi_startproc
+	pushq	%r12
+	.cfi_def_cfa_offset 16
+	.cfi_offset %r12, -16
+	pushq	%rbx
+	.cfi_offset %rbx, -24
+	pushq	%r14
+	.cfi_offset %r14, -32
+	retq
+	.cfi_endproc
+	.globl	_h
+_h:
+	.cfi_startproc
+	.cfi_def_cfa_offset 16
+	.cfi_escape 0x08
+	retq
+	.cfi_endproc
+	.globl	_k
+_k:
+	.cfi_startproc
+	nop
+	.cfi_endproc
+"#;
+    assert_object_for(
+        "x86-64",
+        "x86_64-apple-macos10.6",
+        src,
+        &[
+            "cf fa ed fe 07 00 00 01 03 00 00 00 01 00 00 00",
+            "04 00 00 00 b0 01 00 00 00 00 00 00 00 00 00 00",
+            "19 00 00 00 38 01 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "18 01 00 00 00 00 00 00 d0 01 00 00 00 00 00 00",
+            "18 01 00 00 00 00 00 00 07 00 00 00 07 00 00 00",
+            "03 00 00 00 00 00 00 00 5f 5f 74 65 78 74 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "10 00 00 00 00 00 00 00 d0 01 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 04 00 80 00 00 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 63 6f 6d 70 61 63",
+            "74 5f 75 6e 77 69 6e 64 5f 5f 4c 44 00 00 00 00",
+            "00 00 00 00 00 00 00 00 10 00 00 00 00 00 00 00",
+            "60 00 00 00 00 00 00 00 e0 01 00 00 03 00 00 00",
+            "e8 02 00 00 03 00 00 00 00 00 00 02 00 00 00 00",
+            "00 00 00 00 00 00 00 00 5f 5f 65 68 5f 66 72 61",
+            "6d 65 00 00 00 00 00 00 5f 5f 54 45 58 54 00 00",
+            "00 00 00 00 00 00 00 00 70 00 00 00 00 00 00 00",
+            "a8 00 00 00 00 00 00 00 40 02 00 00 03 00 00 00",
+            "00 00 00 00 00 00 00 00 0b 00 00 68 00 00 00 00",
+            "00 00 00 00 00 00 00 00 24 00 00 00 10 00 00 00",
+            "00 06 0a 00 00 00 00 00 02 00 00 00 18 00 00 00",
+            "00 03 00 00 04 00 00 00 40 03 00 00 10 00 00 00",
+            "0b 00 00 00 50 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 04 00 00 00 04 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "55 48 89 e5 53 5b 5d c3 41 54 53 41 56 c3 c3 90",
+            "00 00 00 00 00 00 00 00 08 00 00 00 01 00 01 01",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "08 00 00 00 00 00 00 00 06 00 00 00 15 0c 02 02",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "0e 00 00 00 00 00 00 00 01 00 00 00 00 00 00 04",
+            "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "14 00 00 00 00 00 00 00 01 7a 52 00 01 78 10 01",
+            "10 0c 07 08 90 01 00 00 24 00 00 00 1c 00 00 00",
+            "70 ff ff ff ff ff ff ff 08 00 00 00 00 00 00 00",
+            "00 41 0e 10 86 02 43 0d 06 41 83 03 00 00 00 00",
+            "24 00 00 00 44 00 00 00 50 ff ff ff ff ff ff ff",
+            "06 00 00 00 00 00 00 00 00 42 0e 10 8c 02 41 83",
+            "03 42 8e 04 00 00 00 00 1c 00 00 00 6c 00 00 00",
+            "2e ff ff ff ff ff ff ff 01 00 00 00 00 00 00 00",
+            "00 0e 10 08 00 00 00 00 1c 00 00 00 8c 00 00 00",
+            "0f ff ff ff ff ff ff ff 01 00 00 00 00 00 00 00",
+            "00 00 00 00 00 00 00 00 40 00 00 00 01 00 00 06",
+            "20 00 00 00 01 00 00 06 00 00 00 00 01 00 00 06",
+            "0a 00 00 00 0f 01 00 00 00 00 00 00 00 00 00 00",
+            "07 00 00 00 0f 01 00 00 08 00 00 00 00 00 00 00",
+            "04 00 00 00 0f 01 00 00 0e 00 00 00 00 00 00 00",
+            "01 00 00 00 0f 01 00 00 0f 00 00 00 00 00 00 00",
+            "00 5f 6b 00 5f 68 00 5f 67 00 5f 66 00 00 00 00",
         ],
     );
 }
