@@ -9,9 +9,9 @@
 //! and the only way to reach an `r16`-`r31` operand of an instruction whose
 //! legacy opcode is in the `0F 38` map, since REX2 covers the one-byte and
 //! `0F` maps and nothing else. The map-4 opcode is usually the legacy opcode
-//! with its escape bytes dropped, but `movbe` and the three bit counts were
-//! renumbered and four instructions changed their mandatory prefix, so each
-//! family states its own.
+//! with its escape bytes dropped, but `movbe`, the three bit counts and the
+//! immediate `shld`/`shrd` were renumbered, and four instructions changed
+//! their mandatory prefix, so each family states its own.
 //!
 //! **NDD rows** add a destination register, carried in `vvvv` with `EVEX.ND`
 //! set, which turns the read-modify-write integer instructions into
@@ -35,9 +35,9 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// An extended-EVEX row in map 4, which is where the promoted legacy opcodes
-/// and everything new live. Only `push2` and `pop2` are in another map's
-/// reach, and they are not: map 4 holds them too.
+/// An extended-EVEX row in map 4, where the promoted legacy opcodes and
+/// everything APX added live. A promoted VEX row keeps the map it already had
+/// and is cloned rather than written out, so it does not come through here.
 fn m4(ops: Vec<Op>, opcode: u8, modrm: ModRm, opsize: u8) -> Def {
     d(ops, &[opcode], modrm, opsize).apx(4).flags(ONLY64)
 }
@@ -157,9 +157,9 @@ pub fn install(t: &mut Tbl) {
 fn install_alu(t: &mut Tbl) {
     for &(mnem, base, ext, nf) in ALU {
         let nf = if nf { APX_NF } else { 0 };
-        // A row with `n` leading destination registers, in the order the
-        // legacy group lists its forms, so the matcher keeps preferring the
-        // sign-extended byte immediate.
+        // The group's rows, with or without the leading destination
+        // register, in the order the legacy group lists its forms so that the
+        // matcher goes on preferring the sign-extended byte immediate.
         let rows = |ndd: bool| {
             let head = |mut ops: Vec<Op>, w: u8| {
                 if ndd {
@@ -508,16 +508,14 @@ fn install_conditional(t: &mut Tbl) {
 
 /// The stack instructions APX added: a hinted push and pop, which are the
 /// ordinary ones under REX2 with `W` set, and the paired forms, which push or
-/// pop two registers at once.
+/// pop two registers at once. Only the pair refuses `rsp`; the hinted forms
+/// take it, as `push` and `pop` do.
 fn install_stack(t: &mut Tbl) {
     for (mnem, op) in [("pushp", 0x50u8), ("popp", 0x58)] {
         add(
             t,
             mnem,
-            vec![
-                d(vec![Op::R(8)], &[op], ModRm::None, 64)
-                    .flags(PLUSREG | ONLY64 | APX_REX2 | NO_RSP),
-            ],
+            vec![d(vec![Op::R(8)], &[op], ModRm::None, 64).flags(PLUSREG | ONLY64 | APX_REX2)],
         );
     }
     // `push2` writes the pair in `vvvv` and r/m; `W` is the push-pop-acceleration

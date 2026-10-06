@@ -81,6 +81,8 @@ fn the_hinted_and_paired_stack_instructions() {
     // `pushp` and `popp` are `push` and `pop` with REX2.W, the hint that the
     // two will be matched; the paired forms write the second register in `vvvv`.
     enc("pushp %rax", "d5 08 50");
+    enc("pushp %rsp", "d5 08 54");
+    enc("popp %rsp", "d5 08 5c");
     enc("popp %rax", "d5 08 58");
     enc("pushp %r16", "d5 18 50");
     enc("popp %r31", "d5 19 5f");
@@ -311,6 +313,7 @@ fn what_the_references_refuse() {
     // The paired forms move the stack pointer themselves, and `pop2` writes
     // both its registers.
     rejects("push2 %rsp, %rax", "cannot be one of a paired push");
+    rejects("push2 %rax, %rsp", "cannot be one of a paired push");
     rejects("pop2 %rax, %rax", "must be different");
     // A condition `{dfv=...}` cannot supply a flag for, and the decorator on
     // an instruction with no condition to compare it against.
