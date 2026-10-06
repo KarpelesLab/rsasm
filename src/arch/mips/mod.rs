@@ -202,7 +202,12 @@ impl Architecture for Mips {
     /// syntax's own lookup: `$31`, the O32 names, and for a 64-bit target
     /// the N64 names llvm-mc also takes (`$a4`-`$a7`, and `$t4`-`$t7` for
     /// 12-15 as well as `$t0`-`$t3`).
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         let name = name.strip_prefix('$')?;
         if let Some(n) = numbered_register(name, "", 31) {
             return Some(n);

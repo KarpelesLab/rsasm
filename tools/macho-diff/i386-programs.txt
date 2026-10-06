@@ -1,0 +1,315 @@
+# Whole programs in a 32-bit Mach-O object.
+#
+# The structures are narrower throughout -- an `mh_magic` header with no
+# reserved word, an `LC_SEGMENT` of `section` rather than `section_64`
+# records, `nlist` rather than `nlist_64`, and a file padded to four bytes --
+# and the relocations are Mach-O's generic ones, which have a scattered
+# record where the 64-bit machines have an addend or a `SUBTRACTOR`. The
+# cases below walk through what needs one: a difference of two symbols, which
+# is a `SECTDIFF` or a `LOCAL_SECTDIFF` with the subtracted address in the
+# `PAIR` behind it, and a reference some way into a symbol, where the record
+# carries the address the field was measured from because a section cannot
+# say which symbol of it that was.
+=== hello, as clang writes it
+	.section	__TEXT,__text,regular,pure_instructions
+	.globl	_main
+	.align	4, 0x90
+_main:
+	pushl	%ebp
+	movl	%esp, %ebp
+	subl	$8, %esp
+	calll	L0$pb
+L0$pb:
+	popl	%eax
+	leal	L_.str-L0$pb(%eax), %eax
+	movl	%eax, (%esp)
+	calll	_printf
+	xorl	%eax, %eax
+	addl	$8, %esp
+	popl	%ebp
+	retl
+	.section	__TEXT,__cstring,cstring_literals
+L_.str:
+	.asciz	"Hello from rsasm!\n"
+	.subsections_via_symbols
+=== a reference to a global in another section
+	.text
+	.globl _g
+_g:	nop
+	.data
+	.long _g
+=== a reference some way into a global
+	.globl _g
+	.data
+_g:	.long 1
+	.long _g+4
+=== a reference some way into a local label
+	.data
+_g:	.long 1
+	.long _g+4
+=== a reference some way into an assembler-local label
+	.data
+Lg:	.long 1
+	.long Lg+4
+=== a reference some way into a private extern
+	.text
+	.private_extern _g
+	.globl _g
+_g:	nop
+	.data
+	.long _g+4
+=== a reference some way into a weak definition, which names the symbol
+	.text
+	.globl _g
+	.weak_definition _g
+_g:	nop
+	.data
+	.long _g+4
+=== a two-byte reference some way into a symbol
+	.globl _g
+	.data
+_g:	.long 1
+	.short _g+2
+=== a one-byte reference some way into a symbol
+	.globl _g
+	.data
+_g:	.long 1
+	.byte _g+2
+=== a branch some way into a symbol in another section
+	.text
+	calll _g+4
+	.section __TEXT,__other
+	.globl _g
+_g:	nop
+=== a branch to a symbol in another section
+	.text
+	calll _g
+	.section __TEXT,__other
+	.globl _g
+_g:	nop
+=== a branch some way into an assembler-local label in another section
+	.text
+	calll Lg+4
+	.section __TEXT,__other
+Lg:	nop
+	nop
+	nop
+	nop
+	nop
+=== a branch within one atom
+	.text
+_f:	nop
+	calll _f
+=== a branch to a linker-visible label in the same section
+	.text
+	.globl _a
+_a:	nop
+	.globl _b
+_b:	calll _a
+=== the same, with the atoms promised to the linker
+	.subsections_via_symbols
+	.text
+	.globl _a
+_a:	nop
+	.globl _b
+_b:	calll _a
+=== a reference into another atom of the same section
+	.subsections_via_symbols
+	.text
+	.globl _a
+_a:	nop
+	.globl _b
+_b:	.long _a+1
+=== a difference of two local labels in one section, which is a number
+	.data
+_a:	.long 1
+_b:	.long 2
+	.long _b-_a
+=== a difference across sections, both local
+	.text
+_t:	nop
+	.data
+_d:	.long 0
+	.long _d-_t
+=== a difference across sections, the added symbol global
+	.text
+_t:	nop
+	.data
+	.globl _d
+_d:	.long 0
+	.long _d-_t
+=== a difference across sections, the subtracted symbol global
+	.text
+	.globl _t
+_t:	nop
+	.data
+_d:	.long 0
+	.long _d-_t
+=== a difference across sections, both global
+	.text
+	.globl _t
+_t:	nop
+	.data
+	.globl _d
+_d:	.long 0
+	.long _d-_t
+=== a difference across sections, both assembler-local
+	.text
+Lt:	nop
+	.data
+Ld:	.long 0
+	.long Ld-Lt
+=== a difference with an offset of its own
+	.text
+_t:	nop
+	.data
+_d:	.long 0
+	.long _d-_t+16
+=== a difference from the position of the field
+	.data
+_a:	.long 1
+	.text
+	.long _a-.
+=== a difference reaching a zero-filled section
+	.zerofill __DATA,__bss,_z,16,4
+	.data
+_d:	.long 0
+	.long _z-_d
+=== a difference where one symbol is undefined
+	.data
+_a:	.long 1
+	.long _u-_a
+=== a difference where the subtracted symbol is undefined
+	.data
+_a:	.long 1
+	.long _a-_u
+=== a thread-local variable, and its descriptor
+	.section __DATA,__thread_data,thread_local_regular
+_v$tlv$init:
+	.long 42
+	.section __DATA,__thread_vars,thread_local_variables
+	.globl _v
+_v:
+	.long __tlv_bootstrap
+	.long 0
+	.long _v$tlv$init
+	.text
+	movl _v@TLVP, %eax
+	calll *(%eax)
+=== a thread-local variable through the PIC base
+	.section __DATA,__thread_vars,thread_local_variables
+	.globl _v
+_v:
+	.long 0
+	.long 0
+	.long 0
+	.text
+_f:
+	calll L0$pb
+L0$pb:
+	popl %eax
+	movl _v@TLVP-L0$pb(%eax), %ecx
+	calll *(%ecx)
+=== a thread-local variable with no initial value
+	.tbss _v$tlv$init, 4, 2
+	.section __DATA,__thread_vars,thread_local_variables
+	.globl _v
+_v:
+	.long __tlv_bootstrap
+	.long 0
+	.long _v$tlv$init
+=== the indirect symbol table
+	.section __DATA,__nl_symbol_ptr,non_lazy_symbol_pointers
+	.indirect_symbol _foo
+	.long 0
+	.indirect_symbol _bar
+	.long 0
+	.section __DATA,__la_symbol_ptr,lazy_symbol_pointers
+	.indirect_symbol _baz
+	.long 0
+=== a pointer the linker needs no symbol for
+	.text
+	.globl _f
+_f:	nop
+	.section __DATA,__nl_symbol_ptr,non_lazy_symbol_pointers
+	.indirect_symbol _f
+	.long _f
+=== symbol stubs
+	.section __TEXT,__picsymbolstub4,symbol_stubs,none,16
+	.indirect_symbol _foo
+	.long 0
+	.long 0
+	.long 0
+	.long 0
+=== data in code
+	.text
+	.globl _f
+_f:
+	nop
+	.data_region jt32
+	.long 1
+	.long 2
+	.end_data_region
+	retl
+=== data in code of each kind
+	.text
+	.globl _f
+_f:
+	.data_region
+	.byte 1
+	.end_data_region
+	.data_region jt8
+	.byte 2
+	.end_data_region
+	.data_region jt16
+	.short 3
+	.end_data_region
+	.data_region jt32
+	.long 4
+	.end_data_region
+	retl
+=== linker options and a version
+	.text
+	.macosx_version_min 10, 7
+	.linker_option "-lfoo"
+	.linker_option "-framework", "CoreFoundation"
+	.globl _f
+_f:	nop
+=== a literal section cut up by its contents
+	.cstring
+Lone:	.asciz "one"
+Ltwo:	.asciz "two"
+	.data
+	.long Lone
+	.long Ltwo
+	.long Ltwo+1
+=== the zero-filled sections come after the rest
+	.text
+	nop
+	.zerofill __DATA,__bss,_z,16,4
+	.data
+	.long 1
+	.comm _c,8,3
+=== every kind of symbol at once
+	.text
+	.globl _global
+_global:
+	nop
+	.private_extern _hidden
+	.globl _hidden
+_hidden:
+	nop
+_local:
+	nop
+Ltemp:
+	nop
+	.weak_definition _weak
+	.globl _weak
+_weak:
+	nop
+	.set _absolute, 7
+	.comm _common, 4, 2
+	.data
+	.long _undefined
+	.long _local
+	.long _absolute

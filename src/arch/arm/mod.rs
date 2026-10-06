@@ -557,7 +557,12 @@ impl Architecture for Arm {
     /// The AAPCS DWARF numbering of the names llvm-mc accepts: the core
     /// registers under their numbers, APCS names and aliases, and the 64-bit
     /// VFP registers from 256. `fp` is `r11` in both instruction sets.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         const APCS: [&str; 15] = [
             "a1", "a2", "a3", "a4", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "ip", "sp",
             "lr",

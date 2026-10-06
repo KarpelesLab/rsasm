@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mach-O: read the deployment target out of a Darwin target triple, and with
   it write x86-64's compact unwind table, which llvm-mc writes from macOS
   10.6 on
+- Mach-O: 32-bit objects for i386, with the narrower structures, Mach-O's
+  generic relocations and the scattered records a difference of symbols and a
+  reference into a symbol need
+- Mach-O: mark a `.set` alias of a position inside a label as not to be
+  dead-stripped, as llvm-mc does
 
 ## [0.1.3](https://github.com/KarpelesLab/rsasm/compare/v0.1.2...v0.1.3) - 2026-09-21
 

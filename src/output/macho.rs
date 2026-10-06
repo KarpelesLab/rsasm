@@ -1,4 +1,5 @@
-//! Mach-O relocatable object output (`MH_OBJECT`), for x86-64 and arm64.
+//! Mach-O relocatable object output (`MH_OBJECT`), for x86-64, i386 and
+//! arm64.
 //!
 //! Mach-O is not ELF with other numbers. Three things about it shape both
 //! this writer and the few decisions the layout pass has to make differently
@@ -59,17 +60,23 @@ use std::collections::{HashMap, HashSet};
 
 // ---- the format's constants -------------------------------------------------
 
+const MH_MAGIC: u32 = 0xfeed_face;
 const MH_MAGIC_64: u32 = 0xfeed_facf;
 const MH_OBJECT: u32 = 1;
 const MH_SUBSECTIONS_VIA_SYMBOLS: u32 = 0x2000;
 
-const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+/// `CPU_ARCH_ABI64`, the bit a machine's 64-bit variant carries.
+const CPU_ARCH_ABI64: u32 = 0x0100_0000;
+const CPU_TYPE_X86: u32 = 7;
+const CPU_TYPE_X86_64: u32 = CPU_ARCH_ABI64 | CPU_TYPE_X86;
+const CPU_SUBTYPE_I386_ALL: u32 = 3;
 const CPU_SUBTYPE_X86_64_ALL: u32 = 3;
 const CPU_TYPE_ARM64: u32 = 0x0100_000c;
 const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
 
 const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xb;
+const LC_SEGMENT: u32 = 0x1;
 const LC_SEGMENT_64: u32 = 0x19;
 pub(crate) const LC_VERSION_MIN_MACOSX: u32 = 0x24;
 pub(crate) const LC_VERSION_MIN_IPHONEOS: u32 = 0x25;
@@ -83,7 +90,9 @@ pub(crate) const LC_BUILD_VERSION: u32 = 0x32;
 /// here; see [`Deployment`].
 pub(crate) const PLATFORM_MACOS: u32 = 1;
 
+const SEGMENT_COMMAND_SIZE: u32 = 56;
 const SEGMENT_COMMAND_64_SIZE: u32 = 72;
+const SECTION_SIZE: u32 = 68;
 const SECTION_64_SIZE: u32 = 80;
 const SYMTAB_COMMAND_SIZE: u32 = 24;
 const DYSYMTAB_COMMAND_SIZE: u32 = 80;
@@ -93,9 +102,16 @@ const LINKER_OPTION_COMMAND_SIZE: u32 = 12;
 const INDIRECT_SYMBOL_SIZE: u64 = 4;
 const LINKEDIT_DATA_COMMAND_SIZE: u32 = 16;
 const DATA_IN_CODE_ENTRY_SIZE: u64 = 8;
-const HEADER_SIZE: u32 = 32;
+const HEADER_SIZE: u32 = 28;
+const HEADER_64_SIZE: u32 = 32;
+const NLIST_SIZE: u64 = 12;
 const NLIST_64_SIZE: u64 = 16;
 const RELOCATION_SIZE: u64 = 8;
+
+/// `R_SCATTERED`, the top bit of a relocation's first word, which says the
+/// record is a `scattered_relocation_info` rather than a `relocation_info`;
+/// see [`Entry`].
+const R_SCATTERED: u32 = 0x8000_0000;
 
 // Section types (the low byte of `flags`).
 pub(crate) const S_REGULAR: u32 = 0x0;
@@ -160,6 +176,17 @@ mod x86_64_reloc {
     pub(crate) const TLV: u8 = 9;
 }
 
+/// The relocation types a 32-bit Mach-O object has, which are the same on
+/// every machine: `<mach-o/reloc.h>`'s `GENERIC_RELOC_*`. A machine adds its
+/// own above them.
+mod generic_reloc {
+    pub(crate) const VANILLA: u8 = 0;
+    pub(crate) const PAIR: u8 = 1;
+    pub(crate) const SECTDIFF: u8 = 2;
+    pub(crate) const LOCAL_SECTDIFF: u8 = 4;
+    pub(crate) const TLV: u8 = 5;
+}
+
 mod arm64_reloc {
     pub(crate) const UNSIGNED: u8 = 0;
     pub(crate) const SUBTRACTOR: u8 = 1;
@@ -178,6 +205,7 @@ mod arm64_reloc {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Cpu {
     X86_64,
+    I386,
     Arm64,
 }
 
@@ -185,6 +213,7 @@ impl Cpu {
     /// The Mach-O machine an architecture backend targets, if it has one.
     pub(crate) fn for_arch(arch: &dyn crate::arch::Architecture) -> Option<Cpu> {
         match arch.elf_machine() {
+            3 => Some(Cpu::I386),
             62 => Some(Cpu::X86_64),
             183 => Some(Cpu::Arm64),
             _ => None,
@@ -194,8 +223,24 @@ impl Cpu {
     fn header(self) -> (u32, u32) {
         match self {
             Cpu::X86_64 => (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL),
+            Cpu::I386 => (CPU_TYPE_X86, CPU_SUBTYPE_I386_ALL),
             Cpu::Arm64 => (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL),
         }
+    }
+
+    /// Whether the object is a 64-bit Mach-O, whose header, segment command,
+    /// section records and symbol table entries are all wider, and whose
+    /// file is padded to eight bytes rather than four.
+    fn wide(self) -> bool {
+        self != Cpu::I386
+    }
+
+    /// Whether the machine relocates with Mach-O's generic relocations,
+    /// which is what every 32-bit object does: one type for everything a
+    /// field can hold by itself, and a scattered record for what it cannot.
+    /// See [`Entry`] and [`scattered`].
+    fn generic_relocs(self) -> bool {
+        !self.wide()
     }
 
     /// Whether the machine's PC-relative relocations are trusted to carry a
@@ -220,12 +265,12 @@ impl Cpu {
     /// than leaving the frame table a relocation.
     ///
     /// Every section of the object has an address here, so the distance from
-    /// the field to the function is a number on x86-64, where llvm-mc writes
-    /// one too. On arm64, where every relocation has to be external, llvm-mc
+    /// the field to the function is a number on x86, where llvm-mc writes one
+    /// too. On arm64, where every relocation has to be external, llvm-mc
     /// writes the difference of the function and the field, which is a
     /// `SUBTRACTOR` pair.
     pub(crate) fn resolves_frame_address(self) -> bool {
-        self == Cpu::X86_64
+        self != Cpu::Arm64
     }
 }
 
@@ -295,16 +340,18 @@ impl Deployment {
                 sdk: 0,
             }),
             compact_unwind: match cpu {
-                // llvm-mc writes the table for x86-64 only from macOS 10.6
-                // on, the release whose linker first read one, and leaves
-                // every frame in the frame table as well, since the compact
-                // word alone describes a frame only on arm64.
-                Cpu::X86_64 => macos
-                    .is_some_and(|v| v >= (10, 6, 0))
-                    .then_some(CompactUnwind {
-                        dwarf_only: 0x0400_0000,
-                        without_eh_frame: false,
-                    }),
+                // llvm-mc writes the table for x86 only from macOS 10.6 on,
+                // the release whose linker first read one, and leaves every
+                // frame in the frame table as well, since the compact word
+                // alone describes a frame only on arm64.
+                Cpu::X86_64 | Cpu::I386 => {
+                    macos
+                        .is_some_and(|v| v >= (10, 6, 0))
+                        .then_some(CompactUnwind {
+                            dwarf_only: 0x0400_0000,
+                            without_eh_frame: false,
+                        })
+                }
                 Cpu::Arm64 => Some(CompactUnwind {
                     dwarf_only: 0x0300_0000,
                     without_eh_frame: true,
@@ -575,6 +622,62 @@ pub(crate) fn defers_to_linker(
     asm.macho.atoms.of(asm, target) != asm.macho.atoms.at(section, frag)
 }
 
+/// The section a defined symbol belongs to, whether it is a label there or
+/// an alias of one.
+fn section_of(asm: &Assembler, id: SymbolId) -> Option<SectionId> {
+    match asm.symbols.get(id).value {
+        SymbolValue::Label { section, .. } => Some(section),
+        _ => asm.symbol_target_section(id).map(|(s, _)| s),
+    }
+}
+
+/// Whether a relocation against `id` has to name the symbol rather than the
+/// section it is in (`MachObjectWriter::doesSymbolRequireExternRelocation`).
+///
+/// An undefined symbol has no section to name. A weak definition has one, but
+/// the linker may keep another file's definition instead, so the field cannot
+/// be worked out here either.
+fn requires_extern(asm: &Assembler, id: SymbolId) -> bool {
+    let sym = asm.symbols.get(id);
+    !sym.is_defined() || (asm.macho.desc(id) | weak_bits(sym.binding, true)) & N_WEAK_DEF != 0
+}
+
+/// The address a 32-bit object's relocation has to be worked out against,
+/// where a scattered record is the only one that can say so.
+///
+/// Two references need one. A difference always does: the machine has one
+/// relocation type and no addend field, so the only way to say `A - B` is to
+/// record both addresses, in a `SECTDIFF` and the `PAIR` behind it. And so
+/// does a reference some way into a symbol whose section the record would
+/// otherwise name, since the linker cannot tell from a section which of the
+/// symbols in it the field was measured from.
+///
+/// Everything else the ordinary record covers, and so does a reference the
+/// scattered one cannot: its address is 24 bits wide, and llvm-mc writes the
+/// ordinary record rather than lose the rest.
+fn scattered(asm: &Assembler, cpu: Cpu, r: &Relocation, places: &Places) -> Option<i64> {
+    if !cpu.generic_relocs() {
+        return None;
+    }
+    let target = r.symbol?;
+    if r.desc.subtrahend.is_some() {
+        return Some(places.symbol(asm, target));
+    }
+    if r.addend == 0 || r.desc.class == RelocClass::ThreadVariable {
+        return None;
+    }
+    // A debugging section holds values a debugger reads as they stand, and
+    // llvm-mc names the section there rather than anything in it; see
+    // [`debugging`].
+    if debugging(asm, r.section) {
+        return None;
+    }
+    if requires_extern(asm, target) || r.offset > 0x00ff_ffff {
+        return None;
+    }
+    section_of(asm, target).map(|_| places.symbol(asm, target))
+}
+
 /// Whether a difference of two symbols in one section is a number the
 /// assembler can work out, rather than a pair of relocations.
 ///
@@ -620,6 +723,14 @@ pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
             RelocClass::SignExtended if d.subtrahend.is_some() => x86_64_reloc::UNSIGNED,
             _ => return None,
         }),
+        // A 32-bit object has one relocation for everything the field can
+        // hold, and a thread-local one for the descriptor a `@TLVP` names.
+        Cpu::I386 => Some(match d.class {
+            RelocClass::Branch | RelocClass::Plain => generic_reloc::VANILLA,
+            RelocClass::ThreadVariable if d.size == 4 => generic_reloc::TLV,
+            RelocClass::SignExtended if d.subtrahend.is_some() => generic_reloc::VANILLA,
+            _ => return None,
+        }),
         Cpu::Arm64 => Some(match d.class {
             RelocClass::Branch if d.size == 4 => arm64_reloc::BRANCH26,
             RelocClass::Page => arm64_reloc::PAGE21,
@@ -641,6 +752,10 @@ pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
 fn entry_pcrel(cpu: Cpu, ty: u8, r: &Relocation) -> bool {
     match cpu {
         Cpu::X86_64 => !matches!(ty, x86_64_reloc::UNSIGNED | x86_64_reloc::SUBTRACTOR),
+        // A `@TLVP` naming the descriptor itself covers no distance; the
+        // same operator written as a difference from the PIC base does.
+        Cpu::I386 if ty == generic_reloc::TLV => r.desc.subtrahend.is_some(),
+        Cpu::I386 => r.desc.pcrel,
         Cpu::Arm64 => match ty {
             arm64_reloc::BRANCH26
             | arm64_reloc::PAGE21
@@ -669,7 +784,7 @@ enum AddendPlace {
 
 fn addend_place(cpu: Cpu, ty: u8) -> AddendPlace {
     match (cpu, ty) {
-        (Cpu::X86_64, _) => AddendPlace::Field,
+        (Cpu::X86_64 | Cpu::I386, _) => AddendPlace::Field,
         (Cpu::Arm64, arm64_reloc::BRANCH26 | arm64_reloc::PAGE21 | arm64_reloc::PAGEOFF12) => {
             AddendPlace::Entry
         }
@@ -690,7 +805,7 @@ fn addend_place(cpu: Cpu, ty: u8) -> AddendPlace {
 /// left over there.
 fn field_bias(cpu: Cpu, r: &Relocation) -> i64 {
     match cpu {
-        Cpu::X86_64 if r.desc.pcrel => -(r.desc.trailing as i64),
+        Cpu::X86_64 | Cpu::I386 if r.desc.pcrel => -(r.desc.trailing as i64),
         _ => 0,
     }
 }
@@ -937,7 +1052,9 @@ struct Sec {
     relocs: Vec<Entry>,
 }
 
-/// One `relocation_info`.
+/// One relocation record: a `relocation_info`, or the
+/// `scattered_relocation_info` a 32-bit object writes where the ordinary
+/// record cannot say what the field holds; see [`scattered`].
 struct Entry {
     address: u32,
     symbolnum: u32,
@@ -945,15 +1062,37 @@ struct Entry {
     length: u8,
     external: bool,
     ty: u8,
+    /// The address the field was worked out against, which only a scattered
+    /// record carries. It takes the place of the symbol index, and the linker
+    /// moves the field by however far that address moves; where the record
+    /// has one, the other machines' `r_extern` and `r_symbolnum` are not
+    /// there to be written.
+    value: Option<u32>,
 }
 
 impl Entry {
-    fn word(&self) -> u32 {
-        (self.symbolnum & 0x00ff_ffff)
-            | ((self.pcrel as u32) << 24)
-            | ((self.length as u32) << 25)
-            | ((self.external as u32) << 27)
-            | ((self.ty as u32) << 28)
+    fn words(&self) -> (u32, u32) {
+        match self.value {
+            // A scattered record packs the address, type and widths into the
+            // first word, leaving the second for the value; the top bit is
+            // what tells the two records apart.
+            Some(value) => (
+                (self.address & 0x00ff_ffff)
+                    | (u32::from(self.ty) << 24)
+                    | (u32::from(self.length) << 28)
+                    | ((self.pcrel as u32) << 30)
+                    | R_SCATTERED,
+                value,
+            ),
+            None => (
+                self.address,
+                (self.symbolnum & 0x00ff_ffff)
+                    | ((self.pcrel as u32) << 24)
+                    | (u32::from(self.length) << 25)
+                    | ((self.external as u32) << 27)
+                    | (u32::from(self.ty) << 28),
+            ),
+        }
     }
 }
 
@@ -1028,7 +1167,7 @@ impl Places {
 pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
     let cpu = Cpu::for_arch(asm.target()).ok_or_else(|| {
         OutputError::Unsupported(format!(
-            "Mach-O output has no machine for `{}`; only x86-64 and arm64 have one",
+            "Mach-O output has no machine for `{}`; only x86-64, i386 and arm64 have one",
             asm.target().name()
         ))
     })?;
@@ -1119,6 +1258,94 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
         let address = r.offset as u32;
         let here = places.addr[&r.section] as i64 + r.offset as i64;
         let target = r.symbol.map_or(0, |t| places.symbol(asm, t)) + r.addend;
+        // A 32-bit `@TLVP` names the descriptor and nothing else. Written
+        // as a difference from the PIC base, which is how
+        // position-independent code reaches it, the distance from that base
+        // is left in the field and the base is not named at all.
+        if cpu.generic_relocs()
+            && ty == generic_reloc::TLV
+            && let Some(sub) = r.desc.subtrahend
+        {
+            let field = here + r.desc.size as i64 - places.symbol(asm, sub) + r.addend;
+            let (off, size) = (r.offset as usize, r.desc.size as usize);
+            if off + size <= secs[si].bytes.len() {
+                crate::arch::Endian::Little
+                    .write(&mut secs[si].bytes[off..off + size], field as u64);
+            }
+            let (symbolnum, external) = number(a)?;
+            secs[si].relocs.push(Entry {
+                address,
+                symbolnum,
+                pcrel: true,
+                length,
+                external,
+                ty,
+                value: None,
+            });
+            continue;
+        }
+
+        // A 32-bit object records an address where the ordinary record
+        // could not say what the field holds; see [`scattered`].
+        if let Some(value) = scattered(asm, cpu, r, &places) {
+            let mut entries = Vec::new();
+            let mut field = target;
+            let ty = match r.desc.subtrahend {
+                Some(sub) => {
+                    if address > 0x00ff_ffff {
+                        return Err(OutputError::Unsupported(format!(
+                            "a difference of symbols {address} bytes into its section cannot be \
+                             relocated; a scattered relocation's address is 24 bits wide"
+                        )));
+                    }
+                    let minus = places.symbol(asm, sub);
+                    field -= minus;
+                    // The `PAIR` holding the subtracted address is written
+                    // first, so that reversing the section's records below
+                    // leaves it behind the record it belongs to.
+                    entries.push(Entry {
+                        address: 0,
+                        symbolnum: 0,
+                        pcrel: r.desc.pcrel,
+                        length,
+                        external: false,
+                        ty: generic_reloc::PAIR,
+                        value: Some(minus as u32),
+                    });
+                    // The linker reads the two difference relocations alike;
+                    // llvm-mc tells them apart as Darwin's own assembler
+                    // did, by whether the symbol added is a global one.
+                    let global =
+                        asm.symbols.get(r.symbol.expect("named")).binding != Binding::Local;
+                    if global {
+                        generic_reloc::SECTDIFF
+                    } else {
+                        generic_reloc::LOCAL_SECTDIFF
+                    }
+                }
+                None => ty,
+            };
+            if r.desc.pcrel {
+                field += field_bias(cpu, r) - (here + r.desc.size as i64);
+            }
+            entries.push(Entry {
+                address,
+                symbolnum: 0,
+                pcrel: r.desc.pcrel,
+                length,
+                external: false,
+                ty,
+                value: Some(value as u32),
+            });
+            let (off, size) = (r.offset as usize, r.desc.size as usize);
+            if off + size <= secs[si].bytes.len() {
+                crate::arch::Endian::Little
+                    .write(&mut secs[si].bytes[off..off + size], field as u64);
+            }
+            secs[si].relocs.append(&mut entries);
+            continue;
+        }
+
         let (symbolnum, external) = number(a)?;
 
         // The field holds what the linker's arithmetic leaves out: the value
@@ -1136,6 +1363,8 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 let subtractor = match cpu {
                     Cpu::X86_64 => x86_64_reloc::SUBTRACTOR,
                     Cpu::Arm64 => arm64_reloc::SUBTRACTOR,
+                    // Handled above, by a scattered record.
+                    Cpu::I386 => unreachable!("a 32-bit difference is scattered"),
                 };
                 entries.push(Entry {
                     address,
@@ -1144,6 +1373,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                     length,
                     external,
                     ty,
+                    value: None,
                 });
                 entries.push(Entry {
                     address,
@@ -1152,16 +1382,20 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                     length,
                     external: bext,
                     ty: subtractor,
+                    value: None,
                 });
             }
             None => {
                 field = target - places.named(asm, a);
                 if r.desc.pcrel {
                     field += field_bias(cpu, r);
-                    if !external {
-                        // A local PC-relative field keeps the distance as
-                        // the assembler measured it, from the end of the
-                        // field.
+                    // A local PC-relative field keeps the distance as the
+                    // assembler measured it, from the end of the field. So
+                    // does a generic relocation's whatever it names: the
+                    // linker adds the symbol's address to what it finds,
+                    // where x86-64's and arm64's measure the distance
+                    // themselves and are given the addend alone.
+                    if !external || cpu.generic_relocs() {
                         field -= here + r.desc.size as i64;
                     }
                 }
@@ -1172,6 +1406,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                     length,
                     external,
                     ty,
+                    value: None,
                 });
                 match addend_place(cpu, ty) {
                     AddendPlace::Field => {}
@@ -1190,6 +1425,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                             length,
                             external: false,
                             ty: arm64_reloc::ADDEND,
+                            value: None,
                         });
                         field = 0;
                     }
@@ -1368,6 +1604,23 @@ fn name_target(
         return Named::Section(r.section);
     };
     let sym = asm.symbols.get(target);
+    // A generic relocation names the section wherever the field can be
+    // worked out here, which leaves only an undefined symbol and a weak
+    // definition to be named; see [`requires_extern`]. An atom means nothing
+    // to it: a reference into one carries the address it was measured from
+    // in a scattered record instead; see [`scattered`].
+    if cpu.generic_relocs() {
+        // A thread-local reference names the descriptor the loader fills in,
+        // whose section says nothing about it.
+        let thread_local = added && r.desc.class == RelocClass::ThreadVariable;
+        if thread_local || requires_extern(asm, target) {
+            return Named::Symbol(target);
+        }
+        return match section_of(asm, target) {
+            Some(section) => Named::Section(section),
+            None => Named::Symbol(target),
+        };
+    }
     if debugging(asm, r.section)
         && let SymbolValue::Label { section, .. } = sym.value
     {
@@ -1393,7 +1646,8 @@ fn name_target(
             visible.insert(target);
             Named::Symbol(target)
         }
-        Cpu::X86_64 => Named::Section(section),
+        // A generic relocation answered above.
+        Cpu::X86_64 | Cpu::I386 => Named::Section(section),
     }
 }
 
@@ -1515,15 +1769,26 @@ fn collect_symbols(
                         continue;
                     };
                     // An alias of a position inside a label's code, rather
-                    // than of the label, is an alternate entry into it.
+                    // than of the label, is an alternate entry into it. An
+                    // alias of the label itself is the label as far as the
+                    // symbol table is concerned, and carries none of the
+                    // bits the directive would otherwise have given it.
                     let inside = asm.eval_ref(*e).is_ok_and(|v| v.addend != 0);
+                    let alt = if inside {
+                        N_ALT_ENTRY
+                            | if asm.macho.set_constants.contains(&id) {
+                                N_NO_DEAD_STRIP
+                            } else {
+                                0
+                            }
+                    } else {
+                        0
+                    };
                     OutSym {
                         name,
                         n_type: N_SECT | ext_bits(global, sym.visibility),
                         n_sect,
-                        n_desc: desc
-                            | weak_bits(sym.binding, true)
-                            | if inside { N_ALT_ENTRY } else { 0 },
+                        n_desc: desc | weak_bits(sym.binding, true) | alt,
                         n_value: places.symbol(asm, id) as u64,
                     }
                 }
@@ -1642,6 +1907,14 @@ impl Buf {
     fn u16(&mut self, v: u16) {
         self.out.extend_from_slice(&v.to_le_bytes());
     }
+    /// An address or a size, as wide as the object makes it.
+    fn word(&mut self, wide: bool, v: u64) {
+        if wide {
+            self.u64(v);
+        } else {
+            self.u32(v as u32);
+        }
+    }
     /// A fixed-width name, NUL-padded and truncated as Mach-O stores them.
     fn name16(&mut self, s: &str) {
         let mut buf = [0u8; 16];
@@ -1662,9 +1935,9 @@ impl Buf {
 
 /// The bytes one `LC_LINKER_OPTION` takes: the command, the count, and each
 /// word with its terminator, rounded up to a pointer.
-fn linker_option_size(words: &[String]) -> u32 {
+fn linker_option_size(words: &[String], align: u32) -> u32 {
     let strings: usize = words.iter().map(|w| w.len() + 1).sum();
-    (LINKER_OPTION_COMMAND_SIZE + strings as u32).next_multiple_of(8)
+    (LINKER_OPTION_COMMAND_SIZE + strings as u32).next_multiple_of(align)
 }
 
 fn write(
@@ -1676,7 +1949,12 @@ fn write(
     regions: &[(u32, u16, u16)],
     indirect: &Indirect,
 ) -> Vec<u8> {
-    let strings = string_table(syms);
+    // A 64-bit object is padded to a pointer throughout -- the file after
+    // the sections, each `LC_LINKER_OPTION` and the string table that ends
+    // the file -- and a 32-bit one to four bytes.
+    let wide = cpu.wide();
+    let pad = if wide { 8 } else { 4 };
+    let strings = string_table(syms, pad as usize);
 
     // The deployment target the target triple named, which a
     // `.build_version` or `.*_version_min` in the source replaces.
@@ -1691,8 +1969,25 @@ fn write(
         + data_in_code as u32
         + 2 * has_symtab as u32
         + options.len() as u32;
-    let sizeofcmds = SEGMENT_COMMAND_64_SIZE
-        + SECTION_64_SIZE * secs.len() as u32
+    let (header_size, segment_size, section_size, nlist_size, segment_command) = if wide {
+        (
+            HEADER_64_SIZE,
+            SEGMENT_COMMAND_64_SIZE,
+            SECTION_64_SIZE,
+            NLIST_64_SIZE,
+            LC_SEGMENT_64,
+        )
+    } else {
+        (
+            HEADER_SIZE,
+            SEGMENT_COMMAND_SIZE,
+            SECTION_SIZE,
+            NLIST_SIZE,
+            LC_SEGMENT,
+        )
+    };
+    let sizeofcmds = segment_size
+        + section_size * secs.len() as u32
         + if data_in_code {
             LINKEDIT_DATA_COMMAND_SIZE
         } else {
@@ -1708,11 +2003,14 @@ fn write(
             Some(_) => VERSION_MIN_COMMAND_SIZE,
             None => 0,
         }
-        + options.iter().map(|w| linker_option_size(w)).sum::<u32>();
+        + options
+            .iter()
+            .map(|w| linker_option_size(w, pad))
+            .sum::<u32>();
 
     // The file is laid out before anything is written: every load command
     // holds an offset into what comes after it.
-    let data_start = (HEADER_SIZE + sizeofcmds) as u64;
+    let data_start = (header_size + sizeofcmds) as u64;
     let file_size: u64 = secs
         .iter()
         .filter(|s| !s.zerofill)
@@ -1720,7 +2018,7 @@ fn write(
         .max()
         .unwrap_or(0);
     let vm_size: u64 = secs.iter().map(|s| s.addr + s.size).max().unwrap_or(0);
-    let reloc_start = (data_start + file_size).next_multiple_of(8);
+    let reloc_start = (data_start + file_size).next_multiple_of(pad as u64);
     let mut off = reloc_start;
     let mut reloc_off = Vec::with_capacity(secs.len());
     for s in secs {
@@ -1730,11 +2028,11 @@ fn write(
     let dataoff = off;
     let indirectoff = dataoff + regions.len() as u64 * DATA_IN_CODE_ENTRY_SIZE;
     let symoff = indirectoff + indirect.entries.len() as u64 * INDIRECT_SYMBOL_SIZE;
-    let stroff = symoff + syms.len() as u64 * NLIST_64_SIZE;
+    let stroff = symoff + syms.len() as u64 * nlist_size;
 
     let mut b = Buf::default();
     let (cputype, cpusubtype) = cpu.header();
-    b.u32(MH_MAGIC_64);
+    b.u32(if wide { MH_MAGIC_64 } else { MH_MAGIC });
     b.u32(cputype);
     b.u32(cpusubtype);
     b.u32(MH_OBJECT);
@@ -1745,16 +2043,18 @@ fn write(
     } else {
         0
     });
-    b.u32(0); // reserved
+    if wide {
+        b.u32(0); // reserved, which only the wider header has
+    }
 
-    // ---- LC_SEGMENT_64, with every section --------------------------------
-    b.u32(LC_SEGMENT_64);
-    b.u32(SEGMENT_COMMAND_64_SIZE + SECTION_64_SIZE * secs.len() as u32);
+    // ---- the one segment, with every section ------------------------------
+    b.u32(segment_command);
+    b.u32(segment_size + section_size * secs.len() as u32);
     b.name16(""); // an object's one segment has no name
-    b.u64(0); // vmaddr
-    b.u64(vm_size);
-    b.u64(data_start);
-    b.u64(file_size);
+    b.word(wide, 0); // vmaddr
+    b.word(wide, vm_size);
+    b.word(wide, data_start);
+    b.word(wide, file_size);
     b.u32(7); // maxprot: rwx
     b.u32(7); // initprot
     b.u32(secs.len() as u32);
@@ -1762,8 +2062,8 @@ fn write(
     for (i, s) in secs.iter().enumerate() {
         b.name16(&s.section);
         b.name16(&s.segment);
-        b.u64(s.addr);
-        b.u64(s.size);
+        b.word(wide, s.addr);
+        b.word(wide, s.size);
         b.u32(if s.zerofill {
             0
         } else {
@@ -1779,7 +2079,9 @@ fn write(
         b.u32(s.flags);
         b.u32(indirect.bases.get(&s.id).copied().unwrap_or(0)); // reserved1
         b.u32(s.reserved2);
-        b.u32(0); // reserved3
+        if wide {
+            b.u32(0); // reserved3, which only `section_64` has
+        }
     }
 
     if let Some(v) = version {
@@ -1839,9 +2141,9 @@ fn write(
     // writes them.
     for words in options {
         b.u32(LC_LINKER_OPTION);
-        b.u32(linker_option_size(words));
+        b.u32(linker_option_size(words, pad));
         b.u32(words.len() as u32);
-        let end = b.len() + u64::from(linker_option_size(words) - LINKER_OPTION_COMMAND_SIZE);
+        let end = b.len() + u64::from(linker_option_size(words, pad) - LINKER_OPTION_COMMAND_SIZE);
         for w in words {
             b.out.extend_from_slice(w.as_bytes());
             b.u8(0);
@@ -1860,12 +2162,13 @@ fn write(
         }
         b.out.extend_from_slice(&s.bytes);
     }
-    b.pad_to(8);
+    b.pad_to(pad as u64);
 
     for s in secs {
         for r in &s.relocs {
-            b.u32(r.address);
-            b.u32(r.word());
+            let (first, second) = r.words();
+            b.u32(first);
+            b.u32(second);
         }
     }
 
@@ -1884,7 +2187,7 @@ fn write(
         b.u8(s.n_type);
         b.u8(s.n_sect);
         b.u16(s.n_desc);
-        b.u64(s.n_value);
+        b.word(wide, s.n_value);
     }
     if has_symtab {
         b.out.extend_from_slice(&strings.bytes);
@@ -1905,7 +2208,7 @@ impl Strings {
     }
 }
 
-fn string_table(syms: &[OutSym]) -> Strings {
+fn string_table(syms: &[OutSym], pad: usize) -> Strings {
     let mut names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
     names.sort_unstable();
     names.dedup();
@@ -1937,7 +2240,7 @@ fn string_table(syms: &[OutSym]) -> Strings {
         previous = Some((name, at));
     }
     // Padded to a word, as the table ends the file.
-    while !bytes.len().is_multiple_of(8) {
+    while !bytes.len().is_multiple_of(pad) {
         bytes.push(0);
     }
     Strings { bytes, offsets }

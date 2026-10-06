@@ -153,6 +153,12 @@ impl Architecture for X86 {
     /// relative to the field -- and `@TLVP`, the address of a thread-local
     /// variable's descriptor, which llvm-mc takes in a RIP-relative operand
     /// and nowhere else. A branch cannot go through either.
+    ///
+    /// i386 has `@TLVP` alone, and takes it in an absolute operand instead,
+    /// since the machine has no PC-relative addressing: `movl _v@TLVP, %eax`
+    /// where the descriptor's address is known at link time, and
+    /// `movl _v@TLVP-L0$pb(%eax), %ecx` where position-independent code has
+    /// to reach it through a base register.
     fn modifier_class(
         &self,
         name: &str,
@@ -164,6 +170,9 @@ impl Architecture for X86 {
             ("gotpcrel", RelocClass::GotLoad) if self.bits == 64 => Some(RelocClass::GotLoad),
             ("gotpcrel", _) if self.bits == 64 => Some(RelocClass::Got),
             ("tlvp", _) if self.bits == 64 && kind.pcrel && kind.size == 4 => {
+                Some(RelocClass::ThreadVariable)
+            }
+            ("tlvp", _) if self.bits == 32 && !kind.pcrel && kind.size == 4 => {
                 Some(RelocClass::ThreadVariable)
             }
             _ => None,
@@ -265,11 +274,16 @@ impl Architecture for X86 {
                 eh_frame_align: 8,
                 cie_version: 1,
             },
+            // The stack pointer is register 5 in Darwin's i386 numbering
+            // and 4 in the psABI's; see `dwarf_register`.
             _ => CfiTarget {
                 data_align: -4,
                 ra_column: 8,
-                initial: vec![cfi::Insn::DefCfa(4, 4), cfi::Insn::Offset(8, -4)],
-                fde_encoding: 0x1b,
+                initial: vec![
+                    cfi::Insn::DefCfa(if macho { 5 } else { 4 }, 4),
+                    cfi::Insn::Offset(8, -4),
+                ],
+                fde_encoding: if macho { 0x10 } else { 0x1b },
                 eh_frame_align: 4,
                 cie_version: 1,
             },
@@ -282,8 +296,17 @@ impl Architecture for X86 {
     }
 
     /// GNU as's `dw2_regnum` table, for the names it accepts in each class:
-    /// the psABI numbering, which differs between the two.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    /// the psABI numbering, which differs between the two word sizes.
+    ///
+    /// Darwin's i386 unwinding numbers two of them its own way, swapping
+    /// `%esp` and `%ebp` (LLVM's `DWARFFlavour::X86_32_DarwinEH`), and
+    /// numbers the rest as the psABI does.
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         let name = name.strip_prefix('%').unwrap_or(name);
         // `%st(0)` and `%st` are the same register.
         let name = match name.replace(' ', "").as_str() {
@@ -332,8 +355,16 @@ impl Architecture for X86 {
         const GPR: [&str; 10] = [
             "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip", "eflags",
         ];
+        const GPR_DARWIN: [&str; 10] = [
+            "eax", "ecx", "edx", "ebx", "ebp", "esp", "esi", "edi", "eip", "eflags",
+        ];
+        let gpr = if format == crate::output::Format::MachO {
+            &GPR_DARWIN
+        } else {
+            &GPR
+        };
         const SEG: [&str; 6] = ["es", "cs", "ss", "ds", "fs", "gs"];
-        if let Some(i) = GPR.iter().position(|r| *r == name) {
+        if let Some(i) = gpr.iter().position(|r| *r == name) {
             return Some(i as u32);
         }
         if let Some(i) = SEG.iter().position(|r| *r == name) {
@@ -387,13 +418,15 @@ impl Architecture for X86 {
         let wide = self.bits == 64;
         // The six registers the word can name, numbered 1 to 6 in this
         // order, as `.cfi_offset` names them: the callee-saved ones of each
-        // ABI, and the frame pointer last.
+        // ABI, and the frame pointer last. A 32-bit number is Darwin's,
+        // which is the only numbering a compact unwind table is read in; see
+        // [`X86::dwarf_register`].
         let order: [u32; 6] = if wide {
             [3, 12, 13, 14, 15, 6]
         } else {
-            [3, 1, 2, 7, 6, 5]
+            [3, 1, 2, 7, 6, 4]
         };
-        let frame_pointer = if wide { 6 } else { 5 };
+        let frame_pointer = if wide { 6 } else { 4 };
         let word = if wide { 8i64 } else { 4 };
 
         // `.cfi_signal_frame` is not an instruction, only a note on the
@@ -481,6 +514,19 @@ impl Architecture for X86 {
                 MODE_STACK_IND | (at << 16) | ((count + 1) << 13) | registers
             }
         })
+    }
+
+    /// The same swap of `%esp` and `%ebp` as [`X86::dwarf_register`], which
+    /// takes a Darwin i386 register back to the number the psABI gives it.
+    fn dwarf_debug_register(&self, format: crate::output::Format, reg: u32) -> u32 {
+        if self.bits != 32 || format != crate::output::Format::MachO {
+            return reg;
+        }
+        match reg {
+            4 => 5,
+            5 => 4,
+            _ => reg,
+        }
     }
 
     fn is_mnemonic(&self, name: &str) -> bool {

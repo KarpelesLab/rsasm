@@ -482,7 +482,12 @@ impl Architecture for M68k {
     /// GNU as's numbering, for the names it accepts, with or without `%`:
     /// `d0`-`d7`, `a0`-`a6` and `sp` from 8, `fp0`-`fp7` from 16, and `pc`
     /// as 24. It takes neither `a7` nor `fp` here.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         let name = name.strip_prefix('%').unwrap_or(name);
         match name {
             "sp" => Some(15),

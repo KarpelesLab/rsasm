@@ -297,7 +297,12 @@ impl Architecture for Riscv {
 
     /// The psABI DWARF numbering: integer registers 0-31 and floating-point
     /// registers 32-63, under their numbers or ABI names.
-    fn dwarf_register(&self, _state: &ArchState, name: &str) -> Option<u32> {
+    fn dwarf_register(
+        &self,
+        _state: &ArchState,
+        _format: crate::output::Format,
+        name: &str,
+    ) -> Option<u32> {
         const ABI: [&str; 32] = [
             "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3",
             "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11",

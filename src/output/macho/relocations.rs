@@ -111,8 +111,13 @@ impl Assembler {
             v.minus = None;
             desc.pcrel = true;
         }
+        // A 32-bit `@TLVP` is read through the PIC base in
+        // position-independent code, and its one relocation carries the
+        // distance from that base in the field; see `crate::output::macho`.
+        let tlvp_pic = cpu == Some(super::Cpu::I386) && desc.class == RelocClass::ThreadVariable;
         if desc.class != RelocClass::Plain
             && desc.class != RelocClass::SignExtended
+            && !tlvp_pic
             && v.minus.is_some()
         {
             self.diags.error(
@@ -196,6 +201,13 @@ impl Assembler {
                 (RelocClass::ThreadLocal, _) => {
                     "a Mach-O object has no relocation for ELF's thread-local access models, \
                      which Darwin replaces with a descriptor for each thread-local variable"
+                        .to_string()
+                }
+                (RelocClass::Got, _) if cpu == super::Cpu::I386 => {
+                    "a 32-bit Mach-O object has no relocation for a GOT entry, which is \
+                     what Darwin's CIE names its personality routine through; llvm-mc \
+                     writes the distance to the routine itself there, and refuses that \
+                     for a routine the object does not define"
                         .to_string()
                 }
                 (RelocClass::SignExtended, _) => {

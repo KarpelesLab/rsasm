@@ -1,0 +1,28 @@
+# Lines of tools/mc-diff/i386.txt this harness does not compare, because
+# llvm-mc does not do anything with them that rsasm could agree with.
+#
+# llvm-mc's 32-bit Mach-O writer looks at a symbol modifier only to see
+# whether it is `@TLVP` (`X86MachObjectWriter::recordX86Relocation`). An ELF
+# thread-local operator is neither refused nor relocated, then: the plain
+# relocation is written and the operator dropped, which assembles a different
+# program from the one the source asked for. Its 64-bit writer refuses the
+# same operators with "unsupported symbol modifier in relocation", and so
+# does rsasm for both word sizes.
+leal foo@TLSGD(,%ebx,1), %eax
+leal foo@TLSLDM(%ebx), %eax
+leal foo@TLSDESC(%ebx), %eax
+leal foo@DTPOFF(%eax), %edx
+leal foo@TPOFF(%eax), %edx
+leal foo@NTPOFF(%eax), %edx
+movl foo@GOTTPOFF(%ebx), %eax
+movl foo@GOTNTPOFF(%ebx), %eax
+movl foo@INDNTPOFF, %eax
+subl foo@GOTTPOFF(%ebx), %eax
+movl %gs:foo@NTPOFF, %eax
+movl $foo@TPOFF, %eax
+movl $foo@NTPOFF, %eax
+movl $foo@DTPOFF, %eax
+# And `@TLSCALL`, where llvm-mc 22 crashes rather than refusing it, as it
+# does for the x86-64 triple; tools/mc-diff comments the x86-64 row out for
+# the same reason.
+call *foo@TLSCALL(%eax)
