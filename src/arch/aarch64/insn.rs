@@ -13,14 +13,22 @@
 //! an even one up to `x22` will do; `bfc` computes one immediate from the
 //! other and bounds their sum; `rprfm` reads a name or a number scattered
 //! over six bits of the word; and `udf` has no opcode bits at all.
+//!
+//! Two whole families are here on the same grounds. FEAT_MOPS's 132 memory
+//! copies and sets write an address back with no offset for the `!` to apply
+//! to and a register back with no brackets at all, and both references
+//! refuse any two of their three registers naming one register; FEAT_CMPBR's
+//! thirty compare-and-branches end in a target, which is a fixup, and a
+//! table row has nowhere to put one.
 
 use super::encode::{const_in_range, field, logical_imm, word, word_fixup};
 use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp, TlsLdst};
 use super::reg::{self, Reg, RegClass};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
+use crate::cursor::Cursor;
 use crate::expr::{ExprKind, ExprRef};
-use crate::lexer::{Punct, TokKind};
+use crate::lexer::{Punct, TokKind, Token};
 use crate::section::{LinkValue, Variant};
 use crate::source::Span;
 
@@ -112,6 +120,20 @@ impl Insn<'_, '_> {
                 None
             }
         }
+    }
+
+    /// A 64-bit general-purpose register, where register 31 is the zero
+    /// register: what the one-register forms of the newest extensions take.
+    fn xreg(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<u32> {
+        let r = self.gpr(cx, i)?;
+        if r.class != RegClass::X {
+            cx.error(
+                self.ops[i].span,
+                format!("`{}` takes a 64-bit register", self.mnemonic),
+            );
+            return None;
+        }
+        Some(u32::from(r.num))
     }
 
     fn cond(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<u8> {
@@ -397,7 +419,28 @@ pub(crate) fn handwritten(mnemonic: &str) -> bool {
                 | "st64bv"
                 | "st64bv0"
                 | "rprfm"
+                // One or two forms each, from the newest extensions:
+                // FEAT_GCS, FEAT_TME, FEAT_ITE, FEAT_TEV and FEAT_POE2.
+                | "gcspushm"
+                | "gcspopm"
+                | "gcsss1"
+                | "gcsss2"
+                | "gcspushx"
+                | "gcspopx"
+                | "gcspopcx"
+                | "gcsstr"
+                | "gcssttr"
+                | "tstart"
+                | "ttest"
+                | "tcancel"
+                | "trcit"
+                | "tenter"
+                | "texit"
+                | "tchangeb"
+                | "tchangef"
         )
+        || is_mops(mnemonic)
+        || cmpbr_name(mnemonic).is_some()
         || loads(mnemonic)
         // The system instructions and the aliases of `hint`, whose names are
         // in the generated tables rather than written out here.
@@ -508,6 +551,10 @@ pub fn assemble(
 
         "b" | "bl" => branch(cx, &i),
         "cbz" | "cbnz" => cbz(cx, &i),
+        _ if cmpbr_name(mnemonic).is_some() => {
+            let (size, cc) = cmpbr_name(mnemonic)?;
+            cmpbr(cx, &i, size, cc)
+        }
         "tbz" | "tbnz" => tbz(cx, &i),
         "br" | "blr" | "ret" => branch_reg(cx, &i),
         "eret" => {
@@ -538,6 +585,12 @@ pub fn assemble(
         "msr" => msr(cx, &i),
         "sys" | "sysl" => sys_raw(cx, &i),
         "smstart" | "smstop" => sme_mode(cx, &i),
+
+        "gcspushm" | "gcspopm" | "gcsss1" | "gcsss2" | "gcspushx" | "gcspopx" | "gcspopcx"
+        | "gcsstr" | "gcssttr" => gcs(cx, &i),
+        "tstart" | "ttest" | "tcancel" => tme(cx, &i),
+        "trcit" => trcit(cx, &i),
+        "tenter" | "texit" | "tchangeb" | "tchangef" => tev(cx, &i),
 
         // `dc civac, x0` and `esb` and their like: a name in the generated
         // system tables is all these mnemonics are.
@@ -2435,6 +2488,465 @@ fn rprfm(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         | field((value >> 3) & 3, 12, 2)
         | field(base.num as u32, 5, 5)
         | field(value & 7, 0, 3))
+}
+
+// ---- compare and branch ----------------------------------------------------
+
+/// The condition field of a FEAT_CMPBR comparison of two registers, and
+/// whether they swap.
+///
+/// Only six of the ten comparisons have an encoding. The other four are the
+/// same comparison the other way round, and both references read them as
+/// that: `cblt w0, w1` is `cbgt w1, w0`.
+fn cmpbr_reg_cond(cc: &str) -> Option<(u32, bool)> {
+    Some(match cc {
+        "gt" => (0, false),
+        "ge" => (1, false),
+        "hi" => (2, false),
+        "hs" => (3, false),
+        "eq" => (6, false),
+        "ne" => (7, false),
+        "lt" => (0, true),
+        "le" => (1, true),
+        "lo" => (2, true),
+        "ls" => (3, true),
+        _ => return None,
+    })
+}
+
+/// The condition field of a comparison against a number, and what the
+/// mnemonic adds to the number it is written with.
+///
+/// Here it is the inclusive comparisons that have no encoding, since the
+/// number can be moved instead: `cbge w0, #1` is `cbgt w0, #0`, which is why
+/// its range is 1 to 64 where `cbgt`'s is 0 to 63.
+fn cmpbr_imm_cond(cc: &str) -> Option<(u32, i64)> {
+    Some(match cc {
+        "gt" => (0, 0),
+        "lt" => (1, 0),
+        "hi" => (2, 0),
+        "lo" => (3, 0),
+        "eq" => (6, 0),
+        "ne" => (7, 0),
+        "ge" => (0, -1),
+        "le" => (1, 1),
+        "hs" => (2, -1),
+        "ls" => (3, 1),
+        _ => return None,
+    })
+}
+
+/// The size field and the condition name of a FEAT_CMPBR mnemonic, or `None`
+/// for a name that is not one of them.
+///
+/// `cbb<cc>` compares the low byte of two registers and `cbh<cc>` their low
+/// halfword; `cb<cc>` compares the whole of them. Neither reference takes
+/// `cs` or `cc` for `hs` and `lo` here, although both take them after `b.`.
+fn cmpbr_name(mnemonic: &str) -> Option<(u32, &str)> {
+    let rest = mnemonic.strip_prefix("cb")?;
+    let (size, cc) = match rest.len() {
+        2 => (0, rest),
+        3 => (
+            match rest.as_bytes()[0] {
+                b'b' => 0b10,
+                b'h' => 0b11,
+                _ => return None,
+            },
+            &rest[1..],
+        ),
+        _ => return None,
+    };
+    cmpbr_reg_cond(cc).map(|_| (size, cc))
+}
+
+/// FEAT_CMPBR's compare-and-branch: two registers, or a register and a
+/// six-bit number, compared and branched on in one instruction.
+///
+/// The target reaches 1KB either way, which is the narrowest branch field
+/// A64 has, and neither reference can relocate one: llvm-mc refuses a target
+/// it cannot resolve itself and GNU as writes `R_AARCH64_NONE`, which no
+/// linker fills in. [`encode::fixup_b9`] therefore has no relocation, so a
+/// target rsasm cannot resolve is an error rather than a branch to itself.
+fn cmpbr(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, size: u32, cc: &str) -> Option<Vec<Variant>> {
+    i.arity(cx, &[3]).then_some(())?;
+    let rt = i.gpr(cx, 0)?;
+    let w = if i.op(1).and_then(|o| o.reg()).is_some() {
+        let (cond, swap) = cmpbr_reg_cond(cc)?;
+        let rm = i.gpr(cx, 1)?;
+        if rm.class != rt.class {
+            cx.error(
+                i.ops[1].span,
+                format!("`{}` compares two registers of one width", i.mnemonic),
+            );
+            return None;
+        }
+        if size != 0 && rt.class == RegClass::X {
+            cx.error(
+                i.ops[0].span,
+                format!(
+                    "`{}` compares part of a register, so it takes the 32-bit name",
+                    i.mnemonic
+                ),
+            );
+            return None;
+        }
+        let (first, second) = if swap { (rm, rt) } else { (rt, rm) };
+        0x7400_0000
+            | field(rt.sf(), 31, 1)
+            | field(cond, 21, 3)
+            | field(u32::from(second.num), 16, 5)
+            | field(size, 14, 2)
+            | field(u32::from(first.num), 0, 5)
+    } else {
+        if size != 0 {
+            cx.error(
+                i.ops[1].span,
+                format!("`{}` compares two registers", i.mnemonic),
+            );
+            return None;
+        }
+        let (cond, bias) = cmpbr_imm_cond(cc)?;
+        let value = i.imm(cx, 1, -bias, 63 - bias, "a comparison value")?;
+        0x7500_0000
+            | field(rt.sf(), 31, 1)
+            | field(cond, 21, 3)
+            | field((value + bias) as u32, 15, 6)
+            | field(u32::from(rt.num), 0, 5)
+    };
+    let e = i.pcrel_expr(cx, 2)?;
+    pcrel(cx, w, e, encode::fixup_b9(), i.ops[2].span)
+}
+
+// ---- memory copy and memory set --------------------------------------------
+
+/// Which registers a FEAT_MOPS mnemonic names.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum MopsForm {
+    /// `cpyfp [x0]!, [x1]!, x2!`: a destination address, a source address and
+    /// a size, each counted on by the instruction and so each written back.
+    Copy,
+    /// `setp [x0]!, x1!, x2`: a destination address and a size, both written
+    /// back, and the byte to store, which is not.
+    Set,
+    /// `setgop [x0]!, x1!`: FEAT_MOPS_GO's granule-only set, which writes
+    /// tags rather than data and so names no byte at all.
+    GranuleOnly,
+}
+
+/// The opcode and operand shape of a FEAT_MOPS mnemonic, or `None` for a name
+/// that is not one.
+///
+/// There are 132 of these because every hint is spelled into the name: a copy
+/// names one for its source and one for its destination, a set names one
+/// pair, and each operation has a prologue, a main body and an epilogue that
+/// resume one another. binutils builds the names from macros for that reason,
+/// and this builds them from the same pieces rather than listing them.
+fn mops(mnemonic: &str) -> Option<(u32, MopsForm)> {
+    // The hints, in the order a name spells them. A copy's source hints
+    // reach bits 13-12 and its destination hints bits 15-14; a set has one
+    // pair of hints over both fields at once.
+    const SOURCE: [&str; 4] = ["", "wt", "rt", "t"];
+    const DEST: [&str; 4] = ["", "wn", "rn", "n"];
+    const SET: [&str; 4] = ["", "t", "n", "tn"];
+
+    let (rest, base, form) = if let Some(rest) = mnemonic.strip_prefix("cpyf") {
+        (rest, 0x1900_0400, MopsForm::Copy)
+    } else if let Some(rest) = mnemonic.strip_prefix("cpy") {
+        (rest, 0x1d00_0400, MopsForm::Copy)
+    } else if let Some(rest) = mnemonic.strip_prefix("setgo") {
+        // The granule-only set is the tagged set with the byte's register
+        // field reading the zero register and the bit at 10 clear.
+        (rest, 0x1dc0_0000 | field(31, 16, 5), MopsForm::GranuleOnly)
+    } else if let Some(rest) = mnemonic.strip_prefix("setg") {
+        (rest, 0x1dc0_0400, MopsForm::Set)
+    } else {
+        (mnemonic.strip_prefix("set")?, 0x19c0_0400, MopsForm::Set)
+    };
+    let (stage, hints) = rest.split_at_checked(1)?;
+    let stage = match stage {
+        "p" => 0,
+        "m" => 1,
+        "e" => 2,
+        _ => return None,
+    };
+    if form == MopsForm::Copy {
+        // A copy holds its stage above the registers, in bits 23-22.
+        let (source, dest) = SOURCE.iter().enumerate().find_map(|(s, src)| {
+            let tail = hints.strip_prefix(src)?;
+            let d = DEST.iter().position(|dst| *dst == tail)?;
+            Some((s as u32, d as u32))
+        })?;
+        return Some((
+            base | field(stage, 22, 2) | field(dest, 14, 2) | field(source, 12, 2),
+            form,
+        ));
+    }
+    // A set holds its stage where a copy holds its destination hints.
+    let hints = SET.iter().position(|h| *h == hints)? as u32;
+    Some((base | field(stage, 14, 2) | field(hints, 12, 2), form))
+}
+
+/// True for one of FEAT_MOPS's 132 names, which `mod.rs` dispatches before
+/// the shared operand parser runs.
+pub(crate) fn is_mops(mnemonic: &str) -> bool {
+    mops(mnemonic).is_some()
+}
+
+/// FEAT_MOPS's memory copies and memory sets.
+///
+/// These are here rather than in the measured table for two reasons a table
+/// row cannot hold. Each address is written back, so it is spelled `[x0]!`
+/// with no offset for the `!` to apply to, and so is the size, spelled `x2!`
+/// with no brackets at all; and both references refuse any two of the
+/// registers naming one register, since an instruction that overwrote its own
+/// size or source could not resume.
+pub(crate) fn mops_insn(
+    cx: &mut AsmCtx<'_>,
+    req: &InsnRequest<'_>,
+    mnemonic: &str,
+) -> Option<Vec<Variant>> {
+    let (base, form) = mops(mnemonic)?;
+    let want: usize = match form {
+        MopsForm::Copy | MopsForm::Set => 3,
+        MopsForm::GranuleOnly => 2,
+    };
+    let cur = Cursor::new(req.operands);
+    let pieces = cur.split_commas();
+    if pieces.len() != want {
+        cx.error(
+            req.span,
+            format!(
+                "`{mnemonic}` takes {want} operand(s), but {} were given",
+                pieces.len()
+            ),
+        );
+        return None;
+    }
+    // In the word the destination address is `Rd`, the size is `Rn`, and
+    // `Rs` is the source address of a copy or the byte of a set.
+    let dest = mops_address(cx, mnemonic, pieces[0])?;
+    let (size, source) = match form {
+        MopsForm::Copy => (
+            mops_counted(cx, mnemonic, pieces[2], true)?,
+            mops_address(cx, mnemonic, pieces[1])?,
+        ),
+        MopsForm::Set => (
+            mops_counted(cx, mnemonic, pieces[1], true)?,
+            mops_counted(cx, mnemonic, pieces[2], false)?,
+        ),
+        MopsForm::GranuleOnly => (mops_counted(cx, mnemonic, pieces[1], true)?, 31),
+    };
+    let named: &[u32] = match form {
+        MopsForm::GranuleOnly => &[dest, size],
+        _ => &[dest, size, source],
+    };
+    for (k, r) in named.iter().enumerate() {
+        if named[..k].contains(r) {
+            cx.error(
+                req.span,
+                format!(
+                    "`{mnemonic}` names one register twice: each of its registers \
+                     is counted on, so they have to differ"
+                ),
+            );
+            return None;
+        }
+    }
+    one(base | field(source, 16, 5) | field(size, 5, 5) | field(dest, 0, 5))
+}
+
+/// `[x0]!`: one of the addresses a copy or a set works through, which it
+/// always writes back. Register 31 is refused by both references here, in
+/// either spelling, since an address is no use read as zero.
+fn mops_address(cx: &mut AsmCtx<'_>, mnemonic: &str, toks: &[Token]) -> Option<u32> {
+    let reg = match toks {
+        [open, name, close, bang]
+            if open.is_punct(Punct::LBracket)
+                && close.is_punct(Punct::RBracket)
+                && bang.is_punct(Punct::Bang) =>
+        {
+            match name.kind {
+                TokKind::Ident(n) => reg::lookup(&cx.name(n).to_ascii_lowercase()),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    match reg {
+        Some(r) if r.class == RegClass::X && r.num != 31 => Some(u32::from(r.num)),
+        _ => {
+            cx.error(
+                mops_span(toks),
+                format!("`{mnemonic}` takes an address written back, `[x0]!`, over `x0` to `x30`"),
+            );
+            None
+        }
+    }
+}
+
+/// `x2!`, the size a copy or a set counts down, or the `x2` a set stores. The
+/// zero register is a register like any other in both fields.
+fn mops_counted(
+    cx: &mut AsmCtx<'_>,
+    mnemonic: &str,
+    toks: &[Token],
+    writeback: bool,
+) -> Option<u32> {
+    let name = match toks {
+        [name] if !writeback => Some(name),
+        [name, bang] if writeback && bang.is_punct(Punct::Bang) => Some(name),
+        _ => None,
+    };
+    let reg = match name.map(|t| t.kind) {
+        Some(TokKind::Ident(n)) => reg::lookup(&cx.name(n).to_ascii_lowercase()),
+        _ => None,
+    };
+    match reg {
+        Some(r) if r.class == RegClass::X && !r.is_sp() => Some(u32::from(r.num)),
+        _ => {
+            cx.error(
+                mops_span(toks),
+                if writeback {
+                    format!("`{mnemonic}` takes a size written back, `x2!`")
+                } else {
+                    format!("`{mnemonic}` takes a 64-bit register for the byte it stores")
+                },
+            );
+            None
+        }
+    }
+}
+
+fn mops_span(toks: &[Token]) -> Span {
+    match (toks.first(), toks.last()) {
+        (Some(a), Some(b)) => a.span.to(b.span),
+        _ => Span::DUMMY,
+    }
+}
+
+// ---- the newest extensions, one or two forms each ---------------------------
+
+/// FEAT_GCS's guarded call stack.
+///
+/// `gcspushm` and `gcsss1` push, `gcspopm` and `gcsss2` pop, the two stores
+/// write through the stack's own permissions, and the three `x` forms move
+/// the exception-return state, which is not a value anything names: they
+/// have no operand at all. `gcspopm` with no operand is the same word as
+/// `gcspopm xzr`, which is how both references print it, so the register is
+/// optional here rather than a form of its own.
+fn gcs(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    // The two stores name a register and an address, and are the only forms
+    // here outside the system encoding space.
+    if let Some(store) = match i.mnemonic {
+        "gcsstr" => Some(0xd91f_0c00u32),
+        "gcssttr" => Some(0xd91f_1c00),
+        _ => None,
+    } {
+        i.arity(cx, &[2]).then_some(())?;
+        let rt = i.xreg(cx, 0)?;
+        let addr = base_only(cx, i, 1, true)?;
+        return one(store | field(u32::from(addr.num), 5, 5) | field(rt, 0, 5));
+    }
+    if let Some(word) = match i.mnemonic {
+        "gcspushx" => Some(0xd508_779fu32),
+        "gcspopcx" => Some(0xd508_77bf),
+        "gcspopx" => Some(0xd508_77df),
+        _ => None,
+    } {
+        i.arity(cx, &[0]).then_some(())?;
+        return one(word);
+    }
+    let base: u32 = match i.mnemonic {
+        "gcspushm" => 0xd50b_7700,
+        "gcsss1" => 0xd50b_7740,
+        "gcspopm" => 0xd52b_7720,
+        _ => 0xd52b_7760,
+    };
+    if i.mnemonic == "gcspopm" && i.ops.is_empty() {
+        return one(base | field(31, 0, 5));
+    }
+    i.arity(cx, &[1]).then_some(())?;
+    one(base | field(i.xreg(cx, 0)?, 0, 5))
+}
+
+/// FEAT_TME's transactions: `tstart` and `ttest` write a result to a
+/// register, and `tcancel` names the 16-bit reason it fails with.
+///
+/// llvm-mc 22 does not know TME at all, so these encodings and the corpus
+/// lines for them are GNU as's.
+fn tme(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1]).then_some(())?;
+    if i.mnemonic == "tcancel" {
+        let reason = i.imm(cx, 0, 0, 0xffff, "a transaction cancellation reason")? as u32;
+        return one(0xd460_0000 | field(reason, 5, 16));
+    }
+    let base: u32 = if i.mnemonic == "tstart" {
+        0xd523_3060
+    } else {
+        0xd523_3160
+    };
+    one(base | field(i.xreg(cx, 0)?, 0, 5))
+}
+
+/// FEAT_ITE's trace instrumentation, which records one register's value in
+/// the trace stream.
+fn trcit(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1]).then_some(())?;
+    one(0xd50b_72e0 | field(i.xreg(cx, 0)?, 0, 5))
+}
+
+/// FEAT_TEV's and FEAT_POE2's thread switches: `tenter` and `texit` enter
+/// and leave a thread, and `tchangef` and `tchangeb` move to the one in
+/// front of or behind the current one, named by a register or by a number.
+///
+/// Each takes an optional `nb` at the end, which says the switch is not
+/// balanced by its opposite.
+fn tev(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    match i.mnemonic {
+        "texit" => {
+            i.arity(cx, &[0, 1]).then_some(())?;
+            one(0xd6ff_03e0 | field(not_balanced(cx, i, 0)?, 10, 1))
+        }
+        "tenter" => {
+            i.arity(cx, &[1, 2]).then_some(())?;
+            let index = i.imm(cx, 0, 0, 127, "a thread index")? as u32;
+            one(0xd4e0_0000 | field(not_balanced(cx, i, 1)?, 17, 1) | field(index, 5, 7))
+        }
+        _ => {
+            i.arity(cx, &[2, 3]).then_some(())?;
+            let forward = i.mnemonic == "tchangef";
+            let rd = i.xreg(cx, 0)?;
+            let nb = field(not_balanced(cx, i, 2)?, 17, 1);
+            let (base, source) = match i.op(1).and_then(|o| o.reg()) {
+                Some(_) => (
+                    if forward { 0xd580_0000u32 } else { 0xd584_0000 },
+                    i.xreg(cx, 1)?,
+                ),
+                None => (
+                    if forward { 0xd590_0000 } else { 0xd594_0000 },
+                    i.imm(cx, 1, 0, 127, "a thread index")? as u32,
+                ),
+            };
+            one(base | nb | field(source, 5, 7) | field(rd, 0, 5))
+        }
+    }
+}
+
+/// The `nb` a thread switch may end with, or 0 where it does not.
+fn not_balanced(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, at: usize) -> Option<u32> {
+    let Some(op) = i.ops.get(at) else {
+        return Some(0);
+    };
+    match op.word() {
+        Some(n) if cx.name(n).eq_ignore_ascii_case("nb") => Some(1),
+        _ => {
+            cx.error(
+                op.span,
+                format!("the last operand of `{}` is `nb` or nothing", i.mnemonic),
+            );
+            None
+        }
+    }
 }
 
 // ---- system ----------------------------------------------------------------

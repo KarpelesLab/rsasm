@@ -27,7 +27,19 @@
 #   <target>-programs.txt  multi-line cases separated by `=== name` lines
 #   <target>-llvm.txt      `=== name` cases compared against llvm-mc alone
 #   <target>-padding.txt   the same, for alignment padding in code
+#   <target>-codeview.txt  the same, for the `.cv_*` directives and the
+#                          `.debug$S` subsections they write
 #   <target>-compiler.txt  the same, for Clang's output (see compiler.sh)
+#
+# The CodeView cases are here rather than in tools/dwarf-diff, where the other
+# PE/COFF debugging information is, because llvm-mc is the reference for the
+# whole object on all three machines and is the only assembler here that
+# writes CodeView at all: GNU as for mingw has no `.cv_*` directive, so the
+# `-g`-style flags and the x86 reference tools/dwarf-diff is built around have
+# nothing to say about it. What has to match is a whole object anyway — the
+# subsections go wherever the source puts them, in `.text` as readily as in
+# `.debug$S`, and the section's characteristics and the relocations into it
+# are part of the answer — which is what canon.sh already prints.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -136,6 +148,7 @@ run_target() { # target, rsasm arch, triple, gas
   [ -f "$here/$target-programs.txt" ] && snippets "$here/$target-programs.txt" 1 "$@"
   [ -f "$here/$target-llvm.txt" ] && snippets "$here/$target-llvm.txt" 0 "$@"
   [ -f "$here/$target-padding.txt" ] && snippets "$here/$target-padding.txt" 0 "$@"
+  [ -f "$here/$target-codeview.txt" ] && snippets "$here/$target-codeview.txt" 0 "$@"
   [ -f "$here/$target-compiler.txt" ] && snippets "$here/$target-compiler.txt" 0 "$@"
   echo "[$target] $((pass + fail - before)) comparisons"
 }

@@ -63,7 +63,8 @@ OBJCOPY = GAS.replace("-as", "-objcopy")
 OBJDUMP = GAS.replace("-as", "-objdump")
 GAS_MARCH = "-march=armv9.5-a+sve2+sve2-aes+sve2-sha3+sve2-sm4+sve2-bitperm+crypto+sm4+sha3" \
     "+dotprod+i8mm+fp16+fp16fml+bf16+rcpc+rcpc3+sme2+sve2p1+f64mm+f32mm+cssc+the+lut" \
-    "+faminmax+fp8+fp8fma+fp8dot2+fp8dot4+sve-b16b16+sme2p1+memtag+lse128+lsui+d128"
+    "+faminmax+fp8+fp8fma+fp8dot2+fp8dot4+sve-b16b16+sme2p1+memtag+lse128+lsui+d128" \
+    "+mops+mops-go+lsfe+lscp+cmpbr+sve2p2+sve2p3+gcs+ite+tme+tev+poe2"
 
 
 # ---------------------------------------------------------------------------

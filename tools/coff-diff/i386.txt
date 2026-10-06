@@ -18,6 +18,7 @@ pushl $_foo
 .secrel32 _foo
 .secrel32 _foo+1
 .secidx _foo
+.text; nop; Lp: nop; .data; .secidx Lp; .secrel32 Lp
 .long _foo@IMGREL
 .long _foo - .
 .data; .long _foo - .
