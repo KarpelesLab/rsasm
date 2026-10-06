@@ -1432,7 +1432,7 @@ is what hid them from rsasm for as long as it did.
   pools and system instructions; for PowerPC's vector and
   POWER8–10 instructions it is GNU as's second opinion, and the check on the
   forms only GNU as accepts. `tools/oracles/build.sh` builds the references
-  from checksum-pinned sources. 25,654 of 25,654 match across fifty-seven
+  from checksum-pinned sources. 25,719 of 25,719 match across fifty-seven
   variants.
 - `tools/flat-diff/run.sh` against a link, for flat binaries: the reference
   assembler's object, linked by GNU ld 2.47 at the same base address with the
