@@ -87,6 +87,7 @@ impl Architecture for V850 {
             bits: 32,
             syntax: Syntax::Att,
             features: if self.rh850 { FEATURE_RH850 } else { 0 },
+            cpu_features: [0; 3],
             intel_register_prefix: false,
             used: 0,
             private: 0,

@@ -2983,28 +2983,28 @@ fn hint_alias(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
             }
         },
     };
-    match sysreg::hint(i.mnemonic, &name) {
-        Some(w) => one(w),
-        None => {
-            let options = sysreg::hint_options(i.mnemonic);
-            let span = i.op(0).map_or(i.span, |op| op.span);
-            cx.error(
-                span,
-                if options.is_empty() {
-                    format!("`{}` takes no operand", i.mnemonic)
-                } else if name.is_empty() {
-                    format!("`{}` takes {}", i.mnemonic, options.join(" or "))
-                } else {
-                    format!(
-                        "`{name}` is not an operand of `{}`; it takes {}",
-                        i.mnemonic,
-                        options.join(" or ")
-                    )
-                },
-            );
-            None
-        }
+    let span = i.op(0).map_or(i.span, |op| op.span);
+    // A name the target has not is reported by `hint` itself, so the error
+    // below is only for a name no target has.
+    if !sysreg::knows_hint(i.mnemonic, &name) {
+        let options = sysreg::hint_options(i.mnemonic);
+        cx.error(
+            span,
+            if options.is_empty() {
+                format!("`{}` takes no operand", i.mnemonic)
+            } else if name.is_empty() {
+                format!("`{}` takes {}", i.mnemonic, options.join(" or "))
+            } else {
+                format!(
+                    "`{name}` is not an operand of `{}`; it takes {}",
+                    i.mnemonic,
+                    options.join(" or ")
+                )
+            },
+        );
+        return None;
     }
+    one(sysreg::hint(cx, span, i.mnemonic, &name)?)
 }
 
 /// `dmb`, `dsb`, `isb` and `clrex`, whose option is a name in the table or
@@ -3033,7 +3033,7 @@ fn barrier(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
                 return None;
             }
         };
-        return one(sysreg::hint("dsb", name)?);
+        return one(sysreg::hint(cx, i.ops[0].span, "dsb", name)?);
     }
     let op2 = match i.mnemonic {
         "clrex" => 2,
@@ -3053,7 +3053,8 @@ fn sys_alias(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         cx.error(op.span, format!("expected a `{}` operand name", i.mnemonic));
         return None;
     };
-    let Some((bits, xt)) = sysreg::sys_ins(i.mnemonic, &name) else {
+    let has_register = i.op(1).is_some();
+    let Some((bits, xt)) = sysreg::sys_ins(cx, op.span, i.mnemonic, &name, has_register) else {
         cx.error(
             op.span,
             format!("`{name}` is not an operand of `{}`", i.mnemonic),

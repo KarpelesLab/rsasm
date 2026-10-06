@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- ARM and AArch64: gate what assembles on the architecture, CPU, unit and
+  extensions selected, through `.arch`, `.cpu`, `.fpu` and
+  `.arch_extension` or the new `-march=`, `-mcpu=` and `-mfpu=` options, as
+  GNU as does
 - ARM: make up the `it` block a conditional Thumb instruction needs, as GNU
   as's `-mimplicit-it` does, with the option spelled the same
 - ARM: read `.thumb_set`, and carry a symbol's Thumb marks onto a `.set`

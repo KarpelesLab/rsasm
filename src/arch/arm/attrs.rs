@@ -57,11 +57,13 @@
 //! `.arch_extension noidiv`, and an `mp` the directive added survives
 //! `.arch_extension nomp`.
 //!
-//! # Not modelled
+//! # Which instructions the selection has
 //!
-//! Which instructions a CPU has: `.arch armv4t` changes what the object says
-//! and not what this backend assembles, where GNU as would refuse an ARMv7
-//! instruction after it.
+//! That is a second model, in [`super::cpu`], over the same names: these
+//! tags are measured through GNU as, and what a target has is read out of
+//! binutils, so the two can disagree about a tag without disagreeing about
+//! an instruction. `.arch armv4t` refuses a `clz` there and writes
+//! `Tag_CPU_arch` 2 here.
 
 use super::attr_data::{ARCHS, CPUS, FP_TAGS, FPUS};
 use crate::arch::{ArchState, AttrSection, AttrValue};

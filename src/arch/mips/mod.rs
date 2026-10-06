@@ -92,6 +92,7 @@ impl Architecture for Mips {
             bits: self.bits,
             syntax: Syntax::Att,
             features: 0,
+            cpu_features: [0; 3],
             intel_register_prefix: false,
             used: 0,
             private: 0,

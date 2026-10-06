@@ -51,11 +51,70 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, at: u16) -> Option<Vec<Vari
     if name == "vldr" && super::vfp::is_literal_load(ins) {
         return super::vfp::literal_load(cx, ins);
     }
-    let all = forms(name)?;
     let thumb = cx.state.bits == THUMB_BITS;
+    // Two things GNU as's own encoders settle that no row of either table
+    // says, and that a target older than this backend's own reaches.
+    match name {
+        // `swp` and `swpb` are not instructions an ARMv8 core has at all:
+        // `do_swap` refuses them where the earlier cores assemble them.
+        "swp" | "swpb"
+            if super::cpu::has(cx.state, super::cpu_data::V8) && !super::cpu::is_any(cx.state) =>
+        {
+            let what = super::cpu::selected_name(cx.state);
+            cx.error(
+                ins.span,
+                format!("`{}` is not an instruction {what} has", ins.text),
+            );
+            return None;
+        }
+        // The hint encoding of `nop` is ARMv6K's. Before it `do_nop`
+        // assembles `mov r0, r0`, and `do_t_nop` the 16-bit `mov r8, r8`
+        // before Thumb-2; a hint number written out leaves only the hint.
+        // A target with no `nop` at all -- a core with no Thumb, asked
+        // for one in Thumb -- falls through to the forms and is refused
+        // there.
+        "nop"
+            if ins.ops.is_empty()
+                && !thumb
+                && has_nop(cx, false)
+                && !super::cpu::has(cx.state, super::cpu_data::V6K) =>
+        {
+            return Some(vec![Variant {
+                bytes: ((u32::from(ins.cond) << 28) | 0x01a0_0000)
+                    .to_le_bytes()
+                    .to_vec(),
+                fixups: Vec::new(),
+            }]);
+        }
+        "nop"
+            if ins.ops.is_empty()
+                && thumb
+                && ins.width != Width::Wide
+                && has_nop(cx, true)
+                && !super::cpu::has(cx.state, super::cpu_data::V6T2) =>
+        {
+            return Some(vec![Variant {
+                bytes: 0x46c0u16.to_le_bytes().to_vec(),
+                fixups: Vec::new(),
+            }]);
+        }
+        _ => {}
+    }
+    let all = forms(name)?;
     let mut best: Option<(&Form, usize)> = None;
+    // The first form the target does not have, for the diagnostic where no
+    // form it does have fits.
+    let mut absent: Option<u16> = None;
     for form in all {
         if !wanted(form.set, thumb, ins.width) {
+            continue;
+        }
+        if !super::cpu::supports_form(cx.state, form.feats, form.unit) {
+            absent = absent.or(Some(if super::cpu::supports(cx.state, form.feats) {
+                form.unit
+            } else {
+                form.feats
+            }));
             continue;
         }
         match encode(cx, ins, form, false) {
@@ -66,6 +125,14 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, at: u16) -> Option<Vec<Vari
                 }
             }
         }
+    }
+    // Nothing was tried because the target has none of the forms that could
+    // have fitted: GNU as reports that case as "selected processor does not
+    // support", whatever the operands were.
+    if let Some(feats) = absent.filter(|_| best.is_none()) {
+        let msg = super::cpu::unsupported(cx.state, ins.text, feats, thumb);
+        cx.error(ins.span, msg);
+        return None;
     }
     // The diagnostic comes from the form that read the most of what was
     // written, which is the one the source most nearly spells.
@@ -84,6 +151,13 @@ pub fn assemble(cx: &mut AsmCtx<'_>, ins: &Insn<'_>, at: u16) -> Option<Vec<Vari
         }
     }
     None
+}
+
+/// Whether the target has `nop` at all in this instruction set, which it
+/// has not where it has no Thumb; every `nop` form in the table is ARMv6K's
+/// hint, so the older spellings have to ask the mnemonic instead.
+fn has_nop(cx: &AsmCtx<'_>, thumb: bool) -> bool {
+    super::cpu::supports(cx.state, super::cpu::mnemonic_feats("nop", thumb))
 }
 
 /// Whether a form's instruction set is the one being assembled, and its

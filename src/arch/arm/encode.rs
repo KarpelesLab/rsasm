@@ -1508,6 +1508,21 @@ fn move_wide(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
 
 // ---- status registers ------------------------------------------------------
 
+/// Whether the target reaches the banked registers at all: GNU as's
+/// `parse_psr` refuses every one of them without the virtualization
+/// extension.
+pub fn banked_available(cx: &mut AsmCtx<'_>, span: Span) -> bool {
+    if super::cpu::has(cx.state, super::cpu_data::VIRT) {
+        return true;
+    }
+    let what = super::cpu::selected_name(cx.state);
+    cx.error(
+        span,
+        format!("the banked registers need the virtualization extension, which {what} has not"),
+    );
+    false
+}
+
 /// The banked register a name stands for, as `(R, m1, m)`: the three fields
 /// `mrs` and `msr` spell a mode's private register with.
 ///
@@ -1594,7 +1609,23 @@ pub fn psr_fields(cx: &mut AsmCtx<'_>, op: &Operand, spec: &str) -> Option<(u32,
                 'c' => flags |= 4,
                 'v' => flags |= 8,
                 'q' => flags |= 16,
-                'g' => ge = 4,
+                'g' => {
+                    // The `g` bitmask reaches the GE bits, which only a core
+                    // with the ARMv6 DSP instructions has; GNU as's
+                    // `parse_psr` refuses it on any other.
+                    if !super::cpu::has(cx.state, super::cpu_data::V6_DSP) {
+                        let what = super::cpu::selected_name(cx.state);
+                        cx.error(
+                            op.span,
+                            format!(
+                                "the `g` bitmask needs the ARMv6 DSP instructions, \
+                                     which {what} has not"
+                            ),
+                        );
+                        return None;
+                    }
+                    ge = 4;
+                }
                 _ => {
                     cx.error(op.span, format!("unexpected bit `{c}` after `apsr`"));
                     return None;
@@ -1643,6 +1674,9 @@ fn status_read(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let rd = rd as u32;
     let name = ins.ops[1].word.clone().unwrap_or_default();
     if let Some((r, m1, m)) = banked(&name) {
+        if !banked_available(cx, ins.ops[1].span) {
+            return None;
+        }
         return Some(one(word(
             ins.cond,
             0x0100_0200 | (r << 22) | (m1 << 16) | (rd << 12) | (m << 8),
@@ -1670,6 +1704,9 @@ fn status_write(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     arity(cx, ins, &[2])?;
     let spec = ins.ops[0].word.clone().unwrap_or_default();
     if let Some((r, m1, m)) = banked(&spec) {
+        if !banked_available(cx, ins.ops[0].span) {
+            return None;
+        }
         let rn = reg_of(cx, &ins.ops[1])? as u32;
         return Some(one(word(
             ins.cond,

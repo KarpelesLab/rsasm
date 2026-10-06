@@ -108,6 +108,32 @@ impl Endian {
 #[doc(hidden)]
 pub const FEATURE_DEFAULT_REL: u64 = 1 << 63;
 
+/// One of the three target-selecting options GNU as spells `-march=`,
+/// `-mcpu=` and `-mfpu=`; see [`Architecture::select_option`].
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum CpuOption {
+    /// An architecture: `-march=armv7-a`, with `+`-separated extensions
+    /// after it.
+    Arch,
+    /// A CPU, which on both ARM and AArch64 wins over an architecture given
+    /// as well: `-mcpu=cortex-a53`, extensions likewise.
+    Cpu,
+    /// A floating-point and SIMD unit: `-mfpu=neon-vfpv4`.
+    Fpu,
+}
+
+impl CpuOption {
+    /// How the option is written, for a diagnostic.
+    pub fn flag(self) -> &'static str {
+        match self {
+            CpuOption::Arch => "-march=",
+            CpuOption::Cpu => "-mcpu=",
+            CpuOption::Fpu => "-mfpu=",
+        }
+    }
+}
+
 /// Operand syntax flavour. Distinct from the [`crate::lexer::Dialect`]: GAS can
 /// assemble Intel-syntax operands via `.intel_syntax`, keeping `#` comments.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -524,6 +550,14 @@ pub struct ArchState {
     pub syntax: Syntax,
     /// Bitset of optional instruction-set extensions the backend defines.
     pub features: u64,
+    /// Which instructions the target selected has, as a bitset in the
+    /// backend's own numbering: what `.arch`, `.cpu`, `.fpu` and
+    /// `.arch_extension`, or `-march=`, `-mcpu=` and `-mfpu=`, settled on.
+    /// Three words because that is what the two backends that gate on it
+    /// need: GNU as's ARM feature set is four 32-bit words, and its AArch64
+    /// one is 148 bits. Zero for a backend that assembles the same
+    /// instructions whatever the source declares.
+    pub cpu_features: [u64; 3],
     /// Set by `.intel_syntax noprefix` / `prefix`.
     pub intel_register_prefix: bool,
     /// Bitset of what the source has used so far, in the backend's own terms,
@@ -1800,13 +1834,39 @@ pub trait Architecture {
     /// Whether `.arch` — or `.cpu`, when `cpu` is set — naming this selects a
     /// CPU of this backend's own rather than switching to another backend,
     /// and records it in `state`. ARM's `.arch armv6` and `.cpu cortex-a8`
-    /// name one of GNU as's ARM CPUs, which changes what the object's build
-    /// attributes say; everywhere else `.arch` names a target and this stays
-    /// false. Asked before the name is looked up as a target, so a backend
-    /// must claim only the names its reference assembler gives the
-    /// directive.
-    fn selects_cpu(&self, _state: &mut ArchState, _name: &str, _cpu: bool) -> bool {
-        false
+    /// name one of GNU as's ARM CPUs, and AArch64's `.arch armv8.5-a+memtag`
+    /// one of its architectures, which decides what the object says it was
+    /// built for and, on both, which instructions assemble; everywhere else
+    /// `.arch` names a target and this stays `Ok(false)`. Asked before the
+    /// name is looked up as a target, so a backend must claim only the names
+    /// its reference assembler gives the directive.
+    ///
+    /// The `Err` is for a name the backend claims and then finds fault with,
+    /// which is what an unknown `+name` suffix after an architecture it does
+    /// know is; the caller reports it against the directive.
+    fn selects_cpu(&self, _state: &mut ArchState, _name: &str, _cpu: bool) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// What `-march=`, `-mcpu=` or `-mfpu=` on the command line selects.
+    ///
+    /// GNU as's options are not the directives of the same name, so this is
+    /// not [`Architecture::selects_cpu`]: `-march=armv7-a+mp` takes the
+    /// extension suffixes that `.arch` refuses, and `-mfpu=neon` merges the
+    /// unit into the CPU's own where `.fpu neon` replaces it. The `Err` is
+    /// the diagnostic, which says what was wrong with the name — or, by
+    /// default, that this backend has no such option.
+    fn select_option(
+        &self,
+        _state: &mut ArchState,
+        opt: CpuOption,
+        _name: &str,
+    ) -> Result<(), String> {
+        Err(format!(
+            "`{}` is not an option of the {} backend",
+            opt.flag(),
+            self.name()
+        ))
     }
 
     /// Words that define a symbol where a label would go, beyond the `EQU`

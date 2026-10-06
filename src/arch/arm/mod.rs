@@ -133,6 +133,9 @@
 #[doc(hidden)]
 pub mod attr_data;
 pub(crate) mod attrs;
+pub(crate) mod cpu;
+#[doc(hidden)]
+pub mod cpu_data;
 pub mod encode;
 pub(crate) mod generic;
 pub mod imm;
@@ -146,8 +149,8 @@ pub mod thumb;
 pub(crate) mod vfp;
 
 use crate::arch::{
-    ArchState, Architecture, AsmCtx, Endian, InsnRequest, Interwork, InterworkTarget, Request,
-    Syntax,
+    ArchState, Architecture, AsmCtx, CpuOption, Endian, InsnRequest, Interwork, InterworkTarget,
+    Request, Syntax,
 };
 use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
@@ -303,6 +306,7 @@ impl Architecture for Arm {
             bits: if self.thumb { THUMB_BITS } else { 32 },
             syntax: Syntax::Att,
             features: 0,
+            cpu_features: cpu::initial(),
             intel_register_prefix: false,
             used: 0,
             private: 0,
@@ -338,13 +342,52 @@ impl Architecture for Arm {
     }
 
     /// `.arch` and `.cpu` name one of GNU as's ARM CPUs here rather than
-    /// another backend, and change what the build attributes say.
-    fn selects_cpu(&self, state: &mut ArchState, name: &str, cpu: bool) -> bool {
-        if cpu {
+    /// another backend. Two tables read the name — the build attributes' and
+    /// the feature model's — and each is derived from binutils its own way,
+    /// so a name either of them has is one this backend claims.
+    fn selects_cpu(&self, state: &mut ArchState, name: &str, cpu: bool) -> Result<bool, String> {
+        let attr = if cpu {
             attrs::set_cpu(state, name)
         } else {
             attrs::set_arch(state, name)
+        };
+        Ok(cpu::directive_arch(state, name, cpu) || attr)
+    }
+
+    /// `-march=`, `-mcpu=` and `-mfpu=`, which take the `+name` extension
+    /// suffixes the directives do not; see [`cpu`].
+    fn select_option(
+        &self,
+        state: &mut ArchState,
+        opt: CpuOption,
+        name: &str,
+    ) -> Result<(), String> {
+        cpu::option(state, opt, name)?;
+        // A target with no ARM instruction set at all starts in Thumb, which
+        // is what GNU as's `autoselect_thumb_from_cpu_variant` does with an
+        // M-profile `-mcpu` or `-march`.
+        if !cpu::has(state, cpu_data::V1) {
+            state.bits = THUMB_BITS;
         }
+        // The attributes follow the selection the way the directives leave
+        // them, which for `-mfpu=` is not quite what GNU as writes: the
+        // option merges the unit into the CPU's own where the directive
+        // replaces it, and `attrs` is measured through the directive. A name
+        // `attr_data` has not is one GNU as wrote no attributes for, and the
+        // feature model above has already taken it.
+        let (base, exts) = match name.split_once('+') {
+            Some((base, rest)) => (base, rest),
+            None => (name, ""),
+        };
+        let _ = match opt {
+            CpuOption::Cpu => attrs::set_cpu(state, base),
+            CpuOption::Fpu => attrs::set_fpu(state, base),
+            _ => attrs::set_arch(state, base),
+        };
+        for ext in exts.split('+').filter(|e| !e.is_empty()) {
+            attrs::set_extension(state, ext);
+        }
+        Ok(())
     }
 
     /// `EF_ARM_EABI_VER5`, as llvm-mc writes for `arm-linux-gnueabi`; GNU ld
@@ -821,6 +864,19 @@ impl Architecture for Arm {
             cx.error(req.mnemonic_span, format!("unknown instruction `{text}`"));
             return None;
         };
+        // What the target needs for a mnemonic a hand-written encoder owns,
+        // from that mnemonic's own `insns[]` row. A form of the generated
+        // table carries its own feature set and `generic::assemble` reads
+        // that, which is finer: one row there is one element size.
+        if !matches!(r.mnem, Mnem::Ext(_)) {
+            let thumb = cx.state.bits == THUMB_BITS;
+            let feats = cpu::mnemonic_feats(r.stem, thumb);
+            if !cpu::supports(cx.state, feats) {
+                let msg = cpu::unsupported(cx.state, &text, feats, thumb);
+                cx.error(req.mnemonic_span, msg);
+                return None;
+            }
+        }
         let ops = {
             let mut cur = req.cursor();
             // Only a branch target reads a `(plt)` suffix; see
@@ -859,7 +915,24 @@ impl Architecture for Arm {
             span: req.span,
         };
         if cx.state.bits == THUMB_BITS {
-            return thumb::assemble(cx, &ins);
+            let out = thumb::assemble(cx, &ins)?;
+            // A 32-bit Thumb encoding needs Thumb-2 unless the mnemonic has
+            // never had a narrow one; see `cpu::wide_ok`. The narrowest
+            // encoding decides, since a mnemonic with a 16-bit one to fall
+            // back on takes it.
+            let narrowest = out.iter().map(|v| v.bytes.len()).min().unwrap_or(0);
+            let always_wide = matches!(r.mnem, Mnem::Bl | Mnem::Blx);
+            if narrowest > 2
+                && !cpu::wide_ok(cx.state, cpu::mnemonic_feats(r.stem, true), always_wide)
+            {
+                let what = cpu::selected_name(cx.state);
+                cx.error(
+                    req.mnemonic_span,
+                    format!("`{text}` needs a 32-bit Thumb encoding, which {what} has not"),
+                );
+                return None;
+            }
+            return Some(out);
         }
         arm_outside_it(cx, &ins);
         encode::assemble(cx, &ins)
@@ -868,18 +941,19 @@ impl Architecture for Arm {
     fn directive(&self, cx: &mut AsmCtx<'_>, name: &str, cur: &mut Cursor<'_>) -> bool {
         match name {
             ".arm" | ".code32" => {
-                set_mode(cx, false);
+                set_mode(cx, false, cur.peek().span);
                 true
             }
             ".thumb" | ".code16" => {
-                set_mode(cx, true);
+                set_mode(cx, true, cur.peek().span);
                 true
             }
             ".code" => {
                 // `.code 16` / `.code 32`, the spelling ARM sources use.
+                let span = cur.peek().span;
                 match cur.peek().kind {
-                    TokKind::Int(16) => set_mode(cx, true),
-                    TokKind::Int(32) => set_mode(cx, false),
+                    TokKind::Int(16) => set_mode(cx, true, span),
+                    TokKind::Int(32) => set_mode(cx, false, span),
                     _ => {
                         let span = cur.peek().span;
                         cx.error(span, "`.code` expects 16 or 32");
@@ -896,7 +970,7 @@ impl Architecture for Arm {
             // The label after `.thumb_func` is a Thumb function; see
             // `label_flags`. The directive also switches to Thumb.
             ".thumb_func" => {
-                set_mode(cx, true);
+                set_mode(cx, true, cur.peek().span);
                 cx.state.private |= PENDING_THUMB_FUNC;
                 true
             }
@@ -912,8 +986,17 @@ impl Architecture for Arm {
                     return true;
                 };
                 let ok = match name {
-                    ".fpu" => attrs::set_fpu(cx.state, &arg),
-                    ".arch_extension" => attrs::set_extension(cx.state, &arg),
+                    ".fpu" => attrs::set_fpu(cx.state, &arg) | cpu::directive_fpu(cx.state, &arg),
+                    ".arch_extension" => {
+                        let attr = attrs::set_extension(cx.state, &arg);
+                        match cpu::directive_extension(cx.state, &arg) {
+                            Ok(known) => known | attr,
+                            Err(msg) => {
+                                cx.error(span, msg);
+                                return true;
+                            }
+                        }
+                    }
                     _ => attrs::set_object_arch(cx.state, &arg),
                 };
                 if !ok {
@@ -1092,8 +1175,21 @@ fn tls_descseq(cx: &mut AsmCtx<'_>, cur: &mut Cursor<'_>) {
 ///
 /// An `it` block the assembler made up also ends here; see
 /// [`thumb::close_implicit_it`].
-fn set_mode(cx: &mut AsmCtx<'_>, thumb: bool) {
+fn set_mode(cx: &mut AsmCtx<'_>, thumb: bool, span: crate::source::Span) {
     if (cx.state.bits == THUMB_BITS) == thumb {
+        return;
+    }
+    // GNU as's `opcode_select` refuses the switch where the target has no
+    // such instruction set: an M-profile core has no ARM state, and a core
+    // older than ARMv4T no Thumb.
+    let (want, what) = if thumb {
+        (cpu_data::V4T, "Thumb")
+    } else {
+        (cpu_data::V1, "ARM")
+    };
+    if !cpu::has(cx.state, want) {
+        let name = cpu::selected_name(cx.state);
+        cx.error(span, format!("{name} has no {what} instruction set"));
         return;
     }
     thumb::close_implicit_it(cx.state);

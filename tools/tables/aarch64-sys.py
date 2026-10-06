@@ -8,6 +8,14 @@ PSTATE fields, the `dc`/`ic`/`at`/`tlbi` operand names and the aliases of
 `opcodes/aarch64-opc.c`), and every encoding comes from assembling that name
 with `aarch64-elf-as`: nothing here says what a word should be.
 
+Those tables also say which extension a `dc`/`ic`/`at`/`tlbi` operand name
+needs -- GNU as refuses one the selected processor does not have -- and that
+comes from them too, through the bit numbering `tools/tables/a64feat.py`
+reads. The `mrs`/`msr` register names and the PSTATE fields carry a feature
+set as well, and GNU as 2.47 never tests it: its `sysreg_checking_p` is zero
+and nothing turns it on, so every name it knows assembles whatever the
+processor is.
+
     tools/tables/aarch64-sys.py table   # rewrite the table and the corpora
     tools/tables/aarch64-sys.py check   # exit 1 if either is out of date
 
@@ -33,6 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 import a64  # noqa: E402
+import a64feat  # noqa: E402
 
 ORACLES = os.environ.get("RSASM_ORACLES", os.path.join(ROOT, "target", "oracles"))
 BINUTILS = os.path.join(ORACLES, "src", "binutils-2.47")
@@ -142,6 +151,88 @@ def _body(text, decl):
     return text[start:text.index("\n};", start)]
 
 
+def fields(text, at):
+    """The top-level fields of the brace group or argument list at `at`."""
+    i, depth, last, out = at + 1, 1, at + 1, []
+    while depth:
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                out.append(text[last:i])
+                break
+        elif c == "," and depth == 1:
+            out.append(text[last:i])
+            last = i + 1
+        i += 1
+    return [f.strip() for f in out]
+
+
+def binutils_features(model):
+    """What each `dc`/`ic`/`at`/`tlbi` operand name needs, as a feature set:
+    the last field of its row in `aarch64-opc.c`.
+
+    `md_assemble` refuses the name without it. The `*_XS_OP` macros write two
+    rows at once, with a set of their own for the `nxs` spelling, and are
+    redefined as the table goes, so the one in force is tracked by hand.
+
+    The `mrs`/`msr` register names and the PSTATE fields have such a set too
+    and are not read here, because GNU as 2.47 does not read theirs: its
+    `sysreg_checking_p` is zero and nothing turns it on.
+    """
+    opc = open(os.path.join(BINUTILS, "opcodes", "aarch64-opc.c")).read()
+
+    def rows_of(table):
+        """(name, feature set) for each row, following the `*_XS_OP` macros.
+
+        A row may be a brace group of its own or a use of one of those
+        macros, which writes two of them; they come in source order, and a
+        macro redefined partway through the table applies from there on.
+        """
+        body = _body(opc, table + "[] =")
+        # Where each `*_XS_OP` definition starts, and the two feature sets
+        # its two rows carry.
+        macros = []
+        for m in re.finditer(r"#define (\w+_XS_OP)\s*\(", body):
+            first = body.index("{", m.end())
+            second = body.index("{", body.index("}", first))
+            macros.append((m.start(), m.group(1),
+                           (model.features(fields(body, first)[3]),
+                            model.features(fields(body, second)[3]))))
+        out = []
+        for m in re.finditer(r'(?:\{\s*"([a-z0-9_]+)"|\b(\w+_XS_OP)\s*\(\s*"([a-z0-9_]+)")',
+                             body):
+            if m.group(1) is not None:
+                out.append((m.group(1),
+                            model.features(fields(body, m.start())[3])))
+                continue
+            # The macro in force here is the last one defined before it.
+            want = next(sets for at, name, sets in reversed(macros)
+                        if name == m.group(2) and at < m.start())
+            out.append((m.group(3), want[0]))
+            out.append((m.group(3) + "nxs", want[1]))
+        return out
+
+    ins = {}
+    for mnemonic, table in SYS_INS_TABLES:
+        for name, want in rows_of(table):
+            ins[(mnemonic, name)] = want
+    return ins
+
+
+# Which table each system instruction's named operands come from; `cfp`,
+# `dvp`, `cpp` and `cosp` share one.
+SYS_INS_TABLES = (
+    ("at", "aarch64_sys_regs_at"), ("dc", "aarch64_sys_regs_dc"),
+    ("ic", "aarch64_sys_regs_ic"), ("tlbi", "aarch64_sys_regs_tlbi"),
+    ("plbi", "aarch64_sys_regs_plbi"), ("cfp", "aarch64_sys_regs_sr"),
+    ("dvp", "aarch64_sys_regs_sr"), ("cpp", "aarch64_sys_regs_sr"),
+    ("cosp", "aarch64_sys_regs_sr"),
+)
+
+
 def binutils_names():
     """Every name GNU as has for a system register, a PSTATE field, a
     `dc`/`ic`/`at`/`tlbi` operand and a `hint` alias."""
@@ -156,11 +247,7 @@ def binutils_names():
     # The sys-instruction operands. A TLBI_XS_OP or PLBI_XS_OP line defines
     # the name twice, the second with `nxs` on the end.
     ins = {}
-    for mnemonic, table in (("at", "aarch64_sys_regs_at"), ("dc", "aarch64_sys_regs_dc"),
-                            ("ic", "aarch64_sys_regs_ic"), ("tlbi", "aarch64_sys_regs_tlbi"),
-                            ("plbi", "aarch64_sys_regs_plbi"), ("cfp", "aarch64_sys_regs_sr"),
-                            ("dvp", "aarch64_sys_regs_sr"), ("cpp", "aarch64_sys_regs_sr"),
-                            ("cosp", "aarch64_sys_regs_sr")):
+    for mnemonic, table in SYS_INS_TABLES:
         names = []
         for line in _body(opc, table + "[] =").splitlines():
             if line.lstrip().startswith("#"):
@@ -306,11 +393,71 @@ def rust(regs, pstate, ins, hints, sys_words):
     def rows(items):
         return "".join("    " + row + "\n" for row in items)
 
+    # What each system-instruction operand needs of the target, from the same
+    # table the names come from. The sets are deduplicated: most need
+    # nothing.
+    model = a64feat.Model()
+    ins_feats = binutils_features(model)
+    opcodes = a64feat.Opcodes(model)
+    pool, sets = {(0, 0, 0): 0}, [(0, 0, 0)]
+
+    def index(f):
+        if f not in pool:
+            pool[f] = len(sets)
+            sets.append(f)
+        return pool[f]
+
+    def hint_want(mnemonic, word):
+        """What a hint alias with this word needs, from the row it encodes.
+
+        One mnemonic can have a row per extension -- `dsb` has the plain
+        barrier and the `+xs` one, whose option names end in `nxs` -- so the
+        word tells them apart where the name alone could not.
+        """
+        return index(opcodes.of(mnemonic, word))
+
+    def want(mnemonic, name, xt, with_register):
+        """The set to test, with the clears GNU as applies.
+
+        A name that may be followed by an address register and is not needs
+        less of the target: the TLB maintenance names drop their `tlbid`.
+        One that takes a register at all drops `d128`, which only the
+        128-bit `sysp` spelling asks of it, and this is not that.
+        """
+        f = ins_feats.get((mnemonic, name), (0, 0, 0))
+        if xt == 1:
+            f = a64feat.without(f, a64feat.union(model.bit("D128_TLBID"),
+                                                 model.bit("D128")))
+        elif xt == 2 and not with_register:
+            f = a64feat.without(f, model.bit("TLBID"))
+        return index(f)
+
+    # The rows first: each asks `want` for an index, which is what fills the
+    # feature table that goes above them.
+    reg_rows = rows(f'("{n}", {b:#010x}, {f}),' for n, b, f in regs)
+    pstate_rows = rows(f'("{n}", {w:#010x}, {lsb}, {top}),'
+                       for n, w, lsb, top in pstate)
+    ins_rows = rows(f'("{m}", "{n}", {w:#010x}, {x}, '
+                    f'{want(m, n, x, True)}, {want(m, n, x, False)}),'
+                    for m, n, w, x in ins)
+    hint_rows = rows(f'("{m}", "{o}", {w:#010x}, {hint_want(m, w)}),'
+                     for m, o, w in hints)
+    feat_rows = "".join("    [%s],\n" % ", ".join("%#x" % x for x in f) for f in sets)
+
     return f'''//! The system-register and system-instruction names GNU as knows.
 //!
 //! Generated by `tools/tables/aarch64-sys.py`, which takes the names from
 //! binutils' own tables and every encoding from a run of `aarch64-elf-as`;
 //! do not edit. The names are sorted, and looked up by binary search.
+//!
+//! A `dc`/`ic`/`at`/`tlbi` operand name also carries which instruction-set
+//! features the target needs for it, as an index into [`FEATS`]: GNU as
+//! refuses one the selected processor does not have, and this table is where
+//! it reads that from. The `mrs`/`msr` names carry no such gate because GNU
+//! as 2.47 applies none; see `tools/tables/aarch64-sys.py`. See
+//! [`super::cpu`].
+
+use super::cpu::Set;
 
 /// The register cannot be written to; `msr` warns, as GNU as does.
 pub(super) const READ_ONLY: u8 = {F_READ};
@@ -319,15 +466,20 @@ pub(super) const WRITE_ONLY: u8 = {F_WRITE};
 /// The name is deprecated and may be removed from the architecture.
 pub(super) const DEPRECATED: u8 = {F_DEPRECATED};
 
+/// Every feature set a name here needs, all of whose bits the target must
+/// have; index 0 is the empty set, which every target has.
+pub(super) static FEATS: &[Set] = &[
+{feat_rows}];
+
 /// `mrs`/`msr` register names: the `o0:op1:CRn:CRm:op2` bits of the word,
 /// already in place, and what the register allows.
 pub(super) static REGS: &[(&str, u32, u8)] = &[
-{rows(f'("{n}", {b:#010x}, {f}),' for n, b, f in regs)}];
+{reg_rows}];
 
 /// PSTATE fields, which `msr` writes with an immediate: the word of
 /// `msr <field>, #0`, the bit the immediate starts at and its largest value.
 pub(super) static PSTATE: &[(&str, u32, u8, u8)] = &[
-{rows(f'("{n}", {w:#010x}, {lsb}, {top}),' for n, w, lsb, top in pstate)}];
+{pstate_rows}];
 
 /// The register operand takes no `Xt`.
 pub(super) const NO_XT: u8 = 0;
@@ -342,15 +494,17 @@ pub(super) const SYS: u32 = {sys_words[0]:#010x};
 pub(super) const SYSL: u32 = {sys_words[1]:#010x};
 
 /// The operand names of `at`, `dc`, `ic`, `tlbi` and friends: the mnemonic,
-/// the name, the `sys` word it stands for with no register in it, and
-/// whether a register follows it.
-pub(super) static SYS_INS: &[(&str, &str, u32, u8)] = &[
-{rows(f'("{m}", "{n}", {w:#010x}, {x}),' for m, n, w, x in ins)}];
+/// the name, the `sys` word it stands for with no register in it, whether a
+/// register follows it, and what the name needs with one written and
+/// without.
+pub(super) static SYS_INS: &[(&str, &str, u32, u8, u16, u16)] = &[
+{ins_rows}];
 
 /// The aliases of `hint` and of the barriers that take no operand or one
-/// named operand: the mnemonic, the name if there is one, and the word.
-pub(super) static HINTS: &[(&str, &str, u32)] = &[
-{rows(f'("{m}", "{o}", {w:#010x}),' for m, o, w in hints)}];
+/// named operand: the mnemonic, the name if there is one, the word, and what
+/// the target needs for it.
+pub(super) static HINTS: &[(&str, &str, u32, u16)] = &[
+{hint_rows}];
 '''
 
 

@@ -1,6 +1,6 @@
 //! The `rsasm` command line driver.
 
-use rsasm::arch;
+use rsasm::arch::{self, CpuOption};
 use rsasm::assembler::{Assembler, ImplicitIt, Options};
 use rsasm::lexer::Dialect;
 use rsasm::output::{self, Format};
@@ -24,6 +24,12 @@ options:
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
                      ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
+      --march=<name> ARM and AArch64: the architecture to assemble for, which
+                     decides which instructions are accepted -- `armv5te`,
+                     `armv9.5-a+sve2+nolse` -- spelled as GNU as spells it,
+                     `-march=<name>`, as well
+      --mcpu=<name>  the same for a named CPU, which wins over `--march`
+      --mfpu=<name>  ARM: the floating-point and SIMD unit, `neon-vfpv4`
       --mimplicit-it=<m>
                      ARM: when a conditional Thumb instruction with no `it`
                      block of its own gets one made up for it -- never, arm
@@ -89,6 +95,24 @@ struct Args {
     format_given: bool,
 }
 
+/// Which target-selecting option this argument is, and what it names.
+/// Spelled as GNU as spells them, with the long form the options written out
+/// in `USAGE` also have.
+fn cpu_option(arg: &str) -> Option<(CpuOption, &str)> {
+    for (flag, opt) in [
+        ("march=", CpuOption::Arch),
+        ("mcpu=", CpuOption::Cpu),
+        ("mfpu=", CpuOption::Fpu),
+    ] {
+        for lead in ["-", "--"] {
+            if let Some(name) = arg.strip_prefix(lead).and_then(|a| a.strip_prefix(flag)) {
+                return Some((opt, name));
+            }
+        }
+    }
+    None
+}
+
 /// Applies a builder method to the options in place, since [`Options`]'s
 /// builders take and return the whole value.
 fn edit(o: &mut Options, f: impl FnOnce(Options) -> Options) {
@@ -140,6 +164,13 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
     };
     while i < args.len() {
         let arg = args[i].as_str();
+        // GNU as's spellings for what the target is: what a build system
+        // written against `arm-none-eabi-as` or `aarch64-elf-as` passes.
+        if let Some((opt, name)) = cpu_option(arg) {
+            edit(&mut a.options, |o| o.with_cpu_option(opt, name));
+            i += 1;
+            continue;
+        }
         match arg {
             "-h" | "--help" => {
                 print!("{USAGE}");

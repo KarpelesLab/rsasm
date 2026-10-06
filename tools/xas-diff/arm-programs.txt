@@ -1,0 +1,57 @@
+# A32 snippets where what `.arch`, `.cpu`, `.fpu` and `.arch_extension`
+# select decides the bytes, not just whether the line assembles: the `nop`
+# encoding is ARMv6K's hint, and before it GNU as assembles `mov r0, r0`
+# instead. The reference runs with `-march=armv7ve -mfpu=neon-vfpv4`, which
+# each directive here overrides; see run.sh and `src/arch/arm/cpu.rs`.
+#
+# Snippets that both assemblers refuse are in arm-relocs.txt, which compares
+# whole objects and takes a `refused:` name.
+
+=== nop on a core older than ARMv6K
+	.arch	armv5te
+	nop
+	nopeq
+=== nop on an ARMv6K
+	.arch	armv6k
+	nop
+	nop	{5}
+=== nop under a CPU name
+	.cpu	arm7tdmi
+	nop
+=== nop in Thumb before Thumb-2
+	.arch	armv4t
+	.thumb
+	nop
+=== nop in Thumb-2
+	.arch	armv6t2
+	.thumb
+	nop
+	nop.w
+=== sdiv once the divide extension is added
+	.arch	armv7-a
+	.arch_extension idiv
+	sdiv	r0, r1, r2
+=== .arch keeps the unit the command line selected
+	.arch	armv7-a
+	vadd.f32	s0, s1, s2
+=== a VFP instruction once a unit is selected
+	.arch	armv7-a
+	.fpu	vfpv3
+	vadd.f32	s0, s1, s2
+	vadd.f64	d0, d1, d2
+=== NEON once the unit has it
+	.arch	armv7-a
+	.fpu	neon-vfpv4
+	vadd.i32	q0, q1, q2
+	vfma.f32	s0, s1, s2
+=== an extension taken away again
+	.arch	armv7-a
+	.arch_extension idiv
+	.arch_extension noidiv
+	nop
+=== the extensions an architecture brings survive taking one away
+	.arch	armv7ve
+	.arch_extension noidiv
+	sdiv	r0, r1, r2
+	smc	#1
+	mrs	r0, sp_usr

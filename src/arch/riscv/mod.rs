@@ -118,6 +118,7 @@ impl Architecture for Riscv {
             // linker relaxation is on as GNU as has it unless `.option
             // norelax` turns it off.
             features: STACK_BOTTOM | RVC | RELAX,
+            cpu_features: [0; 3],
             intel_register_prefix: false,
             used: 0,
             private: 0,

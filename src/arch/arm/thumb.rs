@@ -2637,6 +2637,9 @@ fn status_read(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     let rd = rd as u16;
     let name = ins.ops[1].word.clone().unwrap_or_default();
     if let Some((r, m1, m)) = encode::banked(&name) {
+        if !encode::banked_available(cx, ins.ops[1].span) {
+            return None;
+        }
         return Some(wide(
             0xf3e0 | ((r as u16) << 4) | m1 as u16,
             0x8000 | (rd << 8) | 0x20 | ((m as u16) << 4),
@@ -2663,6 +2666,9 @@ fn status_write(cx: &mut AsmCtx<'_>, ins: &Insn<'_>) -> Option<Vec<Variant>> {
     encode::arity(cx, ins, &[2])?;
     let spec = ins.ops[0].word.clone().unwrap_or_default();
     if let Some((r, m1, m)) = encode::banked(&spec) {
+        if !encode::banked_available(cx, ins.ops[0].span) {
+            return None;
+        }
         let rn = encode::reg_of(cx, &ins.ops[1])?;
         bad_reg(cx, ins.ops[1].span, rn)?;
         let rn = rn as u16;

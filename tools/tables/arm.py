@@ -21,8 +21,15 @@ at bits 16-20 written one greater than the field, then a register at bits
 assembler needs, so this turns the format strings into rsasm's `Op` lists
 and writes the table; `super::generic` encodes from it.
 
-    tools/tables/arm.py table     # rewrite src/arch/arm/table.rs
-    tools/tables/arm.py check     # exit 1 if it is out of date
+It also writes src/arch/arm/cpu_data.rs, the feature model: which
+instructions the architecture, CPU, unit and extensions selected have. That
+comes out of binutils too -- the bit numbering and the selection tables from
+`include/opcode/arm.h` and `gas/config/tc-arm.c`, each form's own feature set
+from the `arm-dis.c` row it came from, and each hand-written mnemonic's from
+its `insns[]` row, which is the set GNU as itself tests.
+
+    tools/tables/arm.py table     # rewrite both files
+    tools/tables/arm.py check     # exit 1 if either is out of date
     tools/tables/arm.py audit     # print every row and where it went
 
 Nothing is dropped silently. Every row of the four tables is accounted for:
@@ -972,7 +979,8 @@ def merge(forms):
             ops.append(("SatShift", f[0][0], f[0][1], asr, 255, 0))
         else:
             raise Unsupported("shift group %r %r" % (key, kinds))
-        out.append(dict(base, word=word, ops=tuple(ops)))
+        out.append(dict(base, word=word, ops=tuple(ops),
+                        feats=frozenset().union(*(f["feats"] for f, _ in group))))
     return out
 
 
@@ -1256,7 +1264,8 @@ def build(entries, insns):
                 use = OVERRIDE.get((name, which), OVERRIDE.get((name, "*"), ops))
                 forms.append(
                     {"name": name, "set": which, "word": w,
-                     "cond": has_cond, "ops": use}
+                     "cond": has_cond, "ops": use,
+                     "feats": frozenset(e["feats"])}
                 )
         audit.append("%-4s %08x %-24s -> %s"
                      % (e["set"], e["val"], mnem,
@@ -1279,16 +1288,20 @@ def build(entries, insns):
     forms += derived(forms)
     for name, which, word, cond, ops in EXTRA:
         forms.append({"name": name, "set": which, "word": word, "cond": cond,
-                      "ops": ops})
+                      "ops": ops,
+                      "feats": frozenset(extra_feats(name, which))})
     forms = merge(forms)
     vector_operands(forms, insns)
     forms = vext_split(forms)
-    seen, out = set(), []
+    seen, out = {}, []
     for f in forms:
         key = (f["name"], f["set"], f["word"], tuple(f["ops"]))
+        # The same form reached twice -- a row that two mnemonic patterns
+        # spell alike -- is one form available wherever either row is.
         if key in seen:
+            seen[key]["feats"] |= f["feats"]
             continue
-        seen.add(key)
+        seen[key] = f
         out.append(f)
     order = {"T16": 0, "T32": 1, "Arm": 2}
     out.sort(key=lambda f: (f["name"], order[f["set"]], f["word"]))
@@ -1296,6 +1309,596 @@ def build(entries, insns):
         form["regs"] = reg_classes(
             form["name"], form["ops"], form["set"] != "Arm", insns)
     return out, audit
+
+
+# ============================================================================
+# The feature model: which instructions the target selected has
+# ============================================================================
+#
+# GNU as gates every instruction on one `arm_feature_set` -- three 32-bit
+# words of core features and one of coprocessor ones -- and lets it through
+# when that set and the instruction's have a bit in common. All the sets are
+# in binutils: the bit numbering and the architecture, CPU, unit and extension
+# sets in `include/opcode/arm.h` and the option tables of `tc-arm.c`, an
+# instruction's own in the row of `arm-dis.c` it came from, and, for the
+# mnemonics a hand-written encoder owns and no row describes, in that
+# mnemonic's `insns[]` row. `src/arch/arm/cpu.rs` is the same three parts and
+# the same test; this writes it its tables.
+
+ARM_H = os.path.join(BINUTILS, "include", "opcode", "arm.h")
+CPU_OUT = os.path.join(ROOT, "src", "arch", "arm", "cpu_data.rs")
+
+# The architecture and unit rsasm's ARM backend is, which is the command line
+# tools/xas-diff and tools/mc-diff assemble the reference with; see
+# `src/arch/arm/cpu.rs`.
+DEFAULT_ARCH = "armv7ve"
+DEFAULT_FPU = "neon-vfpv4"
+
+# How each feature bit reads in a diagnostic. GNU as writes none of these --
+# it says "selected processor does not support `clz r0,r1'" and leaves which
+# processor would to the reader -- so they are this repository's words for
+# what the architecture manual calls each bit. A bit with no entry here reads
+# as its binutils name, which only the architectures rsasm does not claim
+# ever need.
+BIT_WORDS = {
+    "ARM_EXT_V1": "ARMv1 or later",
+    "ARM_EXT_V2": "ARMv2 or later",
+    "ARM_EXT_V2S": "ARMv2a or later",
+    "ARM_EXT_V3": "ARMv3 or later",
+    "ARM_EXT_V3M": "ARMv3M or later",
+    "ARM_EXT_V4": "ARMv4 or later",
+    "ARM_EXT_V4T": "Thumb",
+    "ARM_EXT_V5": "ARMv5 or later",
+    "ARM_EXT_V5T": "ARMv5T or later",
+    "ARM_EXT_V5ExP": "the ARMv5TExP DSP instructions",
+    "ARM_EXT_V5E": "ARMv5TE or later",
+    "ARM_EXT_V5J": "the Jazelle extension",
+    "ARM_EXT_V6": "ARMv6 or later",
+    "ARM_EXT_V6K": "ARMv6K or later",
+    "ARM_EXT_V8": "ARMv8-A or later",
+    "ARM_EXT_V6T2": "Thumb-2",
+    "ARM_EXT_DIV": "the Thumb integer divide extension",
+    "ARM_EXT_V5E_NOTM": "ARMv5TE outside the M profile",
+    "ARM_EXT_V6_NOTM": "ARMv6 outside the M profile",
+    "ARM_EXT_V7": "ARMv7 or later",
+    "ARM_EXT_V7A": "the ARMv7-A profile",
+    "ARM_EXT_V7R": "the ARMv7-R profile",
+    "ARM_EXT_V7M": "the ARMv7-M profile",
+    "ARM_EXT_V6M": "the ARMv6-M profile",
+    "ARM_EXT_BARRIER": "the ARMv7 memory barriers",
+    "ARM_EXT_THUMB_MSR": "the Thumb status-register transfers",
+    "ARM_EXT_V6_DSP": "the ARMv6 DSP instructions",
+    "ARM_EXT_MP": "the multiprocessing extension",
+    "ARM_EXT_SEC": "the security extension",
+    "ARM_EXT_OS": "the ARMv6-M operating-system extension",
+    "ARM_EXT_ADIV": "the ARM integer divide extension",
+    "ARM_EXT_VIRT": "the virtualization extension",
+    "ARM_EXT2_V6T2_V8M": "Thumb-2 or ARMv8-M Baseline",
+    "ARM_EXT2_ATOMICS": "the ARMv8 load-acquire and store-release accesses",
+    "ARM_EXT2_BF16": "the bfloat16 extension",
+    "ARM_EXT2_CDE": "the custom datapath extension",
+    "ARM_EXT2_CRC": "the ARMv8 CRC32 extension",
+    "ARM_EXT2_FP16_INST": "the ARMv8.2-A half-precision instructions",
+    "ARM_EXT2_I8MM": "the 8-bit integer matrix multiply extension",
+    "ARM_EXT2_MVE": "MVE",
+    "ARM_EXT2_MVE_FP": "MVE floating point",
+    "ARM_EXT2_PAN": "the privileged-access-never extension",
+    "ARM_EXT2_PREDRES": "the prediction-restriction instructions",
+    "ARM_EXT2_RAS": "the RAS extension",
+    "ARM_EXT2_SB": "the speculation barrier",
+    "ARM_EXT2_V8M": "the ARMv8-M Baseline profile",
+    "ARM_EXT2_V8M_MAIN": "the ARMv8-M Mainline profile",
+    "ARM_EXT2_V8R": "the ARMv8-R profile",
+    "ARM_EXT2_V8_1M_MAIN": "the ARMv8.1-M Mainline profile",
+    "ARM_EXT2_V8_3A": "ARMv8.3-A or later",
+    "FPU_CRYPTO_EXT_ARMV8": "the ARMv8 cryptographic extension",
+    "FPU_NEON_EXT_DOTPROD": "the NEON dot product extension",
+    "FPU_VFP_EXT_ARMV8xD": "single-precision ARMv8 floating point",
+    "ARM_CEXT_XSCALE": "an XScale coprocessor",
+    "ARM_CEXT_IWMMXT": "Intel Wireless MMX",
+    "ARM_CEXT_IWMMXT2": "Intel Wireless MMX 2",
+    "FPU_ENDIAN_PURE": "pure-endian doubles",
+    "FPU_VFP_EXT_V1xD": "VFPv1",
+    "FPU_VFP_EXT_V1": "double-precision VFP",
+    "FPU_VFP_EXT_V2": "VFPv2",
+    "FPU_VFP_EXT_V3xD": "VFPv3",
+    "FPU_VFP_EXT_V3": "double-precision VFPv3",
+    "FPU_VFP_EXT_D32": "the VFP registers d16 to d31",
+    "FPU_VFP_EXT_FP16": "the half-precision VFP extension",
+    "FPU_VFP_EXT_FMA": "the VFP fused multiply-add",
+    "FPU_NEON_EXT_V1": "NEON",
+    "FPU_NEON_EXT_FMA": "the NEON fused multiply-add",
+}
+
+def extra_feats(name, which):
+    """What GNU as needs for a form of EXTRA, which no `arm-dis.c` row
+    describes because the disassembler prints it as another instruction.
+
+    Everything in EXTRA but the four written out below is NEON: the modified
+    immediate and the structure transfers, whose own rows carry
+    `FPU_NEON_EXT_V1`.
+    """
+    return EXTRA_FEATS.get((name, which), ("FPU_NEON_EXT_V1",))
+
+
+# The features of the EXTRA forms that are not NEON, from those
+# instructions' own `insns[]` rows.
+EXTRA_FEATS = {
+    # `do_pkhtb` turns a shiftless `pkhtb` into the `pkhbt` its row describes.
+    ("pkhtb", "Arm"): ("ARM_EXT_V6",),
+    ("pkhtb", "T32"): ("ARM_EXT_V6T2",),
+    # `sdiv rd, rm` is the two-operand spelling of the row's three.
+    ("sdiv", "Arm"): ("ARM_EXT_ADIV",),
+    ("udiv", "Arm"): ("ARM_EXT_ADIV",),
+    ("sdiv", "T32"): ("ARM_EXT_DIV",),
+    ("udiv", "T32"): ("ARM_EXT_DIV",),
+}
+
+# The constructors `arm.h` writes a feature set with, each giving the four
+# words: three of core features and one of coprocessor ones.
+FEATURE_CTORS = {
+    "ARM_FEATURE_LOW": lambda c, cp: (c, 0, 0, cp),
+    "ARM_FEATURE_CORE": lambda a, b: (a, b, 0, 0),
+    "ARM_FEATURE_CORE_LOW": lambda a: (a, 0, 0, 0),
+    "ARM_FEATURE_CORE_HIGH": lambda a: (0, a, 0, 0),
+    "ARM_FEATURE_CORE_HIGH_HIGH": lambda a: (0, 0, a, 0),
+    "ARM_FEATURE_COPROC": lambda c: (0, 0, 0, c),
+    "ARM_FEATURE": lambda a, b, c: (a, b, 0, c),
+    "ARM_FEATURE_ALL": lambda a, b, c, d: (a, b, c, d),
+}
+W32 = 0xFFFFFFFF
+NO_FEATS = (0, 0, 0, 0)
+
+# Which instruction sets each `insns[]` macro puts its row in. The name says
+# it -- `T` and `t` for a Thumb variant, `o` for Thumb alone -- but spelling
+# them out is what keeps a macro added later from being read as something it
+# is not.
+INSN_MACROS = {
+    # Both, through ARM_VARIANT and THUMB_VARIANT.
+    "TCE": (1, 1), "tCE": (1, 1), "TxCE": (1, 1),
+    "TC3": (1, 1), "tC3": (1, 1), "TxC3": (1, 1),
+    "TC3w": (1, 1), "tC3w": (1, 1), "TxC3w": (1, 1),
+    "TUE": (1, 1), "TUEc": (1, 1), "TUF": (1, 1),
+    "NUF": (1, 1), "nUF": (1, 1), "MNUF": (1, 1), "mnUF": (1, 1),
+    "NCE": (1, 1), "nCE": (1, 1), "nCEF": (1, 1),
+    "MNCE": (1, 1), "MNCEF": (1, 1), "mnCE": (1, 1), "mnCEF": (1, 1),
+    "NCE_tag": (1, 1), "nCE_tag": (1, 1),
+    "mCEF": (1, 1), "mcCE": (1, 1),
+    # The coprocessor instructions, whose Thumb variant is the ARM one: a T32
+    # coprocessor word is the A32 word with `al` left in its condition field.
+    "cCE": (1, 2),
+    # Thumb alone.
+    "ToC": (0, 1), "ToU": (0, 1), "toC": (0, 1), "toU": (0, 1),
+    "mToC": (0, 1),
+    # ARM alone.
+    "CE": (1, 0), "C3": (1, 0), "CL": (1, 0), "UF": (1, 0),
+}
+
+
+def read_defines(path):
+    """`arm.h`'s object-like #defines, by name."""
+    text = open(path, errors="replace").read()
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S).replace("\\\n", " ")
+    out = {}
+    for m in re.finditer(r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+(.*)$", text, re.M):
+        out[m.group(1)] = m.group(2).strip()
+    return out
+
+
+def feature_bits(path):
+    """Every feature bit of `arm.h`, as name -> (word, mask), in its own
+    order, which is the order a diagnostic names them in."""
+    text = open(path, errors="replace").read()
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S).replace("\\\n", " ")
+    out = {}
+    for m in re.finditer(r"#\s*define\s+(ARM_EXT_\w+|ARM_EXT2_\w+|ARM_EXT3_\w+"
+                         r"|ARM_CEXT_\w+|FPU_\w+)\s+(0x[0-9a-fA-F]+)\s*$",
+                         text, re.M):
+        name, bit = m.group(1), int(m.group(2), 16)
+        word = {"ARM_EXT_": 0, "ARM_EXT2_": 1, "ARM_EXT3_": 2}.get(
+            next((p for p in ("ARM_EXT3_", "ARM_EXT2_", "ARM_EXT_")
+                  if name.startswith(p)), ""), 3)
+        out[name] = (word, bit)
+    return out
+
+
+class Features:
+    """`arm.h`'s feature sets, read and evaluated."""
+
+    def __init__(self, path, also=()):
+        self.defs = read_defines(path)
+        self.bits = feature_bits(path)
+        # An architecture's own extension table is written with feature sets
+        # `tc-arm.c` names itself -- `ALL_FP`, `ALL_SIMD` -- so its
+        # definitions come too, those of them that are feature sets.
+        for extra in also:
+            for name, body in read_defines(extra).items():
+                if name not in self.defs and re.search(r"ARM_FEATURE|ARM_ARCH_", body):
+                    self.defs[name] = body
+
+    def expand(self, expr, depth=0):
+        """`expr` with every `arm.h` macro but the constructors put in."""
+        if depth > 60:
+            raise Unsupported("macro loop in %r" % expr)
+        out, changed = [], False
+        for tok in re.split(r"(\w+)", expr):
+            if tok in self.defs and tok not in FEATURE_CTORS:
+                out.append("(" + self.defs[tok] + ")")
+                changed = True
+            else:
+                out.append(tok)
+        expr = "".join(out)
+        return self.expand(expr, depth + 1) if changed else expr
+
+    def value(self, expr):
+        """One feature set, as its four 32-bit words."""
+        v = eval(self.expand(expr), {"__builtins__": {}}, dict(FEATURE_CTORS))
+        if isinstance(v, int):
+            v = (v, 0, 0, 0)
+        return tuple(x & W32 for x in v)
+
+    def of_names(self, names):
+        """The set of these bits, which is how a row of `arm-dis.c` and an
+        `insns[]` variable spell one."""
+        out = [0, 0, 0, 0]
+        for n in names:
+            if n not in self.bits:
+                continue
+            word, bit = self.bits[n]
+            out[word] |= bit
+        return tuple(out)
+
+
+def pack(set_):
+    """A feature set as the two `u64`s `cpu.rs` keeps it in: `core[0]` and
+    `core[1]` in the first, `core[2]` and the coprocessor word in the
+    second."""
+    return (set_[0] | (set_[1] << 32), set_[2] | (set_[3] << 32))
+
+
+def macro_calls(body, name):
+    """Every `name(...)` call in `body`, as (where it is, its arguments).
+
+    Where it is matters: GNU as reads each of these tables in order and
+    takes the first row that has the name it is looking for, and
+    `arm_extensions` has two `idiv` rows on purpose.
+    """
+    out = []
+    for m in re.finditer(r"(?<![\w])%s\s*\(" % name, body):
+        i, depth, last = m.end(), 1, m.end()
+        args = []
+        while depth:
+            c = body[i]
+            if c in "([":
+                depth += 1
+            elif c in ")]":
+                depth -= 1
+                if depth == 0:
+                    args.append(body[last:i])
+                    break
+            elif c == "," and depth == 1:
+                args.append(body[last:i])
+                last = i + 1
+            i += 1
+        out.append((m.start(), [a.strip() for a in args]))
+    return out
+
+
+def ext_tables(text, feats):
+    """Each architecture's and CPU's own extension table, by C identifier.
+
+    An `ARM_ADD` row has nothing to clear and an `ARM_REMOVE` nothing to
+    merge; GNU as skips such a row for the direction it cannot serve and goes
+    on to the shared table, which is what an empty set says here.
+    """
+    out = {}
+    for m in re.finditer(r"static const struct arm_ext_table (\w+)_ext_table\[\] =\s*\{"
+                         r"(.*?)\n\};", text, re.S):
+        rows = []
+        for macro, merge, clear in (("ARM_EXT", 1, 2), ("ARM_ADD", 1, None),
+                                    ("ARM_REMOVE", None, 1)):
+            for at, args in macro_calls(m.group(2), macro):
+                rows.append((at, args[0].strip('"'),
+                             feats.value(args[merge]) if merge else NO_FEATS,
+                             feats.value(args[clear]) if clear else NO_FEATS))
+        rows.sort(key=lambda r: r[0])
+        out[m.group(1)] = [r[1:] for r in rows]
+    # One architecture that takes exactly another's extensions says so with a
+    # `#define`: `armv8.7-A` has `armv8.6-A`'s.
+    for m in re.finditer(r"^#define (\w+)_ext_table (\w+)_ext_table\s*$",
+                         text, re.M):
+        out[m.group(1)] = out[m.group(2)]
+    return out
+
+
+def option_tables(text, feats):
+    """GNU as's `arm_archs`, `arm_cpus`, `arm_fpus` and `arm_extensions`.
+
+    Each architecture and CPU is (name, its own features, its extensions, the
+    unit it brings, its own extension table), in the table's order, since a
+    name looked up in `arm_extensions` takes the first entry that has it.
+    """
+    ctx = ext_tables(text, feats)
+
+    def body(decl):
+        return text.split("static const struct %s[] =" % decl, 1)[1].split("\n};", 1)[0]
+
+    def ordered(rows):
+        return [r[1:] for r in sorted(rows, key=lambda r: r[0])]
+
+    arch_body = body("arm_arch_option_table arm_archs")
+    archs = [(at, a[0].strip('"'), feats.value(a[1]), NO_FEATS,
+              feats.value(a[2]), ctx[a[3]] if len(a) > 3 else [])
+             for at, a in (macro_calls(arch_body, "ARM_ARCH_OPT")
+                           + macro_calls(arch_body, "ARM_ARCH_OPT2"))]
+    cpu_body = body("arm_cpu_option_table arm_cpus")
+    cpus = [(at, c[0].strip('"'), feats.value(c[2]), feats.value(c[3]),
+             feats.value(c[4]), ctx[c[5]] if len(c) > 5 else [])
+            for at, c in (macro_calls(cpu_body, "ARM_CPU_OPT")
+                          + macro_calls(cpu_body, "ARM_CPU_OPT2"))]
+    fpus = [(n.strip('"'), feats.value(v)) for n, v in
+            re.findall(r'\{\s*("[^"]+")\s*,\s*(\w+)\s*\}',
+                       body("arm_option_fpu_value_table arm_fpus"))]
+    ext_body = body("arm_option_extension_value_table arm_extensions")
+    any_ = feats.value("ARM_ANY")
+    exts = []
+    for at, args in (macro_calls(ext_body, "ARM_EXT_OPT")
+                     + macro_calls(ext_body, "ARM_EXT_OPT2")):
+        allowed = [feats.value(a) for a in args[3:]]
+        exts.append((at, args[0].strip('"'),
+                     feats.value(args[1]), feats.value(args[2]),
+                     # `ARM_ANY` marks an entry of `allowed_archs` that is
+                     # not there; `ARM_ARCH_NONE` allows every architecture.
+                     [a for a in allowed if a != any_]))
+    return ordered(archs), ordered(cpus), fpus, ordered(exts)
+
+
+def insn_variants(text, feats):
+    """Mnemonic -> (its A32 feature set, its T32 one), from `insns[]`.
+
+    Every row names its two variants through the `ARM_VARIANT` and
+    `THUMB_VARIANT` macros, which the table redefines as it goes, and a
+    `None` means that instruction set has no such instruction. The sets
+    themselves are `arm_feature_set` variables declared beside the table.
+    """
+    clean = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    vars_ = {}
+    for m in re.finditer(r"static const arm_feature_set (\w+)\s*=\s*([^;]*);",
+                         clean, re.S):
+        try:
+            vars_[m.group(1)] = feats.value(m.group(2))
+        except Exception:
+            continue
+    start = clean.index("static const struct asm_opcode insns[] =")
+    end = clean.index("\n};", start)
+    body = clean[start:end]
+    cur = {"ARM_VARIANT": None, "THUMB_VARIANT": None}
+    out = {}
+    row = re.compile(r"^[ \t]*(\w+)\s*\(\s*\"?([\w.]+)\"?\s*[,)]")
+    for line in body.split("\n"):
+        m = re.match(r"^\s*#\s*define\s+(ARM_VARIANT|THUMB_VARIANT)\s+(.*)$", line)
+        if m:
+            arg = m.group(2).strip()
+            cur[m.group(1)] = (None if arg in ("0", "NULL")
+                               else vars_[arg.lstrip("&").strip()])
+            continue
+        m = row.match(line)
+        if not m or m.group(1) not in INSN_MACROS:
+            continue
+        which = INSN_MACROS[m.group(1)]
+        sets = [None if w == 0 else
+                cur["ARM_VARIANT" if w == 2 or i == 0 else "THUMB_VARIANT"]
+                for i, w in enumerate(which)]
+        have = out.get(m.group(2), (None, None))
+        # One mnemonic can have several rows -- different operand counts, or
+        # the coprocessor and the MVE spelling of one move -- and GNU as
+        # tests whichever row took the operands. Any bit of any of them will
+        # do, which is the same answer for every mnemonic whose rows share an
+        # architecture and the permissive one where they do not.
+        out[m.group(2)] = tuple(merge_sets(h, s) for h, s in zip(have, sets))
+    return out
+
+
+def merge_sets(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return tuple(x | y for x, y in zip(a, b))
+
+
+CPU_HEADER = '''//! What `.arch`, `.cpu`, `.fpu` and `.arch_extension` select, and which
+//! instructions each selection has, read out of GNU binutils 2.47.
+//!
+//! Do not edit: `tools/tables/arm.py table` writes this file. The
+//! architecture, CPU, unit and extension tables are GNU as's own
+//! (`arm_archs`, `arm_cpus`, `arm_fpus`, `arm_extensions` and the
+//! `arm_ext_table` each architecture has, in `gas/config/tc-arm.c`), the
+//! feature sets behind them are the macros of `include/opcode/arm.h`, and
+//! what each instruction needs is the feature set of its own row --
+//! `opcodes/arm-dis.c` for a form of [`super::table::FORMS`], `insns[]` for
+//! a mnemonic a hand-written encoder owns. See [`super::cpu`].
+
+use super::cpu::{Ext, Named, Set};
+
+'''
+
+
+def rust_set(set_):
+    lo, hi = pack(set_)
+    return "[%#x, %#x]" % (lo, hi)
+
+
+def form_feats(form, variants, feats):
+    """What GNU as needs for one form of the table, as two sets.
+
+    The first is the gate GNU as tests, which is per mnemonic: `insns[]`'s
+    set for the form's own spelling, or for the mnemonic without the type
+    suffix a vector instruction adds, in the instruction set the form belongs
+    to. The two tables do not always agree -- the A32 `ldrexb` is ARMv6K to
+    the disassembler and ARMv6K *or* ARMv6T2 to the assembler -- and it is
+    the assembler that decides what assembles. The `arm-dis.c` row's own set
+    stands in for a spelling `insns[]` has no row under, and for the
+    instruction set where its row has none.
+
+    The second is the floating-point or SIMD unit the form's *own* row names,
+    which is where the two tables differ for a reason: one `insns[]` row
+    covers every element size of `vadd`, and GNU as's encoder then checks the
+    unit by hand (`selected FPU does not support instruction`). The row is
+    per encoding, so it is the one that tells the NEON `vadd.i32 q0, q1, q2`
+    from the VFP `vadd.f32 s0, s1, s2`.
+    """
+    which = 0 if form["set"] == "Arm" else 1
+    row = feats.of_names(form["feats"])
+    primary = None
+    for key in (form["name"], form["name"].split(".")[0]):
+        got = variants.get(key)
+        if got is not None and got[which] is not None:
+            primary = got[which]
+            break
+    return (primary or row, (0, 0, 0, row[3]))
+
+
+def render_cpu(forms):
+    """`cpu_data.rs`, and the index each form's feature set is written as."""
+    feats = Features(ARM_H, also=(TC_ARM,))
+    text = open(TC_ARM, errors="replace").read()
+    archs, cpus, fpus, exts = option_tables(text, feats)
+    variants = insn_variants(text, feats)
+
+    # Index 0 is the empty set, which is GNU as's null variant pointer: an
+    # instruction set that has no such instruction at all.
+    order, sets = {NO_FEATS: 0}, [NO_FEATS]
+
+    def index(set_):
+        if set_ not in order:
+            order[set_] = len(sets)
+            sets.append(set_)
+        return order[set_]
+
+    feat_index = {}
+    for form in forms:
+        primary, unit = form_feats(form, variants, feats)
+        feat_index[(form["name"], form["set"], form["feats"])] = (
+            index(primary), index(unit))
+    mnemonics = []
+    for name in sorted(variants):
+        arm, thumb = variants[name]
+        mnemonics.append((name, index(arm or NO_FEATS), index(thumb or NO_FEATS)))
+
+    out = [CPU_HEADER]
+    out.append("/// Every feature bit, in `arm.h`'s own order, and how a\n"
+               "/// diagnostic names it.\n")
+    out.append("pub static NAMES: &[(Set, &str)] = &[\n")
+    for name, (word, bit) in feats.bits.items():
+        set_ = [0, 0, 0, 0]
+        set_[word] = bit
+        out.append('    (%s, "%s"),\n'
+                   % (rust_set(tuple(set_)), BIT_WORDS.get(name, name)))
+    out.append("];\n\n")
+
+    out.append("/// Every feature set an instruction here needs, any bit of\n"
+               "/// which is enough. Index 0 is the empty set, which is GNU\n"
+               "/// as's null variant: that instruction set has no such\n"
+               "/// instruction.\n")
+    out.append("pub static FEATS: &[Set] = &[\n")
+    for set_ in sets:
+        out.append("    %s,\n" % rust_set(set_))
+    out.append("];\n\n")
+
+    # An extension table is shared by every architecture and CPU that names
+    # it, as GNU as shares them.
+    tables, names = {}, []
+    for _n, _v, _e, _f, rows in archs + cpus:
+        key = tuple(rows)
+        if key and key not in tables:
+            tables[key] = "EXTS_%d" % len(tables)
+            names.append(key)
+    for key in names:
+        out.append("/// One architecture's or CPU's own extensions.\n")
+        out.append("static %s: &[Ext] = &[\n" % tables[key])
+        for name, merge, clear in key:
+            out.append('    Ext { key: "%s", merge: %s, clear: %s, allowed: &[] },\n'
+                       % (name, rust_set(merge), rust_set(clear)))
+        out.append("];\n\n")
+
+    for label, rows, what in (("ARCHS", archs, "`.arch` and `-march=`"),
+                              ("CPUS", cpus, "`.cpu` and `-mcpu=`")):
+        out.append("/// The names %s take, in GNU as's order.\n" % what)
+        out.append("pub static %s: &[Named] = &[\n" % label)
+        for name, value, ext, fpu, rows_ in rows:
+            out.append('    Named { key: "%s", set: %s, ext: %s, fpu: %s, exts: %s },\n'
+                       % (name, rust_set(value), rust_set(ext), rust_set(fpu),
+                          tables[tuple(rows_)] if rows_ else "&[]"))
+        out.append("];\n\n")
+
+    out.append("/// The names `.fpu` and `-mfpu=` take.\n")
+    out.append("pub static FPUS: &[(&str, Set)] = &[\n")
+    for name, value in fpus:
+        out.append('    ("%s", %s),\n' % (name, rust_set(value)))
+    out.append("];\n\n")
+
+    out.append("/// GNU as's `arm_extensions`, the table shared by every\n"
+               "/// architecture, each entry naming the architectures it is\n"
+               "/// allowed on.\n")
+    out.append("pub static EXTENSIONS: &[Ext] = &[\n")
+    for name, merge, clear, allowed in exts:
+        out.append('    Ext { key: "%s", merge: %s, clear: %s, allowed: &[%s] },\n'
+                   % (name, rust_set(merge), rust_set(clear),
+                      ", ".join(rust_set(a) for a in allowed)))
+    out.append("];\n\n")
+
+    out.append("/// What each mnemonic of GNU as's `insns[]` needs, in A32\n"
+               "/// and in T32: the two feature sets of its row, as indices\n"
+               "/// into [`FEATS`]. Sorted by name.\n")
+    out.append("pub static MNEMONICS: &[(&str, u16, u16)] = &[\n")
+    for name, arm, thumb in mnemonics:
+        out.append('    ("%s", %d, %d),\n' % (name, arm, thumb))
+    out.append("];\n\n")
+
+    arch_names = [n for n, _, _, _, _ in archs]
+    fpu_names = [n for n, _ in fpus]
+    out.append("/// `armv7ve`: the architecture rsasm's ARM backend is, and\n"
+               "/// what `tools/xas-diff` and `tools/mc-diff` assemble the\n"
+               "/// reference as.\n")
+    out.append("pub const DEFAULT_ARCH: usize = %d;\n\n"
+               % arch_names.index(DEFAULT_ARCH))
+    out.append("/// `neon-vfpv4`: the unit it has, likewise.\n")
+    out.append("pub const DEFAULT_FPU: usize = %d;\n\n"
+               % fpu_names.index(DEFAULT_FPU))
+    out.append("/// `fpu_any`, the bits a `.fpu` takes away from the\n"
+               "/// selection before adding the unit's own.\n")
+    out.append("pub const FPU_ANY: Set = %s;\n\n" % rust_set(feats.value("FPU_ANY")))
+    out.append("// The single bits a hand-written encoder asks about, because\n"
+               "// GNU as's own encoder does: which instruction sets the\n"
+               "// target has at all, which `nop` it spells, whether `swp` is\n"
+               "// still allowed, and whether `msr` and `mrs` reach the banked\n"
+               "// registers.\n")
+    for name in ("V1", "V4T", "V6K", "V6T2", "V6_DSP", "V8", "VIRT"):
+        out.append("pub const %s: Set = %s;\n"
+                   % (name, rust_set(feats.of_names(["ARM_EXT_" + name]))))
+    out.append("\n/// The features GNU as's `known_t32_only_insn` reads as\n"
+               "/// saying a mnemonic's Thumb encoding is 32 bits wide and\n"
+               "/// always has been, so that it needs no Thumb-2.\n")
+    out.append("pub const WIDE_ONLY: Set = %s;\n"
+               % rust_set(feats.of_names([
+                   "ARM_EXT_THUMB_MSR", "ARM_EXT_BARRIER", "ARM_EXT_DIV",
+                   "ARM_EXT2_V8M", "ARM_EXT2_V8M_MAIN", "ARM_EXT2_ATOMICS",
+                   "ARM_EXT2_V6T2_V8M"])))
+    out.append("\n/// `ARM_ANY`: every core feature, which is what\n"
+               "/// `-march=all` selects and which GNU as's `check_obsolete`\n"
+               "/// lets an obsolete instruction through under.\n")
+    out.append("pub const ANY: Set = %s;\n" % rust_set(feats.value("ARM_ANY")))
+
+    text = "".join(out)
+    try:
+        text = subprocess.run(
+            ["rustfmt", "--edition", "2024", "--emit", "stdout"],
+            input=text, capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        sys.exit("rustfmt failed (%s)" % e)
+    return text, feat_index
 
 
 # ============================================================================
@@ -1459,6 +2062,14 @@ pub struct Form {
     /// not has its condition field in `word`.
     pub cond: bool,
     pub ops: &'static [Op],
+    /// Which instruction-set features this form needs, as an index into
+    /// [`super::cpu_data::FEATS`]: what GNU as's `insns[]` asks of the
+    /// mnemonic, any bit of which is enough. See [`super::cpu`].
+    pub feats: u16,
+    /// The floating-point or SIMD unit this form's own row names, likewise,
+    /// or 0 where it names none: what tells the NEON `vadd.i32 q0, q1, q2`
+    /// from the VFP `vadd.f32 s0, s1, s2`, which share an `insns[]` row.
+    pub unit: u16,
     /// Which registers each operand may hold, in the order they are
     /// written: 0 any, 1 not the PC, 2 neither the PC nor the stack
     /// pointer, 3 the PC only where the operand is not written back, 255
@@ -1473,8 +2084,9 @@ const fn f(
     cond: bool,
     ops: &'static [Op],
     regs: &'static [u8],
+    gate: (u16, u16),
 ) -> Form {
-    Form { name, set, word, cond, ops, regs }
+    Form { name, set, word, cond, ops, regs, feats: gate.0, unit: gate.1 }
 }
 
 /// Mnemonics GNU as takes as another spelling of one in the table.
@@ -1549,7 +2161,7 @@ def rust_op(op):
     raise Unsupported("emit %r" % (op,))
 
 
-def render(forms):
+def render(forms, feat_index):
     out = [HEADER]
     for a, b in ALIASES:
         out.append('    ("%s", "%s"),\n' % (a, b))
@@ -1558,11 +2170,12 @@ def render(forms):
     out.append("pub static FORMS: &[Form] = &[\n")
     for form in forms:
         out.append(
-            '    f("%s", Set::%s, %#010x, %s, &[%s], &[%s]),\n'
-            % (form["name"], form["set"], form["word"],
+            '    f("%s", Set::%s, %#010x, %s, &[%s], &[%s], (%d, %d)),\n'
+            % ((form["name"], form["set"], form["word"],
                "true" if form["cond"] else "false",
                ", ".join(rust_op(o) for o in form["ops"]),
                ", ".join(str(c) for c in form["regs"] or ()))
+               + feat_index[(form["name"], form["set"], form["feats"])])
         )
     out.append("];\n")
     text = "".join(out)
@@ -1587,16 +2200,19 @@ def main():
             print(line)
         print("%d forms" % len(forms), file=sys.stderr)
         return
-    text = render(forms)
-    stale = not os.path.exists(TABLE) or open(TABLE).read() != text
+    cpu_text, feat_index = render_cpu(forms)
+    written = [(TABLE, render(forms, feat_index)), (CPU_OUT, cpu_text)]
+    stale = [p for p, text in written
+             if not os.path.exists(p) or open(p).read() != text]
     if cmd == "check":
-        if stale:
-            print("out of date: %s" % os.path.relpath(TABLE, ROOT))
+        for p in stale:
+            print("out of date: %s" % os.path.relpath(p, ROOT))
         sys.exit(1 if stale else 0)
-    if stale:
-        with open(TABLE, "w") as fh:
-            fh.write(text)
-    print("rewrote %d file(s)" % stale, file=sys.stderr)
+    for p, text in written:
+        if p in stale:
+            with open(p, "w") as fh:
+                fh.write(text)
+    print("rewrote %d file(s)" % len(stale), file=sys.stderr)
 
 
 if __name__ == "__main__":

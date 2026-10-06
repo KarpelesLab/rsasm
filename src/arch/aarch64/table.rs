@@ -31,7 +31,7 @@
 
 use super::encode::{logical_imm, word};
 use super::reg::{self, RegClass};
-use super::table_data::{FORMS, MNEMONICS, SHAPES, SLOTS};
+use super::table_data::{FEATS, FORMS, MNEMONICS, SHAPES, SLOTS};
 use super::table_names::{PATTERNS, PREFETCHES};
 use crate::arch::AsmCtx;
 use crate::cursor::Cursor;
@@ -241,8 +241,11 @@ pub struct Slot {
 /// bits, so `mov z0.h, #0xfff0` is `mov z0.h, #-16` and `mov z0.b, #-241` is
 /// `mov z0.b, #15`; the generator sets the width and the ways for each form
 /// llvm-mc was seen to do that for.
+///
+/// The last field is which instruction-set features the target needs for the
+/// form, as an index into [`super::table_data::FEATS`]; see [`super::cpu`].
 #[derive(Copy, Clone, Debug)]
-pub struct Form(pub u16, pub u16, pub u32, pub u8, pub u8);
+pub struct Form(pub u16, pub u16, pub u32, pub u8, pub u8, pub u16);
 
 // ---- operands -----------------------------------------------------------------
 
@@ -1156,6 +1159,9 @@ pub fn assemble(
     };
     let atoms = parse(cx, toks)?;
     let mut range_error = None;
+    // The first form whose operands fit and whose features the target has
+    // not, for the diagnostic where no form it does have fits.
+    let mut absent = None;
     for &form in forms {
         let shape = SHAPES[form.1 as usize];
         if shape.len() != atoms.len()
@@ -1164,6 +1170,11 @@ pub fn assemble(
                 .zip(&atoms)
                 .all(|(&s, (a, _))| fits(SLOTS[s as usize].kind, a).is_some())
         {
+            continue;
+        }
+        let want = FEATS[form.5 as usize];
+        if !super::cpu::supports(cx.state, want) {
+            absent = absent.or(Some(want));
             continue;
         }
         match encode(form, shape, &atoms) {
@@ -1175,6 +1186,14 @@ pub fn assemble(
     }
     if let Some((span, why)) = range_error {
         cx.error(span, format!("`{mnemonic}` {why}"));
+        return None;
+    }
+    // The operands fit a form, and the target has no form they fit: GNU as
+    // reports that as "selected processor does not support", whatever else
+    // the mnemonic can take.
+    if let Some(want) = absent {
+        let msg = super::cpu::unsupported(cx.state, mnemonic, want);
+        cx.error(mnemonic_span, msg);
         return None;
     }
     let given: Vec<String> = atoms.iter().map(|(a, _)| a.describe()).collect();
