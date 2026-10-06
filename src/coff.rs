@@ -434,7 +434,15 @@ impl Assembler {
             );
             return false;
         }
-        let addend = r.addend + coff::reloc::pc_base(machine, ty);
+        // A section index has no room for an offset into the section, so a
+        // reference to a symbol the table does not keep loses the offset
+        // rather than adding it to the index; llvm-mc writes the field as
+        // zero there too.
+        let addend = if r.desc.class == crate::reloc::RelocClass::SectionIndex {
+            0
+        } else {
+            r.addend + coff::reloc::pc_base(machine, ty)
+        };
         if addend != 0 {
             let endian = self.frag_arch(si, fi).0.endian();
             if let crate::section::FragKind::Bytes { variants, chosen } =

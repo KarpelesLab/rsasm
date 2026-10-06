@@ -26,6 +26,7 @@ movl $foo, %eax
 .secrel32 foo
 .secrel32 foo+2
 .secidx foo
+.text; nop; .Lp: nop; .data; .secidx .Lp; .secrel32 .Lp
 .long foo@IMGREL
 .long foo@IMGREL+6
 .long foo - .
