@@ -1215,8 +1215,10 @@ generic ones, which are the same on every 32-bit machine: one
 `GENERIC_RELOC_VANILLA` for everything a field can hold, naming the target's
 section wherever the field can be worked out here and the symbol only where
 it cannot -- an undefined symbol, or a weak definition the linker may replace.
-A PC-relative field keeps the whole distance, measured as if the symbol were
-at zero, since the linker adds the symbol's address to what it finds.
+A PC-relative field keeps the whole distance from the end of the field, which
+for a record naming a symbol is the distance as if the symbol were at zero,
+since the linker adds its address to what it finds; x86-64's own relocations
+are measured by the linker and carry the addend alone.
 
 Two references need more than that, and get a **scattered** record, which
 carries an address where the ordinary one carries a symbol index:
