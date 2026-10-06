@@ -1449,7 +1449,7 @@ is what hid them from rsasm for as long as it did.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,772 of 1,772 match, and every object both
+  those of `tools/mc-diff`. 1,820 of 1,820 match, and every object both
   assemblers write is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random
