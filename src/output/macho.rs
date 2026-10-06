@@ -672,10 +672,18 @@ fn scattered(asm: &Assembler, cpu: Cpu, r: &Relocation, places: &Places) -> Opti
     if debugging(asm, r.section) {
         return None;
     }
+    // A symbol the record would have named anyway needs nothing more, and a
+    // field more than 24 bits into its section is further than a scattered
+    // record can say; llvm-mc writes the ordinary one rather than lose the
+    // rest of the address.
     if requires_extern(asm, target) || r.offset > 0x00ff_ffff {
         return None;
     }
-    section_of(asm, target).map(|_| places.symbol(asm, target))
+    // An absolute symbol is in no section, so there is nothing for the
+    // linker to move the field by.
+    section_of(asm, target)
+        .is_some()
+        .then(|| places.symbol(asm, target))
 }
 
 /// Whether a difference of two symbols in one section is a number the
@@ -1127,6 +1135,16 @@ struct Indirect {
     bases: HashMap<SectionId, u32>,
 }
 
+/// Leaves `field` in the bytes `r` covers, where the section has them: a
+/// zero-filled section holds none, and neither does a reference past the end
+/// of one, which the layout pass has already reported.
+fn write_field(sec: &mut Sec, r: &Relocation, field: i64) {
+    let (off, size) = (r.offset as usize, r.desc.size as usize);
+    if off + size <= sec.bytes.len() {
+        crate::arch::Endian::Little.write(&mut sec.bytes[off..off + size], field as u64);
+    }
+}
+
 /// Section addresses and indices, which everything past layout refers to.
 struct Places {
     index: HashMap<SectionId, usize>,
@@ -1140,12 +1158,8 @@ impl Places {
         let Some(offset) = asm.symbol_addr(id) else {
             return 0;
         };
-        let section = match asm.symbols.get(id).value {
-            SymbolValue::Label { section, .. } => Some(section),
-            _ => asm.symbol_target_section(id).map(|(s, _)| s),
-        };
         offset
-            + section
+            + section_of(asm, id)
                 .and_then(|s| self.addr.get(&s))
                 .copied()
                 .unwrap_or(0) as i64
@@ -1239,11 +1253,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             let here = places.addr[&r.section] as i64 + r.offset as i64;
             let target = r.symbol.map_or(0, |t| places.symbol(asm, t)) + r.addend;
             let value = if r.desc.pcrel { target - here } else { target };
-            let (off, size) = (r.offset as usize, r.desc.size as usize);
-            if off + size <= secs[si].bytes.len() {
-                crate::arch::Endian::Little
-                    .write(&mut secs[si].bytes[off..off + size], value as u64);
-            }
+            write_field(&mut secs[si], r, value);
             continue;
         }
         let ty = reloc_type(cpu, r).ok_or_else(|| {
@@ -1267,11 +1277,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
             && let Some(sub) = r.desc.subtrahend
         {
             let field = here + r.desc.size as i64 - places.symbol(asm, sub) + r.addend;
-            let (off, size) = (r.offset as usize, r.desc.size as usize);
-            if off + size <= secs[si].bytes.len() {
-                crate::arch::Endian::Little
-                    .write(&mut secs[si].bytes[off..off + size], field as u64);
-            }
+            write_field(&mut secs[si], r, field);
             let (symbolnum, external) = number(a)?;
             secs[si].relocs.push(Entry {
                 address,
@@ -1337,11 +1343,7 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 ty,
                 value: Some(value as u32),
             });
-            let (off, size) = (r.offset as usize, r.desc.size as usize);
-            if off + size <= secs[si].bytes.len() {
-                crate::arch::Endian::Little
-                    .write(&mut secs[si].bytes[off..off + size], field as u64);
-            }
+            write_field(&mut secs[si], r, field);
             secs[si].relocs.append(&mut entries);
             continue;
         }
@@ -1446,11 +1448,10 @@ pub fn build(asm: &Assembler) -> Result<Vec<u8>, OutputError> {
                 }
             }
         }
-        let (off, size) = (r.offset as usize, r.desc.size as usize);
         let in_field =
             addend_place(cpu, ty) == AddendPlace::Field || ty == arm64_reloc::POINTER_TO_GOT;
-        if in_field && off + size <= secs[si].bytes.len() {
-            crate::arch::Endian::Little.write(&mut secs[si].bytes[off..off + size], field as u64);
+        if in_field {
+            write_field(&mut secs[si], r, field);
         }
         secs[si].relocs.append(&mut entries);
     }

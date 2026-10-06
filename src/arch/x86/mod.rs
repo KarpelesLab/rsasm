@@ -427,7 +427,9 @@ impl Architecture for X86 {
             [3, 1, 2, 7, 6, 4]
         };
         let frame_pointer = if wide { 6 } else { 4 };
-        let word = if wide { 8i64 } else { 4 };
+        // The stack slot a saved register takes, which is also the unit the
+        // word counts a stack adjustment in.
+        let slot = if wide { 8i64 } else { 4 };
 
         // `.cfi_signal_frame` is not an instruction, only a note on the
         // frame, and llvm-mc's list of instructions never holds one.
@@ -490,7 +492,7 @@ impl Architecture for X86 {
             // A register saved anywhere but in the run directly below the
             // saved frame pointer, which is itself below the return address,
             // is one the word cannot place.
-            if count != 0 && lowest != 3 * word {
+            if count != 0 && lowest != 3 * slot {
                 return Some(MODE_DWARF);
             }
             let regs = numbers
@@ -500,15 +502,16 @@ impl Architecture for X86 {
             return Some(MODE_BP_FRAME | (count << 16) | (regs & BP_FRAME_REGISTERS));
         }
 
-        let size = stack / word;
+        let size = stack / slot;
         let registers = (count << 10) | compact_unwind_permutation(&numbers);
         Some(match u8::try_from(size) {
-            // The adjustment fits the word, in units of a pointer.
+            // The adjustment fits in the eight bits the word has for it.
             Ok(size) => MODE_STACK_IMMD | (u32::from(size) << 16) | registers,
             // It does not, so the linker reads it out of the `sub` that made
-            // the frame, which it finds by the offset the word carries
-            // instead -- past the function's pushes, and past the two or
-            // three bytes of the `sub`'s own opcode.
+            // the frame. The word carries the offset of that instruction's
+            // immediate, past the pushes that saved the registers and past
+            // the two or three bytes of opcode before it, and how many slots
+            // those pushes took, which the `sub` does not account for.
             Err(_) => {
                 let at = if wide { 3 } else { 2 } + pushes;
                 MODE_STACK_IND | (at << 16) | ((count + 1) << 13) | registers

@@ -1224,9 +1224,9 @@ carries an address where the ordinary one carries a symbol index:
 - A difference of two symbols. There is one relocation type and no addend
   field, so the only way to say `A - B` is to record both addresses, in a
   `GENERIC_RELOC_SECTDIFF` and the `GENERIC_RELOC_PAIR` written behind it
-  holding B's. `LOCAL_SECTDIFF` is the same relocation for a `A` that is not
-  global; the linker reads the two alike, and llvm-mc tells them apart as
-  Darwin's own assembler did.
+  holding B's. `LOCAL_SECTDIFF` is the same relocation where the symbol added
+  is not a global one; the linker reads the two alike, and llvm-mc tells them
+  apart as Darwin's own assembler did.
 - A reference some way into a symbol whose section the record would otherwise
   name, since a section cannot say which of the symbols in it the field was
   measured from. The record holds the address it was measured from and the
@@ -1234,10 +1234,11 @@ carries an address where the ordinary one carries a symbol index:
   no offset needs none, and nor does one in a debugging section, where
   llvm-mc names the section whatever is in it.
 
-`sym@TLVP` is i386's too, in an absolute operand rather than a RIP-relative
-one, and with the `sym@TLVP-L0$pb(%eax)` form position-independent code
-reaches the descriptor through: one `GENERIC_RELOC_TLV` naming the
-descriptor, with the distance from the PIC base left in the field.
+`sym@TLVP` is i386's too, written in an absolute operand rather than a
+RIP-relative one, since the machine has no PC-relative addressing, and in the
+`sym@TLVP-L0$pb(%eax)` form position-independent code reaches a descriptor
+through: one `GENERIC_RELOC_TLV` naming the descriptor, with the distance from
+the PIC base left in the field.
 
 A `.cfi_*` register is in Darwin's own i386 numbering, which swaps `%esp` and
 `%ebp` against the psABI's (LLVM's `DWARFFlavour::X86_32_DarwinEH`);
