@@ -5,15 +5,27 @@
 # llvm-mc while measuring the encoding table; regenerate rather than edit. One
 # instruction per line, compared a batch at a time by run.sh.
 abs z0.b, p0/m, z0.b
+abs z0.b, p0/z, z0.b
 abs z0.d, p0/m, z0.d
+abs z0.d, p0/z, z0.d
 abs z0.h, p0/m, z0.h
+abs z0.h, p0/z, z0.h
 abs z0.s, p0/m, z0.s
+abs z0.s, p0/z, z0.s
 abs z11.b, p1/m, z14.b
+abs z17.b, p3/z, z28.b
+abs z2.h, p0/z, z9.h
+abs z23.s, p6/z, z0.s
 abs z24.d, p3/m, z24.d
+abs z26.d, p7/z, z28.d
 abs z31.b, p7/m, z31.b
+abs z31.b, p7/z, z31.b
 abs z31.d, p7/m, z31.d
+abs z31.d, p7/z, z31.d
 abs z31.h, p7/m, z31.h
+abs z31.h, p7/z, z31.h
 abs z31.s, p7/m, z31.s
+abs z31.s, p7/z, z31.s
 abs z5.s, p3/m, z27.s
 abs z8.h, p5/m, z11.h
 adclb z0.d, z0.d, z0.d
@@ -118,6 +130,18 @@ addpt z16.d, p4/m, z16.d, z20.d
 addpt z21.d, z20.d, z27.d
 addpt z31.d, p7/m, z31.d, z31.d
 addpt z31.d, z31.d, z31.d
+addqp z0.b, z0.b, z0.b
+addqp z0.d, z0.d, z0.d
+addqp z0.d, z13.d, z6.d
+addqp z0.h, z0.h, z0.h
+addqp z0.s, z0.s, z0.s
+addqp z26.h, z28.h, z5.h
+addqp z30.b, z20.b, z16.b
+addqp z30.s, z2.s, z29.s
+addqp z31.b, z31.b, z31.b
+addqp z31.d, z31.d, z31.d
+addqp z31.h, z31.h, z31.h
+addqp z31.s, z31.s, z31.s
 addqv v0.16b, p0, z0.b
 addqv v0.2d, p0, z0.d
 addqv v0.4s, p0, z0.s
@@ -130,6 +154,18 @@ addqv v31.2d, p7, z31.d
 addqv v31.4s, p7, z31.s
 addqv v31.8h, p7, z31.h
 addqv v8.8h, p1, z28.h
+addsubp z0.b, z0.b, z0.b
+addsubp z0.d, z0.d, z0.d
+addsubp z0.h, z0.h, z0.h
+addsubp z0.s, z0.s, z0.s
+addsubp z15.d, z23.d, z22.d
+addsubp z19.b, z25.b, z8.b
+addsubp z29.s, z31.s, z0.s
+addsubp z31.b, z31.b, z31.b
+addsubp z31.d, z31.d, z31.d
+addsubp z31.h, z31.h, z31.h
+addsubp z31.s, z31.s, z31.s
+addsubp z5.h, z22.h, z4.h
 adr z0.d, [z0.d, z0.d, lsl #0]
 adr z0.d, [z0.d, z0.d, sxtw #0]
 adr z0.d, [z0.d, z0.d, sxtw]
@@ -178,10 +214,10 @@ and z0.h, p0/m, z0.h, z0.h
 and z0.h, z0.h, #-32768
 and z0.s, p0/m, z0.s, z0.s
 and z0.s, z0.s, #-2147483648
-and z13.h, z13.h, #-513
+and z13.h, z13.h, #-1025
 and z13.s, p0/m, z13.s, z26.s
 and z14.d, p2/m, z14.d, z27.d
-and z15.s, z15.s, #4160749583
+and z15.s, z15.s, #2147484159
 and z22.b, z22.b, #-35
 and z22.d, z26.d, z29.d
 and z28.b, p5/m, z28.b, z11.b
@@ -189,13 +225,13 @@ and z29.h, p7/m, z29.h, z3.h
 and z31.b, p7/m, z31.b, z31.b
 and z31.b, z31.b, #254
 and z31.d, p7/m, z31.d, z31.d
-and z31.d, z31.d, #18446744069431361535
+and z31.d, z31.d, #18446744073692774400
 and z31.d, z31.d, z31.d
 and z31.h, p7/m, z31.h, z31.h
-and z31.h, z31.h, #65534
+and z31.h, z31.h, #65533
 and z31.s, p7/m, z31.s, z31.s
-and z31.s, z31.s, #4294967283
-and z4.d, z4.d, #1152921504606715904
+and z31.s, z31.s, #4294967280
+and z4.d, z4.d, #17870283321406128143
 andqv v0.16b, p0, z0.b
 andqv v0.2d, p0, z0.d
 andqv v0.4s, p0, z0.s
@@ -378,11 +414,14 @@ bfclamp { z28.h, z29.h, z30.h, z31.h }, z31.h, z31.h
 bfclamp { z30.h, z31.h }, z31.h, z31.h
 bfcvt z0.b, { z0.h, z1.h }
 bfcvt z0.h, p0/m, z0.s
+bfcvt z0.h, p0/z, z0.s
 bfcvt z0.h, { z0.s, z1.s }
 bfcvt z15.b, { z24.h, z25.h }
+bfcvt z28.h, p1/z, z16.s
 bfcvt z3.h, { z6.s, z7.s }
 bfcvt z31.b, { z30.h, z31.h }
 bfcvt z31.h, p7/m, z31.s
+bfcvt z31.h, p7/z, z31.s
 bfcvt z31.h, { z30.s, z31.s }
 bfcvt z8.h, p7/m, z23.s
 bfcvtn z0.b, { z0.h, z1.h }
@@ -392,8 +431,11 @@ bfcvtn z23.b, { z20.h, z21.h }
 bfcvtn z31.b, { z30.h, z31.h }
 bfcvtn z31.h, { z30.s, z31.s }
 bfcvtnt z0.h, p0/m, z0.s
+bfcvtnt z0.h, p0/z, z0.s
+bfcvtnt z18.h, p0/z, z19.s
 bfcvtnt z29.h, p7/m, z6.s
 bfcvtnt z31.h, p7/m, z31.s
+bfcvtnt z31.h, p7/z, z31.s
 bfdot z0.s, z0.h, z0.h
 bfdot z0.s, z0.h, z0.h[0]
 bfdot z10.s, z27.h, z3.h[0]
@@ -656,29 +698,53 @@ clastb z31.d, p7, z31.d, z31.d
 clastb z31.h, p7, z31.h, z31.h
 clastb z31.s, p7, z31.s, z31.s
 cls z0.b, p0/m, z0.b
+cls z0.b, p0/z, z0.b
 cls z0.d, p0/m, z0.d
+cls z0.d, p0/z, z0.d
+cls z0.d, p1/z, z20.d
 cls z0.h, p0/m, z0.h
+cls z0.h, p0/z, z0.h
 cls z0.s, p0/m, z0.s
+cls z0.s, p0/z, z0.s
+cls z14.b, p1/z, z28.b
 cls z15.d, p6/m, z28.d
 cls z22.h, p1/m, z24.h
+cls z22.s, p1/z, z26.s
 cls z26.b, p2/m, z14.b
 cls z31.b, p7/m, z31.b
+cls z31.b, p7/z, z31.b
 cls z31.d, p7/m, z31.d
+cls z31.d, p7/z, z31.d
 cls z31.h, p7/m, z31.h
+cls z31.h, p7/z, z31.h
 cls z31.s, p7/m, z31.s
+cls z31.s, p7/z, z31.s
+cls z4.h, p5/z, z27.h
 cls z6.s, p5/m, z24.s
 clz z0.b, p0/m, z0.b
+clz z0.b, p0/z, z0.b
 clz z0.d, p0/m, z0.d
+clz z0.d, p0/z, z0.d
 clz z0.h, p0/m, z0.h
+clz z0.h, p0/z, z0.h
 clz z0.s, p0/m, z0.s
+clz z0.s, p0/z, z0.s
 clz z1.b, p4/m, z21.b
 clz z13.s, p1/m, z31.s
+clz z22.h, p2/z, z10.h
 clz z24.h, p6/m, z17.h
+clz z28.d, p4/z, z3.d
 clz z31.b, p7/m, z31.b
+clz z31.b, p7/z, z15.b
+clz z31.b, p7/z, z31.b
 clz z31.d, p7/m, z31.d
+clz z31.d, p7/z, z31.d
 clz z31.h, p7/m, z31.h
+clz z31.h, p7/z, z31.h
 clz z31.s, p7/m, z31.s
+clz z31.s, p7/z, z31.s
 clz z6.d, p7/m, z16.d
+clz z6.s, p0/z, z13.s
 cmla z0.b, z0.b, z0.b, #0
 cmla z0.d, z0.d, z0.d, #0
 cmla z0.h, z0.h, z0.h, #0
@@ -992,29 +1058,53 @@ cmpne p3.s, p1/z, z2.s, #2
 cmpne p4.h, p7/z, z14.h, z13.d
 cmpne p9.h, p3/z, z24.h, #-13
 cnot z0.b, p0/m, z0.b
+cnot z0.b, p0/z, z0.b
 cnot z0.d, p0/m, z0.d
+cnot z0.d, p0/z, z0.d
 cnot z0.h, p0/m, z0.h
+cnot z0.h, p0/z, z0.h
 cnot z0.s, p0/m, z0.s
+cnot z0.s, p0/z, z0.s
+cnot z12.s, p5/z, z4.s
+cnot z14.b, p6/z, z22.b
 cnot z17.d, p1/m, z28.d
 cnot z18.s, p2/m, z20.s
+cnot z21.h, p7/z, z22.h
+cnot z26.d, p2/z, z4.d
 cnot z30.b, p3/m, z18.b
 cnot z31.b, p7/m, z31.b
+cnot z31.b, p7/z, z31.b
 cnot z31.d, p7/m, z31.d
+cnot z31.d, p7/z, z31.d
 cnot z31.h, p7/m, z31.h
+cnot z31.h, p7/z, z31.h
 cnot z31.s, p7/m, z31.s
+cnot z31.s, p7/z, z31.s
 cnot z8.h, p7/m, z17.h
 cnt z0.b, p0/m, z0.b
+cnt z0.b, p0/z, z0.b
 cnt z0.d, p0/m, z0.d
+cnt z0.d, p0/z, z0.d
 cnt z0.h, p0/m, z0.h
+cnt z0.h, p0/z, z0.h
 cnt z0.s, p0/m, z0.s
+cnt z0.s, p0/z, z0.s
 cnt z17.s, p6/m, z28.s
 cnt z19.b, p6/m, z25.b
+cnt z22.s, p6/z, z18.s
 cnt z23.d, p6/m, z18.d
 cnt z23.h, p2/m, z23.h
+cnt z30.b, p5/z, z13.b
 cnt z31.b, p7/m, z31.b
+cnt z31.b, p7/z, z31.b
 cnt z31.d, p7/m, z31.d
+cnt z31.d, p7/z, z31.d
+cnt z31.h, p5/z, z11.h
 cnt z31.h, p7/m, z31.h
+cnt z31.h, p7/z, z31.h
 cnt z31.s, p7/m, z31.s
+cnt z31.s, p7/z, z31.s
+cnt z9.d, p3/z, z29.d
 cntp x0, p0, p0.b
 cntp x0, p0, p0.d
 cntp x0, p0, p0.h
@@ -1027,9 +1117,15 @@ cntp xzr, p15, p15.b
 cntp xzr, p15, p15.d
 cntp xzr, p15, p15.h
 cntp xzr, p15, p15.s
+compact z0.b, p0, z0.b
 compact z0.d, p0, z0.d
+compact z0.h, p0, z0.h
 compact z0.s, p0, z0.s
+compact z1.h, p4, z12.h
+compact z16.b, p2, z24.b
+compact z31.b, p7, z31.b
 compact z31.d, p7, z31.d
+compact z31.h, p7, z31.h
 compact z31.s, p7, z31.s
 compact z4.d, p6, z1.d
 compact z6.s, p2, z27.s
@@ -1215,13 +1311,13 @@ dupm z0.b, #-128
 dupm z0.d, #-9223372036854775808
 dupm z0.h, #-32768
 dupm z0.s, #-2147483648
-dupm z12.d, #126
-dupm z15.h, #63489
+dupm z12.d, #124
+dupm z15.h, #61440
 dupm z18.s, #-268435457
 dupm z31.b, #254
-dupm z31.d, #18446744073709551607
+dupm z31.d, #18446744073709551613
 dupm z31.h, #65534
-dupm z31.s, #4294967294
+dupm z31.s, #4294967287
 dupm z7.b, #62
 dupq z0.b, z0.b[0]
 dupq z0.d, z0.d[0]
@@ -1258,11 +1354,11 @@ eor z0.d, z0.d, #-9223372036854775808
 eor z0.d, z0.d, z0.d
 eor z0.h, p0/m, z0.h, z0.h
 eor z0.h, z0.h, #-32768
-eor z0.h, z0.h, #57599
+eor z0.h, z0.h, #58367
 eor z0.s, p0/m, z0.s, z0.s
 eor z0.s, z0.s, #-2147483648
 eor z10.b, p4/m, z10.b, z25.b
-eor z12.d, z12.d, #2147352576
+eor z12.d, z12.d, #2199023255520
 eor z25.d, p4/m, z25.d, z11.d
 eor z31.b, p7/m, z31.b, z31.b
 eor z31.b, z31.b, #254
@@ -1270,11 +1366,11 @@ eor z31.d, p7/m, z31.d, z31.d
 eor z31.d, z31.d, #18446744073709518879
 eor z31.d, z31.d, z31.d
 eor z31.h, p7/m, z31.h, z31.h
-eor z31.h, z31.h, #65520
+eor z31.h, z31.h, #65529
 eor z31.s, p7/m, z31.s, z31.s
-eor z31.s, z31.s, #4294967293
+eor z31.s, z31.s, #4294967279
 eor z4.d, z30.d, z1.d
-eor z5.s, z5.s, #4293919743
+eor z5.s, z5.s, #2147500031
 eor z6.h, p6/m, z6.h, z21.h
 eor z7.s, p4/m, z7.s, z12.s
 eor3 z0.d, z0.d, z0.d, z0.d
@@ -1331,6 +1427,18 @@ eorv h31, p7, z31.h
 eorv s0, p0, z0.s
 eorv s19, p5, z12.s
 eorv s31, p7, z31.s
+expand z0.b, p0, z0.b
+expand z0.d, p0, z0.d
+expand z0.h, p0, z0.h
+expand z0.s, p0, z0.s
+expand z2.b, p7, z8.b
+expand z24.s, p6, z10.s
+expand z31.b, p7, z31.b
+expand z31.d, p7, z31.d
+expand z31.h, p7, z31.h
+expand z31.s, p7, z31.s
+expand z4.d, p2, z5.d
+expand z9.h, p3, z21.h
 ext z0.b, z0.b, z0.b, #0
 ext z0.b, { z0.b, z1.b }, #0
 ext z24.b, z24.b, z11.b, #9
@@ -1374,14 +1482,23 @@ fabd z31.d, p7/m, z31.d, z31.d
 fabd z31.h, p7/m, z31.h, z31.h
 fabd z31.s, p7/m, z31.s, z31.s
 fabs z0.d, p0/m, z0.d
+fabs z0.d, p0/z, z0.d
 fabs z0.h, p0/m, z0.h
+fabs z0.h, p0/z, z0.h
 fabs z0.s, p0/m, z0.s
+fabs z0.s, p0/z, z0.s
+fabs z17.s, p0/z, z25.s
 fabs z18.h, p3/m, z16.h
+fabs z2.h, p1/z, z2.h
 fabs z31.d, p1/m, z8.d
 fabs z31.d, p7/m, z31.d
+fabs z31.d, p7/z, z31.d
 fabs z31.h, p7/m, z31.h
+fabs z31.h, p7/z, z31.h
 fabs z31.s, p7/m, z31.s
+fabs z31.s, p7/z, z31.s
 fabs z4.s, p7/m, z29.s
+fabs z9.d, p0/z, z16.d
 facge p0.d, p0/z, z0.d, z0.d
 facge p0.h, p0/z, z0.h, z0.h
 facge p0.s, p0/z, z0.s, z0.s
@@ -1680,35 +1797,59 @@ fcvt z0.b, { z0.h, z1.h }
 fcvt z0.b, { z0.s, z1.s, z2.s, z3.s }
 fcvt z0.d, p0/m, z0.h
 fcvt z0.d, p0/m, z0.s
+fcvt z0.d, p0/z, z0.h
+fcvt z0.d, p0/z, z0.s
 fcvt z0.h, p0/m, z0.d
 fcvt z0.h, p0/m, z0.s
+fcvt z0.h, p0/z, z0.d
+fcvt z0.h, p0/z, z0.s
 fcvt z0.h, { z0.s, z1.s }
 fcvt z0.s, p0/m, z0.d
 fcvt z0.s, p0/m, z0.h
+fcvt z0.s, p0/z, z0.d
+fcvt z0.s, p0/z, z0.h
 fcvt z1.s, p7/m, z2.h
+fcvt z13.d, p1/z, z24.h
 fcvt z13.h, p3/m, z20.d
 fcvt z13.s, p2/m, z12.d
 fcvt z14.h, { z14.s, z15.s }
+fcvt z16.s, p3/z, z31.d
+fcvt z17.d, p7/z, z11.s
 fcvt z2.h, p0/m, z21.s
+fcvt z2.s, p5/z, z0.h
 fcvt z20.b, { z12.s, z13.s, z14.s, z15.s }
+fcvt z23.h, p5/z, z5.s
 fcvt z24.b, { z0.h, z1.h }
+fcvt z24.h, p0/z, z23.d
 fcvt z31.b, { z28.s, z29.s, z30.s, z31.s }
 fcvt z31.b, { z30.h, z31.h }
 fcvt z31.d, p7/m, z16.h
 fcvt z31.d, p7/m, z31.h
 fcvt z31.d, p7/m, z31.s
+fcvt z31.d, p7/z, z31.h
+fcvt z31.d, p7/z, z31.s
 fcvt z31.h, p7/m, z31.d
 fcvt z31.h, p7/m, z31.s
+fcvt z31.h, p7/z, z31.d
+fcvt z31.h, p7/z, z31.s
 fcvt z31.h, { z30.s, z31.s }
 fcvt z31.s, p7/m, z31.d
 fcvt z31.s, p7/m, z31.h
+fcvt z31.s, p7/z, z31.d
+fcvt z31.s, p7/z, z31.h
 fcvt z9.d, p1/m, z4.s
 fcvtlt z0.d, p0/m, z0.s
+fcvtlt z0.d, p0/z, z0.s
 fcvtlt z0.s, p0/m, z0.h
+fcvtlt z0.s, p0/z, z0.h
 fcvtlt z10.d, p0/m, z1.s
+fcvtlt z12.d, p1/z, z8.s
+fcvtlt z16.s, p7/z, z0.h
 fcvtlt z18.s, p6/m, z27.h
 fcvtlt z31.d, p7/m, z31.s
+fcvtlt z31.d, p7/z, z31.s
 fcvtlt z31.s, p7/m, z31.h
+fcvtlt z31.s, p7/z, z31.h
 fcvtn z0.b, { z0.h, z1.h }
 fcvtn z0.b, { z0.s, z1.s, z2.s, z3.s }
 fcvtn z0.h, { z0.s, z1.s }
@@ -1723,61 +1864,133 @@ fcvtnb z1.b, { z30.s, z31.s }
 fcvtnb z31.b, { z30.s, z31.s }
 fcvtnt z0.b, { z0.s, z1.s }
 fcvtnt z0.h, p0/m, z0.s
+fcvtnt z0.h, p0/z, z0.s
 fcvtnt z0.s, p0/m, z0.d
+fcvtnt z0.s, p0/z, z0.d
+fcvtnt z14.s, p5/z, z1.d
 fcvtnt z2.s, p0/m, z30.d
 fcvtnt z30.h, p6/m, z23.s
 fcvtnt z31.b, { z30.s, z31.s }
+fcvtnt z31.h, p2/z, z19.s
 fcvtnt z31.h, p7/m, z31.s
+fcvtnt z31.h, p7/z, z31.s
 fcvtnt z31.s, p7/m, z31.d
+fcvtnt z31.s, p7/z, z31.d
 fcvtnt z7.b, { z8.s, z9.s }
 fcvtx z0.s, p0/m, z0.d
+fcvtx z0.s, p0/z, z0.d
 fcvtx z22.s, p5/m, z17.d
 fcvtx z31.s, p7/m, z31.d
+fcvtx z31.s, p7/z, z31.d
+fcvtx z8.s, p7/z, z22.d
 fcvtxnt z0.s, p0/m, z0.d
+fcvtxnt z0.s, p0/z, z0.d
 fcvtxnt z10.s, p1/m, z13.d
+fcvtxnt z29.s, p1/z, z11.d
 fcvtxnt z31.s, p7/m, z31.d
+fcvtxnt z31.s, p7/z, z31.d
 fcvtzs z0.d, p0/m, z0.d
 fcvtzs z0.d, p0/m, z0.h
 fcvtzs z0.d, p0/m, z0.s
+fcvtzs z0.d, p0/z, z0.d
+fcvtzs z0.d, p0/z, z0.h
+fcvtzs z0.d, p0/z, z0.s
 fcvtzs z0.h, p0/m, z0.h
+fcvtzs z0.h, p0/z, z0.h
 fcvtzs z0.s, p0/m, z0.d
 fcvtzs z0.s, p0/m, z0.h
 fcvtzs z0.s, p0/m, z0.s
+fcvtzs z0.s, p0/z, z0.d
+fcvtzs z0.s, p0/z, z0.h
+fcvtzs z0.s, p0/z, z0.s
 fcvtzs z0.s, p6/m, z22.s
 fcvtzs z12.d, p7/m, z7.h
+fcvtzs z14.d, p2/z, z15.h
 fcvtzs z14.s, p6/m, z9.d
 fcvtzs z15.d, p5/m, z4.s
+fcvtzs z19.d, p4/z, z21.s
+fcvtzs z21.s, p6/z, z12.s
+fcvtzs z24.d, p3/z, z0.d
+fcvtzs z24.s, p1/z, z19.h
+fcvtzs z24.s, p1/z, z8.d
 fcvtzs z25.s, p6/m, z17.h
 fcvtzs z31.d, p7/m, z31.d
 fcvtzs z31.d, p7/m, z31.h
 fcvtzs z31.d, p7/m, z31.s
+fcvtzs z31.d, p7/z, z31.d
+fcvtzs z31.d, p7/z, z31.h
+fcvtzs z31.d, p7/z, z31.s
 fcvtzs z31.h, p7/m, z31.h
+fcvtzs z31.h, p7/z, z31.h
 fcvtzs z31.s, p7/m, z31.d
 fcvtzs z31.s, p7/m, z31.h
 fcvtzs z31.s, p7/m, z31.s
+fcvtzs z31.s, p7/z, z31.d
+fcvtzs z31.s, p7/z, z31.h
+fcvtzs z31.s, p7/z, z31.s
 fcvtzs z7.d, p5/m, z26.d
+fcvtzs z8.h, p1/z, z3.h
 fcvtzs z9.h, p4/m, z8.h
+fcvtzsn z0.b, { z0.h, z1.h }
+fcvtzsn z0.h, { z0.s, z1.s }
+fcvtzsn z0.s, { z0.d, z1.d }
+fcvtzsn z0.s, { z2.d, z3.d }
+fcvtzsn z10.b, { z12.h, z13.h }
+fcvtzsn z20.h, { z2.s, z3.s }
+fcvtzsn z31.b, { z30.h, z31.h }
+fcvtzsn z31.h, { z30.s, z31.s }
+fcvtzsn z31.s, { z30.d, z31.d }
 fcvtzu z0.d, p0/m, z0.d
 fcvtzu z0.d, p0/m, z0.h
 fcvtzu z0.d, p0/m, z0.s
+fcvtzu z0.d, p0/z, z0.d
+fcvtzu z0.d, p0/z, z0.h
+fcvtzu z0.d, p0/z, z0.s
 fcvtzu z0.h, p0/m, z0.h
+fcvtzu z0.h, p0/z, z0.h
 fcvtzu z0.s, p0/m, z0.d
 fcvtzu z0.s, p0/m, z0.h
 fcvtzu z0.s, p0/m, z0.s
+fcvtzu z0.s, p0/z, z0.d
+fcvtzu z0.s, p0/z, z0.h
+fcvtzu z0.s, p0/z, z0.s
+fcvtzu z12.d, p1/z, z0.h
 fcvtzu z13.d, p3/m, z9.s
+fcvtzu z17.s, p3/z, z2.s
+fcvtzu z20.d, p0/z, z30.d
 fcvtzu z20.s, p0/m, z21.d
+fcvtzu z21.d, p2/z, z20.s
 fcvtzu z23.h, p3/m, z0.h
 fcvtzu z28.s, p3/m, z20.h
 fcvtzu z3.s, p0/m, z16.s
+fcvtzu z30.s, p1/z, z3.d
 fcvtzu z31.d, p7/m, z31.d
 fcvtzu z31.d, p7/m, z31.h
 fcvtzu z31.d, p7/m, z31.s
+fcvtzu z31.d, p7/z, z31.d
+fcvtzu z31.d, p7/z, z31.h
+fcvtzu z31.d, p7/z, z31.s
 fcvtzu z31.h, p7/m, z31.h
+fcvtzu z31.h, p7/z, z31.h
 fcvtzu z31.s, p7/m, z31.d
 fcvtzu z31.s, p7/m, z31.h
 fcvtzu z31.s, p7/m, z31.s
+fcvtzu z31.s, p7/z, z31.d
+fcvtzu z31.s, p7/z, z31.h
+fcvtzu z31.s, p7/z, z31.s
 fcvtzu z5.d, p5/m, z27.h
+fcvtzu z5.h, p1/z, z15.h
+fcvtzu z6.s, p7/z, z0.h
 fcvtzu z7.d, p5/m, z21.d
+fcvtzun z0.b, { z0.h, z1.h }
+fcvtzun z0.h, { z0.s, z1.s }
+fcvtzun z0.s, { z0.d, z1.d }
+fcvtzun z0.s, { z22.d, z23.d }
+fcvtzun z10.b, { z12.h, z13.h }
+fcvtzun z31.b, { z30.h, z31.h }
+fcvtzun z31.h, { z30.s, z31.s }
+fcvtzun z31.s, { z30.d, z31.d }
+fcvtzun z9.h, { z22.s, z23.s }
 fdiv z0.d, p0/m, z0.d, z0.d
 fdiv z0.h, p0/m, z0.h, z0.h
 fdiv z0.s, p0/m, z0.s, z0.s
@@ -1832,14 +2045,35 @@ fexpa z28.h, z7.h
 fexpa z31.d, z31.d
 fexpa z31.h, z31.h
 fexpa z31.s, z31.s
+firstp x0, p0, p0.b
+firstp x0, p0, p0.d
+firstp x0, p0, p0.h
+firstp x0, p0, p0.s
+firstp x18, p12, p12.d
+firstp x20, p13, p8.s
+firstp x24, p15, p14.h
+firstp x3, p2, p13.b
+firstp xzr, p15, p15.b
+firstp xzr, p15, p15.d
+firstp xzr, p15, p15.h
+firstp xzr, p15, p15.s
 flogb z0.d, p0/m, z0.d
+flogb z0.d, p0/z, z0.d
 flogb z0.h, p0/m, z0.h
+flogb z0.h, p0/z, z0.h
 flogb z0.s, p0/m, z0.s
+flogb z0.s, p0/z, z0.s
 flogb z12.s, p2/m, z14.s
 flogb z13.h, p3/m, z24.h
+flogb z2.h, p4/z, z28.h
+flogb z29.d, p1/z, z5.d
+flogb z30.s, p5/z, z2.s
 flogb z31.d, p7/m, z31.d
+flogb z31.d, p7/z, z31.d
 flogb z31.h, p7/m, z31.h
+flogb z31.h, p7/z, z31.h
 flogb z31.s, p7/m, z31.s
+flogb z31.s, p7/z, z31.s
 flogb z4.d, p3/m, z21.d
 fmad z0.d, p0/m, z0.d, z0.d
 fmad z0.h, p0/m, z0.h, z0.h
@@ -2225,14 +2459,23 @@ fmulx z31.h, p7/m, z31.h, z31.h
 fmulx z31.s, p7/m, z31.s, z31.s
 fmulx z9.d, p5/m, z9.d, z7.d
 fneg z0.d, p0/m, z0.d
+fneg z0.d, p0/z, z0.d
 fneg z0.h, p0/m, z0.h
+fneg z0.h, p0/z, z0.h
 fneg z0.s, p0/m, z0.s
+fneg z0.s, p0/z, z0.s
 fneg z17.s, p5/m, z2.s
+fneg z22.s, p3/z, z7.s
 fneg z23.d, p6/m, z6.d
+fneg z24.h, p7/z, z5.h
+fneg z29.d, p4/z, z0.d
 fneg z29.h, p2/m, z22.h
 fneg z31.d, p7/m, z31.d
+fneg z31.d, p7/z, z31.d
 fneg z31.h, p7/m, z31.h
+fneg z31.h, p7/z, z31.h
 fneg z31.s, p7/m, z31.s
+fneg z31.s, p7/z, z31.s
 fnmad z0.d, p0/m, z0.d, z0.d
 fnmad z0.h, p0/m, z0.h, z0.h
 fnmad z0.s, p0/m, z0.s, z0.s
@@ -2288,76 +2531,196 @@ frecps z31.h, z31.h, z31.h
 frecps z31.s, z31.s, z31.s
 frecps z5.h, z7.h, z0.h
 frecpx z0.d, p0/m, z0.d
+frecpx z0.d, p0/z, z0.d
 frecpx z0.h, p0/m, z0.h
+frecpx z0.h, p0/z, z0.h
 frecpx z0.s, p0/m, z0.s
+frecpx z0.s, p0/z, z0.s
+frecpx z1.s, p6/z, z0.s
+frecpx z12.d, p2/z, z19.d
+frecpx z18.h, p5/z, z10.h
 frecpx z22.h, p3/m, z13.h
 frecpx z28.d, p4/m, z19.d
 frecpx z31.d, p7/m, z31.d
+frecpx z31.d, p7/z, z31.d
 frecpx z31.h, p7/m, z31.h
+frecpx z31.h, p7/z, z31.h
 frecpx z31.s, p5/m, z28.s
 frecpx z31.s, p7/m, z31.s
+frecpx z31.s, p7/z, z31.s
+frint32x z0.d, p0/m, z0.d
+frint32x z0.d, p0/z, z0.d
+frint32x z0.s, p0/m, z0.s
+frint32x z0.s, p0/z, z0.s
+frint32x z10.d, p7/m, z22.d
+frint32x z19.d, p6/z, z6.d
+frint32x z30.s, p6/z, z19.s
+frint32x z31.d, p7/m, z31.d
+frint32x z31.d, p7/z, z31.d
+frint32x z31.s, p7/m, z25.s
+frint32x z31.s, p7/m, z31.s
+frint32x z31.s, p7/z, z31.s
+frint32z z0.d, p0/m, z0.d
+frint32z z0.d, p0/z, z0.d
+frint32z z0.s, p0/m, z0.s
+frint32z z0.s, p0/z, z0.s
+frint32z z10.d, p1/m, z30.d
+frint32z z12.d, p7/z, z17.d
+frint32z z13.s, p5/m, z8.s
+frint32z z18.s, p5/z, z0.s
+frint32z z31.d, p7/m, z31.d
+frint32z z31.d, p7/z, z31.d
+frint32z z31.s, p7/m, z31.s
+frint32z z31.s, p7/z, z31.s
+frint64x z0.d, p0/m, z0.d
+frint64x z0.d, p0/z, z0.d
+frint64x z0.s, p0/m, z0.s
+frint64x z0.s, p0/z, z0.s
+frint64x z21.d, p1/m, z15.d
+frint64x z22.s, p7/m, z3.s
+frint64x z29.d, p1/z, z9.d
+frint64x z31.d, p7/m, z31.d
+frint64x z31.d, p7/z, z31.d
+frint64x z31.s, p7/m, z31.s
+frint64x z31.s, p7/z, z31.s
+frint64x z8.s, p4/z, z16.s
+frint64z z0.d, p0/m, z0.d
+frint64z z0.d, p0/z, z0.d
+frint64z z0.s, p0/m, z0.s
+frint64z z0.s, p0/z, z0.s
+frint64z z18.d, p2/m, z18.d
+frint64z z25.s, p7/m, z17.s
+frint64z z28.d, p4/z, z7.d
+frint64z z31.d, p7/m, z31.d
+frint64z z31.d, p7/z, z31.d
+frint64z z31.s, p0/z, z20.s
+frint64z z31.s, p7/m, z31.s
+frint64z z31.s, p7/z, z31.s
 frinta z0.d, p0/m, z0.d
+frinta z0.d, p0/z, z0.d
+frinta z0.d, p5/z, z19.d
 frinta z0.h, p0/m, z0.h
+frinta z0.h, p0/z, z0.h
 frinta z0.s, p0/m, z0.s
+frinta z0.s, p0/z, z0.s
 frinta z14.s, p7/m, z11.s
 frinta z18.d, p6/m, z26.d
+frinta z22.s, p4/z, z21.s
 frinta z24.h, p2/m, z5.h
 frinta z31.d, p7/m, z31.d
+frinta z31.d, p7/z, z31.d
 frinta z31.h, p7/m, z31.h
+frinta z31.h, p7/z, z31.h
 frinta z31.s, p7/m, z31.s
+frinta z31.s, p7/z, z31.s
+frinta z7.h, p4/z, z28.h
 frinti z0.d, p0/m, z0.d
+frinti z0.d, p0/z, z0.d
 frinti z0.h, p0/m, z0.h
+frinti z0.h, p0/z, z0.h
 frinti z0.s, p0/m, z0.s
+frinti z0.s, p0/z, z0.s
 frinti z15.s, p7/m, z14.s
 frinti z18.h, p6/m, z20.h
+frinti z2.s, p4/z, z19.s
 frinti z21.d, p7/m, z16.d
+frinti z29.d, p3/z, z29.d
 frinti z31.d, p7/m, z31.d
+frinti z31.d, p7/z, z31.d
+frinti z31.h, p2/z, z5.h
 frinti z31.h, p7/m, z31.h
+frinti z31.h, p7/z, z31.h
 frinti z31.s, p7/m, z31.s
+frinti z31.s, p7/z, z31.s
 frintm z0.d, p0/m, z0.d
+frintm z0.d, p0/z, z0.d
 frintm z0.h, p0/m, z0.h
+frintm z0.h, p0/z, z0.h
 frintm z0.s, p0/m, z0.s
+frintm z0.s, p0/z, z0.s
+frintm z16.d, p7/z, z7.d
 frintm z21.s, p7/m, z23.s
 frintm z25.d, p5/m, z14.d
+frintm z26.h, p7/z, z0.h
+frintm z29.s, p6/z, z27.s
 frintm z31.d, p7/m, z31.d
+frintm z31.d, p7/z, z31.d
 frintm z31.h, p7/m, z31.h
+frintm z31.h, p7/z, z31.h
 frintm z31.s, p7/m, z31.s
+frintm z31.s, p7/z, z31.s
 frintm z7.h, p6/m, z0.h
 frintn z0.d, p0/m, z0.d
+frintn z0.d, p0/z, z0.d
 frintn z0.h, p0/m, z0.h
+frintn z0.h, p0/z, z0.h
 frintn z0.s, p0/m, z0.s
+frintn z0.s, p0/z, z0.s
 frintn z12.h, p2/m, z26.h
+frintn z18.d, p7/z, z20.d
+frintn z27.h, p5/z, z11.h
+frintn z28.s, p6/z, z13.s
 frintn z31.d, p7/m, z31.d
+frintn z31.d, p7/z, z31.d
 frintn z31.h, p7/m, z31.h
+frintn z31.h, p7/z, z31.h
 frintn z31.s, p7/m, z31.s
+frintn z31.s, p7/z, z31.s
 frintn z6.d, p5/m, z10.d
 frintn z7.s, p3/m, z6.s
 frintp z0.d, p0/m, z0.d
+frintp z0.d, p0/z, z0.d
 frintp z0.h, p0/m, z0.h
+frintp z0.h, p0/z, z0.h
 frintp z0.s, p0/m, z0.s
+frintp z0.s, p0/z, z0.s
 frintp z12.d, p4/m, z23.d
+frintp z14.d, p2/z, z27.d
+frintp z15.s, p2/z, z11.s
+frintp z20.h, p2/z, z17.h
 frintp z31.d, p7/m, z31.d
+frintp z31.d, p7/z, z31.d
 frintp z31.h, p7/m, z31.h
+frintp z31.h, p7/z, z31.h
 frintp z31.s, p7/m, z31.s
+frintp z31.s, p7/z, z31.s
 frintp z8.h, p1/m, z28.h
 frintp z9.s, p2/m, z14.s
 frintx z0.d, p0/m, z0.d
 frintx z0.d, p0/m, z27.d
+frintx z0.d, p0/z, z0.d
 frintx z0.h, p0/m, z0.h
+frintx z0.h, p0/z, z0.h
 frintx z0.s, p0/m, z0.s
+frintx z0.s, p0/z, z0.s
+frintx z1.d, p1/z, z28.d
+frintx z18.s, p5/z, z3.s
+frintx z23.h, p4/z, z10.h
 frintx z30.h, p4/m, z3.h
 frintx z31.d, p7/m, z31.d
+frintx z31.d, p7/z, z31.d
 frintx z31.h, p7/m, z31.h
+frintx z31.h, p7/z, z31.h
 frintx z31.s, p7/m, z31.s
+frintx z31.s, p7/z, z31.s
 frintx z8.s, p5/m, z31.s
 frintz z0.d, p0/m, z0.d
+frintz z0.d, p0/z, z0.d
 frintz z0.h, p0/m, z0.h
+frintz z0.h, p0/z, z0.h
 frintz z0.s, p0/m, z0.s
+frintz z0.s, p0/z, z0.s
 frintz z12.d, p3/m, z27.d
+frintz z12.d, p6/z, z24.d
+frintz z14.h, p7/z, z23.h
+frintz z26.s, p7/z, z21.s
 frintz z3.h, p7/m, z23.h
 frintz z31.d, p7/m, z31.d
+frintz z31.d, p7/z, z31.d
 frintz z31.h, p7/m, z31.h
+frintz z31.h, p7/z, z31.h
 frintz z31.s, p7/m, z31.s
+frintz z31.s, p7/z, z31.s
 frintz z5.s, p3/m, z12.s
 frsqrte z0.d, z0.d
 frsqrte z0.h, z0.h
@@ -2387,13 +2750,22 @@ fscale z31.d, p7/m, z31.d, z31.d
 fscale z31.h, p7/m, z31.h, z31.h
 fscale z31.s, p7/m, z31.s, z31.s
 fsqrt z0.d, p0/m, z0.d
+fsqrt z0.d, p0/z, z0.d
 fsqrt z0.h, p0/m, z0.h
+fsqrt z0.h, p0/z, z0.h
 fsqrt z0.s, p0/m, z0.s
+fsqrt z0.s, p0/z, z0.s
+fsqrt z22.s, p3/z, z8.s
 fsqrt z27.h, p3/m, z10.h
 fsqrt z3.s, p1/m, z25.s
 fsqrt z31.d, p7/m, z31.d
+fsqrt z31.d, p7/z, z31.d
 fsqrt z31.h, p7/m, z31.h
+fsqrt z31.h, p7/z, z31.h
 fsqrt z31.s, p7/m, z31.s
+fsqrt z31.s, p7/z, z31.s
+fsqrt z6.h, p0/z, z9.h
+fsqrt z7.d, p6/z, z19.d
 fsqrt z8.d, p4/m, z22.d
 fsub z0.d, p0/m, z0.d, #0.50000000
 fsub z0.d, p0/m, z0.d, z0.d
@@ -2662,6 +3034,18 @@ lastb wzr, p7, z31.s
 lastb x0, p0, z0.d
 lastb x28, p4, z19.d
 lastb xzr, p7, z31.d
+lastp x0, p0, p0.b
+lastp x0, p0, p0.d
+lastp x0, p0, p0.h
+lastp x0, p0, p0.s
+lastp x13, p1, p14.d
+lastp x22, p10, p11.s
+lastp x30, p10, p13.b
+lastp x7, p0, p10.h
+lastp xzr, p15, p15.b
+lastp xzr, p15, p15.d
+lastp xzr, p15, p15.h
+lastp xzr, p15, p15.s
 ld1b { z0.b }, p0/z, [x0, #-8, mul vl]
 ld1b { z0.b }, p0/z, [x0, x0]
 ld1b { z0.b }, p0/z, [x0]
@@ -4054,6 +4438,12 @@ luti4 z30.h, { z26.h }, z12[0]
 luti4 z31.b, { z31.b }, z31[1]
 luti4 z31.h, { z31.h }, z31[3]
 luti4 z31.h, { z31.h, z0.h }, z31[3]
+luti6 z0.b, { z0.b, z1.b }, z0
+luti6 z0.h, { z0.h, z1.h }, z0[0]
+luti6 z25.h, { z24.h, z25.h }, z16[1]
+luti6 z31.b, { z31.b, z0.b }, z31
+luti6 z31.h, { z31.h, z0.h }, z31[1]
+luti6 z6.b, { z14.b, z15.b }, z9
 mad z0.b, p0/m, z0.b, z0.b
 mad z0.d, p0/m, z0.d, z0.d
 mad z0.h, p0/m, z0.h, z0.h
@@ -4207,14 +4597,14 @@ mov z15.s, w17
 mov z18.d, p7/m, z5.d
 mov z2.b, #103
 mov z2.b, b7
-mov z20.d, #33521664
+mov z20.d, #68719476736
 mov z20.h, p7/m, w9
-mov z22.h, #1028
+mov z22.h, #448
 mov z23.d, p2/z, #-17
 mov z23.d, z12.d
 mov z24.d, d31
 mov z24.d, p4/m, x12
-mov z24.s, #4261413119
+mov z24.s, #268435455
 mov z25.b, p14/m, #-126
 mov z25.d, p4/m, #-20992
 mov z25.d, z1.d[0]
@@ -4239,7 +4629,7 @@ mov z31.b, wsp
 mov z31.b, z31.b[63]
 mov z31.d, #127
 mov z31.d, #127, lsl #8
-mov z31.d, #18446744072636334079
+mov z31.d, #18446744073172684799
 mov z31.d, #32512
 mov z31.d, d31
 mov z31.d, p15/m, #127
@@ -4257,7 +4647,7 @@ mov z31.d, z31.d[7]
 mov z31.h, #127
 mov z31.h, #127, lsl #8
 mov z31.h, #32512
-mov z31.h, #65311
+mov z31.h, #65295
 mov z31.h, h31
 mov z31.h, p15/m, #127
 mov z31.h, p15/m, #127, lsl #8
@@ -4275,7 +4665,7 @@ mov z31.q, z31.q[3]
 mov z31.s, #127
 mov z31.s, #127, lsl #8
 mov z31.s, #32512
-mov z31.s, #4294934543
+mov z31.s, #4294909951
 mov z31.s, p15/m, #127
 mov z31.s, p15/m, #127, lsl #8
 mov z31.s, p15/m, #32512
@@ -4382,17 +4772,29 @@ nbsl z0.d, z0.d, z0.d, z0.d
 nbsl z22.d, z22.d, z16.d, z4.d
 nbsl z31.d, z31.d, z31.d, z31.d
 neg z0.b, p0/m, z0.b
+neg z0.b, p0/z, z0.b
 neg z0.d, p0/m, z0.d
+neg z0.d, p0/z, z0.d
 neg z0.h, p0/m, z0.h
+neg z0.h, p0/z, z0.h
 neg z0.s, p0/m, z0.s
+neg z0.s, p0/z, z0.s
+neg z17.d, p3/z, z10.d
 neg z18.d, p4/m, z16.d
 neg z22.h, p4/m, z24.h
+neg z28.b, p0/z, z17.b
+neg z29.h, p1/z, z18.h
 neg z3.s, p1/m, z1.s
 neg z31.b, p7/m, z31.b
+neg z31.b, p7/z, z31.b
 neg z31.d, p7/m, z31.d
+neg z31.d, p7/z, z31.d
 neg z31.h, p7/m, z31.h
+neg z31.h, p7/z, z31.h
 neg z31.s, p7/m, z31.s
+neg z31.s, p7/z, z31.s
 neg z5.b, p7/m, z28.b
+neg z9.s, p5/z, z26.s
 nmatch p0.b, p0/z, z0.b, z0.b
 nmatch p0.h, p0/z, z0.h, z0.h
 nmatch p15.b, p7/z, z31.b, z31.b
@@ -4409,16 +4811,28 @@ not p0.b, p0/z, p0.b
 not p15.b, p15/z, p15.b
 not p3.b, p9/z, p6.b
 not z0.b, p0/m, z0.b
+not z0.b, p0/z, z0.b
 not z0.d, p0/m, z0.d
+not z0.d, p0/z, z0.d
 not z0.h, p0/m, z0.h
+not z0.h, p0/z, z0.h
 not z0.s, p0/m, z0.s
+not z0.s, p0/z, z0.s
 not z18.d, p6/m, z0.d
+not z20.b, p0/z, z31.b
 not z23.h, p5/m, z11.h
 not z26.s, p1/m, z7.s
+not z27.h, p6/z, z7.h
+not z28.s, p6/z, z27.s
+not z3.d, p3/z, z0.d
 not z31.b, p7/m, z31.b
+not z31.b, p7/z, z31.b
 not z31.d, p7/m, z31.d
+not z31.d, p7/z, z31.d
 not z31.h, p7/m, z31.h
+not z31.h, p7/z, z31.h
 not z31.s, p7/m, z31.s
+not z31.s, p7/z, z31.s
 not z6.b, p6/m, z7.b
 nots p0.b, p0/z, p0.b
 nots p13.b, p0/z, p0.b
@@ -4469,20 +4883,20 @@ orr z1.s, p5/m, z1.s, z5.s
 orr z10.d, z6.d, z4.d
 orr z14.d, p3/m, z14.d, z25.d
 orr z21.b, z21.b, #-29
-orr z22.s, z22.s, #-8
+orr z22.s, z22.s, #536870910
 orr z26.h, p7/m, z26.h, z26.h
-orr z27.h, z27.h, #57855
-orr z3.d, z3.d, #-35184372088833
+orr z27.h, z27.h, #63519
+orr z3.d, z3.d, #-70368744177663
 orr z30.b, p3/m, z30.b, z16.b
 orr z31.b, p7/m, z31.b, z31.b
 orr z31.b, z31.b, #254
 orr z31.d, p7/m, z31.d, z31.d
-orr z31.d, z31.d, #18446744073709518849
+orr z31.d, z31.d, #18446744073709547535
 orr z31.d, z31.d, z31.d
 orr z31.h, p7/m, z31.h, z31.h
-orr z31.h, z31.h, #65533
+orr z31.h, z31.h, #65505
 orr z31.s, p7/m, z31.s, z31.s
-orr z31.s, z31.s, #4294967279
+orr z31.s, z31.s, #4294967293
 orrs p0.b, p0/z, p0.b, p0.b
 orrs p15.b, p15/z, p15.b, p15.b
 orrs p9.b, p15/z, p13.b, p6.b
@@ -4981,16 +5395,28 @@ rax1 z0.d, z0.d, z0.d
 rax1 z15.d, z21.d, z27.d
 rax1 z31.d, z31.d, z31.d
 rbit z0.b, p0/m, z0.b
+rbit z0.b, p0/z, z0.b
 rbit z0.d, p0/m, z0.d
+rbit z0.d, p0/z, z0.d
 rbit z0.h, p0/m, z0.h
+rbit z0.h, p0/z, z0.h
 rbit z0.s, p0/m, z0.s
+rbit z0.s, p0/z, z0.s
+rbit z10.b, p5/z, z15.b
 rbit z10.h, p5/m, z3.h
 rbit z11.d, p4/m, z23.d
+rbit z18.h, p1/z, z29.h
 rbit z26.s, p7/m, z5.s
+rbit z28.d, p3/z, z29.d
 rbit z31.b, p7/m, z31.b
+rbit z31.b, p7/z, z31.b
 rbit z31.d, p7/m, z31.d
+rbit z31.d, p7/z, z31.d
 rbit z31.h, p7/m, z31.h
+rbit z31.h, p7/z, z31.h
 rbit z31.s, p7/m, z31.s
+rbit z31.s, p7/z, z31.s
+rbit z5.s, p2/z, z8.s
 rbit z7.b, p7/m, z24.b
 rdffr p0.b
 rdffr p0.b, p0/z
@@ -5026,25 +5452,46 @@ rev z31.h, z31.h
 rev z31.s, z31.s
 rev z5.b, z17.b
 revb z0.d, p0/m, z0.d
+revb z0.d, p0/z, z0.d
 revb z0.d, p6/m, z15.d
 revb z0.h, p0/m, z0.h
+revb z0.h, p0/z, z0.h
 revb z0.s, p0/m, z0.s
+revb z0.s, p0/z, z0.s
+revb z14.h, p7/z, z6.h
 revb z16.h, p6/m, z3.h
+revb z2.s, p2/z, z15.s
+revb z25.d, p0/z, z29.d
 revb z29.s, p2/m, z28.s
 revb z31.d, p7/m, z31.d
+revb z31.d, p7/z, z31.d
 revb z31.h, p7/m, z31.h
+revb z31.h, p7/z, z31.h
 revb z31.s, p7/m, z31.s
+revb z31.s, p7/z, z31.s
 revd z0.q, p0/m, z0.q
+revd z0.q, p0/z, z0.q
 revd z15.q, p0/m, z20.q
+revd z24.q, p0/z, z26.q
 revd z31.q, p7/m, z31.q
+revd z31.q, p7/z, z31.q
 revh z0.d, p0/m, z0.d
+revh z0.d, p0/z, z0.d
 revh z0.s, p0/m, z0.s
+revh z0.s, p0/z, z0.s
 revh z11.d, p3/m, z0.d
+revh z19.d, p7/z, z18.d
+revh z2.s, p4/z, z29.s
 revh z27.s, p2/m, z29.s
 revh z31.d, p7/m, z31.d
+revh z31.d, p7/z, z31.d
 revh z31.s, p7/m, z31.s
+revh z31.s, p7/z, z31.s
 revw z0.d, p0/m, z0.d
+revw z0.d, p0/z, z0.d
+revw z13.d, p5/z, z27.d
 revw z31.d, p7/m, z31.d
+revw z31.d, p7/z, z31.d
 revw z5.d, p3/m, z21.d
 rshrnb z0.b, z0.h, #1
 rshrnb z0.h, z0.s, #1
@@ -5094,6 +5541,15 @@ saba z31.b, z31.b, z31.b
 saba z31.d, z31.d, z31.d
 saba z31.h, z31.h, z31.h
 saba z31.s, z31.s, z31.s
+sabal z0.d, z0.s, z0.s
+sabal z0.h, z0.b, z0.b
+sabal z0.s, z0.h, z0.h
+sabal z13.h, z7.b, z11.b
+sabal z15.d, z20.s, z21.s
+sabal z31.d, z31.s, z31.s
+sabal z31.h, z31.b, z31.b
+sabal z31.s, z31.h, z31.h
+sabal z5.s, z8.h, z26.h
 sabalb z0.d, z0.s, z0.s
 sabalb z0.h, z0.b, z0.b
 sabalb z0.s, z0.h, z0.h
@@ -5255,25 +5711,64 @@ sclamp { z6.h, z7.h }, z20.h, z11.h
 sclamp { z8.d, z9.d, z10.d, z11.d }, z14.d, z0.d
 scvtf z0.d, p0/m, z0.d
 scvtf z0.d, p0/m, z0.s
+scvtf z0.d, p0/z, z0.d
+scvtf z0.d, p0/z, z0.s
+scvtf z0.d, z0.s
 scvtf z0.h, p0/m, z0.d
 scvtf z0.h, p0/m, z0.h
 scvtf z0.h, p0/m, z0.s
+scvtf z0.h, p0/z, z0.d
+scvtf z0.h, p0/z, z0.h
+scvtf z0.h, p0/z, z0.s
+scvtf z0.h, z0.b
 scvtf z0.s, p0/m, z0.d
 scvtf z0.s, p0/m, z0.s
+scvtf z0.s, p0/z, z0.d
+scvtf z0.s, p0/z, z0.s
+scvtf z0.s, z0.h
+scvtf z1.d, z2.s
+scvtf z11.d, p5/z, z4.s
+scvtf z12.h, z10.b
 scvtf z13.h, p7/m, z23.d
+scvtf z14.h, p1/z, z18.s
 scvtf z15.s, p2/m, z27.d
+scvtf z18.s, z17.h
+scvtf z2.h, p4/z, z17.h
+scvtf z20.s, p0/z, z10.s
 scvtf z22.d, p3/m, z30.d
 scvtf z27.d, p1/m, z29.s
+scvtf z29.d, p0/z, z26.d
+scvtf z30.h, p4/z, z14.d
 scvtf z30.s, p3/m, z20.s
 scvtf z31.d, p7/m, z31.d
 scvtf z31.d, p7/m, z31.s
+scvtf z31.d, p7/z, z31.d
+scvtf z31.d, p7/z, z31.s
+scvtf z31.d, z31.s
 scvtf z31.h, p7/m, z31.d
 scvtf z31.h, p7/m, z31.h
 scvtf z31.h, p7/m, z31.s
+scvtf z31.h, p7/z, z31.d
+scvtf z31.h, p7/z, z31.h
+scvtf z31.h, p7/z, z31.s
+scvtf z31.h, z31.b
 scvtf z31.s, p7/m, z31.d
 scvtf z31.s, p7/m, z31.s
+scvtf z31.s, p7/z, z31.d
+scvtf z31.s, p7/z, z31.s
+scvtf z31.s, z31.h
+scvtf z4.s, p1/z, z9.d
 scvtf z6.h, p4/m, z3.s
 scvtf z6.h, p6/m, z10.h
+scvtflt z0.d, z0.s
+scvtflt z0.h, z0.b
+scvtflt z0.s, z0.h
+scvtflt z1.s, z10.h
+scvtflt z26.h, z27.b
+scvtflt z31.d, z31.s
+scvtflt z31.h, z31.b
+scvtflt z31.s, z31.h
+scvtflt z6.d, z0.s
 sdiv z0.d, p0/m, z0.d, z0.d
 sdiv z0.s, p0/m, z0.s, z0.s
 sdiv z18.s, p0/m, z18.s, z27.s
@@ -5288,15 +5783,21 @@ sdivr z31.d, p7/m, z31.d, z31.d
 sdivr z31.s, p7/m, z31.s, z31.s
 sdot z0.d, z0.h, z0.h
 sdot z0.d, z0.h, z0.h[0]
+sdot z0.h, z0.b, z0.b
+sdot z0.h, z0.b, z0.b[0]
+sdot z0.h, z8.b, z1.b[1]
 sdot z0.s, z0.b, z0.b
 sdot z0.s, z0.b, z0.b[0]
 sdot z0.s, z0.h, z0.h
 sdot z0.s, z0.h, z0.h[0]
+sdot z19.h, z6.b, z21.b
 sdot z2.s, z19.h, z4.h[1]
 sdot z2.s, z3.h, z23.h
 sdot z27.s, z8.b, z7.b[3]
 sdot z31.d, z31.h, z15.h[1]
 sdot z31.d, z31.h, z31.h
+sdot z31.h, z31.b, z31.b
+sdot z31.h, z31.b, z7.b[7]
 sdot z31.s, z31.b, z31.b
 sdot z31.s, z31.b, z7.b[3]
 sdot z31.s, z31.h, z31.h
@@ -5653,16 +6154,28 @@ splice z31.h, p7, { z31.h, z0.h }
 splice z31.s, p7, z31.s, z31.s
 splice z31.s, p7, { z31.s, z0.s }
 sqabs z0.b, p0/m, z0.b
+sqabs z0.b, p0/z, z0.b
 sqabs z0.d, p0/m, z0.d
+sqabs z0.d, p0/z, z0.d
 sqabs z0.h, p0/m, z0.h
+sqabs z0.h, p0/z, z0.h
 sqabs z0.s, p0/m, z0.s
+sqabs z0.s, p0/z, z0.s
 sqabs z15.d, p4/m, z25.d
+sqabs z16.b, p1/z, z7.b
 sqabs z19.h, p7/m, z2.h
+sqabs z22.h, p2/z, z29.h
+sqabs z27.d, p1/z, z31.d
 sqabs z3.b, p0/m, z16.b
+sqabs z3.s, p2/z, z17.s
 sqabs z31.b, p7/m, z31.b
+sqabs z31.b, p7/z, z31.b
 sqabs z31.d, p7/m, z31.d
+sqabs z31.d, p7/z, z31.d
 sqabs z31.h, p7/m, z31.h
+sqabs z31.h, p7/z, z31.h
 sqabs z31.s, p7/m, z31.s
+sqabs z31.s, p7/z, z31.s
 sqabs z7.s, p0/m, z22.s
 sqadd z0.b, p0/m, z0.b, z0.b
 sqadd z0.b, z0.b, #0
@@ -6051,15 +6564,27 @@ sqincw z31.s, all
 sqincw z31.s, all, mul #16
 sqincw z9.s, vl7
 sqneg z0.b, p0/m, z0.b
+sqneg z0.b, p0/z, z0.b
 sqneg z0.d, p0/m, z0.d
+sqneg z0.d, p0/z, z0.d
 sqneg z0.d, p4/m, z20.d
 sqneg z0.h, p0/m, z0.h
+sqneg z0.h, p0/z, z0.h
 sqneg z0.s, p0/m, z0.s
+sqneg z0.s, p0/z, z0.s
+sqneg z13.h, p5/z, z21.h
 sqneg z15.s, p0/m, z12.s
+sqneg z24.s, p2/z, z7.s
+sqneg z25.b, p2/z, z11.b
+sqneg z30.d, p4/z, z17.d
 sqneg z31.b, p7/m, z31.b
+sqneg z31.b, p7/z, z31.b
 sqneg z31.d, p7/m, z31.d
+sqneg z31.d, p7/z, z31.d
 sqneg z31.h, p7/m, z31.h
+sqneg z31.h, p7/z, z31.h
 sqneg z31.s, p7/m, z31.s
+sqneg z31.s, p7/z, z31.s
 sqneg z5.h, p0/m, z11.h
 sqneg z9.b, p5/m, z31.b
 sqrdcmlah z0.b, z0.b, z0.b, #0
@@ -6179,13 +6704,16 @@ sqrshr z31.h, { z28.d, z29.d, z30.d, z31.d }, #32
 sqrshr z31.h, { z28.d, z29.d, z30.d, z31.d }, #64
 sqrshr z31.h, { z30.s, z31.s }, #16
 sqrshr z6.h, { z20.d, z21.d, z22.d, z23.d }, #58
+sqrshrn z0.b, { z0.h, z1.h }, #1
 sqrshrn z0.b, { z0.s, z1.s, z2.s, z3.s }, #1
 sqrshrn z0.h, { z0.d, z1.d, z2.d, z3.d }, #1
 sqrshrn z0.h, { z0.s, z1.s }, #1
 sqrshrn z14.h, { z16.d, z17.d, z18.d, z19.d }, #42
 sqrshrn z18.h, { z16.d, z17.d, z18.d, z19.d }, #13
+sqrshrn z22.b, { z4.h, z5.h }, #8
 sqrshrn z24.b, { z28.s, z29.s, z30.s, z31.s }, #12
 sqrshrn z31.b, { z28.s, z29.s, z30.s, z31.s }, #32
+sqrshrn z31.b, { z30.h, z31.h }, #8
 sqrshrn z31.h, { z28.d, z29.d, z30.d, z31.d }, #32
 sqrshrn z31.h, { z28.d, z29.d, z30.d, z31.d }, #64
 sqrshrn z31.h, { z30.s, z31.s }, #16
@@ -6221,15 +6749,18 @@ sqrshru z31.h, { z28.d, z29.d, z30.d, z31.d }, #64
 sqrshru z31.h, { z30.s, z31.s }, #16
 sqrshru z4.b, { z20.s, z21.s, z22.s, z23.s }, #7
 sqrshru z8.h, { z16.d, z17.d, z18.d, z19.d }, #60
+sqrshrun z0.b, { z0.h, z1.h }, #1
 sqrshrun z0.b, { z0.s, z1.s, z2.s, z3.s }, #1
 sqrshrun z0.h, { z0.d, z1.d, z2.d, z3.d }, #1
 sqrshrun z0.h, { z0.s, z1.s }, #1
 sqrshrun z0.h, { z24.d, z25.d, z26.d, z27.d }, #5
 sqrshrun z17.b, { z20.s, z21.s, z22.s, z23.s }, #26
 sqrshrun z18.h, { z12.d, z13.d, z14.d, z15.d }, #47
+sqrshrun z19.b, { z4.h, z5.h }, #4
 sqrshrun z23.h, { z12.d, z13.d, z14.d, z15.d }, #38
 sqrshrun z28.h, { z28.s, z29.s }, #6
 sqrshrun z31.b, { z28.s, z29.s, z30.s, z31.s }, #32
+sqrshrun z31.b, { z30.h, z31.h }, #8
 sqrshrun z31.h, { z28.d, z29.d, z30.d, z31.d }, #32
 sqrshrun z31.h, { z28.d, z29.d, z30.d, z31.d }, #64
 sqrshrun z31.h, { z30.s, z31.s }, #16
@@ -6299,6 +6830,12 @@ sqshlu z31.d, p7/m, z31.d, #63
 sqshlu z31.h, p7/m, z31.h, #15
 sqshlu z31.s, p7/m, z31.s, #31
 sqshlu z7.d, p6/m, z7.d, #19
+sqshrn z0.b, { z0.h, z1.h }, #1
+sqshrn z0.h, { z0.s, z1.s }, #1
+sqshrn z18.h, { z16.s, z17.s }, #13
+sqshrn z21.b, { z26.h, z27.h }, #1
+sqshrn z31.b, { z30.h, z31.h }, #8
+sqshrn z31.h, { z30.s, z31.s }, #16
 sqshrnb z0.b, z0.h, #1
 sqshrnb z0.h, z0.s, #1
 sqshrnb z0.s, z0.d, #1
@@ -6317,6 +6854,12 @@ sqshrnt z31.b, z31.h, #8
 sqshrnt z31.h, z31.s, #16
 sqshrnt z31.s, z31.d, #32
 sqshrnt z7.b, z11.h, #4
+sqshrun z0.b, { z0.h, z1.h }, #1
+sqshrun z0.b, { z22.h, z23.h }, #5
+sqshrun z0.h, { z0.s, z1.s }, #1
+sqshrun z19.h, { z16.s, z17.s }, #1
+sqshrun z31.b, { z30.h, z31.h }, #8
+sqshrun z31.h, { z30.s, z31.s }, #16
 sqshrunb z0.b, z0.h, #1
 sqshrunb z0.h, z0.s, #1
 sqshrunb z0.s, z0.d, #1
@@ -7242,23 +7785,41 @@ suqadd z31.h, p7/m, z31.h, z31.h
 suqadd z31.s, p7/m, z31.s, z31.s
 suqadd z6.s, p2/m, z6.s, z15.s
 sxtb z0.d, p0/m, z0.d
+sxtb z0.d, p0/z, z0.d
 sxtb z0.h, p0/m, z0.h
+sxtb z0.h, p0/z, z0.h
 sxtb z0.s, p0/m, z0.s
+sxtb z0.s, p0/z, z0.s
 sxtb z12.d, p2/m, z3.d
+sxtb z14.d, p0/z, z25.d
 sxtb z29.s, p7/m, z10.s
 sxtb z3.h, p5/m, z15.h
 sxtb z31.d, p7/m, z31.d
+sxtb z31.d, p7/z, z31.d
 sxtb z31.h, p7/m, z31.h
+sxtb z31.h, p7/z, z31.h
 sxtb z31.s, p7/m, z31.s
+sxtb z31.s, p7/z, z31.s
+sxtb z6.s, p3/z, z2.s
+sxtb z7.h, p7/z, z12.h
 sxth z0.d, p0/m, z0.d
+sxth z0.d, p0/z, z0.d
 sxth z0.s, p0/m, z0.s
+sxth z0.s, p0/z, z0.s
 sxth z17.s, p4/m, z28.s
+sxth z21.s, p5/z, z8.s
+sxth z29.d, p6/z, z29.d
 sxth z31.d, p7/m, z31.d
+sxth z31.d, p7/z, z31.d
 sxth z31.s, p7/m, z31.s
+sxth z31.s, p7/z, z31.s
 sxth z6.d, p3/m, z21.d
 sxtw z0.d, p0/m, z0.d
+sxtw z0.d, p0/z, z0.d
 sxtw z16.d, p5/m, z8.d
 sxtw z31.d, p7/m, z31.d
+sxtw z31.d, p7/z, z31.d
+sxtw z8.d, p5/z, z17.d
 tbl z0.b, { z0.b }, z0.b
 tbl z0.b, { z0.b, z1.b }, z0.b
 tbl z0.d, { z0.d }, z0.d
@@ -7385,6 +7946,15 @@ uaba z31.h, z31.h, z31.h
 uaba z31.s, z31.s, z31.s
 uaba z6.b, z29.b, z11.b
 uaba z7.h, z20.h, z23.h
+uabal z0.d, z0.s, z0.s
+uabal z0.h, z0.b, z0.b
+uabal z0.s, z0.h, z0.h
+uabal z11.h, z21.b, z9.b
+uabal z31.d, z31.s, z31.s
+uabal z31.h, z31.b, z31.b
+uabal z31.s, z31.h, z31.h
+uabal z9.d, z17.s, z16.s
+uabal z9.s, z30.h, z4.h
 uabalb z0.d, z0.s, z0.s
 uabalb z0.d, z25.s, z10.s
 uabalb z0.h, z0.b, z0.b
@@ -7528,25 +8098,64 @@ uclamp { z30.s, z31.s }, z31.s, z31.s
 uclamp { z8.h, z9.h, z10.h, z11.h }, z24.h, z25.h
 ucvtf z0.d, p0/m, z0.d
 ucvtf z0.d, p0/m, z0.s
+ucvtf z0.d, p0/z, z0.d
+ucvtf z0.d, p0/z, z0.s
+ucvtf z0.d, z0.s
 ucvtf z0.h, p0/m, z0.d
 ucvtf z0.h, p0/m, z0.h
 ucvtf z0.h, p0/m, z0.s
+ucvtf z0.h, p0/z, z0.d
+ucvtf z0.h, p0/z, z0.h
+ucvtf z0.h, p0/z, z0.s
+ucvtf z0.h, z0.b
 ucvtf z0.s, p0/m, z0.d
 ucvtf z0.s, p0/m, z0.s
+ucvtf z0.s, p0/z, z0.d
+ucvtf z0.s, p0/z, z0.s
+ucvtf z0.s, z0.h
+ucvtf z1.d, p6/z, z12.d
 ucvtf z11.h, p2/m, z25.s
+ucvtf z13.s, p6/z, z11.s
+ucvtf z22.h, p2/z, z27.s
+ucvtf z23.d, p7/z, z30.s
 ucvtf z24.d, p6/m, z13.d
+ucvtf z27.h, p0/z, z25.h
+ucvtf z29.s, z8.h
 ucvtf z3.h, p4/m, z30.h
 ucvtf z3.s, p5/m, z1.d
+ucvtf z30.d, z11.s
 ucvtf z31.d, p7/m, z31.d
 ucvtf z31.d, p7/m, z31.s
+ucvtf z31.d, p7/z, z31.d
+ucvtf z31.d, p7/z, z31.s
+ucvtf z31.d, z31.s
 ucvtf z31.h, p7/m, z31.d
 ucvtf z31.h, p7/m, z31.h
 ucvtf z31.h, p7/m, z31.s
+ucvtf z31.h, p7/z, z31.d
+ucvtf z31.h, p7/z, z31.h
+ucvtf z31.h, p7/z, z31.s
+ucvtf z31.h, z31.b
+ucvtf z31.s, p3/z, z17.d
 ucvtf z31.s, p7/m, z31.d
 ucvtf z31.s, p7/m, z31.s
+ucvtf z31.s, p7/z, z31.d
+ucvtf z31.s, p7/z, z31.s
+ucvtf z31.s, z31.h
 ucvtf z4.h, p5/m, z31.d
+ucvtf z6.h, p6/z, z14.d
+ucvtf z6.h, z23.b
 ucvtf z7.d, p0/m, z27.s
 ucvtf z8.s, p0/m, z4.s
+ucvtflt z0.d, z0.s
+ucvtflt z0.h, z0.b
+ucvtflt z0.s, z0.h
+ucvtflt z16.d, z16.s
+ucvtflt z22.h, z27.b
+ucvtflt z31.d, z31.s
+ucvtflt z31.h, z31.b
+ucvtflt z31.s, z31.h
+ucvtflt z9.s, z8.h
 udiv z0.d, p0/m, z0.d, z0.d
 udiv z0.s, p0/m, z0.s, z0.s
 udiv z10.s, p7/m, z10.s, z4.s
@@ -7561,10 +8170,13 @@ udivr z31.d, p7/m, z31.d, z31.d
 udivr z31.s, p7/m, z31.s, z31.s
 udot z0.d, z0.h, z0.h
 udot z0.d, z0.h, z0.h[0]
+udot z0.h, z0.b, z0.b
+udot z0.h, z0.b, z0.b[0]
 udot z0.s, z0.b, z0.b
 udot z0.s, z0.b, z0.b[0]
 udot z0.s, z0.h, z0.h
 udot z0.s, z0.h, z0.h[0]
+udot z11.h, z5.b, z11.b
 udot z12.s, z15.h, z4.h[3]
 udot z12.s, z3.h, z28.h
 udot z13.d, z1.h, z17.h
@@ -7573,6 +8185,9 @@ udot z15.d, z24.h, z4.h[1]
 udot z19.s, z14.b, z25.b
 udot z31.d, z31.h, z15.h[1]
 udot z31.d, z31.h, z31.h
+udot z31.h, z24.b, z3.b[0]
+udot z31.h, z31.b, z31.b
+udot z31.h, z31.b, z7.b[7]
 udot z31.s, z31.b, z31.b
 udot z31.s, z31.b, z7.b[3]
 udot z31.s, z31.h, z31.h
@@ -8113,14 +8728,17 @@ uqrshr z31.h, { z28.d, z29.d, z30.d, z31.d }, #32
 uqrshr z31.h, { z28.d, z29.d, z30.d, z31.d }, #64
 uqrshr z31.h, { z30.s, z31.s }, #16
 uqrshr z7.b, { z24.s, z25.s, z26.s, z27.s }, #2
+uqrshrn z0.b, { z0.h, z1.h }, #1
 uqrshrn z0.b, { z0.s, z1.s, z2.s, z3.s }, #1
 uqrshrn z0.h, { z0.d, z1.d, z2.d, z3.d }, #1
 uqrshrn z0.h, { z0.s, z1.s }, #1
 uqrshrn z1.h, { z4.d, z5.d, z6.d, z7.d }, #32
+uqrshrn z21.b, { z22.h, z23.h }, #2
 uqrshrn z21.h, { z4.d, z5.d, z6.d, z7.d }, #45
 uqrshrn z22.h, { z4.d, z5.d, z6.d, z7.d }, #64
 uqrshrn z27.h, { z6.s, z7.s }, #6
 uqrshrn z31.b, { z28.s, z29.s, z30.s, z31.s }, #32
+uqrshrn z31.b, { z30.h, z31.h }, #8
 uqrshrn z31.h, { z28.d, z29.d, z30.d, z31.d }, #32
 uqrshrn z31.h, { z28.d, z29.d, z30.d, z31.d }, #64
 uqrshrn z31.h, { z30.s, z31.s }, #16
@@ -8179,6 +8797,12 @@ uqshlr z31.h, p7/m, z31.h, z31.h
 uqshlr z31.s, p7/m, z31.s, z31.s
 uqshlr z5.b, p5/m, z5.b, z12.b
 uqshlr z8.d, p6/m, z8.d, z8.d
+uqshrn z0.b, { z0.h, z1.h }, #1
+uqshrn z0.h, { z0.s, z1.s }, #1
+uqshrn z22.b, { z12.h, z13.h }, #1
+uqshrn z31.b, { z30.h, z31.h }, #8
+uqshrn z31.h, { z30.s, z31.s }, #16
+uqshrn z8.h, { z18.s, z19.s }, #6
 uqshrnb z0.b, z0.h, #1
 uqshrnb z0.h, z0.s, #1
 uqshrnb z0.s, z0.d, #1
@@ -8282,8 +8906,11 @@ uqxtnt z31.b, z31.h
 uqxtnt z31.h, z31.s
 uqxtnt z31.s, z31.d
 urecpe z0.s, p0/m, z0.s
+urecpe z0.s, p0/z, z0.s
+urecpe z22.s, p3/z, z16.s
 urecpe z25.s, p5/m, z1.s
 urecpe z31.s, p7/m, z31.s
+urecpe z31.s, p7/z, z31.s
 urhadd z0.b, p0/m, z0.b, z0.b
 urhadd z0.d, p0/m, z0.d, z0.d
 urhadd z0.h, p0/m, z0.h, z0.h
@@ -8336,7 +8963,10 @@ urshr z31.h, p6/m, z31.h, #5
 urshr z31.h, p7/m, z31.h, #16
 urshr z31.s, p7/m, z31.s, #32
 ursqrte z0.s, p0/m, z0.s
+ursqrte z0.s, p0/z, z0.s
+ursqrte z17.s, p6/z, z24.s
 ursqrte z31.s, p7/m, z31.s
+ursqrte z31.s, p7/z, z31.s
 ursqrte z4.s, p0/m, z23.s
 ursra z0.b, z0.b, #1
 ursra z0.d, z0.d, #1
@@ -8471,23 +9101,41 @@ uunpklo z31.h, z31.b
 uunpklo z31.s, z31.h
 uunpklo z4.s, z19.h
 uxtb z0.d, p0/m, z0.d
+uxtb z0.d, p0/z, z0.d
+uxtb z0.d, p0/z, z5.d
 uxtb z0.h, p0/m, z0.h
+uxtb z0.h, p0/z, z0.h
 uxtb z0.s, p0/m, z0.s
+uxtb z0.s, p0/z, z0.s
 uxtb z10.d, p4/m, z18.d
+uxtb z15.h, p5/z, z21.h
 uxtb z19.s, p7/m, z27.s
+uxtb z2.s, p3/z, z9.s
 uxtb z31.d, p7/m, z31.d
+uxtb z31.d, p7/z, z31.d
 uxtb z31.h, p7/m, z31.h
+uxtb z31.h, p7/z, z31.h
 uxtb z31.s, p7/m, z31.s
+uxtb z31.s, p7/z, z31.s
 uxtb z4.h, p3/m, z13.h
 uxth z0.d, p0/m, z0.d
+uxth z0.d, p0/z, z0.d
 uxth z0.s, p0/m, z0.s
+uxth z0.s, p0/z, z0.s
 uxth z1.d, p6/m, z16.d
+uxth z13.d, p6/z, z15.d
+uxth z22.s, p1/z, z4.s
 uxth z31.d, p7/m, z31.d
+uxth z31.d, p7/z, z31.d
 uxth z31.s, p7/m, z31.s
+uxth z31.s, p7/z, z31.s
 uxth z9.s, p2/m, z16.s
 uxtw z0.d, p0/m, z0.d
+uxtw z0.d, p0/z, z0.d
 uxtw z12.d, p7/m, z19.d
 uxtw z31.d, p7/m, z31.d
+uxtw z31.d, p7/z, z31.d
+uxtw z4.d, p4/z, z16.d
 uzp { z0.b, z1.b }, z0.b, z0.b
 uzp { z0.d, z1.d }, z0.d, z0.d
 uzp { z0.h, z1.h }, z0.h, z0.h

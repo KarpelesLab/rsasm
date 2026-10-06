@@ -1663,9 +1663,20 @@ def prefix_job(args):
     return res.found, res.seen
 
 
-def merge(into, part, rng=random.Random(0)):
+# One random stream per shape, seeded from the shape's name, so that which
+# samples a shape is fitted from depends on that shape alone. A single stream
+# shared by every shape would be drawn from a different number of times as
+# soon as a group of forms was added, and every later shape would be fitted
+# from different operand values -- which showed up as unrelated lines of the
+# corpora changing whenever the table grew.
+_SAMPLE_RNGS = {}
+
+
+def merge(into, part, rngs=None):
     """Adds one job's reservoir to the whole sweep's, keeping the choice of
     samples uniform over everything either saw."""
+    if rngs is None:
+        rngs = _SAMPLE_RNGS
     found, seen = part
     for k, v in found.items():
         cur = into.setdefault(k, ([], 0))
@@ -1676,6 +1687,7 @@ def merge(into, part, rng=random.Random(0)):
             # Each side's samples stand for as many words as it saw.
             weights = [count / max(len(pool), 1)] * len(pool) + \
                 [seen[k] / max(len(v), 1)] * len(v)
+            rng = rngs.setdefault(k, random.Random(zlib.crc32(repr(k).encode())))
             chosen = set()
             while len(chosen) < SAMPLES:
                 chosen.add(rng.choices(range(len(merged)), weights)[0])

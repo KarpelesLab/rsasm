@@ -170,6 +170,100 @@ f:
 local:
         nop
 
+=== compare and branch, two registers (FEAT_CMPBR)
+# Ten comparisons, of which four have no encoding of their own: both
+# references read them as the comparison the other way round. Each over a
+# whole register, its low halfword and its low byte.
+top:
+        cbgt    x1, x2, bottom
+        cbgt    w3, w4, top
+        cbge    x1, x2, bottom
+        cbge    w3, w4, top
+        cblt    x1, x2, bottom
+        cblt    w3, w4, top
+        cble    x1, x2, bottom
+        cble    w3, w4, top
+        cbhi    x1, x2, bottom
+        cbhi    w3, w4, top
+        cbhs    x1, x2, bottom
+        cbhs    w3, w4, top
+        cblo    x1, x2, bottom
+        cblo    w3, w4, top
+        cbls    x1, x2, bottom
+        cbls    w3, w4, top
+        cbeq    x1, x2, bottom
+        cbeq    w3, w4, top
+        cbne    x1, x2, bottom
+        cbne    w3, w4, top
+        cbhgt   w1, w2, bottom
+        cbhge   w1, w2, bottom
+        cbhlt   w1, w2, bottom
+        cbhle   w1, w2, bottom
+        cbhhi   w1, w2, bottom
+        cbhhs   w1, w2, bottom
+        cbhlo   w1, w2, bottom
+        cbhls   w1, w2, bottom
+        cbheq   w1, w2, bottom
+        cbhne   w1, w2, bottom
+        cbbgt   w1, w2, bottom
+        cbbge   w1, w2, bottom
+        cbblt   w1, w2, bottom
+        cbble   w1, w2, bottom
+        cbbhi   w1, w2, bottom
+        cbbhs   w1, w2, bottom
+        cbblo   w1, w2, bottom
+        cbbls   w1, w2, bottom
+        cbbeq   w1, w2, bottom
+        cbbne   w1, w2, bottom
+bottom:
+        ret
+
+=== compare and branch against a number (FEAT_CMPBR)
+# The inclusive comparisons move the number rather than the condition,
+# so `cbge x0, #1` is `cbgt x0, #0` and its range runs to 64.
+head:
+        cbgt    x0, #0, tail
+        cbgt    w5, #63, head
+        cbgt    xzr, #31, tail
+        cbge    x0, #1, tail
+        cbge    w5, #64, head
+        cbge    xzr, #32, tail
+        cblt    x0, #0, tail
+        cblt    w5, #63, head
+        cblt    xzr, #31, tail
+        cble    x0, #-1, tail
+        cble    w5, #62, head
+        cble    xzr, #30, tail
+        cbhi    x0, #0, tail
+        cbhi    w5, #63, head
+        cbhi    xzr, #31, tail
+        cbhs    x0, #1, tail
+        cbhs    w5, #64, head
+        cbhs    xzr, #32, tail
+        cblo    x0, #0, tail
+        cblo    w5, #63, head
+        cblo    xzr, #31, tail
+        cbls    x0, #-1, tail
+        cbls    w5, #62, head
+        cbls    xzr, #30, tail
+        cbeq    x0, #0, tail
+        cbeq    w5, #63, head
+        cbeq    xzr, #31, tail
+        cbne    x0, #0, tail
+        cbne    w5, #63, head
+        cbne    xzr, #31, tail
+tail:
+        ret
+
+=== the compare-and-branch offset, which reaches 1KB either way
+head:
+        cbgt    x0, x1, far
+        cbgt    x0, #1, far
+        .space  1012
+far:
+        cbne    w0, w1, head
+        cbne    w0, #63, far
+        cbbeq   wzr, wzr, .+4
 === a PC-relative number is an offset from the instruction, not an address
         nop
         nop

@@ -443,6 +443,12 @@ impl Architecture for AArch64 {
         if mnemonic == "zero" {
             return insn::sme_zero(cx, req);
         }
+        // FEAT_MOPS, whose operands are an address written back with no
+        // offset (`[x0]!`) and a register written back with no brackets
+        // (`x2!`), neither of which the shared operand parser reads.
+        if insn::is_mops(&mnemonic) {
+            return insn::mops_insn(cx, req, &mnemonic);
+        }
         if table::knows(&mnemonic)
             && (!insn::handwritten(&mnemonic)
                 || table::has_simd_operand(cx, req.operands, !insn::loads(&mnemonic)))
