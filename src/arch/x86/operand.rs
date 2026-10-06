@@ -269,6 +269,68 @@ impl OperandParser<'_, '_> {
         }))
     }
 
+    /// Reads `ccmp`'s and `ctest`'s `{dfv=of,sf,zf,cf}` pseudo-suffix, and
+    /// answers with the flag mask in the bit order `EVEX.vvvv` keeps.
+    ///
+    /// GNU as writes it between the mnemonic and the first operand with no
+    /// comma, in either syntax, so it is read off the instruction line rather
+    /// than parsed as an operand. Returns `None`, having consumed nothing,
+    /// when the brace group is not one; `Some(None)` when it is malformed,
+    /// having said so.
+    pub(super) fn dfv_suffix(&mut self, cur: &mut Cursor<'_>) -> Option<Option<(u8, Span)>> {
+        let TokKind::Ident(n) = cur.nth(1).kind else {
+            return None;
+        };
+        if !self.cx.interner.get(n).eq_ignore_ascii_case("dfv") || !cur.nth(2).is_punct(Punct::Eq) {
+            return None;
+        }
+        let start = cur.peek().span;
+        cur.advance();
+        cur.advance();
+        cur.advance();
+        // The four flags, in the bit order `EVEX.vvvv` keeps them. An empty
+        // list is the default and means all four read as clear.
+        let mut mask = 0u8;
+        while !cur.check_punct(Punct::RBrace) {
+            let tok = cur.peek();
+            let TokKind::Ident(f) = tok.kind else {
+                self.cx
+                    .error(tok.span, "expected `of`, `sf`, `zf` or `cf` in `{dfv=...}`");
+                return Some(None);
+            };
+            cur.advance();
+            let bit = match self.cx.interner.get(f).to_ascii_lowercase().as_str() {
+                "of" => 8,
+                "sf" => 4,
+                "zf" => 2,
+                "cf" => 1,
+                other => {
+                    self.cx.error(
+                        tok.span,
+                        format!("`{other}` is not one of `of`, `sf`, `zf` and `cf`"),
+                    );
+                    return Some(None);
+                }
+            };
+            if mask & bit != 0 {
+                self.cx
+                    .error(tok.span, "the same flag is named twice in `{dfv=...}`");
+                return Some(None);
+            }
+            mask |= bit;
+            if cur.eat_punct(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        let close = cur.peek();
+        if cur.eat_punct(Punct::RBrace).is_none() {
+            self.cx
+                .error(close.span, "expected `}` to close `{dfv=...}`");
+            return Some(None);
+        }
+        Some(Some((mask, start.to(close.span))))
+    }
+
     /// An operand that starts with `{`, which can only be a rounding mode.
     fn rounding_operand(&mut self, cur: &mut Cursor<'_>) -> Option<Operand> {
         if let Some(o) = self.try_rounding(cur) {

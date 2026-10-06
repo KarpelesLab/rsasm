@@ -10,7 +10,8 @@
 
 use super::{
     ADDR16, ADDR32, ATT_ONLY, CONDITIONS, DEF64, Def, IMM64, INTEL_ONLY, ModRm, NO_REX_W,
-    NO_REX_W_GAS, NO64, NO66, NOTACC, ONLY64, Op, PLUSREG, Tbl, WIDTHS, add, d, opsize_bits,
+    NO_REX_W_GAS, NO_REX2, NO64, NO66, NOTACC, ONLY64, Op, PLUSREG, Tbl, WIDTHS, add, d,
+    opsize_bits,
 };
 
 /// `add`-style group: eight instructions sharing one opcode layout.
@@ -78,6 +79,21 @@ fn alu_group(table: &mut Tbl, mnem: &'static str, base: u8, ext: u8) {
     }
 
     table.insert(mnem, defs);
+}
+
+/// `clr`, GNU as's name for clearing a register by exclusive-or with itself.
+/// The source writes the register once and the encoding holds it twice.
+fn install_clr(table: &mut Tbl) {
+    let mut defs = vec![d(vec![Op::R(1), Op::R(1)], &[0x30], ModRm::Reg, 8)];
+    for w in WIDTHS {
+        defs.push(d(
+            vec![Op::R(w), Op::R(w)],
+            &[0x31],
+            ModRm::Reg,
+            opsize_bits(w),
+        ));
+    }
+    table.insert("clr", defs);
 }
 
 /// `shl`-style group: shifts and rotates.
@@ -176,6 +192,7 @@ pub fn install(t: &mut Tbl) {
     alu_group(t, "sub", 0x28, 5);
     alu_group(t, "xor", 0x30, 6);
     alu_group(t, "cmp", 0x38, 7);
+    install_clr(t);
 
     shift_group(t, &["rol"], 0);
     shift_group(t, &["ror"], 1);
@@ -1104,22 +1121,27 @@ fn install_system(t: &mut Tbl) {
     );
 
     // Processor state saves, with a memory operand of no particular size.
-    for (mnem, opcode, ext) in [
-        ("fxsave", &[0x0f, 0xae][..], 0u8),
-        ("fxrstor", &[0x0f, 0xae], 1),
-        ("xsave", &[0x0f, 0xae], 4),
-        ("xrstor", &[0x0f, 0xae], 5),
-        ("xsaveopt", &[0x0f, 0xae], 6),
-        ("clflush", &[0x0f, 0xae], 7),
-        ("xrstors", &[0x0f, 0xc7], 3),
-        ("xsavec", &[0x0f, 0xc7], 4),
-        ("xsaves", &[0x0f, 0xc7], 5),
+    // The extended ones address it with `rbx` as well as the register
+    // written, which is why APX leaves them out: both references refuse
+    // `xsave (%r16)` although REX2 could reach it. The two `fx` forms and
+    // `clflush` are not in that group and take it.
+    for (mnem, opcode, ext, egpr) in [
+        ("fxsave", &[0x0f, 0xae][..], 0u8, true),
+        ("fxrstor", &[0x0f, 0xae], 1, true),
+        ("xsave", &[0x0f, 0xae], 4, false),
+        ("xrstor", &[0x0f, 0xae], 5, false),
+        ("xsaveopt", &[0x0f, 0xae], 6, false),
+        ("clflush", &[0x0f, 0xae], 7, true),
+        ("xrstors", &[0x0f, 0xc7], 3, false),
+        ("xsavec", &[0x0f, 0xc7], 4, false),
+        ("xsaves", &[0x0f, 0xc7], 5, false),
     ] {
-        let mut defs = vec![d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 0)];
+        let extra = if egpr { 0 } else { NO_REX2 };
+        let mut defs = vec![d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 0).flags(extra)];
         // The state saves have 64-bit forms, `xsaveq` in AT&T, which differ
         // by REX.W.
         if ext != 7 {
-            defs.push(d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 64).flags(ONLY64));
+            defs.push(d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 64).flags(ONLY64 | extra));
         }
         t.insert(mnem, defs);
     }

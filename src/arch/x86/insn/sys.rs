@@ -16,7 +16,8 @@
 
 use super::avx::split_escape;
 use super::{
-    ADDR16, ADDR32, CONDITIONS, Def, ModRm, NO64, NO66, ONLY64, Op, SIBMEM, Tbl, Vk, add, d,
+    ADDR16, ADDR32, CONDITIONS, Def, ModRm, NO_REX2, NO64, NO66, ONLY64, Op, SIBMEM, Tbl, Vk, add,
+    d,
 };
 
 fn leak(s: String) -> &'static str {
@@ -418,21 +419,23 @@ fn install_memory(t: &mut Tbl) {
             ),
         ],
     );
-    // The 64-bit state saves under their own names.
-    for (mnem, opcode, ext) in [
-        ("fxsave64", &[0x0fu8, 0xae] as &[u8], 0u8),
-        ("fxrstor64", &[0x0f, 0xae], 1),
-        ("xsave64", &[0x0f, 0xae], 4),
-        ("xrstor64", &[0x0f, 0xae], 5),
-        ("xsaveopt64", &[0x0f, 0xae], 6),
-        ("xrstors64", &[0x0f, 0xc7], 3),
-        ("xsavec64", &[0x0f, 0xc7], 4),
-        ("xsaves64", &[0x0f, 0xc7], 5),
+    // The 64-bit state saves under their own names. The extended ones are out
+    // of APX's reach, as their unsuffixed spellings are.
+    for (mnem, opcode, ext, egpr) in [
+        ("fxsave64", &[0x0fu8, 0xae] as &[u8], 0u8, true),
+        ("fxrstor64", &[0x0f, 0xae], 1, true),
+        ("xsave64", &[0x0f, 0xae], 4, false),
+        ("xrstor64", &[0x0f, 0xae], 5, false),
+        ("xsaveopt64", &[0x0f, 0xae], 6, false),
+        ("xrstors64", &[0x0f, 0xc7], 3, false),
+        ("xsavec64", &[0x0f, 0xc7], 4, false),
+        ("xsaves64", &[0x0f, 0xc7], 5, false),
     ] {
+        let extra = if egpr { 0 } else { NO_REX2 };
         add(
             t,
             mnem,
-            vec![d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 64).flags(ONLY64)],
+            vec![d(vec![Op::M(0)], opcode, ModRm::Ext(ext), 64).flags(ONLY64 | extra)],
         );
     }
 

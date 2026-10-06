@@ -59,7 +59,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
-| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
+| x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker, APX | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 24860 |
 | AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2 up to SVE2.3, the exclusives and the LSE atomics, the floating-point atomics, pointer authentication, memory tagging, the CRC32 checksums, the unprivileged and unscaled accesses, the acquire-release pair, the condition-flag instructions, the memory copies and sets, compare-and-branch, the 64-byte accesses, the guarded call stack, transactional memory, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 24822 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3252 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 582 |
@@ -224,9 +224,12 @@ form by form and in random whole programs as well.
   and disp8\*N at every tuple type, AVX10.2, the VEX additions (F16C, FMA,
   GFNI, VAES, VPCLMULQDQ, SHA, SHA512, SM3, SM4, AVX-VNNI, AVX-IFMA,
   AVX-NE-CONVERT, AVX-VNNI-INT8/16), FMA4 and XOP, BMI1/2, TBM, LWP, AMX, CET,
-  Key Locker, and the newer system instructions; the named compare predicates
-  (`vcmpneq_oqps`, `vpcmpnltuq`), AT&T length spellings (`vcvtpd2psx`) and the
-  `{vex}`, `{vex3}` and `{evex}` pseudo-prefixes
+  Key Locker, and the newer system instructions; APX -- `r16`-`r31` under the
+  REX2 prefix, the new destination register, `{nf}`, `ccmp`/`ctest` with their
+  `{dfv=...}` mask, `cfcmov`, `setzu`/`imulzu`, the paired and hinted pushes
+  and `jmpabs`; the named compare predicates (`vcmpneq_oqps`, `vpcmpnltuq`),
+  AT&T length spellings (`vcvtpd2psx`) and the `{vex}`, `{vex3}`, `{evex}`,
+  `{rex}`, `{rex2}` and `{nf}` pseudo-prefixes
 - ARM and Thumb as GNU as assembles them: literal pools (`ldr r0, =x`,
   `.ltorg`) down to the four-byte slots GNU as keeps them in -- the byte and
   halfword loads take an entry as well, `vldr d0, =x` takes two slots and
@@ -367,9 +370,12 @@ form by form and in random whole programs as well.
 - in Mach-O objects: 32-bit machines (i386, armv7), and compact unwind on
   x86-64, which llvm-mc writes only for a triple naming a macOS of 10.6 or
   later and rsasm reads no version from a triple
-- x86: APX (`r16`–`r31`, REX2, the NDD and `{nf}` forms, `push2`/`pop2`,
-  `ccmp`/`ctest`), the Xeon Phi 4FMAPS and 4VNNIW register-group
-  instructions, the `{disp8}`/`{disp32}`/`{load}`/`{store}` pseudo-prefixes,
+- x86: of APX, the parts whose base instruction is itself missing — the
+  user-mode MSR accesses (`urdmsr`, `uwrmsr`), the map-7 register forms of
+  `rdmsr` and `wrmsrns`, AMX-TRANSPOSE's `t2rpntlvwz*` and AMX-MOVRS's
+  `tileloaddrs*`, and VMX's `invept`/`invvpid`; the Xeon Phi 4FMAPS and
+  4VNNIW register-group instructions, the
+  `{disp8}`/`{disp32}`/`{load}`/`{store}`/`{nooptimize}` pseudo-prefixes,
   SGX, VMX, SVM, MPX and VIA PadLock
 - DWARF: 64-bit DWARF, compressed debug sections, the `.cfi_*` directives
   beyond the common set (`.cfi_label`, `.cfi_val_encoded_addr`,

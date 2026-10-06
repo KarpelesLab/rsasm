@@ -20,9 +20,12 @@ import re
 
 import gnutbl
 
-# CPU flags (without GNU's `Cpu` prefix) whose rows are fuzzed. APX is not in
-# rsasm; the Xeon Phi's 4FMAPS/4VNNIW register groups and the families
-# llvm-mc 22 does not have are left out as well.
+# CPU flags (without GNU's `Cpu` prefix) whose rows are fuzzed. APX is left
+# out because this renderer writes no pseudo-prefix and no `{dfv=...}`, and
+# does not know which of a row's registers `push2` and `pop2` forbid; its
+# forms are in the corpora under tools/gas-diff and tools/mc-diff instead.
+# The Xeon Phi's 4FMAPS/4VNNIW register groups and the families llvm-mc 22
+# does not have are left out as well.
 IN_SCOPE = {
     "AVX", "AVX2", "AES", "PCLMULQDQ", "F16C", "FMA", "FMA4", "XOP", "GFNI",
     "VAES", "VPCLMULQDQ", "SHA", "SHA512", "SM3", "SM4", "AVX_VNNI", "AVX_IFMA",

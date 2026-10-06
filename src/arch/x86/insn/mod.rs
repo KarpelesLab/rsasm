@@ -9,6 +9,7 @@
 //! keeps any one file readable: the SIMD families alone outnumber the base
 //! integer instruction set several times over.
 
+pub(crate) mod apx;
 pub mod avx;
 pub(crate) mod avx10;
 pub mod avx512;
@@ -250,6 +251,37 @@ pub(crate) const DISTINCT_DEST: u32 = 1 << 18;
 /// RIP-relative: AMX's tile loads and stores take their stride from the
 /// index register, and have no encoding without one.
 pub(crate) const SIBMEM: u32 = 1 << 19;
+/// The form has no REX2 encoding, so an `r16`-`r31` operand cannot reach it:
+/// GNU as's `noegpr`. The map an opcode lives in decides most of these —
+/// REX2 covers the one-byte and `0F` maps and nothing else — so the flag is
+/// only for the one family that is in reach and still excluded, the extended
+/// state saves, which address memory with `rbx` as well as with the register
+/// they are given.
+pub(crate) const NO_REX2: u32 = 1 << 21;
+/// The row writes a new destination register, which the extended EVEX prefix
+/// carries in `vvvv` with the `ND` bit set. `setzu`/`imulzu` set the same bit
+/// to ask for the zeroed upper half, and `push2`/`pop2` because `vvvv` is a
+/// register they write.
+pub(crate) const APX_ND: u32 = 1 << 22;
+/// `{nf}` may be written on this row, setting `EVEX.NF` so the operation
+/// leaves the flags alone. Only the rows Intel promoted with a no-flags form
+/// have it: `add` yes, `adc` and `rcl` no.
+pub(crate) const APX_NF: u32 = 1 << 23;
+/// The row *is* a no-flags encoding, with `EVEX.NF` set whether or not `{nf}`
+/// was written. `cfcmov`'s store and three-operand forms are told from its
+/// load form by that bit alone.
+pub(crate) const APX_NF_ON: u32 = 1 << 24;
+/// The row is encodable only with the REX2 prefix, which is what tells it
+/// from the instruction it shares an opcode with: `pushp` is `push` under
+/// REX2.W, and `jmpabs` is the long-gone `mov` from a 64-bit absolute address.
+pub(crate) const APX_REX2: u32 = 1 << 25;
+/// `rsp` is not one of the registers this row names. `push2` and `pop2` move
+/// the stack pointer themselves, so it cannot be one of the pair.
+pub(crate) const NO_RSP: u32 = 1 << 26;
+/// The two registers in `vvvv` and r/m must differ: `pop2` writes both, and
+/// one pop would otherwise be lost. `push2` only reads them, and GNU as
+/// accepts `push2 %rax, %rax`.
+pub(crate) const DISTINCT_PAIR: u32 = 1 << 27;
 /// A 64-bit form GNU as writes without REX.W although the register asked for
 /// it. `xchg rax, rax` is the one case: GNU as spells it `90`, the canonical
 /// `nop`, and NASM writes the `48 90` the operands name. Both do nothing, so
@@ -266,6 +298,10 @@ pub enum Enc {
     Vex,
     /// Four-byte EVEX.
     Evex,
+    /// Four-byte EVEX in APX's extended layout: the same `62` prefix with the
+    /// general-register fields in place of the vector ones. See the note on
+    /// [`crate::arch::x86::insn::apx`].
+    Apx,
 }
 
 /// EVEX *tuple type*: how a compressed 8-bit displacement is scaled.
@@ -407,6 +443,9 @@ pub struct Def {
     /// Vector length in bits: 128, 256 or 512, for the VEX/EVEX `L` bits.
     pub vlen: u16,
     pub tuple: Tuple,
+    /// `ccmp`/`ctest`'s source condition code, which the extended EVEX prefix
+    /// carries where AVX-512 keeps the writemask.
+    pub scc: Option<u8>,
     /// A byte the source never writes, emitted *after* the ModRM, any
     /// displacement and any immediate. 3DNow! selects the operation with one,
     /// and the named compare predicates (`cmpeqps`) fold their immediate into
@@ -427,6 +466,7 @@ impl Def {
             map: 0,
             vlen: 0,
             tuple: Tuple::None,
+            scc: None,
             suffix: None,
         }
     }
@@ -460,15 +500,50 @@ impl Def {
         self
     }
 
+    /// True if the row has a REX2 encoding, which is what lets an `r16`-`r31`
+    /// operand ride on a legacy prefix rather than on the extended EVEX one.
+    /// REX2 reaches the one-byte and `0F` opcode maps and no further, and two
+    /// families are excluded even there; see [`NO_REX2`].
+    pub(crate) fn rex2_ok(&self) -> bool {
+        self.enc == Enc::Legacy
+            && self.flags & NO_REX2 == 0
+            && matches!(self.opcode.as_slice(), [_] | [0x0f, _])
+            // A relative branch has no register field for the extra bits to
+            // fill, and GNU as refuses `{rex2}` on one rather than write a
+            // prefix that says nothing.
+            && !self.ops.iter().any(|o| matches!(o, Op::Rel(_)))
+    }
+
+    /// An APX row: the extended EVEX prefix, in `map`.
+    pub(crate) fn apx(mut self, map: u8) -> Def {
+        self.enc = Enc::Apx;
+        self.map = map;
+        self
+    }
+
+    /// True if an `r16`-`r31` operand is encodable in this row: either the
+    /// prefix has APX's fourth register-number bit, or REX2 can carry it.
+    pub(crate) fn egpr_ok(&self) -> bool {
+        matches!(self.enc, Enc::Apx | Enc::Evex) || self.rex2_ok()
+    }
+
+    /// `ccmp`/`ctest`'s source condition code.
+    pub(crate) fn scc(mut self, n: u8) -> Def {
+        self.scc = Some(n);
+        self
+    }
+
     pub fn suffix(mut self, s: u8) -> Def {
         self.suffix = Some(s);
         self
     }
 
     /// True when `VEX.W` / `EVEX.W` is set, which the tables express as a
-    /// 64-bit operand size.
+    /// 64-bit operand size. `push2` is the exception: its operands are
+    /// quadwords and the bit means the `push2p` hint instead, so the rows that
+    /// fix `W` at zero say so with [`NO_REX_W`].
     pub fn vex_w(&self) -> bool {
-        self.opsize == 64
+        self.opsize == 64 && self.flags & NO_REX_W == 0
     }
 
     /// The `N` of the `{1toN}` this row's memory operand broadcasts with, or
@@ -555,6 +630,9 @@ fn build() -> Tbl {
     avx10::install(&mut t);
     cmpalias::install(&mut t);
     lenalias::install(&mut t);
+    // Last, because it reads the rows it promotes out of the finished table,
+    // and because a promoted row must be offered only after the legacy one.
+    apx::install(&mut t);
     t
 }
 
@@ -646,6 +724,18 @@ mod tests {
                 );
                 continue;
             }
+            // APX's extended EVEX has neither a vector length nor a
+            // compressed displacement, and its maps are the promoted VEX ones
+            // and map 4.
+            if d.enc == Enc::Apx {
+                assert!(matches!(d.map, 1..=4), "`{m}`: bad map in {d:?}");
+                assert_eq!(d.opcode.len(), 1, "`{m}`: APX opcode is one byte");
+                assert!(
+                    d.vlen == 0 && d.tuple == Tuple::None && d.suffix.is_none(),
+                    "`{m}`: {d:?}"
+                );
+                continue;
+            }
             // Maps 5 and 6 are EVEX-only, and hold AVX-512FP16; 8 to 10 are
             // XOP's, which only VEX-style rows use.
             let map_ok = match d.enc {
@@ -685,6 +775,51 @@ mod tests {
                 assert_ne!(d.tuple, Tuple::None, "`{m}`: {d:?}");
             }
         }
+    }
+
+    /// The fields only the extended EVEX prefix has room for, and the rows
+    /// that have to be reachable at all.
+    #[test]
+    fn apx_fields_are_only_on_apx_rows() {
+        for (m, d) in all_rows() {
+            let apx = APX_ND | APX_NF | APX_NF_ON;
+            if d.flags & apx != 0 || d.scc.is_some() {
+                assert_eq!(d.enc, Enc::Apx, "`{m}`: {d:?}");
+            }
+            // `{nf}` and the no-flags encodings are different things: the
+            // first chooses a row, the second is what the row already is.
+            assert!(
+                d.flags & (APX_NF | APX_NF_ON) != APX_NF | APX_NF_ON,
+                "`{m}`: both `{{nf}}` forms"
+            );
+            // A row that only REX2 can carry has to be in REX2's reach.
+            if d.flags & APX_REX2 != 0 {
+                assert!(d.rex2_ok(), "`{m}`: {d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn apx_promotes_the_families_it_claims() {
+        for m in [
+            "ccmpe", "ctestz", "cfcmovne", "setzub", "imulzu", "push2", "pop2", "push2p", "pop2p",
+            "pushp", "popp", "jmpabs", "clr",
+        ] {
+            assert!(is_mnemonic(m), "missing `{m}`");
+        }
+        // `ccmp` has no parity condition: the flags it may assume are only
+        // the four `{dfv=...}` names.
+        assert!(!is_mnemonic("ccmpp"));
+        assert!(!is_mnemonic("ctestnp"));
+        assert!(is_mnemonic("cfcmovp"));
+        // One promoted row of each kind: a legacy opcode moved into map 4, a
+        // VEX row repeated, and a new destination register.
+        let has = |m: &str, f: &dyn Fn(&Def) -> bool| lookup(m).unwrap().iter().any(f);
+        assert!(has("movbe", &|d| d.enc == Enc::Apx && d.opcode == [0x60]));
+        assert!(has("andn", &|d| d.enc == Enc::Apx && d.map == 2));
+        assert!(has("cmpexadd", &|d| d.enc == Enc::Apx && d.map == 2));
+        assert!(has("add", &|d| d.flags & APX_ND != 0 && d.ops.len() == 3));
+        assert!(has("shld", &|d| d.flags & APX_ND != 0 && d.ops.len() == 4));
     }
 
     #[test]

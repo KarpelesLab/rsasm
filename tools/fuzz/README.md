@@ -166,7 +166,9 @@ operand whose displacement lands on and off every disp8\*N scale, and, where
 the row takes them, a writemask, `{z}`, a `{1toN}` broadcast and embedded
 rounding or `{sae}`; a mutated case gets a decorator that should be refused.
 `--forms base|simd|all` (default `all`) chooses the set; `all` gives the two
-halves of the cases.
+halves of the cases. APX's rows are the one family read from that table and
+not fuzzed: its pseudo-prefixes and `{dfv=...}` are not shapes this renderer
+writes, so its forms live in the corpora instead (`x86-64-apx.txt`).
 
 `gnutbl.py` doubles as a way to look a row up:
 
@@ -195,7 +197,6 @@ batch of 200; a batch with errors is reassembled without the rejected cases.
   reading an unknown register name as a symbol in Intel syntax — and rsasm
   follows one of them. **convention-other** is the same where rsasm follows
   the side the rule marks as the wrong one to copy; those are listed too.
-- **ignored**: 64-bit lines both references encode as APX.
 
 Findings are grouped by table row, mutation and prefix, most frequent first,
 each with its shortest example.
