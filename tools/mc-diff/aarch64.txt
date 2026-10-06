@@ -8,7 +8,11 @@
 # accesses (`ld64b x0, [x1, #0]`), where llvm-mc takes the base register
 # alone; rsasm follows GNU as, and `tests/aarch64.rs` has the bytes. The
 # other way round, llvm-mc assembles `setf8` with no register at all as
-# `setf8 w0`, which GNU as refuses and rsasm refuses with it.
+# `setf8 w0`, which GNU as refuses and rsasm refuses with it. A third, below:
+# llvm-mc takes the zero register for the size a FEAT_MOPS copy or set counts
+# down (`cpyfp [x0]!, [x1]!, xzr!`) and GNU as wants a numbered register
+# there; rsasm follows llvm-mc, as it does for every AArch64 encoding, so
+# those two lines are here rather than in a corpus both references read.
 
 # ---- add / subtract, immediate ----
 add x0, x1, 0
@@ -622,6 +626,153 @@ msr daif, x1
 dup v0.2d, v1.d[1]
 dup v0.8h, w3
 dup v0.4h, v2.h[7]
+
+# ---- memory copy and memory set (FEAT_MOPS) ----
+# Every one of the 132 names, which spell the operation, the stage and the
+# hints: `cpyf` moves bytes and `cpy` may read them more than once, `p`, `m`
+# and `e` are the prologue, the main body and the epilogue, and `setgo` sets
+# tags alone.
+cpyfp [x0]!, [x1]!, x2!
+cpyfpwn [x3]!, [x4]!, x5!
+cpyfprn [x6]!, [x7]!, x8!
+cpyfpn [x9]!, [x10]!, x11!
+cpyfpwt [x12]!, [x13]!, x14!
+cpyfpwtwn [x15]!, [x16]!, x17!
+cpyfpwtrn [x18]!, [x19]!, x20!
+cpyfpwtn [x21]!, [x22]!, x23!
+cpyfprt [x24]!, [x25]!, x26!
+cpyfprtwn [x27]!, [x28]!, x29!
+cpyfprtrn [x30]!, [x0]!, x1!
+cpyfprtn [x2]!, [x3]!, x4!
+cpyfpt [x5]!, [x6]!, x7!
+cpyfptwn [x8]!, [x9]!, x10!
+cpyfptrn [x11]!, [x12]!, x13!
+cpyfptn [x14]!, [x15]!, x16!
+cpyfm [x17]!, [x18]!, x19!
+cpyfmwn [x20]!, [x21]!, x22!
+cpyfmrn [x23]!, [x24]!, x25!
+cpyfmn [x26]!, [x27]!, x28!
+cpyfmwt [x29]!, [x30]!, x0!
+cpyfmwtwn [x1]!, [x2]!, x3!
+cpyfmwtrn [x4]!, [x5]!, x6!
+cpyfmwtn [x7]!, [x8]!, x9!
+cpyfmrt [x10]!, [x11]!, x12!
+cpyfmrtwn [x13]!, [x14]!, x15!
+cpyfmrtrn [x16]!, [x17]!, x18!
+cpyfmrtn [x19]!, [x20]!, x21!
+cpyfmt [x22]!, [x23]!, x24!
+cpyfmtwn [x25]!, [x26]!, x27!
+cpyfmtrn [x28]!, [x29]!, x30!
+cpyfmtn [x0]!, [x1]!, x2!
+cpyfe [x3]!, [x4]!, x5!
+cpyfewn [x6]!, [x7]!, x8!
+cpyfern [x9]!, [x10]!, x11!
+cpyfen [x12]!, [x13]!, x14!
+cpyfewt [x15]!, [x16]!, x17!
+cpyfewtwn [x18]!, [x19]!, x20!
+cpyfewtrn [x21]!, [x22]!, x23!
+cpyfewtn [x24]!, [x25]!, x26!
+cpyfert [x27]!, [x28]!, x29!
+cpyfertwn [x30]!, [x0]!, x1!
+cpyfertrn [x2]!, [x3]!, x4!
+cpyfertn [x5]!, [x6]!, x7!
+cpyfet [x8]!, [x9]!, x10!
+cpyfetwn [x11]!, [x12]!, x13!
+cpyfetrn [x14]!, [x15]!, x16!
+cpyfetn [x17]!, [x18]!, x19!
+cpyp [x20]!, [x21]!, x22!
+cpypwn [x23]!, [x24]!, x25!
+cpyprn [x26]!, [x27]!, x28!
+cpypn [x29]!, [x30]!, x0!
+cpypwt [x1]!, [x2]!, x3!
+cpypwtwn [x4]!, [x5]!, x6!
+cpypwtrn [x7]!, [x8]!, x9!
+cpypwtn [x10]!, [x11]!, x12!
+cpyprt [x13]!, [x14]!, x15!
+cpyprtwn [x16]!, [x17]!, x18!
+cpyprtrn [x19]!, [x20]!, x21!
+cpyprtn [x22]!, [x23]!, x24!
+cpypt [x25]!, [x26]!, x27!
+cpyptwn [x28]!, [x29]!, x30!
+cpyptrn [x0]!, [x1]!, x2!
+cpyptn [x3]!, [x4]!, x5!
+cpym [x6]!, [x7]!, x8!
+cpymwn [x9]!, [x10]!, x11!
+cpymrn [x12]!, [x13]!, x14!
+cpymn [x15]!, [x16]!, x17!
+cpymwt [x18]!, [x19]!, x20!
+cpymwtwn [x21]!, [x22]!, x23!
+cpymwtrn [x24]!, [x25]!, x26!
+cpymwtn [x27]!, [x28]!, x29!
+cpymrt [x30]!, [x0]!, x1!
+cpymrtwn [x2]!, [x3]!, x4!
+cpymrtrn [x5]!, [x6]!, x7!
+cpymrtn [x8]!, [x9]!, x10!
+cpymt [x11]!, [x12]!, x13!
+cpymtwn [x14]!, [x15]!, x16!
+cpymtrn [x17]!, [x18]!, x19!
+cpymtn [x20]!, [x21]!, x22!
+cpye [x23]!, [x24]!, x25!
+cpyewn [x26]!, [x27]!, x28!
+cpyern [x29]!, [x30]!, x0!
+cpyen [x1]!, [x2]!, x3!
+cpyewt [x4]!, [x5]!, x6!
+cpyewtwn [x7]!, [x8]!, x9!
+cpyewtrn [x10]!, [x11]!, x12!
+cpyewtn [x13]!, [x14]!, x15!
+cpyert [x16]!, [x17]!, x18!
+cpyertwn [x19]!, [x20]!, x21!
+cpyertrn [x22]!, [x23]!, x24!
+cpyertn [x25]!, [x26]!, x27!
+cpyet [x28]!, [x29]!, x30!
+cpyetwn [x0]!, [x1]!, x2!
+cpyetrn [x3]!, [x4]!, x5!
+cpyetn [x6]!, [x7]!, x8!
+setp [x9]!, x10!, x11
+setpt [x12]!, x13!, x14
+setpn [x15]!, x16!, x17
+setptn [x18]!, x19!, x20
+setm [x21]!, x22!, x23
+setmt [x24]!, x25!, x26
+setmn [x27]!, x28!, x29
+setmtn [x30]!, x0!, x1
+sete [x2]!, x3!, x4
+setet [x5]!, x6!, x7
+seten [x8]!, x9!, x10
+setetn [x11]!, x12!, x13
+setgp [x14]!, x15!, x16
+setgpt [x17]!, x18!, x19
+setgpn [x20]!, x21!, x22
+setgptn [x23]!, x24!, x25
+setgm [x26]!, x27!, x28
+setgmt [x29]!, x30!, x0
+setgmn [x1]!, x2!, x3
+setgmtn [x4]!, x5!, x6
+setge [x7]!, x8!, x9
+setget [x10]!, x11!, x12
+setgen [x13]!, x14!, x15
+setgetn [x16]!, x17!, x18
+setgop [x19]!, x20!
+setgopt [x22]!, x23!
+setgopn [x25]!, x26!
+setgoptn [x28]!, x29!
+setgom [x0]!, x1!
+setgomt [x3]!, x4!
+setgomn [x6]!, x7!
+setgomtn [x9]!, x10!
+setgoe [x12]!, x13!
+setgoet [x15]!, x16!
+setgoen [x18]!, x19!
+setgoetn [x21]!, x22!
+# The ends of each register field, and the zero register where one of
+# the two references takes it.
+cpyfp [x30]!, [x29]!, x28!
+cpyp [x1]!, [x0]!, x30!
+setp [x30]!, x29!, xzr
+setgp [x0]!, x1!, xzr
+setgop [x30]!, x29!
+cpyfp [x0]!, [x1]!, xzr!
+setgop [x0]!, xzr!
 
 # ---- SME: its mode switches and zeroing ZA ----
 smstart

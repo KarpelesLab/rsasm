@@ -114,6 +114,12 @@ GP_SINGLES = re.compile(r"""
     # and FEAT_RPRFM's range prefetch, whose operation is a name or a six-bit
     # number scattered over the word.
   | ld64b | st64b v? 0? | rprfm
+    # FEAT_MOPS's memory copies and memory sets, which are a family rather
+    # than one form each, but a handwritten one: they are a mnemonic for
+    # every combination of their hints -- 132 of them, built from macros in
+    # binutils too -- and their three registers must all be different, which
+    # no measured row could say. `insn.rs` builds the name the same way.
+  | cpy f? [pme] (wt|rt|t)? (wn|rn|n)? | set (g o?)? [pme] t? n?
 """, re.X)
 
 
@@ -345,8 +351,18 @@ def parse_operand(op, out):
     if m:
         out.append(Atom(("g", m.group(1)), (int(m.group(2)),)))
         return
+    # A register FEAT_MOPS writes back, which is a bare register with a `!`
+    # after it rather than an address: `cpyfp [x0]!, [x1]!, x2!` counts down
+    # in `x2`.
+    m = re.fullmatch(r"([wx])(\d+)!", op)
+    if m:
+        out.append(Atom(("gwb", m.group(1)), (int(m.group(2)),)))
+        return
     if op in ("wzr", "xzr"):
         out.append(Atom(("g", op[0]), (31,)))
+        return
+    if op in ("wzr!", "xzr!"):
+        out.append(Atom(("gwb", op[0]), (31,)))
         return
     if op in ("sp", "wsp"):
         out.append(Atom(("g", "x" if op == "sp" else "w"), (31,), sp=True))
@@ -485,12 +501,13 @@ def render_atom(a):
     if t in ("p", "pm", "pz"):
         s = "p%d" % a.vals[0] + ("." + k[1] if k[1] else "")
         return s + ("/m" if t == "pm" else "/z" if t == "pz" else "")
-    if t == "g":
+    if t in ("g", "gwb"):
+        bang = "!" if t == "gwb" else ""
         if a.vals[0] == 31:
             if a.sp:
-                return "sp" if k[1] == "x" else "wsp"
-            return "xzr" if k[1] == "x" else "wzr"
-        return "%s%d" % (k[1], a.vals[0])
+                return ("sp" if k[1] == "x" else "wsp") + bang
+            return ("xzr" if k[1] == "x" else "wzr") + bang
+        return "%s%d%s" % (k[1], a.vals[0], bang)
     if t == "s":
         return "%s%d" % (k[1], a.vals[0])
     if t == "vlist":

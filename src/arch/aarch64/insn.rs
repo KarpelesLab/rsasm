@@ -19,8 +19,9 @@ use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, Shif
 use super::reg::{self, Reg, RegClass};
 use super::{encode, sysreg};
 use crate::arch::{AsmCtx, InsnRequest};
+use crate::cursor::Cursor;
 use crate::expr::{ExprKind, ExprRef};
-use crate::lexer::{Punct, TokKind};
+use crate::lexer::{Punct, TokKind, Token};
 use crate::section::{LinkValue, Variant};
 use crate::source::Span;
 
@@ -398,6 +399,7 @@ pub(crate) fn handwritten(mnemonic: &str) -> bool {
                 | "st64bv0"
                 | "rprfm"
         )
+        || is_mops(mnemonic)
         || loads(mnemonic)
         // The system instructions and the aliases of `hint`, whose names are
         // in the generated tables rather than written out here.
@@ -2435,6 +2437,213 @@ fn rprfm(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
         | field((value >> 3) & 3, 12, 2)
         | field(base.num as u32, 5, 5)
         | field(value & 7, 0, 3))
+}
+
+// ---- memory copy and memory set --------------------------------------------
+
+/// Which registers a FEAT_MOPS mnemonic names.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum MopsForm {
+    /// `cpyfp [x0]!, [x1]!, x2!`: a destination address, a source address and
+    /// a size, each counted on by the instruction and so each written back.
+    Copy,
+    /// `setp [x0]!, x1!, x2`: a destination address and a size, both written
+    /// back, and the byte to store, which is not.
+    Set,
+    /// `setgop [x0]!, x1!`: FEAT_MOPS_GO's granule-only set, which writes
+    /// tags rather than data and so names no byte at all.
+    GranuleOnly,
+}
+
+/// The opcode and operand shape of a FEAT_MOPS mnemonic, or `None` for a name
+/// that is not one.
+///
+/// There are 132 of these because every hint is spelled into the name: a copy
+/// names one for its source and one for its destination, a set names one
+/// pair, and each operation has a prologue, a main body and an epilogue that
+/// resume one another. binutils builds the names from macros for that reason,
+/// and this builds them from the same pieces rather than listing them.
+fn mops(mnemonic: &str) -> Option<(u32, MopsForm)> {
+    // The hints, in the order a name spells them. A copy's source hints
+    // reach bits 13-12 and its destination hints bits 15-14; a set has one
+    // pair of hints over both fields at once.
+    const SOURCE: [&str; 4] = ["", "wt", "rt", "t"];
+    const DEST: [&str; 4] = ["", "wn", "rn", "n"];
+    const SET: [&str; 4] = ["", "t", "n", "tn"];
+
+    let (rest, base, form) = if let Some(rest) = mnemonic.strip_prefix("cpyf") {
+        (rest, 0x1900_0400, MopsForm::Copy)
+    } else if let Some(rest) = mnemonic.strip_prefix("cpy") {
+        (rest, 0x1d00_0400, MopsForm::Copy)
+    } else if let Some(rest) = mnemonic.strip_prefix("setgo") {
+        // The granule-only set is the tagged set with the byte's register
+        // field reading the zero register and the bit at 10 clear.
+        (rest, 0x1dc0_0000 | field(31, 16, 5), MopsForm::GranuleOnly)
+    } else if let Some(rest) = mnemonic.strip_prefix("setg") {
+        (rest, 0x1dc0_0400, MopsForm::Set)
+    } else {
+        (mnemonic.strip_prefix("set")?, 0x19c0_0400, MopsForm::Set)
+    };
+    let (stage, hints) = rest.split_at_checked(1)?;
+    let stage = match stage {
+        "p" => 0,
+        "m" => 1,
+        "e" => 2,
+        _ => return None,
+    };
+    if form == MopsForm::Copy {
+        // A copy holds its stage above the registers, in bits 23-22.
+        let (source, dest) = SOURCE.iter().enumerate().find_map(|(s, src)| {
+            let tail = hints.strip_prefix(src)?;
+            let d = DEST.iter().position(|dst| *dst == tail)?;
+            Some((s as u32, d as u32))
+        })?;
+        return Some((
+            base | field(stage, 22, 2) | field(dest, 14, 2) | field(source, 12, 2),
+            form,
+        ));
+    }
+    // A set holds its stage where a copy holds its destination hints.
+    let hints = SET.iter().position(|h| *h == hints)? as u32;
+    Some((base | field(stage, 14, 2) | field(hints, 12, 2), form))
+}
+
+/// True for one of FEAT_MOPS's 132 names, which `mod.rs` dispatches before
+/// the shared operand parser runs.
+pub(crate) fn is_mops(mnemonic: &str) -> bool {
+    mops(mnemonic).is_some()
+}
+
+/// FEAT_MOPS's memory copies and memory sets.
+///
+/// These are here rather than in the measured table for two reasons a table
+/// row cannot hold. Each address is written back, so it is spelled `[x0]!`
+/// with no offset for the `!` to apply to, and so is the size, spelled `x2!`
+/// with no brackets at all; and both references refuse any two of the
+/// registers naming one register, since an instruction that overwrote its own
+/// size or source could not resume.
+pub(crate) fn mops_insn(
+    cx: &mut AsmCtx<'_>,
+    req: &InsnRequest<'_>,
+    mnemonic: &str,
+) -> Option<Vec<Variant>> {
+    let (base, form) = mops(mnemonic)?;
+    let want: usize = match form {
+        MopsForm::Copy | MopsForm::Set => 3,
+        MopsForm::GranuleOnly => 2,
+    };
+    let cur = Cursor::new(req.operands);
+    let pieces = cur.split_commas();
+    if pieces.len() != want {
+        cx.error(
+            req.span,
+            format!(
+                "`{mnemonic}` takes {want} operand(s), but {} were given",
+                pieces.len()
+            ),
+        );
+        return None;
+    }
+    // In the word the destination address is `Rd`, the size is `Rn`, and
+    // `Rs` is the source address of a copy or the byte of a set.
+    let dest = mops_address(cx, mnemonic, pieces[0])?;
+    let (size, source) = match form {
+        MopsForm::Copy => (
+            mops_counted(cx, mnemonic, pieces[2], true)?,
+            mops_address(cx, mnemonic, pieces[1])?,
+        ),
+        MopsForm::Set => (
+            mops_counted(cx, mnemonic, pieces[1], true)?,
+            mops_counted(cx, mnemonic, pieces[2], false)?,
+        ),
+        MopsForm::GranuleOnly => (mops_counted(cx, mnemonic, pieces[1], true)?, 31),
+    };
+    let named: &[u32] = match form {
+        MopsForm::GranuleOnly => &[dest, size],
+        _ => &[dest, size, source],
+    };
+    for (k, r) in named.iter().enumerate() {
+        if named[..k].contains(r) {
+            cx.error(
+                req.span,
+                format!(
+                    "`{mnemonic}` names one register twice: each of its registers \
+                     is counted on, so they have to differ"
+                ),
+            );
+            return None;
+        }
+    }
+    one(base | field(source, 16, 5) | field(size, 5, 5) | field(dest, 0, 5))
+}
+
+/// `[x0]!`: one of the addresses a copy or a set works through, which it
+/// always writes back. Register 31 is refused by both references here, in
+/// either spelling, since an address is no use read as zero.
+fn mops_address(cx: &mut AsmCtx<'_>, mnemonic: &str, toks: &[Token]) -> Option<u32> {
+    let reg = match toks {
+        [open, name, close, bang]
+            if open.is_punct(Punct::LBracket)
+                && close.is_punct(Punct::RBracket)
+                && bang.is_punct(Punct::Bang) =>
+        {
+            match name.kind {
+                TokKind::Ident(n) => reg::lookup(&cx.name(n).to_ascii_lowercase()),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    match reg {
+        Some(r) if r.class == RegClass::X && r.num != 31 => Some(u32::from(r.num)),
+        _ => {
+            cx.error(
+                mops_span(toks),
+                format!("`{mnemonic}` takes an address written back, `[x0]!`, over `x0` to `x30`"),
+            );
+            None
+        }
+    }
+}
+
+/// `x2!`, the size a copy or a set counts down, or the `x2` a set stores. The
+/// zero register is a register like any other in both fields.
+fn mops_counted(
+    cx: &mut AsmCtx<'_>,
+    mnemonic: &str,
+    toks: &[Token],
+    writeback: bool,
+) -> Option<u32> {
+    let name = match toks {
+        [name] if !writeback => Some(name),
+        [name, bang] if writeback && bang.is_punct(Punct::Bang) => Some(name),
+        _ => None,
+    };
+    let reg = match name.map(|t| t.kind) {
+        Some(TokKind::Ident(n)) => reg::lookup(&cx.name(n).to_ascii_lowercase()),
+        _ => None,
+    };
+    match reg {
+        Some(r) if r.class == RegClass::X && !r.is_sp() => Some(u32::from(r.num)),
+        _ => {
+            cx.error(
+                mops_span(toks),
+                if writeback {
+                    format!("`{mnemonic}` takes a size written back, `x2!`")
+                } else {
+                    format!("`{mnemonic}` takes a 64-bit register for the byte it stores")
+                },
+            );
+            None
+        }
+    }
+}
+
+fn mops_span(toks: &[Token]) -> Span {
+    match (toks.first(), toks.last()) {
+        (Some(a), Some(b)) => a.span.to(b.span),
+        _ => Span::DUMMY,
+    }
 }
 
 // ---- system ----------------------------------------------------------------

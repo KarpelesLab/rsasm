@@ -1868,6 +1868,52 @@ fn one_off_general_purpose_diagnostics() {
     );
 }
 
+/// FEAT_MOPS's memory copies and memory sets: the stage and both hints are
+/// spelled into the name, so there are 132 of them. One of each shape here,
+/// with the rest in `tools/mc-diff/aarch64.txt`.
+#[test]
+fn memory_copy_and_memory_set() {
+    check(&[
+        ("cpyfp [x0]!, [x1]!, x2!", "40 04 01 19"),
+        ("cpyfm [x3]!, [x4]!, x5!", "a3 04 44 19"),
+        ("cpyfe [x6]!, [x7]!, x8!", "06 05 87 19"),
+        ("cpyfprtwn [x9]!, [x10]!, x11!", "69 65 0a 19"),
+        ("cpyp [x12]!, [x13]!, x14!", "cc 05 0d 1d"),
+        ("cpymwtn [x15]!, [x16]!, x17!", "2f d6 50 1d"),
+        ("cpyetn [x30]!, [x29]!, x28!", "9e f7 9d 1d"),
+        ("setp [x0]!, x1!, x2", "20 04 c2 19"),
+        ("setm [x3]!, x4!, x5", "83 44 c5 19"),
+        ("sete [x6]!, x7!, x8", "e6 84 c8 19"),
+        ("setptn [x9]!, x10!, x11", "49 35 cb 19"),
+        ("setgp [x12]!, x13!, x14", "ac 05 ce 1d"),
+        ("setgetn [x30]!, x29!, xzr", "be b7 df 1d"),
+        // FEAT_MOPS_GO's granule-only sets, which store no byte and so name
+        // two registers rather than three.
+        ("setgop [x0]!, x1!", "20 00 df 1d"),
+        ("setgoetn [x30]!, x29!", "be b3 df 1d"),
+    ]);
+}
+
+/// A copy or a set resumes where the one before it left off, reading the
+/// registers it wrote back, so both references refuse any two of them naming
+/// one register, and refuse an address that is not written back.
+#[test]
+fn memory_copy_diagnostics() {
+    rejects("cpyfp [x0]!, [x0]!, x2!", &["names one register twice"]);
+    rejects("cpyfp [x0]!, [x1]!, x1!", &["names one register twice"]);
+    rejects("setp [x0]!, x1!, x0", &["names one register twice"]);
+    rejects("setgop [x0]!, x0!", &["names one register twice"]);
+    rejects("cpyfp [x0], [x1]!, x2!", &["an address written back"]);
+    rejects("cpyfp [sp]!, [x1]!, x2!", &["`x0` to `x30`"]);
+    rejects("cpyfp [xzr]!, [x1]!, x2!", &["`x0` to `x30`"]);
+    rejects("cpyfp [w0]!, [x1]!, x2!", &["`x0` to `x30`"]);
+    rejects("cpyfp [x0]!, [x1]!, x2", &["a size written back"]);
+    rejects("cpyfp [x0]!, [x1]!, w2!", &["a size written back"]);
+    rejects("setp [x0]!, x1!, sp", &["the byte it stores"]);
+    rejects("cpyfp [x0]!, [x1]!", &["takes 3 operand"]);
+    rejects("setgop [x0]!, x1!, x2", &["takes 2 operand"]);
+}
+
 /// The general-purpose groups the generated table gained with the one-off
 /// forms: the CRC32 checksums, the unprivileged loads and stores, and the
 /// byte, halfword and signed-word members of the unscaled acquire-release
