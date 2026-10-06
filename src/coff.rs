@@ -4,7 +4,9 @@
 //! the source is read — the directives COFF has and ELF does not (`.def`,
 //! `.secrel32`, `.rva`, `.linkonce`, the `.seh_*` family), the COMDAT and
 //! attribute arguments of `.section`, and the x86-64 unwind data those `.seh_*`
-//! directives describe, which is written out once layout has settled.
+//! directives describe, which is written out once layout has settled. The
+//! `.cv_*` family is one of those directive sets too, and large enough to
+//! live in [`crate::codeview`].
 //!
 //! Nothing here runs unless `-f coff` (or `-f win64` / `-f win32`) was asked
 //! for: the directives refuse any other output format rather than quietly
@@ -58,6 +60,8 @@ pub(crate) struct State {
     pub(crate) files: Vec<String>,
     /// The symbol an open `.def` is describing.
     def: Option<SymbolId>,
+    /// What the `.cv_*` directives have recorded; see [`crate::codeview`].
+    pub(crate) cv: crate::codeview::State,
     /// Finished `.seh_proc` blocks, in the order they were read.
     procs: Vec<Proc>,
     open: Option<Proc>,
@@ -140,6 +144,7 @@ pub(crate) fn is_directive(name: &str) -> bool {
         name,
         ".def" | ".endef" | ".scl" | ".linkonce" | ".rva" | ".secrel32" | ".secidx" | ".safeseh"
     ) || name.starts_with(".seh_")
+        || crate::codeview::is_directive(name)
 }
 
 /// The fields that may appear between `.def` and `.endef`, where they mean
@@ -286,6 +291,7 @@ impl Assembler {
                 );
                 cur.set_pos(cur.all().len());
             }
+            _ if crate::codeview::is_directive(name) => self.codeview_directive(name, cur, span),
             _ => self.seh_directive(name, cur, span),
         }
         true
@@ -434,7 +440,15 @@ impl Assembler {
             );
             return false;
         }
-        let addend = r.addend + coff::reloc::pc_base(machine, ty);
+        // A section index has no room for an offset into the section, so a
+        // reference to a symbol the table does not keep loses the offset
+        // rather than adding it to the index; llvm-mc writes the field as
+        // zero there too.
+        let addend = if r.desc.class == crate::reloc::RelocClass::SectionIndex {
+            0
+        } else {
+            r.addend + coff::reloc::pc_base(machine, ty)
+        };
         if addend != 0 {
             let endian = self.frag_arch(si, fi).0.endian();
             if let crate::section::FragKind::Bytes { variants, chosen } =
