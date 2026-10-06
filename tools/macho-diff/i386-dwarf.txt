@@ -3,10 +3,12 @@
 #
 # The debugging sections hold four-byte addresses here, and the relocations
 # that reach into them name a section apiece, as a 32-bit object's do
-# everywhere. The CIE is the one the i386 psABI asks for -- a data alignment
-# of -4 and the return address in column 8 -- but the FDE's address is the
-# pointer-sized PC-relative one llvm-mc writes in a Mach-O object, not the
-# four-byte `DW_EH_PE_sdata4` GNU as writes in an ELF one.
+# everywhere. The CIE's data alignment is -4 and its return address column 8,
+# as the i386 psABI has them, but its CFA names register 5, since Darwin
+# numbers `%esp` and `%ebp` its own way in the unwinding tables and the other
+# way in `.debug_frame`; and the FDE's address is the pointer-sized
+# PC-relative one llvm-mc writes in a Mach-O object, not the four-byte
+# `DW_EH_PE_sdata4` GNU as writes in an ELF one.
 === one row
 	.file 1 "a.c"
 	.text

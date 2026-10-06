@@ -242,9 +242,10 @@ impl Options {
     ///
     /// Only Mach-O output reads it, and only for the deployment target a
     /// Darwin triple names: `x86_64-apple-macos10.6` writes an
-    /// `LC_VERSION_MIN_MACOSX`, and from macOS 10.6 on the linker is also
-    /// given a compact unwind table. llvm-mc takes both from the triple, so
-    /// rsasm has to have it to write the same object.
+    /// `LC_VERSION_MIN_MACOSX`, and on x86 a deployment target of macOS 10.6
+    /// or later gives the linker a compact unwind table as well. llvm-mc
+    /// takes both from the triple, so rsasm has to have it to write the same
+    /// object.
     pub fn with_target_triple(mut self, triple: impl Into<String>) -> Options {
         self.target_triple = Some(triple.into());
         self

@@ -760,9 +760,10 @@ pub(crate) fn reloc_type(cpu: Cpu, r: &Relocation) -> Option<u8> {
 fn entry_pcrel(cpu: Cpu, ty: u8, r: &Relocation) -> bool {
     match cpu {
         Cpu::X86_64 => !matches!(ty, x86_64_reloc::UNSIGNED | x86_64_reloc::SUBTRACTOR),
-        // A `@TLVP` naming the descriptor itself covers no distance; the
-        // same operator written as a difference from the PIC base does.
-        Cpu::I386 if ty == generic_reloc::TLV => r.desc.subtrahend.is_some(),
+        // A `@TLVP` naming the descriptor itself covers no distance. The
+        // same operator written as a difference from the PIC base does, and
+        // the writer sets that entry's bit where it makes the entry.
+        Cpu::I386 if ty == generic_reloc::TLV => false,
         Cpu::I386 => r.desc.pcrel,
         Cpu::Arm64 => match ty {
             arm64_reloc::BRANCH26

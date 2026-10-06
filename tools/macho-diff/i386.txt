@@ -2,10 +2,10 @@
 # symbol this file does not define comes out as, and the directives whose
 # meaning is Darwin's. A line may hold several statements separated by `;`.
 #
-# The relocation is `GENERIC_RELOC_VANILLA` for all of them -- a 32-bit
-# object has one relocation for everything a field can hold -- and what
-# differs is the width, whether the entry is PC-relative and what the field
-# is left holding.
+# The relocation is `GENERIC_RELOC_VANILLA` for all but the `@TLVP` lines --
+# a 32-bit object has one relocation for everything a field can hold -- and
+# what differs is the width, whether the entry is PC-relative and what the
+# field is left holding.
 calll _u
 jmp _u
 jne _u
