@@ -1,0 +1,40 @@
+# CodeView on ARM64, where a function's start is an
+# IMAGE_REL_ARM64_SECREL/IMAGE_REL_ARM64_SECTION pair and every row sits on a
+# four-byte boundary. The rest of the stream is the same as x86-64's.
+=== a line table
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+f:
+        .cv_loc 0 1 1 2
+        nop
+        .cv_loc 0 1 2 0
+        ret
+fend:
+        .cv_linetable 0, f, fend
+        .cv_filechecksums
+        .cv_stringtable
+=== a function named by a private label
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+        nop
+.Lf:
+        .cv_loc 0 1 1 0
+        nop
+.Lend:
+        .cv_linetable 0, .Lf, .Lend
+        .cv_filechecksums
+=== a stream in .debug$S
+        .cv_file 1 "a.c" "00112233445566778899aabbccddeeff" 1
+        .cv_func_id 0
+        .text
+        .globl  main
+main:
+        .cv_loc 0 1 3 1
+        nop
+        ret
+.Lmain_end:
+        .section .debug$S,"dr"
+        .long   4
+        .cv_linetable 0, main, .Lmain_end
+        .cv_filechecksums
+        .cv_stringtable

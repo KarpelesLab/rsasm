@@ -401,3 +401,111 @@ fn x86_64_unwind_directives_are_refused_for_arm64() {
     );
     assert!(e.contains("x86-64 unwind data"), "{e}");
 }
+
+/// CodeView line and file information: the `.debug$S` subsection stream, the
+/// `SECREL32`/`SECTION` pair naming the function it describes, and the
+/// four-byte alignment the string table gives the section.
+#[test]
+fn codeview_line_table_matches_llvm_mc() {
+    // llvm-mc -triple=x86_64-windows-msvc -filetype=obj
+    let src = r#"        .cv_file 1 "a.c" "00112233445566778899aabbccddeeff" 1
+        .cv_func_id 0
+        .text
+        .globl  main
+        .def    main; .scl 2; .type 32; .endef
+main:
+        .cv_loc 0 1 3 1
+        nop
+        .cv_loc 0 1 4 5
+        ret
+.Lmain_end:
+        .section .debug$S,"dr"
+        .long   4
+        .cv_linetable 0, main, .Lmain_end
+        .cv_filechecksums
+        .cv_stringtable
+"#;
+    let expected = unhex(&[
+        "64860400000000003601000009000000000000002e74657874000000000000000000000002000000b4000000000000000000",
+        "000000000000200030602e64617461000000000000000000000000000000b6000000000000000000000000000000400030c0",
+        "2e6273730000000000000000000000000000000000000000000000000000000000000000800030c02e646562756724530000",
+        "0000000000006c000000b60000002201000000000000020000004000304290c304000000f200000030000000000000000000",
+        "010002000000000000000200000024000000000000000300000001000000040000000100000005000000f400000018000000",
+        "01000000100100112233445566778899aabbccddeeff0000f30000000800000000612e63000000000c000000080000000b00",
+        "10000000080000000a002e7465787400000000000000010000000301020000000000000010192c730100000000002e646174",
+        "61000000000000000200000003010000000000000000000000000200000000002e6273730000000000000000030000000301",
+        "0000000000000000000000000300000000002e64656275672453000000000400000003016c00000002000000f211c4e00400",
+        "000000006d61696e000000000000000001002000020004000000",
+    ]);
+    assert_eq!(coff("x86-64", src), expected);
+}
+
+/// What llvm-mc refuses in a `.cv_*` directive, refused here too. The last
+/// two it answers with a complaint about a label it never named, and with a
+/// crash, so there is no wording to follow there; what matters is that
+/// neither assembler writes a number it cannot stand behind.
+#[test]
+fn codeview_refusals_follow_llvm_mc() {
+    let cases: &[(&str, &str)] = &[
+        (".cv_loc 0 1 1 1\n", "unassigned file number"),
+        (
+            ".cv_file 2 \"b.c\"\n.cv_func_id 0\n.cv_loc 0 1 1 1\n",
+            "unassigned file number",
+        ),
+        (".cv_file 1 \"a.c\"\n.cv_loc 0 1 1 1\n", "not introduced"),
+        (".cv_file 0 \"a.c\"\n", "file number less than one"),
+        (
+            ".cv_file 1 \"a.c\"\n.cv_file 1 \"a.c\"\n",
+            "already allocated",
+        ),
+        (".cv_func_id 0\n.cv_func_id 0\n", "already allocated"),
+        (".cv_func_id 4294967295\n", "[0, UINT_MAX)"),
+        (
+            ".cv_file 1 \"a.c\"\n.cv_func_id 0\n.cv_loc 0 1 1 1 is_stmt 2\n",
+            "is_stmt value not 0 or 1",
+        ),
+        (
+            ".cv_file 1 \"a.c\"\n.cv_func_id 0\nf:\n.cv_loc 0 1 1 0\n\
+             .section .other,\"xr\"\n.cv_loc 0 1 2 0\n",
+            "same section",
+        ),
+        (
+            ".cv_file 1 \"a.c\"\n.cv_filechecksumoffset 1\n",
+            "needs a `.cv_filechecksums`",
+        ),
+        (
+            ".cv_file 1 \"a.c\"\n.cv_file 3 \"b.c\"\n.cv_filechecksums\n",
+            "2 is missing",
+        ),
+    ];
+    for (src, want) in cases {
+        let e = errors("x86-64", Format::Coff, src);
+        assert!(e.contains(want), "{src}\n{e}");
+    }
+}
+
+/// The three families of `.cv_*` directive rsasm does not write yet say so
+/// rather than assembling into a stream that is missing what they described.
+#[test]
+fn codeview_families_rsasm_does_not_write_are_refused() {
+    for (src, want) in [
+        (
+            ".cv_file 1 \"a.c\"\n.cv_func_id 0\n.cv_inline_site_id 1 within 0 inlined_at 1 7 3\n",
+            "inlined call site",
+        ),
+        (
+            "f: nop\nfend:\n.cv_def_range f fend, reg, 17\n",
+            "local variable",
+        ),
+        (".cv_fpo_proc f 8\n", "i386 frame"),
+    ] {
+        let e = errors("x86-64", Format::Coff, src);
+        assert!(e.contains(want), "{src}\n{e}");
+    }
+}
+
+#[test]
+fn codeview_directives_need_a_coff_object() {
+    let e = errors("x86-64", Format::Elf, ".cv_file 1 \"a.c\"\n");
+    assert!(e.contains("-f coff"), "{e}");
+}

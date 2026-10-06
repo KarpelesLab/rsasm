@@ -78,6 +78,7 @@
 
 pub mod arch;
 pub mod assembler;
+pub(crate) mod codeview;
 pub(crate) mod coff;
 pub(crate) mod cursor;
 pub mod diag;

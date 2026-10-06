@@ -203,8 +203,8 @@ form by form and in random whole programs as well.
   writing the plain `R_X86_64_PC32` would have been a different program
 - PE/COFF relocatable objects for x86-64, i386 and ARM64 (`-f coff`, or NASM's
   `-f win64` and `-f win32`): COMDAT sections, weak externals, `.def`, `.rva`,
-  `.secrel32` and `@IMGREL`, x86-64 unwind data from `.seh_*`, and DWARF; see
-  [PE/COFF](#pecoff)
+  `.secrel32` and `@IMGREL`, x86-64 unwind data from `.seh_*`, DWARF, and
+  CodeView line and file information from `.cv_*`; see [PE/COFF](#pecoff)
 - Mach-O relocatable objects for x86-64 and arm64 (`-f macho`, or a Darwin
   triple such as `-a arm64-apple-macos`), with Darwin's section, symbol and
   data-in-code directives and its `__DWARF` segment, byte for byte as llvm-mc
@@ -350,15 +350,20 @@ form by form and in random whole programs as well.
   string functions, `SIZEOF`/`TOPOF`, `__PID_REG`, big-endian sections, and
   bit length specifiers that ask for a longer form than the shortest (all
   refused with the reason)
-- in PE/COFF objects: CodeView debug information (`.cv_file`, `.cv_loc`, the
-  `.cv_fpo_*` family), which is not a dialect of DWARF but a format of its own
-  -- subsections of `.debug$S` and `.debug$T` with a string table and file
-  checksums of their own; and unwind data for ARM64, whose `.seh_*` directives
-  are a different set from x86-64's and whose records are a packed word where
-  one will do and an extended one with epilogue scopes where it will not. Both
-  are refused with the reason. i386's `.safeseh` is refused for a reason of
-  its own: GNU as, the reference for x86 PE objects here, has no such
-  directive, so there is nothing to check an implementation of it against
+- in PE/COFF objects: the CodeView directives that describe more than line
+  and file information. `.cv_inline_site_id` and `.cv_inline_linetable`
+  describe an inlined call site, whose rows belong to the caller's table at
+  the call site's own position and are encoded as binary annotations;
+  `.cv_def_range` says where a local variable lives; the `.cv_fpo_*` family
+  describes an i386 frame in a `DEBUG_S_FRAMEDATA` subsection of its own.
+  There is no `.debug$T` to write: no `.cv_*` directive makes a type record,
+  so llvm-mc writes a type stream only for one a compiler hands it. Also
+  unwind data for ARM64, whose `.seh_*` directives are a different set from
+  x86-64's and whose records are a packed word where one will do and an
+  extended one with epilogue scopes where it will not. All of those are
+  refused with the reason. i386's `.safeseh` is refused for a reason of its
+  own: GNU as, the reference for x86 PE objects here, has no such directive,
+  so there is nothing to check an implementation of it against
 - in Mach-O objects: 32-bit machines (i386, armv7), and compact unwind on
   x86-64, which llvm-mc writes only for a triple naming a macOS of 10.6 or
   later and rsasm reads no version from a triple
@@ -1062,6 +1067,11 @@ Four differences remain:
 The producer named in the unit is `rsasm` and its version, or the value of
 `DEBUG_PRODUCER`, which llvm-mc also reads.
 
+A Windows object can carry CodeView instead, which is the format MSVC's
+toolchain reads and not a dialect of DWARF: the `.cv_*` directives write
+subsections of a `.debug$S` stream, with a string table and file checksums of
+their own. See [PE/COFF](#pecoff).
+
 ## PE/COFF
 
 `-f coff` writes a Windows object file for the target: an AMD64 object for
@@ -1109,6 +1119,20 @@ What the source can say:
   [Debug information](#debug-information). A function can carry both
   descriptions at once, `.seh_*` for the Windows unwinder and `.cfi_*` for a
   DWARF one, as it can in the mingw assembler
+- CodeView line and file information, which is what an MSVC-targeted
+  toolchain reads rather than DWARF: `.cv_file`, `.cv_func_id`, `.cv_loc`,
+  `.cv_linetable`, `.cv_filechecksums`, `.cv_filechecksumoffset`,
+  `.cv_string` and `.cv_stringtable` write the `DEBUG_S_LINES`,
+  `DEBUG_S_FILECHKSMS` and `DEBUG_S_STRINGTABLE` subsections of a `.debug$S`
+  stream. Each goes where its directive stands, in whatever section is
+  current, since that is the only thing that puts the subsections of a stream
+  in order; a line subsection names the function it describes with an
+  `IMAGE_REL_*_SECREL` and an `IMAGE_REL_*_SECTION` against its start and
+  holds each row's offset as a number the layout works out. A `.cv_loc` makes
+  its row where it stands rather than at the next instruction, as `.loc`
+  does, so two in a row make two rows at one address. llvm-mc is the only
+  reference here that writes any of this, since GNU as for mingw has no
+  `.cv_*` directive at all; see `src/codeview.rs`
 
 Backends choose relocations as ELF numbers, the one numbering all of them
 share, and name in a `reloc::RelocClass` what a number cannot say;
@@ -1156,9 +1180,12 @@ debugging sections.
 
 Neither reference writes `IMAGE_REL_AMD64_REL32_1` to `_5`: both measure every
 PC-relative field from four bytes past it and put the difference in the field,
-so rsasm does the same. Two things differ on purpose: ELF's `.type
-foo,@function` is accepted and says nothing, where llvm-mc refuses it, and a
-`.comm` alignment past 32 bytes is refused, where llvm-mc 22 crashes.
+so rsasm does the same. Four things differ on purpose: ELF's `.type
+foo,@function` is accepted and says nothing, where llvm-mc refuses it; and
+three are refused where llvm-mc 22 cannot answer either, but answers with a
+crash or an unhelpful diagnostic — a `.comm` alignment past 32 bytes, a
+`.cv_filechecksums` whose file table has a number skipped, and a CodeView
+field naming a file's place in a checksum table the source never asked for.
 
 In NASM source the object follows NASM's COFF writer rather than llvm-mc's:
 its section words (`code`, `data`, `rdata`, `bss`, `info`, `align=`) and
@@ -1445,12 +1472,12 @@ is what hid them from rsasm for as long as it did.
   characteristics and bytes, every symbol with its auxiliary records, every
   relocation — from single statements, hand-written programs and Clang's
   output, and against GNU as 2.47 for mingw as relocations with the addends
-  their fields hold. 302 of 302 comparisons match. `tools/oracles/build.sh`
+  their fields hold. 348 of 348 comparisons match. `tools/oracles/build.sh`
   builds GNU as for mingw alongside the other cross assemblers.
 - `tools/macho-diff/run.sh` for [Mach-O objects](#mach-o-objects), against
   llvm-mc 22 for x86-64 and arm64: header, load commands, sections, symbols
   and relocations as `llvm-readobj` reads them, over its own corpora and
-  those of `tools/mc-diff`. 1,772 of 1,772 match, and every object both
+  those of `tools/mc-diff`. 1,820 of 1,820 match, and every object both
   assemblers write is also identical byte for byte.
 
 The x86 backend is also fuzzed: `tools/fuzz/x86.py` generates random

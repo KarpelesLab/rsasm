@@ -1,0 +1,43 @@
+# CodeView on i386, where a function's start is an
+# IMAGE_REL_I386_SECREL/IMAGE_REL_I386_SECTION pair. The rest of the stream is
+# the same as x86-64's, so only what the machine decides is repeated here.
+=== a line table
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+_f:
+        .cv_loc 0 1 1 2
+        nop
+        .cv_loc 0 1 2 0
+        ret
+Lfend:
+        .cv_linetable 0, _f, Lfend
+        .cv_filechecksums
+        .cv_stringtable
+# llvm-mc keeps a Microsoft-style local label out of an i386 symbol table, so
+# both relocations name the section: the section-relative field carries the
+# label's offset, and the section index has no room for one.
+=== a function named by a label the symbol table drops
+        .cv_file 1 "a.c"
+        .cv_func_id 0
+        nop
+Lf:
+        .cv_loc 0 1 1 0
+        nop
+Lend:
+        .cv_linetable 0, Lf, Lend
+        .cv_filechecksums
+=== a stream in .debug$S
+        .cv_file 1 "a.c" "00112233445566778899aabbccddeeff" 1
+        .cv_func_id 0
+        .text
+        .globl  _main
+_main:
+        .cv_loc 0 1 3 1
+        nop
+        ret
+Lmain_end:
+        .section .debug$S,"dr"
+        .long   4
+        .cv_linetable 0, _main, Lmain_end
+        .cv_filechecksums
+        .cv_stringtable
