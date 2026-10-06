@@ -1417,9 +1417,9 @@ and a loader may do with the object, and leaving them out of the comparison
 is what hid them from rsasm for as long as it did.
 
 - `tools/gas-diff/run.sh` against GNU as 2.47, for x86 in 64-, 32- and
-  16-bit mode, in AT&T and Intel syntax. 8,675 of 8,675 match.
+  16-bit mode, in AT&T and Intel syntax. 12,552 of 12,552 match.
 - `tools/mc-diff/run.sh` against llvm-mc 22, for x86 and the targets LLVM
-  supports. 42,093 of 42,093 match across twenty-three target variants. For RISC-V
+  supports. 45,970 of 45,970 match across twenty-three target variants. For RISC-V
   it also compares whole objects, relocations included, since `la` and its
   relatives are only right if the linker is told the right things; llvm-mc runs
   with `+relax` there, because relaxation is on in rsasm as it is in GNU as,
