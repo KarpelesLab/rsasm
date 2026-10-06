@@ -627,6 +627,49 @@ dup v0.2d, v1.d[1]
 dup v0.8h, w3
 dup v0.4h, v2.h[7]
 
+# ---- the newest extensions, one or two forms each ----
+# FEAT_GCS's guarded call stack, FEAT_ITE's trace instrumentation, and the
+# thread switches of FEAT_TEV and FEAT_POE2. FEAT_TME's transactions are in
+# tools/xas-diff/aarch64-programs.txt instead: llvm-mc 22 has no name for
+# that extension at all, so GNU as is their only reference.
+gcspushm x0
+gcspushm x30
+gcspushm xzr
+gcspopm
+gcspopm x0
+gcspopm xzr
+gcsss1 x0
+gcsss1 xzr
+gcsss2 x30
+gcsss2 xzr
+gcspushx
+gcspopx
+gcspopcx
+gcsstr x0, [x1]
+gcsstr xzr, [sp]
+gcssttr x30, [x29]
+gcssttr x0, [sp]
+trcit x0
+trcit x30
+trcit xzr
+texit
+texit nb
+tenter 0
+tenter 127
+tenter 5, nb
+tchangef x0, x1
+tchangef x30, xzr
+tchangef x0, x1, nb
+tchangeb x0, x1
+tchangeb xzr, x30
+tchangeb x0, x1, nb
+tchangef x0, 0
+tchangef x30, 127
+tchangef x0, 5, nb
+tchangeb x0, 0
+tchangeb x30, 127
+tchangeb x0, 5, nb
+
 # ---- memory copy and memory set (FEAT_MOPS) ----
 # Every one of the 132 names, which spell the operation, the stage and the
 # hints: `cpyf` moves bytes and `cpy` may read them more than once, `p`, `m`

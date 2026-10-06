@@ -1,6 +1,7 @@
 # AArch64 snippets compared against GNU as, which is the other reference for
-# the families here: FEAT_MOPS and FEAT_CMPBR are in the llvm-mc corpora as
-# well, and this is where what GNU as alone reads can go.
+# the families here. FEAT_MOPS and FEAT_CMPBR are in the llvm-mc corpora as
+# well; FEAT_TME's transactions are only here, since llvm-mc 22 has no name
+# for that extension at all.
 #
 # A copy or a set warns here about opening a dependency sequence without
 # ending the one before it, which is a warning about the program and not
@@ -198,3 +199,50 @@ top:
         cbne    w5, #63, top
 bottom:
         ret
+
+=== the newest extensions, one or two forms each
+        gcspushm x0
+        gcspushm x30
+        gcspushm xzr
+        gcspopm
+        gcspopm x0
+        gcspopm xzr
+        gcsss1 x0
+        gcsss1 xzr
+        gcsss2 x30
+        gcsss2 xzr
+        gcspushx
+        gcspopx
+        gcspopcx
+        gcsstr x0, [x1]
+        gcsstr xzr, [sp]
+        gcssttr x30, [x29]
+        gcssttr x0, [sp]
+        trcit x0
+        trcit x30
+        trcit xzr
+        texit
+        texit nb
+        tenter 0
+        tenter 127
+        tenter 5, nb
+        tchangef x0, x1
+        tchangef x30, xzr
+        tchangef x0, x1, nb
+        tchangeb x0, x1
+        tchangeb xzr, x30
+        tchangeb x0, x1, nb
+        tchangef x0, 0
+        tchangef x30, 127
+        tchangef x0, 5, nb
+        tchangeb x0, 0
+        tchangeb x30, 127
+        tchangeb x0, 5, nb
+        tstart x0
+        tstart x30
+        tstart xzr
+        ttest x0
+        ttest xzr
+        tcancel 0
+        tcancel 65535
+        tcancel 0x1234

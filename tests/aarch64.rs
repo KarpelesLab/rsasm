@@ -1988,6 +1988,77 @@ fn memory_copy_diagnostics() {
     rejects("setgop [x0]!, x1!, x2", &["takes 2 operand"]);
 }
 
+/// The newest extensions' one and two forms each: FEAT_GCS's guarded call
+/// stack, FEAT_ITE's trace instrumentation, and the thread switches of
+/// FEAT_TEV and FEAT_POE2, whose last operand is an optional `nb`.
+#[test]
+fn the_newest_extensions() {
+    check(&[
+        ("gcspushm x0", "00 77 0b d5"),
+        ("gcspushm xzr", "1f 77 0b d5"),
+        // `gcspopm` with no register is the word `gcspopm xzr` is, which is
+        // how both references print it.
+        ("gcspopm", "3f 77 2b d5"),
+        ("gcspopm x30", "3e 77 2b d5"),
+        ("gcsss1 x0", "40 77 0b d5"),
+        ("gcsss2 xzr", "7f 77 2b d5"),
+        ("gcspushx", "9f 77 08 d5"),
+        ("gcspopx", "df 77 08 d5"),
+        ("gcspopcx", "bf 77 08 d5"),
+        ("gcsstr x0, [x1]", "20 0c 1f d9"),
+        ("gcsstr xzr, [sp]", "ff 0f 1f d9"),
+        ("gcssttr x30, [x29]", "be 1f 1f d9"),
+        ("trcit x0", "e0 72 0b d5"),
+        ("trcit xzr", "ff 72 0b d5"),
+        ("texit", "e0 03 ff d6"),
+        ("texit nb", "e0 07 ff d6"),
+        ("tenter 0", "00 00 e0 d4"),
+        ("tenter 127", "e0 0f e0 d4"),
+        ("tenter 5, nb", "a0 00 e2 d4"),
+        ("tchangef x0, x1", "20 00 80 d5"),
+        ("tchangeb x30, xzr", "fe 03 84 d5"),
+        ("tchangef x0, 127", "e0 0f 90 d5"),
+        ("tchangeb x0, 5, nb", "a0 00 96 d5"),
+    ]);
+}
+
+/// FEAT_TME's transactions. llvm-mc 22 has no name for the extension at all,
+/// so these bytes are GNU as's, from `tools/xas-diff/run.sh aarch64`.
+#[test]
+fn transactional_memory() {
+    check(&[
+        ("tstart x0", "60 30 23 d5"),
+        ("tstart xzr", "7f 30 23 d5"),
+        ("ttest x30", "7e 31 23 d5"),
+        ("tcancel 0", "00 00 60 d4"),
+        ("tcancel 65535", "e0 ff 7f d4"),
+    ]);
+}
+
+#[test]
+fn newest_extension_diagnostics() {
+    rejects("gcspushm w0", &["takes a 64-bit register"]);
+    rejects("gcspushm sp", &["cannot be the stack pointer"]);
+    rejects("gcspushm", &["takes 1 operand"]);
+    rejects("gcspushx x0", &["takes 0 operand"]);
+    // The stack stores reach the stack pointer, so register 31 there is
+    // `sp`, not the zero register.
+    rejects("gcsstr x0, [xzr]", &["cannot use the zero register"]);
+    rejects(
+        "gcsstr x0, [x1, 8]",
+        &["addresses through a base register only"],
+    );
+    rejects("trcit w0", &["takes a 64-bit register"]);
+    rejects(
+        "tcancel 65536",
+        &["a transaction cancellation reason", "0..=65535"],
+    );
+    rejects("tenter 128", &["a thread index", "0..=127"]);
+    rejects("tchangef x0, 128", &["a thread index", "0..=127"]);
+    rejects("texit x0", &["is `nb` or nothing"]);
+    rejects("tchangef x0, x1, x2", &["is `nb` or nothing"]);
+}
+
 /// FEAT_LSFE's floating-point atomics and FEAT_LSCP's acquire-release pair,
 /// which the generated table gained with the rest of the general-purpose
 /// groups. A `ldf<op>` returns the old value and a `stf<op>` discards it,

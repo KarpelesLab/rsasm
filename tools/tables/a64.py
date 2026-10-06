@@ -130,6 +130,11 @@ GP_SINGLES = re.compile(r"""
     # binutils too -- and their three registers must all be different, which
     # no measured row could say. `insn.rs` builds the name the same way.
   | cpy f? [pme] (wt|rt|t)? (wn|rn|n)? | set (g o?)? [pme] t? n?
+    # The newest extensions, one or two forms each: FEAT_GCS's guarded call
+    # stack, FEAT_ITE's trace instrumentation, FEAT_TME's transactions and
+    # the thread switches of FEAT_TEV and FEAT_POE2.
+  | gcs (push|pop) (m|x|cx) | gcsss [12] | gcs st t? r
+  | trcit | tstart | ttest | tcancel | tenter | texit | tchange [bf]
 """, re.X)
 
 

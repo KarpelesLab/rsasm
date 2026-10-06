@@ -115,6 +115,20 @@ impl Insn<'_, '_> {
         }
     }
 
+    /// A 64-bit general-purpose register, where register 31 is the zero
+    /// register: what the one-register forms of the newest extensions take.
+    fn xreg(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<u32> {
+        let r = self.gpr(cx, i)?;
+        if r.class != RegClass::X {
+            cx.error(
+                self.ops[i].span,
+                format!("`{}` takes a 64-bit register", self.mnemonic),
+            );
+            return None;
+        }
+        Some(u32::from(r.num))
+    }
+
     fn cond(&self, cx: &mut AsmCtx<'_>, i: usize) -> Option<u8> {
         let op = self.op(i)?;
         match op.cond() {
@@ -398,6 +412,25 @@ pub(crate) fn handwritten(mnemonic: &str) -> bool {
                 | "st64bv"
                 | "st64bv0"
                 | "rprfm"
+                // One or two forms each, from the newest extensions:
+                // FEAT_GCS, FEAT_TME, FEAT_ITE, FEAT_TEV and FEAT_POE2.
+                | "gcspushm"
+                | "gcspopm"
+                | "gcsss1"
+                | "gcsss2"
+                | "gcspushx"
+                | "gcspopx"
+                | "gcspopcx"
+                | "gcsstr"
+                | "gcssttr"
+                | "tstart"
+                | "ttest"
+                | "tcancel"
+                | "trcit"
+                | "tenter"
+                | "texit"
+                | "tchangeb"
+                | "tchangef"
         )
         || is_mops(mnemonic)
         || cmpbr_name(mnemonic).is_some()
@@ -545,6 +578,12 @@ pub fn assemble(
         "msr" => msr(cx, &i),
         "sys" | "sysl" => sys_raw(cx, &i),
         "smstart" | "smstop" => sme_mode(cx, &i),
+
+        "gcspushm" | "gcspopm" | "gcsss1" | "gcsss2" | "gcspushx" | "gcspopx" | "gcspopcx"
+        | "gcsstr" | "gcssttr" => gcs(cx, &i),
+        "tstart" | "ttest" | "tcancel" => tme(cx, &i),
+        "trcit" => trcit(cx, &i),
+        "tenter" | "texit" | "tchangeb" | "tchangef" => tev(cx, &i),
 
         // `dc civac, x0` and `esb` and their like: a name in the generated
         // system tables is all these mnemonics are.
@@ -2775,6 +2814,131 @@ fn mops_span(toks: &[Token]) -> Span {
     match (toks.first(), toks.last()) {
         (Some(a), Some(b)) => a.span.to(b.span),
         _ => Span::DUMMY,
+    }
+}
+
+// ---- the newest extensions, one or two forms each ---------------------------
+
+/// FEAT_GCS's guarded call stack.
+///
+/// `gcspushm` and `gcsss1` push, `gcspopm` and `gcsss2` pop, the two stores
+/// write through the stack's own permissions, and the three `x` forms move
+/// the exception-return state, which is not a value anything names: they
+/// have no operand at all. `gcspopm` with no operand is the same word as
+/// `gcspopm xzr`, which is how both references print it, so the register is
+/// optional here rather than a form of its own.
+fn gcs(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    // The two stores name a register and an address, and are the only forms
+    // here outside the system encoding space.
+    if let Some(store) = match i.mnemonic {
+        "gcsstr" => Some(0xd91f_0c00u32),
+        "gcssttr" => Some(0xd91f_1c00),
+        _ => None,
+    } {
+        i.arity(cx, &[2]).then_some(())?;
+        let rt = i.xreg(cx, 0)?;
+        let addr = base_only(cx, i, 1, true)?;
+        return one(store | field(u32::from(addr.num), 5, 5) | field(rt, 0, 5));
+    }
+    if let Some(word) = match i.mnemonic {
+        "gcspushx" => Some(0xd508_779fu32),
+        "gcspopcx" => Some(0xd508_77bf),
+        "gcspopx" => Some(0xd508_77df),
+        _ => None,
+    } {
+        i.arity(cx, &[0]).then_some(())?;
+        return one(word);
+    }
+    let base: u32 = match i.mnemonic {
+        "gcspushm" => 0xd50b_7700,
+        "gcsss1" => 0xd50b_7740,
+        "gcspopm" => 0xd52b_7720,
+        _ => 0xd52b_7760,
+    };
+    if i.mnemonic == "gcspopm" && i.ops.is_empty() {
+        return one(base | field(31, 0, 5));
+    }
+    i.arity(cx, &[1]).then_some(())?;
+    one(base | field(i.xreg(cx, 0)?, 0, 5))
+}
+
+/// FEAT_TME's transactions: `tstart` and `ttest` write a result to a
+/// register, and `tcancel` names the 16-bit reason it fails with.
+///
+/// llvm-mc 22 does not know TME at all, so these encodings and the corpus
+/// lines for them are GNU as's.
+fn tme(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1]).then_some(())?;
+    if i.mnemonic == "tcancel" {
+        let reason = i.imm(cx, 0, 0, 0xffff, "a transaction cancellation reason")? as u32;
+        return one(0xd460_0000 | field(reason, 5, 16));
+    }
+    let base: u32 = if i.mnemonic == "tstart" {
+        0xd523_3060
+    } else {
+        0xd523_3160
+    };
+    one(base | field(i.xreg(cx, 0)?, 0, 5))
+}
+
+/// FEAT_ITE's trace instrumentation, which records one register's value in
+/// the trace stream.
+fn trcit(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    i.arity(cx, &[1]).then_some(())?;
+    one(0xd50b_72e0 | field(i.xreg(cx, 0)?, 0, 5))
+}
+
+/// FEAT_TEV's and FEAT_POE2's thread switches: `tenter` and `texit` enter
+/// and leave a thread, and `tchangef` and `tchangeb` move to the one in
+/// front of or behind the current one, named by a register or by a number.
+///
+/// Each takes an optional `nb` at the end, which says the switch is not
+/// balanced by its opposite.
+fn tev(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>) -> Option<Vec<Variant>> {
+    match i.mnemonic {
+        "texit" => {
+            i.arity(cx, &[0, 1]).then_some(())?;
+            one(0xd6ff_03e0 | field(not_balanced(cx, i, 0)?, 10, 1))
+        }
+        "tenter" => {
+            i.arity(cx, &[1, 2]).then_some(())?;
+            let index = i.imm(cx, 0, 0, 127, "a thread index")? as u32;
+            one(0xd4e0_0000 | field(not_balanced(cx, i, 1)?, 17, 1) | field(index, 5, 7))
+        }
+        _ => {
+            i.arity(cx, &[2, 3]).then_some(())?;
+            let forward = i.mnemonic == "tchangef";
+            let rd = i.xreg(cx, 0)?;
+            let nb = field(not_balanced(cx, i, 2)?, 17, 1);
+            let (base, source) = match i.op(1).and_then(|o| o.reg()) {
+                Some(_) => (
+                    if forward { 0xd580_0000u32 } else { 0xd584_0000 },
+                    i.xreg(cx, 1)?,
+                ),
+                None => (
+                    if forward { 0xd590_0000 } else { 0xd594_0000 },
+                    i.imm(cx, 1, 0, 127, "a thread index")? as u32,
+                ),
+            };
+            one(base | nb | field(source, 5, 7) | field(rd, 0, 5))
+        }
+    }
+}
+
+/// The `nb` a thread switch may end with, or 0 where it does not.
+fn not_balanced(cx: &mut AsmCtx<'_>, i: &Insn<'_, '_>, at: usize) -> Option<u32> {
+    let Some(op) = i.ops.get(at) else {
+        return Some(0);
+    };
+    match op.word() {
+        Some(n) if cx.name(n).eq_ignore_ascii_case("nb") => Some(1),
+        _ => {
+            cx.error(
+                op.span,
+                format!("the last operand of `{}` is `nb` or nothing", i.mnemonic),
+            );
+            None
+        }
     }
 }
 
