@@ -67,6 +67,12 @@ impl Reg {
         self.num >= 16
     }
 
+    /// True for APX's `r16`-`r31`, whose fourth number bit only the REX2
+    /// prefix and the extended EVEX one carry.
+    pub fn needs_rex2(&self) -> bool {
+        self.is_gpr() && self.num >= 16
+    }
+
     /// x86 forbids `rsp`/`esp` as a SIB index. A vector register is legal
     /// there only in the VSIB form used by gather and scatter, which the
     /// encoder checks separately.
@@ -172,9 +178,9 @@ static REGS: &[Entry] = &{
         // The top of the x87 stack. `st(1)`-`st(7)` are spelled with an index
         // in parentheses, which the operand parsers read as one register.
         e("st", St, 0, 10, false),
-        // xmm0-31, ymm0-31 and zmm0-31, and the control and debug registers,
-        // are added by `tables()`: rows of one shape each, which read better
-        // generated than tabulated.
+        // xmm0-31, ymm0-31 and zmm0-31, the control and debug registers, and
+        // APX's `r16`-`r31` are added by `tables()`: rows of one shape each,
+        // which read better generated than tabulated.
     ]
 };
 
@@ -233,6 +239,23 @@ fn tables() -> &'static Tables {
                         },
                     );
                 }
+            }
+        }
+        // APX's sixteen further general registers. They are spelled by number
+        // in every width -- `r16`, `r16d`, `r16w`, `r16b` -- so there is no
+        // historical name to tabulate, and no high-byte half.
+        for num in 16..32u8 {
+            for (suffix, size) in [("", 8u8), ("d", 4), ("w", 2), ("b", 1)] {
+                let name: &'static str = Box::leak(format!("r{num}{suffix}").into_boxed_str());
+                add(
+                    name,
+                    Reg {
+                        class: RegClass::Gpr,
+                        num,
+                        size,
+                        rex_required: false,
+                    },
+                );
             }
         }
         for (stem, class, size) in VECTOR_FAMILIES {
@@ -361,6 +384,27 @@ mod tests {
         ] {
             assert_eq!(name_of(lookup(n).unwrap()), n);
         }
+    }
+
+    #[test]
+    fn apx_registers_exist_in_every_width() {
+        for (name, size) in [("r16", 8u8), ("r23d", 4), ("r28w", 2), ("r31b", 1)] {
+            let r = lookup(name).unwrap();
+            assert_eq!(r.class, RegClass::Gpr);
+            assert_eq!(r.size, size);
+            assert!(r.needs_rex2(), "`{name}` needs REX2");
+            assert!(r.only_64());
+            assert_eq!(name_of(r), name);
+        }
+        assert_eq!(lookup("r16").unwrap().num, 16);
+        assert_eq!(lookup("r31b").unwrap().num, 31);
+        assert!(lookup("r32").is_none());
+        assert!(lookup("r16l").is_none());
+        assert!(!lookup("r15").unwrap().needs_rex2());
+        // `r20` is a legal SIB index: only `rsp`'s number is reserved there,
+        // and the fourth bit tells the two apart.
+        assert!(lookup("r20").unwrap().valid_index());
+        assert!(lookup_in_mode("r16", 32).is_none());
     }
 
     #[test]

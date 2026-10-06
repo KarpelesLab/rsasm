@@ -10,7 +10,7 @@ use crate::arch::{ArchState, Architecture, AsmCtx, Endian, FlatModifier, InsnReq
 use crate::cursor::Cursor;
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::expr::ExprRef;
-use crate::lexer::TokKind;
+use crate::lexer::{Punct, TokKind};
 use crate::section::Variant;
 use crate::source::Span;
 use crate::symbol::Binding;
@@ -417,8 +417,11 @@ enum PrefixKind {
     Data(u8),
     /// `addr16`/`addr32`: the address size override, with its size.
     Addr(u8),
-    /// `{vex}`, `{vex3}`, `{evex}`: which encoding to choose. Emits nothing.
+    /// `{vex}`, `{vex3}`, `{evex}`, `{rex}`, `{rex2}`: which encoding to
+    /// choose. Emits nothing of its own.
     Encoding(encode::EncodingPrefix),
+    /// `{nf}`: APX's no-flags form of the instruction.
+    NoFlags,
 }
 
 fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
@@ -427,6 +430,9 @@ fn prefix_kind(mnemonic: &str) -> Option<PrefixKind> {
         "{vex}" | "{vex2}" => PrefixKind::Encoding(E::Vex),
         "{vex3}" => PrefixKind::Encoding(E::Vex3),
         "{evex}" => PrefixKind::Encoding(E::Evex),
+        "{rex}" => PrefixKind::Encoding(E::Rex),
+        "{rex2}" => PrefixKind::Encoding(E::Rex2),
+        "{nf}" => PrefixKind::NoFlags,
         "lock" => PrefixKind::Lock,
         "rep" | "repe" | "repz" => PrefixKind::Rep(0xf3),
         "repne" | "repnz" => PrefixKind::Rep(0xf2),
@@ -470,7 +476,23 @@ fn assemble_inner(
                     );
                     return None;
                 }
-                prefixes.encoding = Some(e);
+                // `{rex2}` wins over `{rex}` whichever order the two were
+                // written in, as GNU as resolves the pair.
+                if prefixes.encoding != Some(encode::EncodingPrefix::Rex2)
+                    || e != encode::EncodingPrefix::Rex
+                {
+                    prefixes.encoding = Some(e);
+                }
+            }
+            PrefixKind::NoFlags => {
+                if req.cursor().at_end() {
+                    cx.error(
+                        req.mnemonic_span,
+                        format!("`{mnemonic}` needs an instruction after it"),
+                    );
+                    return None;
+                }
+                prefixes.nf = true;
             }
             // A size prefix names the size it switches to, so the mode's own
             // size is refused as redundant, and long mode has no 32-bit
@@ -522,14 +544,29 @@ fn assemble_inner(
             return Some(vec![Variant::new(bytes)]);
         }
         let tok = cur.advance();
-        let Some(next) = tok.ident() else {
+        // The parser reads a `{...}` pseudo-prefix as a mnemonic only where a
+        // statement begins, so a second one -- `{evex} {nf} add` -- still has
+        // its braces here and is put back together the same way.
+        let braced = tok.is_punct(Punct::LBrace)
+            && matches!(cur.peek().kind, TokKind::Ident(_))
+            && cur.nth(1).is_punct(Punct::RBrace);
+        let (next, next_span) = if braced {
+            let TokKind::Ident(word) = cur.advance().kind else {
+                unreachable!("the token was checked to be an identifier")
+            };
+            let close = cur.advance();
+            let text = format!("{{{}}}", cx.name(word).to_ascii_lowercase());
+            (cx.interner.intern(&text), tok.span.to(close.span))
+        } else if let Some(n) = tok.ident() {
+            (n, tok.span)
+        } else {
             cx.error(tok.span, "expected an instruction after a prefix");
             return None;
         };
         let next_text = cx.name(next).to_ascii_lowercase();
         let sub = InsnRequest {
             mnemonic: next,
-            mnemonic_span: tok.span,
+            mnemonic_span: next_span,
             operands: cur.rest(),
             span: req.span,
         };
@@ -560,7 +597,21 @@ fn assemble_inner(
     // of a displacement, so they are offered to the parser for an instruction
     // that has a relative form and are an unknown name anywhere else, as they
     // are to NASM.
-    let cur = req.cursor();
+    let mut cur = req.cursor();
+    // `{dfv=...}` qualifies the instruction rather than an operand, and GNU as
+    // writes it between the mnemonic and the first operand with no comma, so
+    // it is read here instead of being parsed as one.
+    if cur.check_punct(Punct::LBrace) {
+        let mut p = OperandParser {
+            cx,
+            syntax,
+            addr_size: if bits == 64 { 8 } else { bits / 8 },
+            relative: false,
+        };
+        if let Some(found) = p.dfv_suffix(&mut cur) {
+            prefixes.dfv = Some(found?);
+        }
+    }
     let pieces = cur.split_commas();
     let relative = resolved
         .defs
@@ -609,12 +660,17 @@ fn assemble_inner(
     }
     // `imul $imm, %reg` multiplies the register in place: it is the
     // three-operand form with the register as both source and destination.
-    if named("imul")
+    // APX's `imulzu` has the same shape, and `clr` names the one register its
+    // encoding holds twice.
+    if (named("imul") || mnemonic == "imulzu")
         && ops.len() == 2
         && ops[0].reg().is_some()
         && matches!(ops[1].kind, OperandKind::Imm(_))
     {
         ops.insert(1, ops[0].clone());
+    }
+    if mnemonic == "clr" && ops.len() == 1 && ops[0].reg().is_some() {
+        ops.push(ops[0].clone());
     }
     // AT&T writes a direct far pointer as two immediates, segment first.
     if syntax == Syntax::Att
@@ -715,18 +771,46 @@ fn assemble_inner(
     }
     // `{vex}` and `{evex}` narrow the choice to one encoding. That is the only
     // way to reach the VEX forms of AVX-VNNI and AVX-IFMA, whose mnemonics
-    // AVX-512 already spells.
+    // AVX-512 already spells, and the only way to ask for an APX form of an
+    // instruction whose legacy one is shorter. `{rex}` and `{rex2}` ask for a
+    // legacy row instead, being prefixes of that encoding rather than
+    // encodings of their own.
     if let Some(want) = prefixes.encoding {
-        let enc = match want {
-            encode::EncodingPrefix::Evex => Enc::Evex,
-            _ => Enc::Vex,
+        use encode::EncodingPrefix as E;
+        let (name, keep): (_, fn(&Def) -> bool) = match want {
+            E::Evex => ("EVEX", |d| matches!(d.enc, Enc::Evex | Enc::Apx)),
+            E::Rex | E::Rex2 => ("legacy", |d| d.enc == Enc::Legacy),
+            _ => ("VEX", |d| d.enc == Enc::Vex),
         };
-        matches.retain(|d| d.enc == enc);
+        matches.retain(|d| keep(d));
         if matches.is_empty() {
-            let name = if enc == Enc::Evex { "EVEX" } else { "VEX" };
             cx.error(
                 req.span,
                 format!("`{mnemonic}` has no {name} encoding for these operands"),
+            );
+            return None;
+        }
+    }
+    // `{nf}` exists only for the rows Intel gave a no-flags form, and asking
+    // for it is also what chooses the APX encoding over the legacy one.
+    if prefixes.nf {
+        matches.retain(|d| d.flags & insn::APX_NF != 0);
+        if matches.is_empty() {
+            cx.error(
+                req.span,
+                format!("`{mnemonic}` has no `{{nf}}` form for these operands"),
+            );
+            return None;
+        }
+    }
+    // `{dfv=...}` only means anything where the prefix holds a condition for
+    // it to be compared against.
+    if let Some((_, dspan)) = prefixes.dfv {
+        matches.retain(|d| d.scc.is_some());
+        if matches.is_empty() {
+            cx.error(
+                dspan,
+                format!("`{mnemonic}` takes no `{{dfv=...}}` decorator"),
             );
             return None;
         }
@@ -834,6 +918,7 @@ fn assemble_inner(
         return None;
     }
     let matches = prefer_evex_when_required(matches, &ops, rounding.is_some());
+    let matches = prefer_apx_when_required(matches, &ops);
 
     // A relative branch gets one variant per displacement width, smallest
     // first, so the layout pass can shorten it once addresses are known.
@@ -931,7 +1016,9 @@ fn prefer_evex_when_required<'d>(
     ops: &[Operand],
     rounding: bool,
 ) -> Vec<&'d Def> {
-    let high = |r: &reg::Reg| r.needs_evex_ext();
+    // A general register's fourth number bit is APX's business, not the
+    // vector file's, and REX2 carries it on a legacy row.
+    let high = |r: &reg::Reg| r.needs_evex_ext() && !r.is_gpr();
     let needs_evex = rounding
         || ops.iter().any(|o| {
             !o.decor.is_empty()
@@ -945,6 +1032,35 @@ fn prefer_evex_when_required<'d>(
         return matches;
     }
     matches.into_iter().filter(|d| d.enc == Enc::Evex).collect()
+}
+
+/// Narrows the candidates to the forms that can carry an `r16`-`r31` operand.
+///
+/// Such an operand is encodable either way where the instruction has a REX2
+/// encoding, and GNU as prefers that: `addq %r16, %rbx` is four bytes under
+/// REX2 and six under the extended EVEX prefix. Where the preferred row is out
+/// of REX2's reach -- the `0F 38` map, or a VEX row, neither of which REX2
+/// covers -- only an EVEX row is left, promoted or AVX-512's own.
+fn prefer_apx_when_required<'d>(matches: Vec<&'d Def>, ops: &[Operand]) -> Vec<&'d Def> {
+    let egpr = |r: &reg::Reg| r.needs_rex2();
+    let needs = ops.iter().any(|o| match &o.kind {
+        OperandKind::Reg(r) => egpr(r),
+        OperandKind::Mem(m) => {
+            m.base.as_ref().is_some_and(egpr) || m.index.as_ref().is_some_and(egpr)
+        }
+        OperandKind::Indirect(inner) => match &**inner {
+            OperandKind::Reg(r) => egpr(r),
+            OperandKind::Mem(m) => {
+                m.base.as_ref().is_some_and(egpr) || m.index.as_ref().is_some_and(egpr)
+            }
+            _ => false,
+        },
+        _ => false,
+    });
+    if !needs || matches[0].egpr_ok() || !matches.iter().any(|d| d.egpr_ok()) {
+        return matches;
+    }
+    matches.into_iter().filter(|d| d.egpr_ok()).collect()
 }
 
 /// True if a `{rn-sae}` or `{sae}` operand at `pos` (in Intel order) is where

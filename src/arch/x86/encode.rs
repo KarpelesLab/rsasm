@@ -2,8 +2,9 @@
 //! displacement and immediate.
 
 use super::insn::{
-    ADDR16, ADDR32, DEF64, DISTINCT_DEST, Def, EVEX_ER, EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK,
-    NO_REX_W, NO_REX_W_GAS, NO64, NO66, NOMASK, ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Vk, WAIT,
+    ADDR16, ADDR32, APX_ND, APX_NF_ON, APX_REX2, DEF64, DISTINCT_DEST, DISTINCT_PAIR, Def, EVEX_ER,
+    EVEX_SAE, Enc, IMM64, ModRm, NEEDS_MASK, NO_REX_W, NO_REX_W_GAS, NO_RSP, NO64, NO66, NOMASK,
+    ONLY64, Op, PLUSREG, R_IN_RM, SIBMEM, Vk, WAIT,
 };
 use super::operand::{Decor, Mem, Operand, OperandKind, RoundCtl};
 use super::reg::{self, Reg, RegClass};
@@ -26,8 +27,15 @@ pub struct Prefixes {
     /// address size override whether or not the operands need it.
     pub data: bool,
     pub addr: bool,
-    /// A `{vex}`, `{vex3}` or `{evex}` pseudo-prefix.
+    /// A `{vex}`, `{vex3}`, `{evex}`, `{rex}` or `{rex2}` pseudo-prefix.
     pub(crate) encoding: Option<EncodingPrefix>,
+    /// `{nf}`: APX's no-flags form, which leaves the flags as they were.
+    pub(crate) nf: bool,
+    /// The mask `{dfv=...}` supplies for `ccmp` and `ctest`, in the prefix's
+    /// own bit order: overflow, sign, zero, carry. GNU as calls it a
+    /// pseudo-suffix and takes it only between the mnemonic and the operands,
+    /// which is why it belongs here and not with them.
+    pub(crate) dfv: Option<(u8, Span)>,
 }
 
 /// The encoding a pseudo-prefix asks for.
@@ -39,6 +47,10 @@ pub(crate) enum EncodingPrefix {
     Vex3,
     /// `{evex}`: EVEX even where VEX would do.
     Evex,
+    /// `{rex}`: an empty REX prefix even where no register needs one.
+    Rex,
+    /// `{rex2}`: the two-byte REX2 prefix, likewise.
+    Rex2,
 }
 
 /// Which operand fills which encoding slot, worked out from the pattern.
@@ -278,6 +290,9 @@ pub fn encode(
     // Whether a REX prefix is part of the encoding, which only the two
     // relaxable `@GOTPCREL` relocation numbers care about.
     let mut has_rex = false;
+    // REX2 names the opcode map in a bit of its own, so the `0F` escape byte
+    // the legacy opcode starts with is not written again.
+    let mut drop_escape = false;
 
     // ---- legacy prefixes --------------------------------------------------
     // In the order GNU as writes them, which is by kind rather than as
@@ -341,8 +356,10 @@ pub fn encode(
     let tlsdesc_call = check_tls(cx, target, def, &roles, &mut mem)?;
 
     // Only EVEX has the fifth register-number bit, so `xmm16` and above are
-    // unreachable from any other encoding even though they parse fine.
-    if def.enc != Enc::Evex {
+    // unreachable from any other encoding even though they parse fine. A
+    // general register's fourth bit is in reach of REX2 as well, which is why
+    // a legacy row is let through to the check that builds that prefix.
+    if !matches!(def.enc, Enc::Evex | Enc::Apx) {
         let high = [
             roles.reg,
             roles.nds,
@@ -352,12 +369,33 @@ pub fn encode(
         .into_iter()
         .flatten()
         .chain(mem.iter().flat_map(|m| [m.base, m.index]).flatten())
-        .find(|r| r.needs_evex_ext());
+        .find(|r| r.needs_evex_ext() && !(def.enc == Enc::Legacy && r.needs_rex2()));
         if let Some(r) = high {
             cx.error(
                 span,
                 format!(
                     "`{}` is only reachable through an EVEX-encoded instruction",
+                    reg::name_of(r)
+                ),
+            );
+            return None;
+        }
+    }
+
+    // `ah`, `ch`, `dh` and `bh` have no encoding under any prefix that came
+    // after REX, which took their register numbers for the low halves of
+    // `rsp` and its neighbours. The legacy path says the same thing where it
+    // finds it has to write a REX byte.
+    if def.enc != Enc::Legacy {
+        let high = [roles.reg, roles.nds, roles.rm.and_then(rm_register)]
+            .into_iter()
+            .flatten()
+            .find(|r| r.class == RegClass::GprHigh);
+        if let Some(r) = high {
+            cx.error(
+                span,
+                format!(
+                    "`{}` cannot be used in an instruction that needs an EVEX or REX2 prefix",
                     reg::name_of(r)
                 ),
             );
@@ -455,6 +493,31 @@ pub fn encode(
         );
         return None;
     }
+    if def.flags & NO_RSP != 0
+        && let Some(r) = [roles.nds, rm_reg]
+            .into_iter()
+            .flatten()
+            .find(|r| r.num == 4)
+    {
+        cx.error(
+            span,
+            format!(
+                "`{}` cannot be one of a paired push or pop, which moves it itself",
+                reg::name_of(r)
+            ),
+        );
+        return None;
+    }
+    if def.flags & DISTINCT_PAIR != 0 && roles.nds.is_some() && roles.nds == rm_reg {
+        cx.error(span, "the two registers popped must be different");
+        return None;
+    }
+    // GNU as refuses `lock` on everything APX promoted, extended EVEX having
+    // no encoding for it.
+    if prefixes.lock && def.enc == Enc::Apx {
+        cx.error(span, "this form cannot be combined with `lock`");
+        return None;
+    }
     // AMX's tile arithmetic reads and writes whole tiles in place, so no two
     // of its three tiles may be the same.
     if let (Some(a), Some(b), Some(c)) = (roles.reg, roles.nds, rm_reg)
@@ -487,19 +550,35 @@ pub fn encode(
     }
 
     // The REX-style register extension bits, worked out before deciding which
-    // prefix will carry them. `X` doubles as the fifth bit of a register-direct r/m
-    // operand under EVEX, which is how `xmm16`-`xmm31` are reached there.
-    let base_reg = mem.as_ref().and_then(|m| m.base);
-    let index_reg = mem.as_ref().and_then(|m| m.index);
+    // prefix will carry them.
+    //
+    // A string instruction's operands only name an address size and, for the
+    // source, a segment: neither register is encoded, so neither contributes
+    // an extension bit. Both references write `movsb (%r8), %es:(%rdi)` as
+    // the plain `A4`.
+    let encoded_mem = mem.as_ref().filter(|_| !is_string);
+    let base_reg = encoded_mem.and_then(|m| m.base);
+    let index_reg = encoded_mem.and_then(|m| m.index);
     let ext_r = !plus_reg && roles.reg.is_some_and(|r| r.num & 8 != 0);
     let ext_b = rm_reg.is_some_and(|r| r.num & 8 != 0)
         || base_reg.is_some_and(|r| r.num & 8 != 0)
         || (plus_reg && roles.reg.is_some_and(|r| r.num & 8 != 0));
-    let ext_x = match (&index_reg, rm_reg) {
-        (Some(i), _) => i.num & 8 != 0,
-        (None, Some(r)) if def.enc == Enc::Evex => r.num & 16 != 0,
-        _ => false,
-    };
+    // The fifth bit of a register-direct r/m operand. AVX-512 keeps a vector
+    // register's in `X`, which is why `xmm16` needs EVEX; a general register's
+    // is APX's `B4`, in both EVEX layouts, since a promoted instruction has no
+    // vector operand to compete for the bit.
+    let rm_high = rm_reg.filter(|r| r.num & 16 != 0);
+    let rm_high_in_x = rm_high.is_some_and(|r| def.enc == Enc::Evex && r.is_vector());
+    let ext_x = index_reg.map_or(rm_high_in_x, |i| i.num & 8 != 0);
+    // The rest of APX's fourth number bits, which REX2 and both EVEX layouts
+    // carry in fields of their own: `B4` also extends a memory base, `X4` the
+    // SIB index when it is a general register, `R4` ModRM.reg -- and that last
+    // is the bit AVX-512 already calls `R'`.
+    let ext_r4 = !plus_reg && roles.reg.is_some_and(|r| r.num & 16 != 0);
+    let ext_b4 = (rm_high.is_some() && !rm_high_in_x)
+        || base_reg.is_some_and(|r| r.num & 16 != 0)
+        || (plus_reg && roles.reg.is_some_and(|r| r.num & 16 != 0));
+    let ext_x4 = index_reg.is_some_and(|r| r.is_gpr() && r.num & 16 != 0);
 
     match def.enc {
         Enc::Legacy => {
@@ -544,8 +623,20 @@ pub fn encode(
             let has_high_byte = roles.reg.is_some_and(|r| r.class == RegClass::GprHigh)
                 || rm_reg.is_some_and(|r| r.class == RegClass::GprHigh);
 
-            let need_rex = rex_w || ext_r || ext_b || ext_x || forced_rex;
-            if need_rex {
+            // REX2 is REX with a fourth bit for each register field and one
+            // for the opcode map, so it is what carries an `r16`-`r31`
+            // operand -- and `{rex2}` asks for it outright, as `pushp` and
+            // `jmpabs` need it to be told from the opcode they share.
+            let want_rex2 =
+                prefixes.encoding == Some(EncodingPrefix::Rex2) || def.flags & APX_REX2 != 0;
+            let need_rex2 = ext_r4 || ext_b4 || ext_x4 || want_rex2;
+            let need_rex = rex_w
+                || ext_r
+                || ext_b
+                || ext_x
+                || forced_rex
+                || prefixes.encoding == Some(EncodingPrefix::Rex);
+            if need_rex || need_rex2 {
                 if has_high_byte {
                     cx.error(
                         span,
@@ -557,6 +648,29 @@ pub fn encode(
                     cx.error(span, "this operand combination requires 64-bit mode");
                     return None;
                 }
+            }
+            if need_rex2 {
+                if !def.rex2_ok() {
+                    cx.error(span, "this instruction has no REX2 encoding");
+                    return None;
+                }
+                // The one map bit tells the `0F` map from the one-byte one,
+                // which is as far as REX2 reaches.
+                let map0 = u8::from(def.opcode.len() == 2);
+                drop_escape = map0 == 1;
+                bytes.push(0xd5);
+                bytes.push(
+                    (map0 << 7)
+                        | ((ext_r4 as u8) << 6)
+                        | ((ext_x4 as u8) << 5)
+                        | ((ext_b4 as u8) << 4)
+                        | ((rex_w as u8) << 3)
+                        | ((ext_r as u8) << 2)
+                        | ((ext_x as u8) << 1)
+                        | (ext_b as u8),
+                );
+                has_rex = true;
+            } else if need_rex {
                 let rex = 0x40
                     | ((rex_w as u8) << 3)
                     | ((ext_r as u8) << 2)
@@ -593,6 +707,47 @@ pub fn encode(
                 bytes.push(((w as u8) << 7) | ((!vvvv & 0xf) << 3) | (l << 2) | pp);
             }
         }
+        Enc::Apx => {
+            // Extended EVEX: the same `62` prefix with the general-register
+            // fields in place of the vector ones. `B4` sits where AVX-512
+            // keeps a reserved zero, `X4` where it keeps a reserved one, and
+            // the last byte carries `ND`, `NF` and `ccmp`'s condition rather
+            // than the writemask, the broadcast and the vector length.
+            push_rep_lock(&mut bytes, prefixes);
+            // `ccmp` and `ctest` put the flags to assume in `vvvv`, where
+            // every other form keeps a register number.
+            let vvvv = match (def.scc, prefixes.dfv) {
+                // A `ccmp` written without one assumes every flag clear,
+                // which GNU as encodes as the empty mask.
+                (Some(_), dfv) => !dfv.map_or(0, |(f, _)| f) & 0xf,
+                (None, _) => roles.nds.map_or(0, |r| r.num) & 0xf,
+            };
+            let ext_v4 = prefixes.dfv.is_none() && roles.nds.is_some_and(|r| r.num & 16 != 0);
+            let w = def.vex_w();
+            // A 16-bit operation names its size with the `pp` field the
+            // legacy `66` prefix would have filled.
+            let pp = if def.opsize == 16 {
+                1
+            } else {
+                pp_bits(def.pfx)
+            };
+            let nd = def.flags & APX_ND != 0;
+            let nf = prefixes.nf || def.flags & APX_NF_ON != 0;
+            bytes.push(0x62);
+            bytes.push(
+                ((!ext_r as u8) << 7)
+                    | ((!ext_x as u8) << 6)
+                    | ((!ext_b as u8) << 5)
+                    | ((!ext_r4 as u8) << 4)
+                    | ((ext_b4 as u8) << 3)
+                    | (def.map & 7),
+            );
+            bytes.push(((w as u8) << 7) | ((!vvvv & 0xf) << 3) | ((!ext_x4 as u8) << 2) | pp);
+            bytes.push(match def.scc {
+                Some(scc) => ((nd as u8) << 4) | (scc & 0xf),
+                None => ((nd as u8) << 4) | ((!ext_v4 as u8) << 3) | ((nf as u8) << 2),
+            });
+        }
         Enc::Evex => {
             push_rep_lock(&mut bytes, prefixes);
             let vvvv = roles.nds.map_or(0, |r| r.num);
@@ -620,9 +775,12 @@ pub fn encode(
                     | ((!ext_x as u8) << 6)
                     | ((!ext_b as u8) << 5)
                     | ((!ext_r2 as u8) << 4)
+                    | ((ext_b4 as u8) << 3)
                     | (def.map & 7),
             );
-            bytes.push(((w as u8) << 7) | ((!vvvv & 0xf) << 3) | (1 << 2) | pp);
+            // The bit AVX-512 fixes at one is APX's `X4`, which extends a
+            // general-register SIB index past `r15`.
+            bytes.push(((w as u8) << 7) | ((!vvvv & 0xf) << 3) | ((!ext_x4 as u8) << 2) | pp);
             bytes.push(
                 ((roles.decor.zeroing as u8) << 7)
                     | (ll << 5)
@@ -634,7 +792,11 @@ pub fn encode(
     }
 
     // ---- opcode -----------------------------------------------------------
-    bytes.extend_from_slice(&def.opcode);
+    bytes.extend_from_slice(if drop_escape {
+        &def.opcode[1..]
+    } else {
+        &def.opcode
+    });
     if plus_reg {
         let Some(r) = roles.reg else {
             cx.error(span, "internal: `+r` encoding without a register operand");
