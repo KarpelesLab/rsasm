@@ -26,6 +26,13 @@ MATTR = ",".join([
     "+jsconv", "+complxnum", "+rcpc3", "+cssc", "+the", "+d128", "+lut",
     "+faminmax", "+fp8", "+fp8fma", "+fp8dot2", "+fp8dot4", "+sme", "+sme2",
     "+sme2p1",
+    # FEAT_LSFE's floating-point atomics, FEAT_LSCP's acquire-release pair,
+    # and the SVE2.2 and SVE2.3 additions.
+    "+lsfe", "+lscp", "+sve2p2", "+sve2p3",
+    # The two extensions the handwritten encoder owns, which the fuzzer still
+    # has to be able to put through llvm-mc: FEAT_MOPS, with the
+    # granule-only sets of FEAT_MOPS_GO, and FEAT_CMPBR.
+    "+mops", "+mops-go", "+cmpbr",
 ])
 
 TRIPLE = "aarch64"
@@ -61,6 +68,9 @@ GP_GROUPS = re.compile(r"""
   | rcw s? (cas|clr|set|swp) p? (a|l|al)?
     # FEAT_LRCPC's acquiring load and FEAT_LRCPC3's ordered pair.
   | ldapr [bh]? | ldiapp | stilp
+    # FEAT_LSCP's acquire-release pair, which is two doublewords at the base
+    # register and nothing else: no offset, and no 32-bit form.
+  | ldap p? | stlp
     # The pointer-authentication instructions that name a register. The
     # spellings with a fixed modifier -- `paciasp`, `paciaz`, `pacia1716`,
     # `xpaclri` -- are `hint` encodings and separate mnemonics to both
@@ -114,6 +124,17 @@ GP_SINGLES = re.compile(r"""
     # and FEAT_RPRFM's range prefetch, whose operation is a name or a six-bit
     # number scattered over the word.
   | ld64b | st64b v? 0? | rprfm
+    # FEAT_MOPS's memory copies and memory sets, which are a family rather
+    # than one form each, but a handwritten one: they are a mnemonic for
+    # every combination of their hints -- 132 of them, built from macros in
+    # binutils too -- and their three registers must all be different, which
+    # no measured row could say. `insn.rs` builds the name the same way.
+  | cpy f? [pme] (wt|rt|t)? (wn|rn|n)? | set (g o?)? [pme] t? n?
+    # The newest extensions, one or two forms each: FEAT_GCS's guarded call
+    # stack, FEAT_ITE's trace instrumentation, FEAT_TME's transactions and
+    # the thread switches of FEAT_TEV and FEAT_POE2.
+  | gcs (push|pop) (m|x|cx) | gcsss [12] | gcs st t? r
+  | trcit | tstart | ttest | tcancel | tenter | texit | tchange [bf]
 """, re.X)
 
 
@@ -345,8 +366,18 @@ def parse_operand(op, out):
     if m:
         out.append(Atom(("g", m.group(1)), (int(m.group(2)),)))
         return
+    # A register FEAT_MOPS writes back, which is a bare register with a `!`
+    # after it rather than an address: `cpyfp [x0]!, [x1]!, x2!` counts down
+    # in `x2`.
+    m = re.fullmatch(r"([wx])(\d+)!", op)
+    if m:
+        out.append(Atom(("gwb", m.group(1)), (int(m.group(2)),)))
+        return
     if op in ("wzr", "xzr"):
         out.append(Atom(("g", op[0]), (31,)))
+        return
+    if op in ("wzr!", "xzr!"):
+        out.append(Atom(("gwb", op[0]), (31,)))
         return
     if op in ("sp", "wsp"):
         out.append(Atom(("g", "x" if op == "sp" else "w"), (31,), sp=True))
@@ -485,12 +516,13 @@ def render_atom(a):
     if t in ("p", "pm", "pz"):
         s = "p%d" % a.vals[0] + ("." + k[1] if k[1] else "")
         return s + ("/m" if t == "pm" else "/z" if t == "pz" else "")
-    if t == "g":
+    if t in ("g", "gwb"):
+        bang = "!" if t == "gwb" else ""
         if a.vals[0] == 31:
             if a.sp:
-                return "sp" if k[1] == "x" else "wsp"
-            return "xzr" if k[1] == "x" else "wzr"
-        return "%s%d" % (k[1], a.vals[0])
+                return ("sp" if k[1] == "x" else "wsp") + bang
+            return ("xzr" if k[1] == "x" else "wzr") + bang
+        return "%s%d%s" % (k[1], a.vals[0], bang)
     if t == "s":
         return "%s%d" % (k[1], a.vals[0])
     if t == "vlist":

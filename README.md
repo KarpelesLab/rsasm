@@ -60,7 +60,7 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the exclusives and the LSE atomics, pointer authentication, memory tagging, the CRC32 checksums, the unprivileged and unscaled accesses, the condition-flag instructions, the 64-byte accesses, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 23597 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2 up to SVE2.3, the exclusives and the LSE atomics, the floating-point atomics, pointer authentication, memory tagging, the CRC32 checksums, the unprivileged and unscaled accesses, the acquire-release pair, the condition-flag instructions, the memory copies and sets, compare-and-branch, the 64-byte accesses, the guarded call stack, transactional memory, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 24822 |
 | ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3252 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 582 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
@@ -391,23 +391,20 @@ form by form and in random whole programs as well.
   PACBTI, and the M-profile special registers of `vmrs`/`vmsr`
 - AArch64: SME beyond `smstart`, `smstop` and `zero {za}` — the ZA array and
   its tiles, `zt0`, the multi-vector and strided register lists, predicates as
-  counters and `psel`. The rest of what GNU as 2.47's and llvm-mc 22's tables
-  have and this does not is whole extensions rather than stray forms, each a
-  family with its own operand grammar: FEAT_MOPS's 132 `cpyf`, `cpy`, `set`
-  and `setg` prologue/main/epilogue forms with their non-temporal and
-  unprivileged suffixes; FEAT_LSFE's 60 floating-point atomics (`ldfadd`,
-  `ldfmaxnm`, `stbfmin` and the rest); FEAT_CMPBR's 30 register compare-and-
-  branches (`cbeq`, `cbbhi`, `cbhlt`); FEAT_GCS's guarded control stack
-  (`gcspushm`, `gcspopcx`, `gcsstr`); FEAT_D128's `mrrs`, `msrr`, `sysp` and
-  `tlbip`; FEAT_TME's `tstart`, `ttest` and `tcancel`; the SVE2.2 and SVE2.3
-  additions (`expand`, `pext`, `firstp`, `lastp`, `addqp`, `addsubp`, the
-  narrowing `fcvtzsn`/`scvtflt` conversions, `luti6` and `aesemc`); and the
-  single instructions of the newest extensions, whose names nothing here
-  shares: `brb` (BRBE), `trcit` (ITE), `gic`/`gicr`/`gsb` (GICv5), `dfb`
-  (ARMv8-R), `tenter`/`texit` (TEV), `tchangeb`/`tchangef` (POE2) and the
-  128-bit `ldapp`/`stlp` (LSCP). `movprfx` is assembled
-  but its sequence is not checked, where llvm-mc refuses an instruction that
-  does not use the prefixed register and GNU as warns
+  counters and `psel`. That operand grammar is unlike anything else in the
+  backend, and the few SVE2.2 and SVE2.3 forms written with a piece of it wait
+  on it: `pext`, which indexes a predicate-as-counter, and the multi-vector
+  `aesemc` and `aesdimc`, which name two register lists in one instruction.
+  Beside it, three groups whose operand names belong in the generated system
+  tables rather than written out by hand: FEAT_D128's `mrrs`, `msrr`, `sysp`
+  and `tlbip`, which name a register pair and a 128-bit system register;
+  `brb`'s two operations (BRBE); and GICv5's `gic`, `gicr` and `gsb`, whose
+  operation names come from binutils' own tables as every other system
+  instruction's do. `dfb` is GNU as's too, but only under `-march=armv8-r`,
+  which nothing here targets.
+  `movprfx` is assembled but its sequence is not checked, where llvm-mc
+  refuses an instruction that does not use the prefixed register and GNU as
+  warns
 - PowerPC: POWER10's matrix-multiply accelerator (`xvi8ger4` and the other
   MMA instructions), POWER11's `xxaes*` and `xxgfmul128*`, decimal floating
   point, the quadword `lqarx`, `stqcx.`, `plq` and `pstq`, the `bctar`
@@ -474,6 +471,13 @@ form by form and in random whole programs as well.
   CPU's own and so can keep a tag the directive replaces. Which instructions
   the selection has is a separate model and does merge the bits, so the two
   can disagree about a tag without disagreeing about an instruction
+- ARM's floating-point unit: naming an architecture or a CPU does not take
+  the unit away, because the default selection here has `neon-vfpv4` and
+  nothing but a unit's own name replaces it. GNU as starts an
+  `arm-none-eabi` target with no floating point, so where it refuses a
+  `vadd.f32` under `-mcpu=arm7tdmi` until an `.fpu` or `-mfpu=` names a
+  unit, rsasm assembles it. A unit that means none, `softfpa` or `softvfp`,
+  takes it away in both
 - ARM's M profile: `.arch armv7-m`, `armv6-m` and the ARMv8-M names select
   the feature set GNU as gives them, and a core with no ARM state starts in
   Thumb as GNU as's `-mcpu` does, but the instructions this backend has are
@@ -482,6 +486,22 @@ form by form and in random whole programs as well.
   narrower immediates and the width rules of the M-profile encodings are not
   modelled. `tools/tables/arm.py` says which architectures the instruction
   table claims
+- ARM before Thumb-2: a 32-bit Thumb encoding is refused with the
+  architecture that would take it named, where GNU as instead asks its
+  encoder for a 16-bit one and refuses only what comes back wide anyway
+  ("cannot honor width suffix"). The two differ over the few statements GNU
+  as can rewrite to reach a narrow form, `adds r6, -1` becoming `subs r6, #1`
+  on an ARMv4T, which rsasm refuses; `subs r6, 1` assembles. ARMv8-M
+  Baseline's own rule, that a `mov` may take its 32-bit encoding although the
+  architecture has no Thumb-2, is not modelled either, so a wide `mov` under
+  `armv8-m.base` is refused where GNU as takes it
+- AArch64: a mnemonic `insn.rs` encodes by hand carries the bits every row of
+  its name needs, which is all a name alone can say, so one whose rows belong
+  to different extensions -- `zero {za}`, which SME, SME2 and SME2.1 each
+  have a form of -- is not gated at all; the forms of the generated table
+  carry a set apiece and are. GNU as does not gate the `mrs`/`msr` register
+  names or the PSTATE fields: its tables say which extension each belongs to
+  and nothing ever turns that check on, so neither does rsasm
 - 6502: the 65C02 and later instruction sets; in ca65 source, cheap local
   (`@loop`) and unnamed (`:`, `:-`) labels, `.proc`/`.scope`, `.struct`, and
   the `ZEROPAGE` segment's zero-page addressing for labels defined in it
@@ -1530,17 +1550,20 @@ AArch64's SIMD, floating-point and SVE table is derived from llvm-mc rather
 than written: `tools/tables/aarch64.py` disassembles random instruction words
 to find every form llvm-mc prints, measures where each operand's bits go by
 assembling the form with one operand changed at a time, and checks every form
-against llvm-mc before writing `src/arch/aarch64/table_data.rs` (6,451 forms) and
+against llvm-mc before writing `src/arch/aarch64/table_data.rs` (6,794 forms) and
 the corpora that check it, `tools/mc-diff/aarch64-{simd,sve,gp}-words.txt`
-(19,300 lines, compared a batch at a time). The general-purpose groups that
+(20,329 lines, compared a batch at a time). The general-purpose groups that
 are families of the same shape go through it too, and are the `gp` corpus:
 the load/store exclusives and the acquire/release accesses, the LSE, LSE128,
-LSUI, RCPC and FEAT_THE atomics, the pointer-authentication instructions that
+LSUI, RCPC and FEAT_THE atomics, FEAT_LSCP's acquire-release pair, the
+pointer-authentication instructions that
 name a register (the `paciasp`-style hints, which both references treat as
 mnemonics of their own, stay in `insn.rs`), memory tagging, the CRC32
 checksums, and the unprivileged `ldtr`/`sttr` and byte and halfword
 `ldapurb`/`stlurb` unscaled accesses — one form per access size and
 signedness over a 9-bit signed offset, which is the shape a row holds.
+FEAT_LSFE's floating-point atomics come in with the `simd` corpus instead,
+since `ldfadd s0, s1, [x2]` names floating-point registers.
 A general-purpose instruction that is *one* form rather than a family goes to
 `insn.rs` instead, because each of those constrains an operand in a way a
 measured row has no way to say: `bfc` computes its rotation from its field
@@ -1548,7 +1571,11 @@ width and bounds their sum, `ld64b` and `st64b` name the first of eight
 consecutive registers so only an even one up to `x22` will do, `rprfm` reads
 an operation name or a six-bit number scattered over the word, `udf` has no
 opcode bits at all, and `rmif`, `setf8`, `cfinv`, `ctz`, `wfet`, `maddpt` and
-`bc.<cond>` each join a family `insn.rs` already writes out.
+`bc.<cond>` each join a family `insn.rs` already writes out. Two families are
+there for the same reason: FEAT_MOPS's 132 memory copies and sets, whose three
+registers must all be different and whose operands are an address and a
+register written back with nothing for the `!` to apply to, and FEAT_CMPBR's
+thirty compare-and-branches, whose target is a fixup no row can hold.
 `tools/tables/aarch64.py check` says whether the table is still what llvm-mc
 gives. The backend is fuzzed by `tools/fuzz/aarch64.py`, whose cases are
 llvm-mc's or GNU objdump's disassembly of random words, a quarter of them

@@ -686,3 +686,25 @@ wdef:   .xword  wref
 === refused: an extension no architecture has
 	.arch_extension nosuchextension
 	nop
+
+=== refused: a memory copy without FEAT_MOPS
+	.arch	armv8.7-a
+	cpyfp	[x0]!, [x1]!, x2!
+=== refused: a tagged memory set without memory tagging
+	.arch	armv8.8-a
+	setgp	[x14]!, x15!, x16
+=== refused: compare-and-branch without FEAT_CMPBR
+	.arch	armv9.5-a
+	cbgt	x1, x2, .
+=== refused: a transaction without FEAT_TME
+	.arch	armv9.5-a
+	tstart	x0
+=== refused: the guarded call stack without FEAT_GCS
+	.arch	armv9.5-a
+	gcspushm	x0
+=== refused: a floating-point atomic without FEAT_LSFE
+	.arch	armv9.5-a
+	ldfadd	s0, s1, [x2]
+=== refused: the nXS barriers without FEAT_XS
+	.arch	armv8.6-a
+	dsb	ishnxs

@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ARM: take a difference of labels as the number an eight-byte `vldr` literal
   pool entry has to be, where GNU as's parser folds one
 - ARM: read the `(SBREL)`, `(TARGET1)` and `(TARGET2)` data suffixes
+- AArch64: FEAT_MOPS's 132 memory copies and memory sets, whose stage and
+  hints are spelled into the mnemonic, from `cpyfp` to `setgoptn`
+- AArch64: FEAT_LSFE's 60 floating-point atomics -- `ldfadd` to `stbfminnml`
+  -- in their four orderings, their three sizes and their BFloat16 flavour
+- AArch64: FEAT_CMPBR's 30 compare-and-branches, each of the ten conditions
+  over a whole register, its low halfword and its low byte, and against a
+  six-bit number
+- AArch64: FEAT_LSCP's acquire-release pair, `ldap`, `ldapp` and `stlp`
+- AArch64: the SVE2.2 and SVE2.3 additions llvm-mc can encode -- `expand`,
+  `firstp`, `lastp`, `addqp`, `addsubp`, `luti6`, the narrowing converts and
+  the predicated forms of what was already there
+- AArch64: FEAT_GCS's guarded call stack, FEAT_ITE's `trcit`, FEAT_TME's
+  `tstart`, `ttest` and `tcancel`, and the thread switches of FEAT_TEV and
+  FEAT_POE2
 
 ## [0.1.3](https://github.com/KarpelesLab/rsasm/compare/v0.1.2...v0.1.3) - 2026-09-21
 

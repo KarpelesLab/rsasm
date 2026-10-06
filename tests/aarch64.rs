@@ -1868,6 +1868,230 @@ fn one_off_general_purpose_diagnostics() {
     );
 }
 
+/// FEAT_CMPBR's compare-and-branch, which puts a comparison and a branch of
+/// up to 1KB in one instruction. The condition and the width compared are
+/// both in the mnemonic, as the condition is for `b.<cond>`.
+#[test]
+fn compare_and_branch() {
+    check(&[
+        ("cbgt x1, x2, #8", "41 00 02 f4"),
+        ("cbge x1, x2, #8", "41 00 22 f4"),
+        ("cbhi x1, x2, #8", "41 00 42 f4"),
+        ("cbhs x1, x2, #8", "41 00 62 f4"),
+        ("cbeq x1, x2, #8", "41 00 c2 f4"),
+        ("cbne x1, x2, #8", "41 00 e2 f4"),
+        ("cbgt w3, w4, #-8", "c3 3f 04 74"),
+        // The four reversed comparisons, which swap the registers: `cblt x1,
+        // x2` is the `cbgt x2, x1` both references print for the word.
+        ("cblt x1, x2, #8", "42 00 01 f4"),
+        ("cble x1, x2, #8", "42 00 21 f4"),
+        ("cblo x1, x2, #8", "42 00 41 f4"),
+        ("cbls x1, x2, #8", "42 00 61 f4"),
+        // The low halfword and the low byte, which compare 32-bit names.
+        ("cbhgt w1, w2, #4", "21 c0 02 74"),
+        ("cbhlt w1, w2, #4", "22 c0 01 74"),
+        ("cbhhs w1, w2, #4", "21 c0 62 74"),
+        ("cbhls w1, w2, #4", "22 c0 61 74"),
+        ("cbheq w1, w2, #4", "21 c0 c2 74"),
+        ("cbhne w1, w2, #4", "21 c0 e2 74"),
+        ("cbbgt w1, w2, #4", "21 80 02 74"),
+        ("cbblt w1, w2, #4", "22 80 01 74"),
+        ("cbbhs w1, w2, #4", "21 80 62 74"),
+        ("cbbls w1, w2, #4", "22 80 61 74"),
+        ("cbbeq w1, w2, #4", "21 80 c2 74"),
+        ("cbbne w1, w2, #4", "21 80 e2 74"),
+        // Against a number, where it is the inclusive comparisons that have
+        // no encoding: `cbge x0, #1` is `cbgt x0, #0`, so the four of them
+        // run to 64 or down to -1 where the other six run 0 to 63.
+        ("cbgt x0, #0, #0", "00 00 00 f5"),
+        ("cbgt w5, #63, #0", "05 80 1f 75"),
+        ("cbge x0, #1, #0", "00 00 00 f5"),
+        ("cbge w5, #64, #0", "05 80 1f 75"),
+        ("cblt x0, #0, #0", "00 00 20 f5"),
+        ("cble x0, #-1, #0", "00 00 20 f5"),
+        ("cble w5, #62, #0", "05 80 3f 75"),
+        ("cbhi w5, #63, #0", "05 80 5f 75"),
+        ("cbhs x0, #1, #0", "00 00 40 f5"),
+        ("cblo x0, #0, #0", "00 00 60 f5"),
+        ("cbls w5, #62, #0", "05 80 7f 75"),
+        ("cbeq x0, #0, #0", "00 00 c0 f5"),
+        ("cbne w5, #63, #0", "05 80 ff 75"),
+        // The ends of the offset field, which is nine bits of instructions.
+        ("cbne xzr, xzr, #1020", "ff 1f ff f4"),
+        ("cbne wzr, #63, #-1024", "1f a0 ff 75"),
+    ]);
+}
+
+/// Neither reference can relocate a compare-and-branch: llvm-mc refuses a
+/// target it cannot resolve itself, and GNU as writes `R_AARCH64_NONE`, which
+/// no linker fills in. rsasm refuses it rather than branching to itself.
+#[test]
+fn compare_and_branch_diagnostics() {
+    rejects("cbgt x0, x1, elsewhere", &["no relocation exists"]);
+    rejects("cbgt x0, x1, #1024", &["out of range"]);
+    rejects("cbgt x0, x1, #3", &["not a multiple of 4"]);
+    rejects("cbgt w0, x1, #0", &["compares two registers of one width"]);
+    rejects("cbhgt x0, x1, #0", &["takes the 32-bit name"]);
+    rejects("cbbgt w0, #5, #0", &["`cbbgt` compares two registers"]);
+    rejects("cbgt sp, x1, #0", &["cannot be the stack pointer"]);
+    rejects("cbge w0, #0, #0", &["a comparison value", "1..=64"]);
+    rejects("cbls w0, #63, #0", &["a comparison value", "-1..=62"]);
+    rejects("cbgt w0, #64, #0", &["a comparison value", "0..=63"]);
+    // `cs` and `cc` name the same conditions as `hs` and `lo` after `b.`,
+    // and neither reference takes them here.
+    rejects("cbcs w0, w1, #0", &["unknown instruction `cbcs`"]);
+}
+
+/// FEAT_MOPS's memory copies and memory sets: the stage and both hints are
+/// spelled into the name, so there are 132 of them. One of each shape here,
+/// with the rest in `tools/mc-diff/aarch64.txt`.
+#[test]
+fn memory_copy_and_memory_set() {
+    check(&[
+        ("cpyfp [x0]!, [x1]!, x2!", "40 04 01 19"),
+        ("cpyfm [x3]!, [x4]!, x5!", "a3 04 44 19"),
+        ("cpyfe [x6]!, [x7]!, x8!", "06 05 87 19"),
+        ("cpyfprtwn [x9]!, [x10]!, x11!", "69 65 0a 19"),
+        ("cpyp [x12]!, [x13]!, x14!", "cc 05 0d 1d"),
+        ("cpymwtn [x15]!, [x16]!, x17!", "2f d6 50 1d"),
+        ("cpyetn [x30]!, [x29]!, x28!", "9e f7 9d 1d"),
+        ("setp [x0]!, x1!, x2", "20 04 c2 19"),
+        ("setm [x3]!, x4!, x5", "83 44 c5 19"),
+        ("sete [x6]!, x7!, x8", "e6 84 c8 19"),
+        ("setptn [x9]!, x10!, x11", "49 35 cb 19"),
+        ("setgp [x12]!, x13!, x14", "ac 05 ce 1d"),
+        ("setgetn [x30]!, x29!, xzr", "be b7 df 1d"),
+        // FEAT_MOPS_GO's granule-only sets, which store no byte and so name
+        // two registers rather than three.
+        ("setgop [x0]!, x1!", "20 00 df 1d"),
+        ("setgoetn [x30]!, x29!", "be b3 df 1d"),
+    ]);
+}
+
+/// A copy or a set resumes where the one before it left off, reading the
+/// registers it wrote back, so both references refuse any two of them naming
+/// one register, and refuse an address that is not written back.
+#[test]
+fn memory_copy_diagnostics() {
+    rejects("cpyfp [x0]!, [x0]!, x2!", &["names one register twice"]);
+    rejects("cpyfp [x0]!, [x1]!, x1!", &["names one register twice"]);
+    rejects("setp [x0]!, x1!, x0", &["names one register twice"]);
+    rejects("setgop [x0]!, x0!", &["names one register twice"]);
+    rejects("cpyfp [x0], [x1]!, x2!", &["an address written back"]);
+    rejects("cpyfp [sp]!, [x1]!, x2!", &["`x0` to `x30`"]);
+    rejects("cpyfp [xzr]!, [x1]!, x2!", &["`x0` to `x30`"]);
+    rejects("cpyfp [w0]!, [x1]!, x2!", &["`x0` to `x30`"]);
+    rejects("cpyfp [x0]!, [x1]!, x2", &["a size written back"]);
+    rejects("cpyfp [x0]!, [x1]!, w2!", &["a size written back"]);
+    rejects("setp [x0]!, x1!, sp", &["the byte it stores"]);
+    rejects("cpyfp [x0]!, [x1]!", &["takes 3 operand"]);
+    rejects("setgop [x0]!, x1!, x2", &["takes 2 operand"]);
+}
+
+/// The newest extensions' one and two forms each: FEAT_GCS's guarded call
+/// stack, FEAT_ITE's trace instrumentation, and the thread switches of
+/// FEAT_TEV and FEAT_POE2, whose last operand is an optional `nb`.
+#[test]
+fn the_newest_extensions() {
+    check(&[
+        ("gcspushm x0", "00 77 0b d5"),
+        ("gcspushm xzr", "1f 77 0b d5"),
+        // `gcspopm` with no register is the word `gcspopm xzr` is, which is
+        // how both references print it.
+        ("gcspopm", "3f 77 2b d5"),
+        ("gcspopm x30", "3e 77 2b d5"),
+        ("gcsss1 x0", "40 77 0b d5"),
+        ("gcsss2 xzr", "7f 77 2b d5"),
+        ("gcspushx", "9f 77 08 d5"),
+        ("gcspopx", "df 77 08 d5"),
+        ("gcspopcx", "bf 77 08 d5"),
+        ("gcsstr x0, [x1]", "20 0c 1f d9"),
+        ("gcsstr xzr, [sp]", "ff 0f 1f d9"),
+        ("gcssttr x30, [x29]", "be 1f 1f d9"),
+        ("trcit x0", "e0 72 0b d5"),
+        ("trcit xzr", "ff 72 0b d5"),
+        ("texit", "e0 03 ff d6"),
+        ("texit nb", "e0 07 ff d6"),
+        ("tenter 0", "00 00 e0 d4"),
+        ("tenter 127", "e0 0f e0 d4"),
+        ("tenter 5, nb", "a0 00 e2 d4"),
+        ("tchangef x0, x1", "20 00 80 d5"),
+        ("tchangeb x30, xzr", "fe 03 84 d5"),
+        ("tchangef x0, 127", "e0 0f 90 d5"),
+        ("tchangeb x0, 5, nb", "a0 00 96 d5"),
+    ]);
+}
+
+/// FEAT_TME's transactions. llvm-mc 22 has no name for the extension at all,
+/// so these bytes are GNU as's, from `tools/xas-diff/run.sh aarch64`.
+#[test]
+fn transactional_memory() {
+    check(&[
+        ("tstart x0", "60 30 23 d5"),
+        ("tstart xzr", "7f 30 23 d5"),
+        ("ttest x30", "7e 31 23 d5"),
+        ("tcancel 0", "00 00 60 d4"),
+        ("tcancel 65535", "e0 ff 7f d4"),
+    ]);
+}
+
+#[test]
+fn newest_extension_diagnostics() {
+    rejects("gcspushm w0", &["takes a 64-bit register"]);
+    rejects("gcspushm sp", &["cannot be the stack pointer"]);
+    rejects("gcspushm", &["takes 1 operand"]);
+    rejects("gcspushx x0", &["takes 0 operand"]);
+    // The stack stores reach the stack pointer, so register 31 there is
+    // `sp`, not the zero register.
+    rejects("gcsstr x0, [xzr]", &["cannot use the zero register"]);
+    rejects(
+        "gcsstr x0, [x1, 8]",
+        &["addresses through a base register only"],
+    );
+    rejects("trcit w0", &["takes a 64-bit register"]);
+    rejects(
+        "tcancel 65536",
+        &["a transaction cancellation reason", "0..=65535"],
+    );
+    rejects("tenter 128", &["a thread index", "0..=127"]);
+    rejects("tchangef x0, 128", &["a thread index", "0..=127"]);
+    rejects("texit x0", &["is `nb` or nothing"]);
+    rejects("tchangef x0, x1, x2", &["is `nb` or nothing"]);
+}
+
+/// FEAT_LSFE's floating-point atomics and FEAT_LSCP's acquire-release pair,
+/// which the generated table gained with the rest of the general-purpose
+/// groups. A `ldf<op>` returns the old value and a `stf<op>` discards it,
+/// which is the same word with the zero register in the result.
+#[test]
+fn floating_point_atomics_and_the_ordered_pair() {
+    check(&[
+        ("ldfadd h0, h1, [x2]", "41 00 20 7c"),
+        ("ldfadd s0, s1, [x2]", "41 00 20 bc"),
+        ("ldfadd d0, d1, [x2]", "41 00 20 fc"),
+        ("ldfadda s0, s1, [x2]", "41 00 a0 bc"),
+        ("ldfaddl s0, s1, [x2]", "41 00 60 bc"),
+        ("ldfaddal s31, s30, [sp]", "fe 03 ff bc"),
+        ("ldfmax d0, d1, [x2]", "41 40 20 fc"),
+        ("ldfmin h0, h1, [x2]", "41 50 20 7c"),
+        ("ldfmaxnm s0, s1, [x2]", "41 60 20 bc"),
+        ("ldfminnm s0, s1, [x2]", "41 70 20 bc"),
+        ("stfadd s0, [x1]", "3f 80 20 bc"),
+        ("stfaddl d31, [sp]", "ff 83 7f fc"),
+        ("stfmaxnm h0, [x1]", "3f e0 20 7c"),
+        // The BFloat16 flavour, which has a halfword form and no other.
+        ("ldbfadd h0, h1, [x2]", "41 00 20 3c"),
+        ("ldbfminnmal h31, h30, [sp]", "fe 73 ff 3c"),
+        ("stbfadd h0, [x1]", "3f 80 20 3c"),
+        ("stbfminnml h31, [sp]", "ff f3 7f 3c"),
+        // FEAT_LSCP, which is a pair of doublewords at the base register:
+        // no offset, and no 32-bit form.
+        ("ldap x0, x1, [x2]", "40 58 41 d9"),
+        ("ldapp x30, x29, [sp]", "fe 7b 5d d9"),
+        ("stlp x0, x1, [x2]", "40 58 01 d9"),
+    ]);
+}
+
 /// The general-purpose groups the generated table gained with the one-off
 /// forms: the CRC32 checksums, the unprivileged loads and stores, and the
 /// byte, halfword and signed-word members of the unscaled acquire-release
@@ -1992,4 +2216,38 @@ fn the_architecture_selected_decides_what_assembles() {
         (".arch armv8-a\nmrs x0, s3_0_c1_c0_5", "a0 10 38 d5"),
         (".arch armv8-a\nmrs x0, rgsr_el1", "a0 10 38 d5"),
     ]);
+}
+
+/// The families the newest extensions bring are gated the same way, by the
+/// feature set every row of the mnemonic's name needs. Every case here is
+/// one `tools/xas-diff/run.sh aarch64` records, in `aarch64-programs.txt` or
+/// as a `refused:` snippet in `aarch64-relocs.txt`.
+#[test]
+fn the_newest_extensions_are_gated_too() {
+    check(&[
+        (".arch armv8.8-a\ncpyfp [x0]!, [x1]!, x2!", "40 04 01 19"),
+        (
+            ".arch armv8.8-a+memtag\nsetgp [x14]!, x15!, x16",
+            "ee 05 d0 1d",
+        ),
+        (".arch armv9.5-a+cmpbr\ncbgt x1, x2, .", "01 00 02 f4"),
+        (".arch armv9.5-a+tme\ntstart x0", "60 30 23 d5"),
+        (".arch armv9.5-a+lsfe\nldfadd s0, s1, [x2]", "41 00 20 bc"),
+        (".arch armv8.7-a\ndsb ishnxs", "3f 3a 03 d5"),
+    ]);
+    for (src, needle) in [
+        (".arch armv8.7-a\ncpyfp [x0]!, [x1]!, x2!", "`+mops`"),
+        (".arch armv8.8-a\nsetgp [x14]!, x15!, x16", "`+memtag`"),
+        (".arch armv9.5-a\ncbgt x1, x2, .", "`+cmpbr`"),
+        (".arch armv9.5-a\ntstart x0", "`+tme`"),
+        (".arch armv9.5-a\ngcspushm x0", "`+gcs`"),
+        (".arch armv9.5-a\nldfadd s0, s1, [x2]", "`+lsfe`"),
+        (".arch armv8.6-a\ndsb ishnxs", "`+xs`"),
+    ] {
+        let e = errors_for(ARCH, src);
+        assert!(
+            e.contains(needle),
+            "`{src}` should mention `{needle}`:\n{e}"
+        );
+    }
 }

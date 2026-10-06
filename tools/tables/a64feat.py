@@ -19,8 +19,11 @@ is not written by hand. Everything in it comes from binutils 2.47:
                                 encodes by hand
 
 `src/arch/aarch64/cpu.rs` is the same model and the same test; this writes
-it its tables. The forms of the generated table carry a feature set of their
-own, measured rather than read; `tools/tables/aarch64.py` writes those.
+it its tables, and the other two generators read this one. The forms of the
+generated table carry a feature set apiece, which is finer than a mnemonic's:
+`tools/tables/aarch64.py` asks `Opcodes` for each, matching the form to the
+`aarch64-tbl.h` row its opcode encodes. `tools/tables/aarch64-sys.py` asks
+for the set of each system-instruction operand name.
 
     tools/tables/a64feat.py table   # rewrite src/arch/aarch64/cpu_data.rs
     tools/tables/a64feat.py check   # exit 1 if it is out of date
@@ -271,6 +274,98 @@ def virtual(deps, want):
 # ---------------------------------------------------------------------------
 
 
+def macro_calls(text, name):
+    """Every `name(...)` call in `text`, as (where it is, its arguments)."""
+    out = []
+    for m in re.finditer(r"(?<![\w])%s\s*\(" % re.escape(name), text):
+        i, depth, last, args = m.end(), 1, m.end(), []
+        while depth and i < len(text):
+            c = text[i]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+                if depth == 0:
+                    args.append(text[last:i])
+                    break
+            elif c == "," and depth == 1:
+                args.append(text[last:i])
+                last = i + 1
+            i += 1
+        out.append((m.start(), [a.strip() for a in args]))
+    return out
+
+
+def function_macros(text):
+    """`aarch64-tbl.h`'s function-like macros, as name -> (params, body)."""
+    out = {}
+    for m in re.finditer(r"^#\s*define\s+(\w+)\(([^)]*)\)[ \t]+(.*)$", text, re.M):
+        params = [a.strip() for a in m.group(2).split(",")]
+        out[m.group(1)] = (params, m.group(3))
+    return out
+
+
+def literals(expr):
+    """The text of a run of string literals, as C concatenates them, or
+    `None` where the run holds anything else."""
+    out = ""
+    for tok in re.findall(r'"(?:[^"\\]|\\.)*"|[A-Za-z_]\w*|\S', expr):
+        if not tok.startswith('"'):
+            return None
+        out += tok[1:-1]
+    return out
+
+
+def substitute(expr, params, args):
+    """`expr` with this macro's parameters replaced by the arguments."""
+    return "".join(
+        args[params.index(tok)] if tok in params else tok
+        for tok in re.split(r"(\w+)", expr)
+    )
+
+
+def generated_rows(text, row_features, macros):
+    """(name, feature set) for the rows a macro writes rather than spells.
+
+    The FEAT_MOPS family is a hundred mnemonics built by concatenation --
+    `cpyf` + `p` + `wn` -- so the name is a string literal nowhere and the
+    plain scan cannot see it. Following the macros and substituting their
+    arguments reaches them. Which row macro ends the chain can itself be an
+    argument (`MOPS_SET_INSN` is handed `MOPS_INSN` or `MOPS_GO_INSN`),
+    which is why the substitution is textual rather than over literals
+    alone.
+    """
+    out = []
+
+    def expand(name, args, depth):
+        if depth > 8 or name not in macros:
+            return
+        params, body = macros[name]
+        for m in re.finditer(r"(?<![\w])(\w+)\s*\(", body):
+            callee = substitute(m.group(1), params, args).strip()
+            row = callee in row_features
+            if not row and (callee not in macros or "_INSN" not in callee):
+                continue
+            for _at, iargs in macro_calls(body[m.start():], m.group(1)):
+                iargs = [substitute(a, params, args) for a in iargs]
+                if row:
+                    spelt = literals(iargs[0])
+                    if spelt:
+                        out.append((spelt, row_features[callee]))
+                else:
+                    expand(callee, iargs, depth + 1)
+                break
+
+    # Only the calls in the table itself, not the ones inside a macro body.
+    table = re.sub(r"^#\s*define\s+\w+\([^)]*\)[ \t]+.*$", "", text, flags=re.M)
+    for name in macros:
+        if name in row_features or "_INSN" not in name:
+            continue
+        for _at, args in macro_calls(table, name):
+            expand(name, args, 0)
+    return out
+
+
 def opcode_rows(model):
     """Every row of `aarch64-tbl.h`, as (name, opcode, mask, feature set).
 
@@ -372,11 +467,11 @@ def instruction_features(model):
         if len(found) == 1:
             macros[m.group(1)] = found[0]
     out = {}
-    for m in re.finditer(r"\b(\w*_INSN\w*)\s*\(\s*\"([^\"]+)\"", text):
-        want = macros.get(m.group(1))
-        if want is None:
-            continue
-        name = m.group(2)
+    rows = [(m.group(2), macros[m.group(1)])
+            for m in re.finditer(r"\b(\w*_INSN\w*)\s*\(\s*\"([^\"]+)\"", text)
+            if m.group(1) in macros]
+    rows += generated_rows(text, macros, function_macros(text))
+    for name, want in rows:
         out[name] = want if name not in out else intersect(out[name], want)
     return out
 

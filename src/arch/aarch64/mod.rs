@@ -488,13 +488,15 @@ impl Architecture for AArch64 {
         // The one SME instruction beyond `smstart`/`smstop`, whose `{za}` the
         // operand grammar has no other use for.
         if mnemonic == "zero" {
-            let feats = cpu::mnemonic_feats(&mnemonic);
-            if !cpu::supports(cx.state, feats) {
-                let msg = cpu::unsupported(cx.state, &mnemonic, feats);
-                cx.error(req.mnemonic_span, msg);
-                return None;
-            }
+            has_mnemonic(cx, req.mnemonic_span, &mnemonic).then_some(())?;
             return insn::sme_zero(cx, req);
+        }
+        // FEAT_MOPS, whose operands are an address written back with no
+        // offset (`[x0]!`) and a register written back with no brackets
+        // (`x2!`), neither of which the shared operand parser reads.
+        if insn::is_mops(&mnemonic) {
+            has_mnemonic(cx, req.mnemonic_span, &mnemonic).then_some(())?;
+            return insn::mops_insn(cx, req, &mnemonic);
         }
         if table::knows(&mnemonic)
             && (!insn::handwritten(&mnemonic)
@@ -509,20 +511,26 @@ impl Architecture for AArch64 {
             );
             return None;
         }
-        // What GNU as needs for a mnemonic encoded here by hand, from the
-        // rows of its own opcode table under that name. A form of the
-        // generated table carries a set of its own, which `table::assemble`
-        // reads, and which is finer: one form there is one operand shape.
-        let feats = cpu::mnemonic_feats(&mnemonic);
-        if !cpu::supports(cx.state, feats) {
-            let msg = cpu::unsupported(cx.state, &mnemonic, feats);
-            cx.error(req.mnemonic_span, msg);
-            return None;
-        }
+        has_mnemonic(cx, req.mnemonic_span, &mnemonic).then_some(())?;
         let cur = req.cursor();
         let ops = operand::parse_list(cx, &cur)?;
         insn::assemble(cx, req, &mnemonic, &ops)
     }
+}
+
+/// Whether the target has a mnemonic one of the hand-written encoders owns,
+/// reporting what it needs if not: the feature set GNU as's opcode table
+/// gives every row of that name. A form of the generated table carries a set
+/// of its own, which `table::assemble` reads and which is finer, one form
+/// there being one operand shape.
+fn has_mnemonic(cx: &mut AsmCtx<'_>, span: crate::source::Span, mnemonic: &str) -> bool {
+    let feats = cpu::mnemonic_feats(mnemonic);
+    if cpu::supports(cx.state, feats) {
+        return true;
+    }
+    let msg = cpu::unsupported(cx.state, mnemonic, feats);
+    cx.error(span, msg);
+    false
 }
 
 /// The name a target-selecting directive was given: whatever is written
