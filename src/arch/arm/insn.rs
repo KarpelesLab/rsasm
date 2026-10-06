@@ -346,8 +346,11 @@ fn table() -> &'static HashMap<&'static str, Mnem> {
     })
 }
 
-pub fn lookup(name: &str) -> Option<Mnem> {
-    table().get(name).copied()
+/// The operation this name spells, with the table's own spelling of it,
+/// which outlives the text that was looked up and is the key the
+/// instruction's feature set is read by.
+fn lookup(name: &str) -> Option<(&'static str, Mnem)> {
+    table().get_key_value(name).map(|(k, v)| (*k, *v))
 }
 
 /// Whether a mnemonic takes a data type that means nothing to its encoding:
@@ -395,6 +398,10 @@ pub struct Resolved {
     pub cond_written: bool,
     pub set_flags: bool,
     pub width: Width,
+    /// The spelling the mnemonic was found under, which is the key
+    /// [`super::cpu::mnemonic_feats`] reads the instruction's feature set
+    /// by; the condition, the `s` and the width hint are not part of it.
+    pub stem: &'static str,
 }
 
 /// Splits `text` into base mnemonic, `s` flag, condition and width.
@@ -417,12 +424,15 @@ pub fn resolve(text: &str) -> Option<Resolved> {
         None => (head, None),
     };
 
-    let mk = |mnem: Mnem, cond: u8, cond_written: bool, set_flags: bool| Resolved {
-        mnem,
-        cond,
-        cond_written,
-        set_flags,
-        width,
+    let mk = |(stem, mnem): (&'static str, Mnem), cond: u8, cond_written: bool, set_flags: bool| {
+        Resolved {
+            mnem,
+            cond,
+            cond_written,
+            set_flags,
+            width,
+            stem,
+        }
     };
     // The name to look up is the stem with the type suffix put back on --
     // unless the instruction is one of those whose type GNU as parses and
@@ -459,7 +469,7 @@ pub fn resolve(text: &str) -> Option<Resolved> {
         }
         if let Some(base) = base.strip_suffix('s')
             && let Some(m) = named(base)
-            && m.allows_s()
+            && m.1.allows_s()
         {
             return Some(mk(m, cond, true, true));
         }
@@ -468,7 +478,7 @@ pub fn resolve(text: &str) -> Option<Resolved> {
     // A bare `s`: `movs`, `bics`, `adds`.
     if let Some(base) = stem.strip_suffix('s')
         && let Some(m) = named(base)
-        && m.allows_s()
+        && m.1.allows_s()
     {
         return Some(mk(m, AL, false, true));
     }

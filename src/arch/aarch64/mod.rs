@@ -26,6 +26,9 @@
 //! only in the first column (see `comments` below), so both `add x0, x1,
 //! #1` and the bare `add x0, x1, 1` that GNU as and llvm-mc also accept work.
 
+pub(crate) mod cpu;
+#[doc(hidden)]
+pub mod cpu_data;
 pub mod encode;
 pub mod insn;
 pub mod operand;
@@ -40,7 +43,7 @@ pub(crate) mod table;
 mod table_data;
 mod table_names;
 
-use crate::arch::{ArchState, Architecture, AsmCtx, Endian, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, CpuOption, Endian, InsnRequest, Syntax};
 use crate::dwarf::{CfiTarget, DwarfTarget, Flavor, cfi, numbered_register};
 use crate::section::Variant;
 
@@ -81,10 +84,40 @@ impl Architecture for AArch64 {
             bits: 64,
             syntax: Syntax::Att,
             features: 0,
+            cpu_features: cpu::initial(),
             intel_register_prefix: false,
             used: 0,
             private: 0,
         }
+    }
+
+    /// `.arch` and `.cpu` name one of GNU as's AArch64 architectures or
+    /// CPUs here rather than another backend, and decide which instructions
+    /// assemble; see [`cpu`].
+    fn selects_cpu(
+        &self,
+        state: &mut ArchState,
+        name: &str,
+        cpu_name: bool,
+    ) -> Result<bool, String> {
+        // The architecture or CPU has to be one of this backend's before a
+        // `+name` suffix after it can be read as an extension rather than as
+        // part of another target's name.
+        if !cpu::knows(name, cpu_name) {
+            return Ok(false);
+        }
+        cpu::directive_arch(state, name, cpu_name).map(|()| true)
+    }
+
+    /// `-march=` and `-mcpu=`, which take the `all` entry the directives
+    /// pass over as well as the `+name` extension suffixes.
+    fn select_option(
+        &self,
+        state: &mut ArchState,
+        opt: CpuOption,
+        name: &str,
+    ) -> Result<(), String> {
+        cpu::option(state, opt, name)
     }
 
     /// A64 has one operand syntax. `.intel_syntax` in a file that also has x86
@@ -387,6 +420,20 @@ impl Architecture for AArch64 {
                 cx.requests.push(crate::arch::Request::FlushLiterals);
                 return true;
             }
+            // `.arch_extension` takes one name, with `no` in front of it
+            // to take the extension away; `.arch` and `.cpu` arrive through
+            // `selects_cpu`, since a name either knows is one this backend
+            // claims rather than another target.
+            ".arch_extension" => {
+                let span = cur.peek().span;
+                let name = arch_word(cx, cur);
+                if name.is_empty() {
+                    cx.error(span, "`.arch_extension` expects a name");
+                } else if let Err(msg) = cpu::directive_extension(cx.state, &name) {
+                    cx.error(span, msg);
+                }
+                return true;
+            }
             ".tlsdesccall" => reloc::TLSDESC_CALL,
             ".tlsdescadd" => reloc::TLSDESC_ADD,
             ".tlsdescldr" => reloc::TLSDESC_LDR,
@@ -441,6 +488,12 @@ impl Architecture for AArch64 {
         // The one SME instruction beyond `smstart`/`smstop`, whose `{za}` the
         // operand grammar has no other use for.
         if mnemonic == "zero" {
+            let feats = cpu::mnemonic_feats(&mnemonic);
+            if !cpu::supports(cx.state, feats) {
+                let msg = cpu::unsupported(cx.state, &mnemonic, feats);
+                cx.error(req.mnemonic_span, msg);
+                return None;
+            }
             return insn::sme_zero(cx, req);
         }
         if table::knows(&mnemonic)
@@ -456,10 +509,36 @@ impl Architecture for AArch64 {
             );
             return None;
         }
+        // What GNU as needs for a mnemonic encoded here by hand, from the
+        // rows of its own opcode table under that name. A form of the
+        // generated table carries a set of its own, which `table::assemble`
+        // reads, and which is finer: one form there is one operand shape.
+        let feats = cpu::mnemonic_feats(&mnemonic);
+        if !cpu::supports(cx.state, feats) {
+            let msg = cpu::unsupported(cx.state, &mnemonic, feats);
+            cx.error(req.mnemonic_span, msg);
+            return None;
+        }
         let cur = req.cursor();
         let ops = operand::parse_list(cx, &cur)?;
         insn::assemble(cx, req, &mnemonic, &ops)
     }
+}
+
+/// The name a target-selecting directive was given: whatever is written
+/// without spaces, since `armv8.5-a+memtag` is not one identifier.
+fn arch_word(cx: &AsmCtx<'_>, cur: &mut crate::cursor::Cursor<'_>) -> String {
+    if cur.peek().is_eol() {
+        return String::new();
+    }
+    let first = cur.peek();
+    let mut last = cur.advance();
+    while !cur.peek().is_eol() && !cur.peek().preceded_by_space {
+        last = cur.advance();
+    }
+    cx.sources
+        .span_text(first.span.to(last.span))
+        .to_ascii_lowercase()
 }
 
 /// True if `name` is a register, so the generic parser does not treat a

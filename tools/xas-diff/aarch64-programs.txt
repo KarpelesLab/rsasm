@@ -1,0 +1,48 @@
+# AArch64 snippets where `.arch`, `.cpu` and `.arch_extension` decide which
+# instructions assemble. The reference runs with the `-march=` that names
+# every extension (see run.sh), which each directive here overrides, so what
+# is left is what the architecture or CPU named really has.
+#
+# Snippets both assemblers refuse are in aarch64-relocs.txt, which compares
+# whole objects and takes a `refused:` name. See `src/arch/aarch64/cpu.rs`.
+
+=== the LSE atomics once the extension is added
+	.arch	armv8-a+lse
+	cas	x0, x1, [x2]
+	casp	x0, x1, x2, x3, [x4]
+	swp	x0, x1, [x2]
+=== CSSC on an ARMv8.9-A
+	.arch	armv8.9-a
+	abs	x0, x1
+	smax	x0, x1, x2
+=== SVE on an ARMv9-A
+	.arch	armv9-a
+	ld1b	{ z0.b }, p0/z, [x0]
+	add	z0.b, z1.b, z2.b
+=== pointer authentication on an ARMv8.3-A
+	.arch	armv8.3-a
+	pacia	x0, x1
+	autib	x0, x1
+=== memory tagging once the extension is added
+	.arch	armv8.5-a+memtag
+	irg	x0, x1
+	gmi	x0, x1, x2
+=== the CRC32 checksums on an ARMv8.1-A
+	.arch	armv8.1-a
+	crc32b	w0, w1, w2
+=== a CPU with the cryptographic extensions added
+	.cpu	cortex-a57+crypto
+	aese	v0.16b, v1.16b
+	sha1h	s0, s1
+=== an extension added by the directive
+	.arch	armv8-a
+	.arch_extension memtag
+	irg	x0, x1
+=== an extension dragging in the ones it is defined with
+	.arch	armv8-a+sve2
+	adclb	z0.s, z1.s, z2.s
+	ld1b	{ z0.b }, p0/z, [x0]
+=== taking an extension away takes away what depends on it
+	.arch	armv9-a
+	.arch_extension nosve
+	nop

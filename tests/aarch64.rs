@@ -1907,3 +1907,89 @@ fn checksums_and_unscaled_accesses() {
     rejects("ldtr x0, [x1, 256]", &["-256..=255"]);
     rejects("ldapurb w0, [x1, -257]", &["-256..=255"]);
 }
+
+/// What the target selected has. Every refusal here is one
+/// `tools/xas-diff/run.sh aarch64` records as a `refused:` case, and every
+/// byte string one of its `aarch64-programs.txt` snippets, so GNU as refuses
+/// or assembles each of them the same way under the same directive.
+#[test]
+fn the_architecture_selected_decides_what_assembles() {
+    // Nothing selected is ARMv9.5-A with every extension, which is what the
+    // differential harnesses run both references as.
+    check(&[
+        ("cas x0, x1, [x2]", "41 7c a0 c8"),
+        ("abs x0, x1", "20 20 c0 da"),
+        ("crc32b w0, w1, w2", "20 40 c2 1a"),
+        ("irg x0, x1", "20 10 df 9a"),
+    ]);
+    for (src, needle) in [
+        (".arch armv8-a\ncas x0, x1, [x2]", "`+lse`"),
+        (".arch armv8.8-a\nabs x0, x1", "`+cssc`"),
+        (".arch armv8-a\ncrc32b w0, w1, w2", "`+crc`"),
+        (".arch armv8.5-a\nirg x0, x1", "`+memtag`"),
+        (".arch armv8.2-a\npacia x0, x1", "`+pauth`"),
+        (".arch armv8.3-a\ncfinv", "`+flagm`"),
+        (".arch armv8.6-a\nld64b x0, [x1]", "`+ls64`"),
+        (".arch armv9-a\nrcwcas x0, x1, [x2]", "`+the`"),
+        (".arch armv8-a\nld1b { z0.b }, p0/z, [x0]", "`+sve`"),
+        (".arch armv8-a+sve\nadclb z0.s, z1.s, z2.s", "`+sve2`"),
+        (".cpu cortex-a53\nsdot v0.4s, v1.16b, v2.16b", "`+dotprod`"),
+        (".cpu cortex-a57\naese v0.16b, v1.16b", "`+aes`"),
+        // A system instruction's named operand is gated by feature too,
+        // which is a different thing from a name GNU as has never heard of.
+        // The `mrs`/`msr` register names are not: GNU as 2.47 carries the
+        // extension each belongs to and never tests it.
+        (".arch armv8-a\ndc cgdsw, x0", "`+memtag`"),
+        (".arch armv8-a\ntlbi alle1is, x0", "`+tlbid`"),
+    ] {
+        let e = errors_for(ARCH, src);
+        assert!(
+            e.contains(needle),
+            "`{src}` should mention `{needle}`:\n{e}"
+        );
+    }
+    // Adding an extension brings the ones it is defined in terms of, and
+    // taking one away takes with it everything that needs it.
+    check(&[
+        (
+            ".arch armv8-a+lse\ncasp x0, x1, x2, x3, [x4]",
+            "82 7c 20 48",
+        ),
+        (".arch armv8-a+sve2\nadclb z0.s, z1.s, z2.s", "20 d0 02 45"),
+        (
+            ".arch armv8-a\n.arch_extension memtag\nirg x0, x1",
+            "20 10 df 9a",
+        ),
+        (".cpu cortex-a57+crypto\naese v0.16b, v1.16b", "20 48 28 4e"),
+    ]);
+    assert!(
+        errors_for(
+            ARCH,
+            ".arch armv9-a\n.arch_extension nolse\ncas x0, x1, [x2]"
+        )
+        .contains("`+lse`")
+    );
+    assert!(
+        errors_for(
+            ARCH,
+            ".arch armv8-a+sve2\n.arch_extension nosve\nadclb z0.s, z1.s, z2.s"
+        )
+        .contains("`+sve")
+    );
+    // A name of neither table.
+    assert!(errors_for(ARCH, ".arch armv8.99-a\nnop").contains("unknown architecture"));
+    assert!(
+        errors_for(ARCH, ".arch armv8-a+nosuchextension\nnop")
+            .contains("unknown architectural extension")
+    );
+    assert!(
+        errors_for(ARCH, ".arch_extension nosuchextension\nnop")
+            .contains("unknown architectural extension")
+    );
+    // `S<op0>_...` names no register, only the five numbers, and the named
+    // registers are not gated either, so an ARMv8-A reaches both.
+    check(&[
+        (".arch armv8-a\nmrs x0, s3_0_c1_c0_5", "a0 10 38 d5"),
+        (".arch armv8-a\nmrs x0, rgsr_el1", "a0 10 38 d5"),
+    ]);
+}

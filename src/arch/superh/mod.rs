@@ -91,6 +91,7 @@ impl Architecture for SuperH {
             bits: 32,
             syntax: Syntax::Att,
             features: u64::from(self.cpus),
+            cpu_features: [0; 3],
             intel_register_prefix: false,
             used: 0,
             private: 0,

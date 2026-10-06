@@ -1839,12 +1839,19 @@ impl Assembler {
         // changes what the build attributes say; see
         // `Architecture::selects_cpu`.
         let mut state = self.arch_state.clone();
-        if self
+        match self
             .arch
             .selects_cpu(&mut state, &name.to_ascii_lowercase(), cpu)
         {
-            self.arch_state = state;
-            return true;
+            Ok(true) => {
+                self.arch_state = state;
+                return true;
+            }
+            Err(msg) => {
+                self.diags.error(span, msg);
+                return true;
+            }
+            Ok(false) => {}
         }
         match crate::arch::lookup(&name) {
             Some(a) => self.switch_arch(a),

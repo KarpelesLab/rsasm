@@ -627,3 +627,62 @@ wdef:   .xword  wref
 === refused: a modifier the backend does not know, in data
         .data
         .xword  x@FOOBAR
+
+# What the target selected has. `.arch`, `.cpu` and `.arch_extension` decide
+# which instructions assemble, as they do in GNU as; each of these is
+# refused by both assemblers, under the architecture or CPU the directive
+# names rather than the `-march=` of the command line, which has every
+# extension in it. See `src/arch/aarch64/cpu.rs`.
+=== refused: the LSE atomics on an ARMv8-A
+	.arch	armv8-a
+	cas	x0, x1, [x2]
+=== refused: the LSE atomics after the extension is taken away
+	.arch	armv9-a
+	.arch_extension nolse
+	cas	x0, x1, [x2]
+=== refused: CSSC on an ARMv8.8-A
+	.arch	armv8.8-a
+	abs	x0, x1
+=== refused: SVE on an ARMv8-A
+	.arch	armv8-a
+	ld1b	{ z0.b }, p0/z, [x0]
+=== refused: SVE2 with SVE alone
+	.arch	armv8-a+sve
+	adclb	z0.s, z1.s, z2.s
+=== refused: SVE2 after SVE is taken away
+	.arch	armv8-a+sve2
+	.arch_extension nosve
+	adclb	z0.s, z1.s, z2.s
+=== refused: pointer authentication on an ARMv8.2-A
+	.arch	armv8.2-a
+	pacia	x0, x1
+=== refused: memory tagging without the extension
+	.arch	armv8.5-a
+	irg	x0, x1
+=== refused: the CRC32 checksums on an ARMv8-A
+	.arch	armv8-a
+	crc32b	w0, w1, w2
+=== refused: the condition-flag instructions without FlagM
+	.arch	armv8.3-a
+	cfinv
+=== refused: a 64-byte access without LS64
+	.arch	armv8.6-a
+	ld64b	x0, [x1]
+=== refused: the THE instructions without the extension
+	.arch	armv9-a
+	rcwcas	x0, x1, [x2]
+=== refused: a CPU without the dot product
+	.cpu	cortex-a53
+	sdot	v0.4s, v1.16b, v2.16b
+=== refused: a CPU whose entry has no cryptographic extensions
+	.cpu	cortex-a57
+	aese	v0.16b, v1.16b
+=== refused: an architecture GNU as does not know
+	.arch	armv8.99-a
+	nop
+=== refused: an extension GNU as does not know
+	.arch	armv8-a+nosuchextension
+	nop
+=== refused: an extension no architecture has
+	.arch_extension nosuchextension
+	nop

@@ -1303,3 +1303,65 @@ l1:     vldr    d0, =l1-l0
         ldr     r0, =4
         vldr    d3, =l0-l1
         .ltorg
+
+# What the target selected has. `.arch`, `.cpu`, `.fpu` and
+# `.arch_extension` decide which instructions assemble, as they do in GNU
+# as; each of these is refused by both assemblers, under the architecture
+# the directive names rather than the `-march=armv7ve` of the command line.
+# See `src/arch/arm/cpu.rs`.
+=== refused: clz on an ARMv4T
+	.syntax unified
+	.arch	armv4t
+	clz	r0, r1
+=== refused: bx on an ARMv4
+	.syntax unified
+	.arch	armv4
+	bx	lr
+=== refused: sdiv on an ARMv5TE
+	.syntax unified
+	.arch	armv5te
+	sdiv	r0, r1, r2
+=== refused: sdiv without the divide extension
+	.syntax unified
+	.arch	armv7-a
+	sdiv	r0, r1, r2
+=== refused: an instruction after the extension that had it was taken away
+	.syntax unified
+	.arch	armv7-a
+	.arch_extension idiv
+	.arch_extension noidiv
+	udiv	r0, r1, r2
+=== refused: a banked register without the virtualization extension
+	.syntax unified
+	.arch	armv7-a
+	mrs	r0, sp_usr
+=== refused: smc without the security extension
+	.syntax unified
+	.arch	armv7-a
+	smc	#1
+=== refused: NEON with a VFP-only unit
+	.syntax unified
+	.arch	armv7-a
+	.fpu	vfpv3
+	vadd.i32	q0, q1, q2
+=== refused: swp on an ARMv8-A
+	.syntax unified
+	.arch	armv8-a
+	swp	r0, r1, [r2]
+=== refused: the apsr_g bitmask without the ARMv6 DSP instructions
+	.syntax unified
+	.arch	armv3
+	msr	apsr_g, r0
+=== refused: an extension the base architecture does not allow
+	.syntax unified
+	.arch	armv7-a
+	.arch_extension crc
+	nop
+=== refused: an extension no architecture has
+	.syntax unified
+	.arch_extension nosuchextension
+	nop
+=== refused: an architecture GNU as does not know
+	.syntax unified
+	.arch	armv42
+	nop

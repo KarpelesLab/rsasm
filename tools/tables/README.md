@@ -13,6 +13,12 @@ and checked against it.
   which registers an operand may hold, and the element sizes a NEON type
   has -- comes from the operand kinds of gas's own `insns[]` in
   `gas/config/tc-arm.c`, or is written out in the script with the reason.
+  It also writes `src/arch/arm/cpu_data.rs`, the feature model: the bit
+  numbering and the architecture, CPU, unit and extension sets of
+  `include/opcode/arm.h` and the option tables of `tc-arm.c`, and what each
+  instruction needs -- `insns[]`'s own variant for the mnemonic, and the
+  `arm-dis.c` row's for the unit a vector form names, which is what tells
+  the NEON `vadd.i32 q0, q1, q2` from the VFP `vadd.f32 s0, s1, s2`.
 - `arm-attrs.py` measures what `.arch`, `.cpu`, `.fpu`, `.arch_extension`,
   `.object_arch` and `.eabi_attribute` put in `.ARM.attributes`, by
   assembling the directive with `arm-none-eabi-as` under the command line
@@ -32,6 +38,15 @@ and checked against it.
   the load/store exclusives, the acquire/release accesses, the atomics,
   pointer authentication and memory tagging -- are measured
   the same way and go to `aarch64-gp-words.txt`.
+- `a64feat.py` reads GNU as's AArch64 feature model -- the bit numbering
+  and the architecture versions of `include/opcode/aarch64.h`, the names
+  `-march=`, `-mcpu=` and the `+` suffixes take and the dependencies between
+  them from `gas/config/tc-aarch64.c`, and the feature set of every
+  instruction from `opcodes/aarch64-tbl.h` -- and writes
+  `src/arch/aarch64/cpu_data.rs`. `aarch64.py` asks it for the set of each
+  form of its own table, matching the form to the opcode row that encodes
+  it, and `aarch64-sys.py` for the set of each system-instruction operand
+  name.
 - `aarch64-sys.py` does the same for the system instructions against the
   other reference: the names come from binutils' `aarch64-sys-regs.def` and
   the `aarch64_sys_regs_*` tables in `aarch64-opc.c`, and each encoding from
@@ -41,9 +56,11 @@ and checked against it.
   `tools/xas-diff/aarch64.txt` (where it does not know the name).
 
 ```console
-$ tools/tables/arm.py table                     # rewrite src/arch/arm/table.rs
-$ tools/tables/arm.py check                     # exit 1 if it is out of date
+$ tools/tables/arm.py table                     # table.rs and cpu_data.rs
+$ tools/tables/arm.py check                     # exit 1 if either is out of date
 $ tools/tables/arm.py audit                     # one line per row of the tables
+$ tools/tables/a64feat.py table                 # rewrite cpu_data.rs
+$ tools/tables/a64feat.py check
 $ tools/tables/aarch64.py table --jobs 32       # about ten minutes
 $ tools/tables/aarch64.py check                 # exit 1 if it is out of date
 $ tools/tables/aarch64.py fit --only '^fmov$' --dump forms.txt

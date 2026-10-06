@@ -155,6 +155,14 @@ pub struct Form {
     /// not has its condition field in `word`.
     pub cond: bool,
     pub ops: &'static [Op],
+    /// Which instruction-set features this form needs, as an index into
+    /// [`super::cpu_data::FEATS`]: what GNU as's `insns[]` asks of the
+    /// mnemonic, any bit of which is enough. See [`super::cpu`].
+    pub feats: u16,
+    /// The floating-point or SIMD unit this form's own row names, likewise,
+    /// or 0 where it names none: what tells the NEON `vadd.i32 q0, q1, q2`
+    /// from the VFP `vadd.f32 s0, s1, s2`, which share an `insns[]` row.
+    pub unit: u16,
     /// Which registers each operand may hold, in the order they are
     /// written: 0 any, 1 not the PC, 2 neither the PC nor the stack
     /// pointer, 3 the PC only where the operand is not written back, 255
@@ -169,6 +177,7 @@ const fn f(
     cond: bool,
     ops: &'static [Op],
     regs: &'static [u8],
+    gate: (u16, u16),
 ) -> Form {
     Form {
         name,
@@ -177,6 +186,8 @@ const fn f(
         cond,
         ops,
         regs,
+        feats: gate.0,
+        unit: gate.1,
     }
 }
 
@@ -208,6 +219,7 @@ pub static FORMS: &[Form] = &[
             Op::Msb(&[(0, 5)]),
         ],
         &[2, 255, 255],
+        (1, 0),
     ),
     f(
         "bfc",
@@ -216,6 +228,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Lsb(&[(7, 5)]), Op::Msb(&[(16, 5)])],
         &[1, 255, 255],
+        (1, 0),
     ),
     f(
         "bfi",
@@ -229,6 +242,7 @@ pub static FORMS: &[Form] = &[
             Op::Msb(&[(0, 5)]),
         ],
         &[2, 2, 255, 255],
+        (1, 0),
     ),
     f(
         "bfi",
@@ -242,6 +256,7 @@ pub static FORMS: &[Form] = &[
             Op::Msb(&[(16, 5)]),
         ],
         &[1, 1, 255, 255],
+        (1, 0),
     ),
     f(
         "bkpt",
@@ -250,6 +265,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Imm(&[(0, 8)], 1, 0)],
         &[],
+        (2, 0),
     ),
     f(
         "bkpt",
@@ -258,9 +274,26 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
         &[],
+        (3, 0),
     ),
-    f("bxj", Set::T32, 0xf3c08f00, true, &[Op::Reg(16, 4)], &[2]),
-    f("bxj", Set::Arm, 0x012fff20, true, &[Op::Reg(0, 4)], &[0]),
+    f(
+        "bxj",
+        Set::T32,
+        0xf3c08f00,
+        true,
+        &[Op::Reg(16, 4)],
+        &[2],
+        (1, 0),
+    ),
+    f(
+        "bxj",
+        Set::Arm,
+        0x012fff20,
+        true,
+        &[Op::Reg(0, 4)],
+        &[0],
+        (4, 0),
+    ),
     f(
         "cdp",
         Set::T32,
@@ -275,6 +308,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[],
+        (1, 0),
     ),
     f(
         "cdp",
@@ -290,6 +324,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[],
+        (5, 0),
     ),
     f(
         "cdp2",
@@ -305,6 +340,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[],
+        (1, 0),
     ),
     f(
         "cdp2",
@@ -320,9 +356,10 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[],
+        (3, 0),
     ),
-    f("clrex", Set::T32, 0xf3bf8f2f, true, &[], &[]),
-    f("clrex", Set::Arm, 0xf57ff01f, false, &[], &[]),
+    f("clrex", Set::T32, 0xf3bf8f2f, true, &[], &[], (6, 0)),
+    f("clrex", Set::Arm, 0xf57ff01f, false, &[], &[], (7, 0)),
     f(
         "clz",
         Set::T32,
@@ -330,6 +367,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
         &[2, 2],
+        (1, 0),
     ),
     f(
         "clz",
@@ -338,6 +376,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
         &[1, 1],
+        (3, 0),
     ),
     f(
         "cps",
@@ -346,6 +385,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (8, 0),
     ),
     f(
         "cps",
@@ -354,6 +394,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsid",
@@ -362,6 +403,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(0)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsid",
@@ -370,6 +412,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(5)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsid",
@@ -378,6 +421,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(5), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsid",
@@ -386,6 +430,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(6)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsid",
@@ -394,6 +439,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(6), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsie",
@@ -402,6 +448,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(0)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsie",
@@ -410,6 +457,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(5)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsie",
@@ -418,6 +466,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(5), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsie",
@@ -426,6 +475,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(6)],
         &[],
+        (9, 0),
     ),
     f(
         "cpsie",
@@ -434,9 +484,10 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::IntFlags(6), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
-    f("csdb", Set::T32, 0xf3af8014, false, &[], &[]),
-    f("csdb", Set::Arm, 0xe320f014, false, &[], &[]),
+    f("csdb", Set::T32, 0xf3af8014, false, &[], &[], (1, 0)),
+    f("csdb", Set::Arm, 0xe320f014, false, &[], &[], (10, 0)),
     f(
         "dbg",
         Set::T32,
@@ -444,6 +495,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 4)], 1, 0)],
         &[],
+        (11, 0),
     ),
     f(
         "dbg",
@@ -452,12 +504,45 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 4)], 1, 0)],
         &[],
+        (11, 0),
     ),
-    f("dmb", Set::T32, 0xf3bf8f50, true, &[Op::Barrier], &[]),
-    f("dmb", Set::Arm, 0xf57ff050, false, &[Op::Barrier], &[]),
-    f("dsb", Set::T32, 0xf3bf8f40, true, &[Op::Barrier], &[]),
-    f("dsb", Set::Arm, 0xf57ff040, false, &[Op::Barrier], &[]),
-    f("eret", Set::Arm, 0x0160006e, true, &[], &[]),
+    f(
+        "dmb",
+        Set::T32,
+        0xf3bf8f50,
+        true,
+        &[Op::Barrier],
+        &[],
+        (12, 0),
+    ),
+    f(
+        "dmb",
+        Set::Arm,
+        0xf57ff050,
+        false,
+        &[Op::Barrier],
+        &[],
+        (12, 0),
+    ),
+    f(
+        "dsb",
+        Set::T32,
+        0xf3bf8f40,
+        true,
+        &[Op::Barrier],
+        &[],
+        (12, 0),
+    ),
+    f(
+        "dsb",
+        Set::Arm,
+        0xf57ff040,
+        false,
+        &[Op::Barrier],
+        &[],
+        (12, 0),
+    ),
+    f("eret", Set::Arm, 0x0160006e, true, &[], &[], (13, 0)),
     f(
         "fldmdbx",
         Set::T32,
@@ -469,6 +554,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "fldmdbx",
@@ -481,6 +567,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "fldmiax",
@@ -493,6 +580,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "fldmiax",
@@ -505,6 +593,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "fstmdbx",
@@ -517,6 +606,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "fstmdbx",
@@ -529,6 +619,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "fstmiax",
@@ -541,6 +632,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "fstmiax",
@@ -553,6 +645,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "hlt",
@@ -561,6 +654,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
         &[],
+        (15, 0),
     ),
     f(
         "hvc",
@@ -569,6 +663,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 12), (16, 4)], 1, 0)],
         &[],
+        (13, 0),
     ),
     f(
         "hvc",
@@ -577,9 +672,26 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
         &[],
+        (13, 0),
     ),
-    f("isb", Set::T32, 0xf3bf8f60, true, &[Op::Barrier], &[]),
-    f("isb", Set::Arm, 0xf57ff060, false, &[Op::Barrier], &[]),
+    f(
+        "isb",
+        Set::T32,
+        0xf3bf8f60,
+        true,
+        &[Op::Barrier],
+        &[],
+        (12, 0),
+    ),
+    f(
+        "isb",
+        Set::Arm,
+        0xf57ff060,
+        false,
+        &[Op::Barrier],
+        &[],
+        (12, 0),
+    ),
     f(
         "ldc",
         Set::T32,
@@ -587,6 +699,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "ldc",
@@ -595,6 +708,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (5, 0),
     ),
     f(
         "ldc2",
@@ -603,6 +717,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "ldc2",
@@ -611,6 +726,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (3, 0),
     ),
     f(
         "ldc2l",
@@ -619,6 +735,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "ldc2l",
@@ -627,6 +744,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (3, 0),
     ),
     f(
         "ldcl",
@@ -635,6 +753,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "ldcl",
@@ -643,6 +762,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (5, 0),
     ),
     f(
         "ldrex",
@@ -651,6 +771,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
         &[2, 1],
+        (6, 0),
     ),
     f(
         "ldrex",
@@ -659,6 +780,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::OffMem(16, &[(0, 8)], 4)],
         &[2, 1],
+        (6, 0),
     ),
     f(
         "ldrex",
@@ -667,6 +789,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
         &[1, 255],
+        (9, 0),
     ),
     f(
         "ldrexb",
@@ -675,6 +798,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
         &[2, 1],
+        (6, 0),
     ),
     f(
         "ldrexb",
@@ -683,6 +807,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
         &[1, 1],
+        (7, 0),
     ),
     f(
         "ldrexd",
@@ -691,6 +816,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Distinct, Op::Base(16, 4)],
         &[2, 2, 1],
+        (8, 0),
     ),
     f(
         "ldrexd",
@@ -699,6 +825,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Next, Op::Base(16, 4)],
         &[1, 1, 1],
+        (7, 0),
     ),
     f(
         "ldrexh",
@@ -707,6 +834,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
         &[2, 1],
+        (6, 0),
     ),
     f(
         "ldrexh",
@@ -715,6 +843,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Base(16, 4)],
         &[1, 1],
+        (7, 0),
     ),
     f(
         "mcr",
@@ -730,6 +859,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 2, 255, 255, 255],
+        (1, 0),
     ),
     f(
         "mcr",
@@ -745,6 +875,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 0, 255, 255, 255],
+        (5, 0),
     ),
     f(
         "mcr2",
@@ -760,6 +891,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 2, 255, 255, 255],
+        (1, 0),
     ),
     f(
         "mcr2",
@@ -775,6 +907,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 0, 255, 255, 255],
+        (3, 0),
     ),
     f(
         "mcrr",
@@ -789,6 +922,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 2, 2, 255],
+        (1, 0),
     ),
     f(
         "mcrr",
@@ -803,6 +937,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 1, 1, 255],
+        (16, 0),
     ),
     f(
         "mcrr2",
@@ -817,6 +952,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 2, 2, 255],
+        (1, 0),
     ),
     f(
         "mcrr2",
@@ -831,6 +967,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "mrc",
@@ -846,6 +983,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 2, 255, 255, 255],
+        (1, 0),
     ),
     f(
         "mrc",
@@ -861,6 +999,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[],
+        (1, 0),
     ),
     f(
         "mrc",
@@ -876,6 +1015,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 1, 255, 255, 255],
+        (5, 0),
     ),
     f(
         "mrc",
@@ -891,6 +1031,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[],
+        (5, 0),
     ),
     f(
         "mrc2",
@@ -906,6 +1047,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 2, 255, 255, 255],
+        (1, 0),
     ),
     f(
         "mrc2",
@@ -921,6 +1063,7 @@ pub static FORMS: &[Form] = &[
             Op::OptImm(&[(5, 3)]),
         ],
         &[255, 255, 0, 255, 255, 255],
+        (3, 0),
     ),
     f(
         "mrrc",
@@ -936,6 +1079,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 2, 2, 255],
+        (1, 0),
     ),
     f(
         "mrrc",
@@ -951,6 +1095,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 1, 1, 255],
+        (16, 0),
     ),
     f(
         "mrrc2",
@@ -966,6 +1111,7 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 2, 2, 255],
+        (1, 0),
     ),
     f(
         "mrrc2",
@@ -981,9 +1127,10 @@ pub static FORMS: &[Form] = &[
             Op::CReg(0),
         ],
         &[255, 255, 1, 1, 255],
+        (9, 0),
     ),
-    f("nop", Set::T16, 0x0000bf00, true, &[], &[]),
-    f("nop", Set::T32, 0xf3af8000, true, &[], &[]),
+    f("nop", Set::T16, 0x0000bf00, true, &[], &[], (17, 0)),
+    f("nop", Set::T32, 0xf3af8000, true, &[], &[], (17, 0)),
     f(
         "nop",
         Set::Arm,
@@ -991,6 +1138,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Hint(&[(0, 8)])],
         &[],
+        (15, 0),
     ),
     f(
         "pkhbt",
@@ -1004,6 +1152,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(6, 2, 255, 12, 3),
         ],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "pkhbt",
@@ -1017,6 +1166,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(7, 5, 255, 255, 0),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "pkhtb",
@@ -1025,6 +1175,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "pkhtb",
@@ -1038,6 +1189,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(6, 2, 69, 12, 3),
         ],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "pkhtb",
@@ -1046,6 +1198,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "pkhtb",
@@ -1059,9 +1212,10 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(7, 5, 70, 255, 0),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
-    f("pssbb", Set::T32, 0xf3bf8f44, false, &[], &[]),
-    f("pssbb", Set::Arm, 0xf57ff044, false, &[], &[]),
+    f("pssbb", Set::T32, 0xf3bf8f44, false, &[], &[], (1, 0)),
+    f("pssbb", Set::Arm, 0xf57ff044, false, &[], &[], (10, 0)),
     f(
         "qadd",
         Set::T32,
@@ -1069,6 +1223,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "qadd",
@@ -1077,6 +1232,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "qadd16",
@@ -1085,6 +1241,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "qadd16",
@@ -1093,6 +1250,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "qadd8",
@@ -1101,6 +1259,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "qadd8",
@@ -1109,6 +1268,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "qasx",
@@ -1117,6 +1277,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "qasx",
@@ -1125,6 +1286,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "qdadd",
@@ -1133,6 +1295,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "qdadd",
@@ -1141,6 +1304,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "qdsub",
@@ -1149,6 +1313,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "qdsub",
@@ -1157,6 +1322,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "qsax",
@@ -1165,6 +1331,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "qsax",
@@ -1173,6 +1340,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "qsub",
@@ -1181,6 +1349,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "qsub",
@@ -1189,6 +1358,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Reg(16, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "qsub16",
@@ -1197,6 +1367,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "qsub16",
@@ -1205,6 +1376,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "qsub8",
@@ -1213,6 +1385,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "qsub8",
@@ -1221,6 +1394,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "rbit",
@@ -1229,6 +1403,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
         &[2, 2],
+        (1, 0),
     ),
     f(
         "rbit",
@@ -1237,6 +1412,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
         &[0, 0],
+        (1, 0),
     ),
     f(
         "rev",
@@ -1245,6 +1421,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "rev",
@@ -1253,6 +1430,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "rev",
@@ -1261,6 +1439,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
         &[1, 1],
+        (9, 0),
     ),
     f(
         "rev16",
@@ -1269,6 +1448,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "rev16",
@@ -1277,6 +1457,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "rev16",
@@ -1285,6 +1466,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
         &[1, 1],
+        (9, 0),
     ),
     f(
         "revsh",
@@ -1293,6 +1475,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "revsh",
@@ -1301,6 +1484,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::RegTwice(16, 0)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "revsh",
@@ -1309,6 +1493,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4)],
         &[1, 1],
+        (9, 0),
     ),
     f(
         "rfeda",
@@ -1317,6 +1502,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
         &[1],
+        (9, 0),
     ),
     f(
         "rfedb",
@@ -1325,6 +1511,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Writeback(21)],
         &[1],
+        (8, 0),
     ),
     f(
         "rfedb",
@@ -1333,6 +1520,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
         &[1],
+        (9, 0),
     ),
     f(
         "rfeia",
@@ -1341,6 +1529,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Writeback(21)],
         &[1],
+        (8, 0),
     ),
     f(
         "rfeia",
@@ -1349,6 +1538,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
         &[1],
+        (9, 0),
     ),
     f(
         "rfeib",
@@ -1357,6 +1547,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(16, 4), Op::Writeback(21)],
         &[1],
+        (9, 0),
     ),
     f(
         "sadd16",
@@ -1365,6 +1556,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "sadd16",
@@ -1373,6 +1565,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "sadd8",
@@ -1381,6 +1574,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "sadd8",
@@ -1389,6 +1583,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "sasx",
@@ -1397,6 +1592,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "sasx",
@@ -1405,6 +1601,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "sbfx",
@@ -1418,6 +1615,7 @@ pub static FORMS: &[Form] = &[
             Op::Width(&[(0, 5)]),
         ],
         &[2, 2, 255, 255],
+        (1, 0),
     ),
     f(
         "sbfx",
@@ -1431,6 +1629,7 @@ pub static FORMS: &[Form] = &[
             Op::Width(&[(16, 5)]),
         ],
         &[0, 0, 255, 255],
+        (1, 0),
     ),
     f(
         "sdiv",
@@ -1439,6 +1638,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (20, 0),
     ),
     f(
         "sdiv",
@@ -1447,6 +1647,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::RegTwice(8, 16), Op::Reg(0, 4)],
         &[2, 2],
+        (20, 0),
     ),
     f(
         "sdiv",
@@ -1455,6 +1656,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (21, 0),
     ),
     f(
         "sdiv",
@@ -1463,6 +1665,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::RegTwice(16, 0), Op::Reg(8, 4)],
         &[1, 1],
+        (21, 0),
     ),
     f(
         "sel",
@@ -1471,6 +1674,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "sel",
@@ -1479,12 +1683,29 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
-    f("setend", Set::T16, 0x0000b650, false, &[Op::Endian(3)], &[]),
-    f("setend", Set::Arm, 0xf1010000, false, &[Op::Endian(9)], &[]),
-    f("sev", Set::T16, 0x0000bf40, true, &[], &[]),
-    f("sev", Set::T32, 0xf3af8004, true, &[], &[]),
-    f("sev", Set::Arm, 0x0320f004, true, &[], &[]),
+    f(
+        "setend",
+        Set::T16,
+        0x0000b650,
+        false,
+        &[Op::Endian(3)],
+        &[],
+        (9, 0),
+    ),
+    f(
+        "setend",
+        Set::Arm,
+        0xf1010000,
+        false,
+        &[Op::Endian(9)],
+        &[],
+        (9, 0),
+    ),
+    f("sev", Set::T16, 0x0000bf40, true, &[], &[], (7, 0)),
+    f("sev", Set::T32, 0xf3af8004, true, &[], &[], (7, 0)),
+    f("sev", Set::Arm, 0x0320f004, true, &[], &[], (7, 0)),
     f(
         "shadd16",
         Set::T32,
@@ -1492,6 +1713,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "shadd16",
@@ -1500,6 +1722,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "shadd8",
@@ -1508,6 +1731,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "shadd8",
@@ -1516,6 +1740,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "shasx",
@@ -1524,6 +1749,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "shasx",
@@ -1532,6 +1758,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "shsax",
@@ -1540,6 +1767,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "shsax",
@@ -1548,6 +1776,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "shsub16",
@@ -1556,6 +1785,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "shsub16",
@@ -1564,6 +1794,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "shsub8",
@@ -1572,6 +1803,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "shsub8",
@@ -1580,6 +1812,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "smc",
@@ -1588,6 +1821,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(16, 4)], 1, 0)],
         &[],
+        (22, 0),
     ),
     f(
         "smc",
@@ -1596,6 +1830,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 4)], 1, 0)],
         &[],
+        (22, 0),
     ),
     f(
         "smlabb",
@@ -1604,6 +1839,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlabb",
@@ -1612,6 +1848,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlabt",
@@ -1620,6 +1857,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlabt",
@@ -1628,6 +1866,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlad",
@@ -1636,6 +1875,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlad",
@@ -1644,6 +1884,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smladx",
@@ -1652,6 +1893,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smladx",
@@ -1660,6 +1902,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smlalbb",
@@ -1668,6 +1911,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlalbb",
@@ -1676,6 +1920,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlalbt",
@@ -1684,6 +1929,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlalbt",
@@ -1692,6 +1938,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlald",
@@ -1700,6 +1947,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlald",
@@ -1708,6 +1956,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smlaldx",
@@ -1716,6 +1965,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlaldx",
@@ -1724,6 +1974,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smlaltb",
@@ -1732,6 +1983,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlaltb",
@@ -1740,6 +1992,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlaltt",
@@ -1748,6 +2001,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlaltt",
@@ -1756,6 +2010,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlatb",
@@ -1764,6 +2019,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlatb",
@@ -1772,6 +2028,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlatt",
@@ -1780,6 +2037,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlatt",
@@ -1788,6 +2046,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlawb",
@@ -1796,6 +2055,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlawb",
@@ -1804,6 +2064,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlawt",
@@ -1812,6 +2073,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (19, 0),
     ),
     f(
         "smlawt",
@@ -1820,6 +2082,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (19, 0),
     ),
     f(
         "smlsd",
@@ -1828,6 +2091,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlsd",
@@ -1836,6 +2100,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smlsdx",
@@ -1844,6 +2109,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlsdx",
@@ -1852,6 +2118,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smlsld",
@@ -1860,6 +2127,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlsld",
@@ -1868,6 +2136,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smlsldx",
@@ -1876,6 +2145,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smlsldx",
@@ -1884,6 +2154,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smmla",
@@ -1892,6 +2163,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smmla",
@@ -1900,6 +2172,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smmlar",
@@ -1908,6 +2181,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smmlar",
@@ -1916,6 +2190,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smmls",
@@ -1924,6 +2199,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smmls",
@@ -1932,6 +2208,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smmlsr",
@@ -1940,6 +2217,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "smmlsr",
@@ -1948,6 +2226,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "smmul",
@@ -1956,6 +2235,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "smmul",
@@ -1964,6 +2244,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "smmulr",
@@ -1972,6 +2253,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "smmulr",
@@ -1980,6 +2262,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "smuad",
@@ -1988,6 +2271,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "smuad",
@@ -1996,6 +2280,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "smuadx",
@@ -2004,6 +2289,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "smuadx",
@@ -2012,6 +2298,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "smulbb",
@@ -2020,6 +2307,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "smulbb",
@@ -2028,6 +2316,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "smulbt",
@@ -2036,6 +2325,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "smulbt",
@@ -2044,6 +2334,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "smultb",
@@ -2052,6 +2343,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "smultb",
@@ -2060,6 +2352,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "smultt",
@@ -2068,6 +2361,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "smultt",
@@ -2076,6 +2370,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "smulwb",
@@ -2084,6 +2379,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "smulwb",
@@ -2092,6 +2388,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "smulwt",
@@ -2100,6 +2397,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (19, 0),
     ),
     f(
         "smulwt",
@@ -2108,6 +2406,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (19, 0),
     ),
     f(
         "smusd",
@@ -2116,6 +2415,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "smusd",
@@ -2124,6 +2424,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "smusdx",
@@ -2132,6 +2433,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "smusdx",
@@ -2140,6 +2442,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "srsda",
@@ -2148,6 +2451,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "srsdb",
@@ -2156,6 +2460,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (8, 0),
     ),
     f(
         "srsdb",
@@ -2164,6 +2469,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "srsia",
@@ -2172,6 +2478,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (8, 0),
     ),
     f(
         "srsia",
@@ -2180,6 +2487,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "srsib",
@@ -2188,6 +2496,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::SpBase(16, 21), Op::Imm(&[(0, 5)], 1, 0)],
         &[],
+        (9, 0),
     ),
     f(
         "ssat",
@@ -2201,6 +2510,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(6, 2, 21, 12, 3),
         ],
         &[2, 255, 2, 255],
+        (1, 0),
     ),
     f(
         "ssat",
@@ -2214,6 +2524,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(7, 5, 6, 255, 0),
         ],
         &[1, 255, 1, 255],
+        (9, 0),
     ),
     f(
         "ssat16",
@@ -2222,6 +2533,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Imm(&[(0, 4)], 1, 1), Op::Reg(16, 4)],
         &[2, 255, 2],
+        (18, 0),
     ),
     f(
         "ssat16",
@@ -2230,6 +2542,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Imm(&[(16, 4)], 1, 1), Op::Reg(0, 4)],
         &[1, 255, 1],
+        (9, 0),
     ),
     f(
         "ssax",
@@ -2238,6 +2551,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "ssax",
@@ -2246,9 +2560,10 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
-    f("ssbb", Set::T32, 0xf3bf8f40, false, &[], &[]),
-    f("ssbb", Set::Arm, 0xf57ff040, false, &[], &[]),
+    f("ssbb", Set::T32, 0xf3bf8f40, false, &[], &[], (1, 0)),
+    f("ssbb", Set::Arm, 0xf57ff040, false, &[], &[], (10, 0)),
     f(
         "ssub16",
         Set::T32,
@@ -2256,6 +2571,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "ssub16",
@@ -2264,6 +2580,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "ssub8",
@@ -2272,6 +2589,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "ssub8",
@@ -2280,6 +2598,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "stc",
@@ -2288,6 +2607,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "stc",
@@ -2296,6 +2616,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (5, 0),
     ),
     f(
         "stc2",
@@ -2304,6 +2625,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "stc2",
@@ -2312,6 +2634,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (3, 0),
     ),
     f(
         "stc2l",
@@ -2320,6 +2643,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "stc2l",
@@ -2328,6 +2652,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (3, 0),
     ),
     f(
         "stcl",
@@ -2336,6 +2661,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (1, 0),
     ),
     f(
         "stcl",
@@ -2344,6 +2670,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Coproc(8), Op::CReg(12), Op::CoprocMem],
         &[],
+        (5, 0),
     ),
     f(
         "strex",
@@ -2352,6 +2679,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(12, 4), Op::Base(16, 4)],
         &[2, 2, 1],
+        (6, 0),
     ),
     f(
         "strex",
@@ -2360,6 +2688,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(12, 4), Op::OffMem(16, &[(0, 8)], 4)],
         &[2, 2, 1],
+        (6, 0),
     ),
     f(
         "strex",
@@ -2373,6 +2702,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "strexb",
@@ -2386,6 +2716,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[2, 2, 1],
+        (6, 0),
     ),
     f(
         "strexb",
@@ -2399,6 +2730,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[1, 1, 255],
+        (7, 0),
     ),
     f(
         "strexd",
@@ -2413,6 +2745,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[2, 2, 2, 1],
+        (8, 0),
     ),
     f(
         "strexd",
@@ -2427,6 +2760,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[1, 1, 1, 1],
+        (7, 0),
     ),
     f(
         "strexh",
@@ -2440,6 +2774,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[2, 2, 1],
+        (6, 0),
     ),
     f(
         "strexh",
@@ -2453,6 +2788,7 @@ pub static FORMS: &[Form] = &[
             Op::FirstDistinct,
         ],
         &[1, 1, 255],
+        (7, 0),
     ),
     f(
         "svc",
@@ -2461,6 +2797,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 8)], 1, 0)],
         &[],
+        (23, 0),
     ),
     f(
         "svc",
@@ -2469,6 +2806,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 24)], 1, 0)],
         &[],
+        (15, 0),
     ),
     f(
         "swp",
@@ -2477,6 +2815,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
         &[1, 1, 1],
+        (24, 0),
     ),
     f(
         "swpb",
@@ -2485,6 +2824,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Base(16, 4)],
         &[1, 1, 1],
+        (24, 0),
     ),
     f(
         "sxtab",
@@ -2493,6 +2833,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "sxtab",
@@ -2506,6 +2847,7 @@ pub static FORMS: &[Form] = &[
             Op::Rotate(10),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "sxtab16",
@@ -2514,6 +2856,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "sxtab16",
@@ -2527,6 +2870,7 @@ pub static FORMS: &[Form] = &[
             Op::Rotate(10),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "sxtah",
@@ -2535,6 +2879,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "sxtah",
@@ -2548,6 +2893,7 @@ pub static FORMS: &[Form] = &[
             Op::Rotate(10),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "sxtb",
@@ -2556,6 +2902,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "sxtb",
@@ -2564,6 +2911,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 255],
+        (9, 0),
     ),
     f(
         "sxtb",
@@ -2572,6 +2920,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "sxtb16",
@@ -2580,6 +2929,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 255],
+        (18, 0),
     ),
     f(
         "sxtb16",
@@ -2588,6 +2938,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "sxth",
@@ -2596,6 +2947,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "sxth",
@@ -2604,6 +2956,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 255],
+        (9, 0),
     ),
     f(
         "sxth",
@@ -2612,6 +2965,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "tbb",
@@ -2620,6 +2974,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::IdxMem(16, 0, 0)],
         &[],
+        (1, 0),
     ),
     f(
         "tbh",
@@ -2628,6 +2983,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::IdxMem(16, 0, 1)],
         &[],
+        (1, 0),
     ),
     f(
         "uadd16",
@@ -2636,6 +2992,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uadd16",
@@ -2644,6 +3001,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uadd8",
@@ -2652,6 +3010,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uadd8",
@@ -2660,6 +3019,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uasx",
@@ -2668,6 +3028,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uasx",
@@ -2676,6 +3037,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "ubfx",
@@ -2689,6 +3051,7 @@ pub static FORMS: &[Form] = &[
             Op::Width(&[(0, 5)]),
         ],
         &[2, 2, 255, 255],
+        (1, 0),
     ),
     f(
         "ubfx",
@@ -2702,6 +3065,7 @@ pub static FORMS: &[Form] = &[
             Op::Width(&[(16, 5)]),
         ],
         &[0, 0, 255, 255],
+        (1, 0),
     ),
     f(
         "udf",
@@ -2710,6 +3074,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 8)], 1, 0)],
         &[],
+        (17, 0),
     ),
     f(
         "udf",
@@ -2718,6 +3083,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Imm(&[(0, 12), (16, 4)], 1, 0)],
         &[],
+        (17, 0),
     ),
     f(
         "udf",
@@ -2726,6 +3092,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Imm(&[(0, 4), (8, 12)], 1, 0)],
         &[],
+        (15, 0),
     ),
     f(
         "udiv",
@@ -2734,6 +3101,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (20, 0),
     ),
     f(
         "udiv",
@@ -2742,6 +3110,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::RegTwice(8, 16), Op::Reg(0, 4)],
         &[2, 2],
+        (20, 0),
     ),
     f(
         "udiv",
@@ -2750,6 +3119,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (21, 0),
     ),
     f(
         "udiv",
@@ -2758,6 +3128,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::RegTwice(16, 0), Op::Reg(8, 4)],
         &[1, 1],
+        (21, 0),
     ),
     f(
         "uhadd16",
@@ -2766,6 +3137,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uhadd16",
@@ -2774,6 +3146,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uhadd8",
@@ -2782,6 +3155,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uhadd8",
@@ -2790,6 +3164,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uhasx",
@@ -2798,6 +3173,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uhasx",
@@ -2806,6 +3182,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uhsax",
@@ -2814,6 +3191,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uhsax",
@@ -2822,6 +3200,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uhsub16",
@@ -2830,6 +3209,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uhsub16",
@@ -2838,6 +3218,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uhsub8",
@@ -2846,6 +3227,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uhsub8",
@@ -2854,6 +3236,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "umaal",
@@ -2862,6 +3245,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "umaal",
@@ -2870,6 +3254,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "undefined (bcc, cond=0xE)",
@@ -2878,6 +3263,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[],
         &[],
+        (1, 0),
     ),
     f(
         "undefined (bcc, cond=0xF)",
@@ -2886,6 +3272,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[],
         &[],
+        (1, 0),
     ),
     f(
         "uqadd16",
@@ -2894,6 +3281,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uqadd16",
@@ -2902,6 +3290,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uqadd8",
@@ -2910,6 +3299,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uqadd8",
@@ -2918,6 +3308,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uqasx",
@@ -2926,6 +3317,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uqasx",
@@ -2934,6 +3326,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uqsax",
@@ -2942,6 +3335,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uqsax",
@@ -2950,6 +3344,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uqsub16",
@@ -2958,6 +3353,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uqsub16",
@@ -2966,6 +3362,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uqsub8",
@@ -2974,6 +3371,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "uqsub8",
@@ -2982,6 +3380,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "usad8",
@@ -2990,6 +3389,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "usad8",
@@ -2998,6 +3398,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "usada8",
@@ -3006,6 +3407,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(12, 4)],
         &[2, 2, 2, 2],
+        (18, 0),
     ),
     f(
         "usada8",
@@ -3014,6 +3416,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(16, 4), Op::Reg(0, 4), Op::Reg(8, 4), Op::Reg(12, 4)],
         &[1, 1, 1, 1],
+        (9, 0),
     ),
     f(
         "usat",
@@ -3027,6 +3430,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(6, 2, 21, 12, 3),
         ],
         &[2, 255, 2, 255],
+        (1, 0),
     ),
     f(
         "usat",
@@ -3040,6 +3444,7 @@ pub static FORMS: &[Form] = &[
             Op::SatShift(7, 5, 6, 255, 0),
         ],
         &[1, 255, 1, 255],
+        (9, 0),
     ),
     f(
         "usat16",
@@ -3048,6 +3453,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Imm(&[(0, 4)], 1, 0), Op::Reg(16, 4)],
         &[2, 255, 2],
+        (18, 0),
     ),
     f(
         "usat16",
@@ -3056,6 +3462,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Imm(&[(16, 4)], 1, 0), Op::Reg(0, 4)],
         &[1, 255, 1],
+        (9, 0),
     ),
     f(
         "usax",
@@ -3064,6 +3471,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "usax",
@@ -3072,6 +3480,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "usub16",
@@ -3080,6 +3489,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "usub16",
@@ -3088,6 +3498,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "usub8",
@@ -3096,6 +3507,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[2, 2, 2],
+        (18, 0),
     ),
     f(
         "usub8",
@@ -3104,6 +3516,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(16, 4), Op::Reg(0, 4)],
         &[1, 1, 1],
+        (9, 0),
     ),
     f(
         "uxtab",
@@ -3112,6 +3525,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "uxtab",
@@ -3125,6 +3539,7 @@ pub static FORMS: &[Form] = &[
             Op::Rotate(10),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "uxtab16",
@@ -3133,6 +3548,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "uxtab16",
@@ -3146,6 +3562,7 @@ pub static FORMS: &[Form] = &[
             Op::Rotate(10),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "uxtah",
@@ -3154,6 +3571,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(16, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 2, 255],
+        (18, 0),
     ),
     f(
         "uxtah",
@@ -3167,6 +3585,7 @@ pub static FORMS: &[Form] = &[
             Op::Rotate(10),
         ],
         &[1, 1, 1, 255],
+        (9, 0),
     ),
     f(
         "uxtb",
@@ -3175,6 +3594,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "uxtb",
@@ -3183,6 +3603,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 255],
+        (9, 0),
     ),
     f(
         "uxtb",
@@ -3191,6 +3612,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "uxtb16",
@@ -3199,6 +3621,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 255],
+        (18, 0),
     ),
     f(
         "uxtb16",
@@ -3207,6 +3630,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "uxth",
@@ -3215,6 +3639,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(0, 3), Op::Reg(3, 3)],
         &[2, 2],
+        (9, 0),
     ),
     f(
         "uxth",
@@ -3223,6 +3648,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(8, 4), Op::Reg(0, 4), Op::Rotate(4)],
         &[2, 2, 255],
+        (9, 0),
     ),
     f(
         "uxth",
@@ -3231,6 +3657,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Reg(0, 4), Op::Rotate(10)],
         &[1, 1, 255],
+        (9, 0),
     ),
     f(
         "vaba.s16",
@@ -3243,6 +3670,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.s16",
@@ -3255,6 +3683,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.s32",
@@ -3267,6 +3696,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.s32",
@@ -3279,6 +3709,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.s8",
@@ -3291,6 +3722,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.s8",
@@ -3303,6 +3735,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.u16",
@@ -3315,6 +3748,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.u16",
@@ -3327,6 +3761,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.u32",
@@ -3339,6 +3774,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.u32",
@@ -3351,6 +3787,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.u8",
@@ -3363,6 +3800,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaba.u8",
@@ -3375,6 +3813,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.s16",
@@ -3387,6 +3826,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.s16",
@@ -3399,6 +3839,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.s32",
@@ -3411,6 +3852,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.s32",
@@ -3423,6 +3865,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.s8",
@@ -3435,6 +3878,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.s8",
@@ -3447,6 +3891,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.u16",
@@ -3459,6 +3904,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.u16",
@@ -3471,6 +3917,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.u32",
@@ -3483,6 +3930,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.u32",
@@ -3495,6 +3943,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.u8",
@@ -3507,6 +3956,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabal.u8",
@@ -3519,6 +3969,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.f32",
@@ -3531,6 +3982,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.f32",
@@ -3542,6 +3994,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.f32",
@@ -3554,6 +4007,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.f32",
@@ -3565,6 +4019,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.s16",
@@ -3577,6 +4032,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.s16",
@@ -3588,6 +4044,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.s16",
@@ -3600,6 +4057,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.s16",
@@ -3611,6 +4069,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.s32",
@@ -3623,6 +4082,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.s32",
@@ -3634,6 +4094,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.s32",
@@ -3646,6 +4107,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.s32",
@@ -3657,6 +4119,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.s8",
@@ -3669,6 +4132,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.s8",
@@ -3680,6 +4144,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.s8",
@@ -3692,6 +4157,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.s8",
@@ -3703,6 +4169,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.u16",
@@ -3715,6 +4182,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.u16",
@@ -3726,6 +4194,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.u16",
@@ -3738,6 +4207,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.u16",
@@ -3749,6 +4219,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.u32",
@@ -3761,6 +4232,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.u32",
@@ -3772,6 +4244,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.u32",
@@ -3784,6 +4257,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.u32",
@@ -3795,6 +4269,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.u8",
@@ -3807,6 +4282,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.u8",
@@ -3818,6 +4294,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabd.u8",
@@ -3830,6 +4307,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabd.u8",
@@ -3841,6 +4319,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabdl.s16",
@@ -3853,6 +4332,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabdl.s16",
@@ -3865,6 +4345,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabdl.s32",
@@ -3877,6 +4358,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabdl.s32",
@@ -3889,6 +4371,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabdl.s8",
@@ -3901,6 +4384,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabdl.s8",
@@ -3913,6 +4397,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabdl.u16",
@@ -3925,6 +4410,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabdl.u16",
@@ -3937,6 +4423,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabdl.u32",
@@ -3949,6 +4436,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabdl.u32",
@@ -3961,6 +4449,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabdl.u8",
@@ -3973,6 +4462,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabdl.u8",
@@ -3985,6 +4475,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vabs.f32",
@@ -3996,6 +4487,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vabs.f32",
@@ -4007,6 +4499,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabs.f32",
@@ -4018,6 +4511,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vabs.f32",
@@ -4029,6 +4523,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vabs.f64",
@@ -4040,6 +4535,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vabs.f64",
@@ -4051,6 +4547,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vabs.s16",
@@ -4062,6 +4559,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabs.s16",
@@ -4073,6 +4571,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vabs.s32",
@@ -4084,6 +4583,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabs.s32",
@@ -4095,6 +4595,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vabs.s8",
@@ -4106,6 +4607,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vabs.s8",
@@ -4117,6 +4619,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vacge.f32",
@@ -4129,6 +4632,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacge.f32",
@@ -4140,6 +4644,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacge.f32",
@@ -4152,6 +4657,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacge.f32",
@@ -4163,6 +4669,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacgt.f32",
@@ -4175,6 +4682,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacgt.f32",
@@ -4186,6 +4694,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacgt.f32",
@@ -4198,6 +4707,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacgt.f32",
@@ -4209,6 +4719,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacle.f32",
@@ -4221,6 +4732,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacle.f32",
@@ -4232,6 +4744,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacle.f32",
@@ -4244,6 +4757,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vacle.f32",
@@ -4255,6 +4769,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaclt.f32",
@@ -4267,6 +4782,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaclt.f32",
@@ -4278,6 +4794,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaclt.f32",
@@ -4290,6 +4807,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaclt.f32",
@@ -4301,6 +4819,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vadd.f32",
@@ -4313,6 +4832,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vadd.f32",
@@ -4324,6 +4844,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vadd.f32",
@@ -4336,6 +4857,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.f32",
@@ -4347,6 +4869,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.f32",
@@ -4359,6 +4882,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vadd.f32",
@@ -4370,6 +4894,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vadd.f32",
@@ -4382,6 +4907,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.f32",
@@ -4393,6 +4919,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.f64",
@@ -4405,6 +4932,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vadd.f64",
@@ -4416,6 +4944,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vadd.f64",
@@ -4428,6 +4957,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vadd.f64",
@@ -4439,6 +4969,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vadd.i16",
@@ -4451,6 +4982,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i16",
@@ -4462,6 +4994,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i16",
@@ -4474,6 +5007,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i16",
@@ -4485,6 +5019,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i32",
@@ -4497,6 +5032,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i32",
@@ -4508,6 +5044,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i32",
@@ -4520,6 +5057,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i32",
@@ -4531,6 +5069,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i64",
@@ -4543,6 +5082,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i64",
@@ -4554,6 +5094,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i64",
@@ -4566,6 +5107,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i64",
@@ -4577,6 +5119,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i8",
@@ -4589,6 +5132,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i8",
@@ -4600,6 +5144,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vadd.i8",
@@ -4612,6 +5157,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vadd.i8",
@@ -4623,6 +5169,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vaddhn.i16",
@@ -4635,6 +5182,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddhn.i16",
@@ -4647,6 +5195,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddhn.i32",
@@ -4659,6 +5208,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddhn.i32",
@@ -4671,6 +5221,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddhn.i64",
@@ -4683,6 +5234,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddhn.i64",
@@ -4695,6 +5247,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddl.s16",
@@ -4707,6 +5260,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vaddl.s16",
@@ -4719,6 +5273,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddl.s32",
@@ -4731,6 +5286,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vaddl.s32",
@@ -4743,6 +5299,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddl.s8",
@@ -4755,6 +5312,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vaddl.s8",
@@ -4767,6 +5325,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddl.u16",
@@ -4779,6 +5338,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vaddl.u16",
@@ -4791,6 +5351,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddl.u32",
@@ -4803,6 +5364,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vaddl.u32",
@@ -4815,6 +5377,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddl.u8",
@@ -4827,6 +5390,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vaddl.u8",
@@ -4839,6 +5403,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s16",
@@ -4851,6 +5416,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s16",
@@ -4862,6 +5428,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s16",
@@ -4874,6 +5441,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s16",
@@ -4885,6 +5453,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s32",
@@ -4897,6 +5466,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s32",
@@ -4908,6 +5478,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s32",
@@ -4920,6 +5491,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s32",
@@ -4931,6 +5503,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s8",
@@ -4943,6 +5516,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s8",
@@ -4954,6 +5528,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s8",
@@ -4966,6 +5541,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.s8",
@@ -4977,6 +5553,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u16",
@@ -4989,6 +5566,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u16",
@@ -5000,6 +5578,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u16",
@@ -5012,6 +5591,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u16",
@@ -5023,6 +5603,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u32",
@@ -5035,6 +5616,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u32",
@@ -5046,6 +5628,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u32",
@@ -5058,6 +5641,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u32",
@@ -5069,6 +5653,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u8",
@@ -5081,6 +5666,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u8",
@@ -5092,6 +5678,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u8",
@@ -5104,6 +5691,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vaddw.u8",
@@ -5115,6 +5703,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vand",
@@ -5127,6 +5716,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vand",
@@ -5138,6 +5728,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vand",
@@ -5150,6 +5741,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vand",
@@ -5161,6 +5753,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i16",
@@ -5169,6 +5762,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 16)],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i16",
@@ -5181,6 +5775,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 16),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i16",
@@ -5189,6 +5784,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 16)],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i16",
@@ -5201,6 +5797,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 16),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i32",
@@ -5209,6 +5806,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 32)],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i32",
@@ -5221,6 +5819,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 32),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i32",
@@ -5229,6 +5828,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 32)],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i32",
@@ -5241,6 +5841,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 32),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i64",
@@ -5249,6 +5850,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 64)],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i64",
@@ -5261,6 +5863,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 64),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i64",
@@ -5269,6 +5872,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 64)],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i64",
@@ -5281,6 +5885,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 64),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i8",
@@ -5289,6 +5894,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 8)],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i8",
@@ -5301,6 +5907,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 8),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vand.i8",
@@ -5309,6 +5916,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(4, 8)],
         &[],
+        (25, 25),
     ),
     f(
         "vand.i8",
@@ -5321,6 +5929,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(4, 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbic",
@@ -5333,6 +5942,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vbic",
@@ -5344,6 +5954,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vbic",
@@ -5356,6 +5967,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbic",
@@ -5367,6 +5979,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i16",
@@ -5375,6 +5988,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 16)],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i16",
@@ -5387,6 +6001,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 16),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i16",
@@ -5395,6 +6010,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 16)],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i16",
@@ -5407,6 +6023,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 16),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i32",
@@ -5415,6 +6032,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 32)],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i32",
@@ -5427,6 +6045,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 32),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i32",
@@ -5435,6 +6054,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 32)],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i32",
@@ -5447,6 +6067,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 32),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i64",
@@ -5455,6 +6076,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 64)],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i64",
@@ -5467,6 +6089,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 64),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i64",
@@ -5475,6 +6098,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 64)],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i64",
@@ -5487,6 +6111,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 64),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i8",
@@ -5495,6 +6120,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 8)],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i8",
@@ -5507,6 +6133,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 8),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vbic.i8",
@@ -5515,6 +6142,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(3, 8)],
         &[],
+        (25, 25),
     ),
     f(
         "vbic.i8",
@@ -5527,6 +6155,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(3, 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbif",
@@ -5539,6 +6168,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbif",
@@ -5551,6 +6181,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbit",
@@ -5563,6 +6194,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbit",
@@ -5575,6 +6207,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbsl",
@@ -5587,6 +6220,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vbsl",
@@ -5599,6 +6233,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5611,6 +6246,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5622,6 +6258,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5634,6 +6271,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5645,6 +6283,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5657,6 +6296,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5668,6 +6308,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5680,6 +6321,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.f32",
@@ -5691,6 +6333,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5703,6 +6346,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5714,6 +6358,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5726,6 +6371,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5737,6 +6383,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5749,6 +6396,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5760,6 +6408,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5772,6 +6421,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i16",
@@ -5783,6 +6433,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5795,6 +6446,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5806,6 +6458,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5818,6 +6471,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5829,6 +6483,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5841,6 +6496,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5852,6 +6508,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5864,6 +6521,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i32",
@@ -5875,6 +6533,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5887,6 +6546,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5898,6 +6558,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5910,6 +6571,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5921,6 +6583,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5933,6 +6596,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5944,6 +6608,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5956,6 +6621,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vceq.i8",
@@ -5967,6 +6633,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -5979,6 +6646,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -5990,6 +6658,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -6002,6 +6671,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -6013,6 +6683,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -6025,6 +6696,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -6036,6 +6708,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -6048,6 +6721,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.f32",
@@ -6059,6 +6733,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6071,6 +6746,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6082,6 +6758,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6094,6 +6771,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6105,6 +6783,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6117,6 +6796,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6128,6 +6808,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6140,6 +6821,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s16",
@@ -6151,6 +6833,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6163,6 +6846,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6174,6 +6858,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6186,6 +6871,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6197,6 +6883,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6209,6 +6896,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6220,6 +6908,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6232,6 +6921,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s32",
@@ -6243,6 +6933,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6255,6 +6946,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6266,6 +6958,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6278,6 +6971,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6289,6 +6983,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6301,6 +6996,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6312,6 +7008,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6324,6 +7021,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.s8",
@@ -6335,6 +7033,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u16",
@@ -6347,6 +7046,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u16",
@@ -6358,6 +7058,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u16",
@@ -6370,6 +7071,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u16",
@@ -6381,6 +7083,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u32",
@@ -6393,6 +7096,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u32",
@@ -6404,6 +7108,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u32",
@@ -6416,6 +7121,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u32",
@@ -6427,6 +7133,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u8",
@@ -6439,6 +7146,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u8",
@@ -6450,6 +7158,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u8",
@@ -6462,6 +7171,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcge.u8",
@@ -6473,6 +7183,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6485,6 +7196,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6496,6 +7208,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6508,6 +7221,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6519,6 +7233,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6531,6 +7246,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6542,6 +7258,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6554,6 +7271,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.f32",
@@ -6565,6 +7283,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6577,6 +7296,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6588,6 +7308,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6600,6 +7321,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6611,6 +7333,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6623,6 +7346,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6634,6 +7358,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6646,6 +7371,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s16",
@@ -6657,6 +7383,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6669,6 +7396,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6680,6 +7408,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6692,6 +7421,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6703,6 +7433,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6715,6 +7446,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6726,6 +7458,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6738,6 +7471,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s32",
@@ -6749,6 +7483,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6761,6 +7496,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6772,6 +7508,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6784,6 +7521,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6795,6 +7533,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6807,6 +7546,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6818,6 +7558,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6830,6 +7571,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.s8",
@@ -6841,6 +7583,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u16",
@@ -6853,6 +7596,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u16",
@@ -6864,6 +7608,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u16",
@@ -6876,6 +7621,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u16",
@@ -6887,6 +7633,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u32",
@@ -6899,6 +7646,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u32",
@@ -6910,6 +7658,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u32",
@@ -6922,6 +7671,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u32",
@@ -6933,6 +7683,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u8",
@@ -6945,6 +7696,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u8",
@@ -6956,6 +7708,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u8",
@@ -6968,6 +7721,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcgt.u8",
@@ -6979,6 +7733,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -6991,6 +7746,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7002,6 +7758,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7014,6 +7771,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7025,6 +7783,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7037,6 +7796,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7048,6 +7808,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7060,6 +7821,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.f32",
@@ -7071,6 +7833,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7083,6 +7846,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7094,6 +7858,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7106,6 +7871,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7117,6 +7883,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7129,6 +7896,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7140,6 +7908,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7152,6 +7921,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s16",
@@ -7163,6 +7933,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7175,6 +7946,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7186,6 +7958,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7198,6 +7971,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7209,6 +7983,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7221,6 +7996,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7232,6 +8008,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7244,6 +8021,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s32",
@@ -7255,6 +8033,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7267,6 +8046,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7278,6 +8058,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7290,6 +8071,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7301,6 +8083,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7313,6 +8096,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7324,6 +8108,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7336,6 +8121,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.s8",
@@ -7347,6 +8133,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u16",
@@ -7359,6 +8146,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u16",
@@ -7370,6 +8158,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u16",
@@ -7382,6 +8171,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u16",
@@ -7393,6 +8183,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u32",
@@ -7405,6 +8196,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u32",
@@ -7416,6 +8208,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u32",
@@ -7428,6 +8221,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u32",
@@ -7439,6 +8233,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u8",
@@ -7451,6 +8246,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u8",
@@ -7462,6 +8258,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u8",
@@ -7474,6 +8271,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcle.u8",
@@ -7485,6 +8283,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcls.s16",
@@ -7496,6 +8295,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vcls.s16",
@@ -7507,6 +8307,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcls.s32",
@@ -7518,6 +8319,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vcls.s32",
@@ -7529,6 +8331,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcls.s8",
@@ -7540,6 +8343,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vcls.s8",
@@ -7551,6 +8355,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7563,6 +8368,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7574,6 +8380,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7586,6 +8393,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7597,6 +8405,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7609,6 +8418,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7620,6 +8430,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7632,6 +8443,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.f32",
@@ -7643,6 +8455,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7655,6 +8468,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7666,6 +8480,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7678,6 +8493,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7689,6 +8505,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7701,6 +8518,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7712,6 +8530,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7724,6 +8543,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s16",
@@ -7735,6 +8555,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7747,6 +8568,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7758,6 +8580,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7770,6 +8593,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7781,6 +8605,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7793,6 +8618,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7804,6 +8630,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7816,6 +8643,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s32",
@@ -7827,6 +8655,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7839,6 +8668,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7850,6 +8680,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7862,6 +8693,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7873,6 +8705,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7885,6 +8718,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7896,6 +8730,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7908,6 +8743,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.s8",
@@ -7919,6 +8755,7 @@ pub static FORMS: &[Form] = &[
             Op::Fixed(0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u16",
@@ -7931,6 +8768,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u16",
@@ -7942,6 +8780,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u16",
@@ -7954,6 +8793,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u16",
@@ -7965,6 +8805,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u32",
@@ -7977,6 +8818,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u32",
@@ -7988,6 +8830,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u32",
@@ -8000,6 +8843,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u32",
@@ -8011,6 +8855,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u8",
@@ -8023,6 +8868,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u8",
@@ -8034,6 +8880,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u8",
@@ -8046,6 +8893,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclt.u8",
@@ -8057,6 +8905,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclz.i16",
@@ -8068,6 +8917,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vclz.i16",
@@ -8079,6 +8929,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclz.i32",
@@ -8090,6 +8941,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vclz.i32",
@@ -8101,6 +8953,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vclz.i8",
@@ -8112,6 +8965,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vclz.i8",
@@ -8123,6 +8977,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcmp.f32",
@@ -8134,6 +8989,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vcmp.f32",
@@ -8142,6 +8998,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::Zero],
         &[],
+        (1, 14),
     ),
     f(
         "vcmp.f32",
@@ -8153,6 +9010,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcmp.f32",
@@ -8161,6 +9019,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::Zero],
         &[],
+        (14, 14),
     ),
     f(
         "vcmp.f64",
@@ -8172,6 +9031,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vcmp.f64",
@@ -8180,6 +9040,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::Zero],
         &[],
+        (1, 26),
     ),
     f(
         "vcmp.f64",
@@ -8191,6 +9052,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcmp.f64",
@@ -8199,6 +9061,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::Zero],
         &[],
+        (14, 26),
     ),
     f(
         "vcmpe.f32",
@@ -8210,6 +9073,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vcmpe.f32",
@@ -8218,6 +9082,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::Zero],
         &[],
+        (1, 14),
     ),
     f(
         "vcmpe.f32",
@@ -8229,6 +9094,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcmpe.f32",
@@ -8237,6 +9103,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::Zero],
         &[],
+        (14, 14),
     ),
     f(
         "vcmpe.f64",
@@ -8248,6 +9115,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vcmpe.f64",
@@ -8256,6 +9124,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::Zero],
         &[],
+        (1, 26),
     ),
     f(
         "vcmpe.f64",
@@ -8267,6 +9136,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcmpe.f64",
@@ -8275,6 +9145,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::Zero],
         &[],
+        (14, 26),
     ),
     f(
         "vcnt.8",
@@ -8286,6 +9157,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcnt.8",
@@ -8297,6 +9169,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vcvt.f16.f32",
@@ -8308,6 +9181,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvt.f16.f32",
@@ -8319,6 +9193,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvt.f32.f16",
@@ -8330,6 +9205,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvt.f32.f16",
@@ -8341,6 +9217,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvt.f32.f64",
@@ -8352,6 +9229,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f32.f64",
@@ -8363,6 +9241,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f32.s16",
@@ -8375,6 +9254,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.s16",
@@ -8387,6 +9267,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.s32",
@@ -8398,6 +9279,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.f32.s32",
@@ -8410,6 +9292,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.s32",
@@ -8422,6 +9305,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.s32",
@@ -8433,6 +9317,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.s32",
@@ -8444,6 +9329,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.f32.s32",
@@ -8456,6 +9342,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.s32",
@@ -8468,6 +9355,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.s32",
@@ -8479,6 +9367,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.u16",
@@ -8491,6 +9380,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.u16",
@@ -8503,6 +9393,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.u32",
@@ -8514,6 +9405,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.f32.u32",
@@ -8526,6 +9418,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.u32",
@@ -8538,6 +9431,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.u32",
@@ -8549,6 +9443,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.u32",
@@ -8560,6 +9455,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.f32.u32",
@@ -8572,6 +9468,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.f32.u32",
@@ -8584,6 +9481,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f32.u32",
@@ -8595,6 +9493,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.f64.f32",
@@ -8606,6 +9505,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f64.f32",
@@ -8617,6 +9517,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f64.s16",
@@ -8629,6 +9530,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.s16",
@@ -8641,6 +9543,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.s32",
@@ -8652,6 +9555,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f64.s32",
@@ -8664,6 +9568,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.s32",
@@ -8675,6 +9580,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f64.s32",
@@ -8687,6 +9593,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.u16",
@@ -8699,6 +9606,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.u16",
@@ -8711,6 +9619,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.u32",
@@ -8722,6 +9631,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f64.u32",
@@ -8734,6 +9644,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.f64.u32",
@@ -8745,6 +9656,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.f64.u32",
@@ -8757,6 +9669,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.s16.f32",
@@ -8769,6 +9682,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.s16.f32",
@@ -8781,6 +9695,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.s16.f64",
@@ -8793,6 +9708,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.s16.f64",
@@ -8805,6 +9721,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.s32.f32",
@@ -8816,6 +9733,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.s32.f32",
@@ -8828,6 +9746,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.s32.f32",
@@ -8840,6 +9759,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.s32.f32",
@@ -8851,6 +9771,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.s32.f32",
@@ -8862,6 +9783,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.s32.f32",
@@ -8874,6 +9796,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.s32.f32",
@@ -8886,6 +9809,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.s32.f32",
@@ -8897,6 +9821,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.s32.f64",
@@ -8908,6 +9833,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.s32.f64",
@@ -8920,6 +9846,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.s32.f64",
@@ -8931,6 +9858,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.s32.f64",
@@ -8943,6 +9871,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.u16.f32",
@@ -8955,6 +9884,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.u16.f32",
@@ -8967,6 +9897,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.u16.f64",
@@ -8979,6 +9910,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.u16.f64",
@@ -8991,6 +9923,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.u32.f32",
@@ -9002,6 +9935,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.u32.f32",
@@ -9014,6 +9948,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.u32.f32",
@@ -9026,6 +9961,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.u32.f32",
@@ -9037,6 +9973,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.u32.f32",
@@ -9048,6 +9985,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvt.u32.f32",
@@ -9060,6 +9998,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vcvt.u32.f32",
@@ -9072,6 +10011,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.u32.f32",
@@ -9083,6 +10023,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vcvt.u32.f64",
@@ -9094,6 +10035,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.u32.f64",
@@ -9106,6 +10048,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvt.u32.f64",
@@ -9117,6 +10060,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvt.u32.f64",
@@ -9129,6 +10073,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpFix(&[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vcvtb.f16.f32",
@@ -9140,6 +10085,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtb.f16.f32",
@@ -9151,6 +10097,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtb.f32.f16",
@@ -9162,6 +10109,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtb.f32.f16",
@@ -9173,6 +10121,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtr.s32.f32",
@@ -9184,6 +10133,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvtr.s32.f32",
@@ -9195,6 +10145,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvtr.s32.f64",
@@ -9206,6 +10157,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvtr.s32.f64",
@@ -9217,6 +10169,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvtr.u32.f32",
@@ -9228,6 +10181,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvtr.u32.f32",
@@ -9239,6 +10193,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vcvtr.u32.f64",
@@ -9250,6 +10205,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvtr.u32.f64",
@@ -9261,6 +10217,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vcvtt.f16.f32",
@@ -9272,6 +10229,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtt.f16.f32",
@@ -9283,6 +10241,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtt.f32.f16",
@@ -9294,6 +10253,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vcvtt.f32.f16",
@@ -9305,6 +10265,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 27),
     ),
     f(
         "vdiv.f32",
@@ -9317,6 +10278,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vdiv.f32",
@@ -9329,6 +10291,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vdiv.f64",
@@ -9341,6 +10304,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vdiv.f64",
@@ -9353,6 +10317,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vdup.16",
@@ -9361,6 +10326,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.16",
@@ -9369,6 +10335,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(2, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.16",
@@ -9380,6 +10347,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(0, 4), (5, 1)], &[(18, 2)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.16",
@@ -9388,6 +10356,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.16",
@@ -9396,6 +10365,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(2, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.16",
@@ -9407,6 +10377,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(0, 4), (5, 1)], &[(18, 2)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.32",
@@ -9415,6 +10386,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.32",
@@ -9423,6 +10395,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(2, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.32",
@@ -9434,6 +10407,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(0, 4), (5, 1)], &[(19, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.32",
@@ -9442,6 +10416,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.32",
@@ -9450,6 +10425,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(2, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.32",
@@ -9461,6 +10437,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(0, 4), (5, 1)], &[(19, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.8",
@@ -9469,6 +10446,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.8",
@@ -9477,6 +10455,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(2, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.8",
@@ -9488,6 +10467,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(0, 4), (5, 1)], &[(17, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vdup.8",
@@ -9496,6 +10476,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.8",
@@ -9504,6 +10485,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(2, &[(16, 4), (7, 1)]), Op::Reg(12, 4)],
         &[],
+        (25, 25),
     ),
     f(
         "vdup.8",
@@ -9515,6 +10497,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(0, 4), (5, 1)], &[(17, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "veor",
@@ -9527,6 +10510,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "veor",
@@ -9538,6 +10522,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "veor",
@@ -9550,6 +10535,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "veor",
@@ -9561,6 +10547,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9574,6 +10561,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9586,6 +10574,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9599,6 +10588,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9611,6 +10601,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9624,6 +10615,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9636,6 +10628,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9649,6 +10642,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vext.8",
@@ -9661,6 +10655,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(8, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vfma.f32",
@@ -9673,6 +10668,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f32",
@@ -9684,6 +10680,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f32",
@@ -9696,6 +10693,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfma.f32",
@@ -9707,6 +10705,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfma.f32",
@@ -9719,6 +10718,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f32",
@@ -9730,6 +10730,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f32",
@@ -9742,6 +10743,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfma.f32",
@@ -9753,6 +10755,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfma.f64",
@@ -9765,6 +10768,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f64",
@@ -9776,6 +10780,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f64",
@@ -9788,6 +10793,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfma.f64",
@@ -9799,6 +10805,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f32",
@@ -9811,6 +10818,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f32",
@@ -9822,6 +10830,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f32",
@@ -9834,6 +10843,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfms.f32",
@@ -9845,6 +10855,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfms.f32",
@@ -9857,6 +10868,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f32",
@@ -9868,6 +10880,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f32",
@@ -9880,6 +10893,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfms.f32",
@@ -9891,6 +10905,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 31),
     ),
     f(
         "vfms.f64",
@@ -9903,6 +10918,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f64",
@@ -9914,6 +10930,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f64",
@@ -9926,6 +10943,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfms.f64",
@@ -9937,6 +10955,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnma.f32",
@@ -9949,6 +10968,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnma.f32",
@@ -9961,6 +10981,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnma.f64",
@@ -9973,6 +10994,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnma.f64",
@@ -9985,6 +11007,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnms.f32",
@@ -9997,6 +11020,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnms.f32",
@@ -10009,6 +11033,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnms.f64",
@@ -10021,6 +11046,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vfnms.f64",
@@ -10033,6 +11059,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (30, 30),
     ),
     f(
         "vhadd.s16",
@@ -10045,6 +11072,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.s16",
@@ -10056,6 +11084,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.s16",
@@ -10068,6 +11097,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.s16",
@@ -10079,6 +11109,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.s32",
@@ -10091,6 +11122,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.s32",
@@ -10102,6 +11134,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.s32",
@@ -10114,6 +11147,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.s32",
@@ -10125,6 +11159,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.s8",
@@ -10137,6 +11172,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.s8",
@@ -10148,6 +11184,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.s8",
@@ -10160,6 +11197,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.s8",
@@ -10171,6 +11209,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.u16",
@@ -10183,6 +11222,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.u16",
@@ -10194,6 +11234,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.u16",
@@ -10206,6 +11247,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.u16",
@@ -10217,6 +11259,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.u32",
@@ -10229,6 +11272,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.u32",
@@ -10240,6 +11284,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.u32",
@@ -10252,6 +11297,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.u32",
@@ -10263,6 +11309,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.u8",
@@ -10275,6 +11322,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.u8",
@@ -10286,6 +11334,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhadd.u8",
@@ -10298,6 +11347,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhadd.u8",
@@ -10309,6 +11359,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.s16",
@@ -10321,6 +11372,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.s16",
@@ -10332,6 +11384,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.s16",
@@ -10344,6 +11397,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.s16",
@@ -10355,6 +11409,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.s32",
@@ -10367,6 +11422,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.s32",
@@ -10378,6 +11434,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.s32",
@@ -10390,6 +11447,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.s32",
@@ -10401,6 +11459,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.s8",
@@ -10413,6 +11472,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.s8",
@@ -10424,6 +11484,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.s8",
@@ -10436,6 +11497,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.s8",
@@ -10447,6 +11509,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.u16",
@@ -10459,6 +11522,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.u16",
@@ -10470,6 +11534,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.u16",
@@ -10482,6 +11547,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.u16",
@@ -10493,6 +11559,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.u32",
@@ -10505,6 +11572,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.u32",
@@ -10516,6 +11584,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.u32",
@@ -10528,6 +11597,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.u32",
@@ -10539,6 +11609,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.u8",
@@ -10551,6 +11622,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.u8",
@@ -10562,6 +11634,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vhsub.u8",
@@ -10574,6 +11647,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vhsub.u8",
@@ -10585,6 +11659,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vld1.16",
@@ -10593,6 +11668,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.16",
@@ -10601,6 +11677,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.16",
@@ -10609,6 +11686,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.16",
@@ -10617,6 +11695,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.16",
@@ -10625,6 +11704,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.16",
@@ -10633,6 +11713,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.32",
@@ -10641,6 +11722,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.32",
@@ -10649,6 +11731,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.32",
@@ -10657,6 +11740,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.32",
@@ -10665,6 +11749,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.32",
@@ -10673,6 +11758,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.32",
@@ -10681,6 +11767,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.64",
@@ -10689,6 +11776,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.64",
@@ -10697,6 +11785,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.8",
@@ -10705,6 +11794,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.8",
@@ -10713,6 +11803,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.8",
@@ -10721,6 +11812,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.8",
@@ -10729,6 +11821,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.8",
@@ -10737,6 +11830,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld1.8",
@@ -10745,6 +11839,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.16",
@@ -10753,6 +11848,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.16",
@@ -10761,6 +11857,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.16",
@@ -10769,6 +11866,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.16",
@@ -10777,6 +11875,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.16",
@@ -10785,6 +11884,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.16",
@@ -10793,6 +11893,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.32",
@@ -10801,6 +11902,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.32",
@@ -10809,6 +11911,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.32",
@@ -10817,6 +11920,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.32",
@@ -10825,6 +11929,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.32",
@@ -10833,6 +11938,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.32",
@@ -10841,6 +11947,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.64",
@@ -10849,6 +11956,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.64",
@@ -10857,6 +11965,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.8",
@@ -10865,6 +11974,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.8",
@@ -10873,6 +11983,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.8",
@@ -10881,6 +11992,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.8",
@@ -10889,6 +12001,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.8",
@@ -10897,6 +12010,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld2.8",
@@ -10905,6 +12019,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.16",
@@ -10913,6 +12028,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.16",
@@ -10921,6 +12037,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.16",
@@ -10929,6 +12046,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.16",
@@ -10937,6 +12055,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.16",
@@ -10945,6 +12064,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.16",
@@ -10953,6 +12073,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.32",
@@ -10961,6 +12082,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.32",
@@ -10969,6 +12091,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.32",
@@ -10977,6 +12100,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.32",
@@ -10985,6 +12109,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.32",
@@ -10993,6 +12118,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.32",
@@ -11001,6 +12127,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.64",
@@ -11009,6 +12136,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.64",
@@ -11017,6 +12145,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.8",
@@ -11025,6 +12154,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.8",
@@ -11033,6 +12163,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.8",
@@ -11041,6 +12172,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.8",
@@ -11049,6 +12181,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.8",
@@ -11057,6 +12190,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld3.8",
@@ -11065,6 +12199,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.16",
@@ -11073,6 +12208,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.16",
@@ -11081,6 +12217,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.16",
@@ -11089,6 +12226,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.16",
@@ -11097,6 +12235,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.16",
@@ -11105,6 +12244,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.16",
@@ -11113,6 +12253,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.32",
@@ -11121,6 +12262,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.32",
@@ -11129,6 +12271,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.32",
@@ -11137,6 +12280,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.32",
@@ -11145,6 +12289,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.32",
@@ -11153,6 +12298,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.32",
@@ -11161,6 +12307,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.64",
@@ -11169,6 +12316,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.64",
@@ -11177,6 +12325,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.8",
@@ -11185,6 +12334,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.8",
@@ -11193,6 +12343,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.8",
@@ -11201,6 +12352,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.8",
@@ -11209,6 +12361,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.8",
@@ -11217,6 +12370,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vld4.8",
@@ -11225,6 +12379,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(2, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vldmdb",
@@ -11237,6 +12392,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[1, 255],
+        (1, 14),
     ),
     f(
         "vldmdb",
@@ -11249,6 +12405,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (1, 33),
     ),
     f(
         "vldmdb",
@@ -11261,6 +12418,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "vldmdb",
@@ -11273,6 +12431,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 33),
     ),
     f(
         "vldmia",
@@ -11285,6 +12444,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[1, 255],
+        (1, 14),
     ),
     f(
         "vldmia",
@@ -11297,6 +12457,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (1, 33),
     ),
     f(
         "vldmia",
@@ -11309,6 +12470,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "vldmia",
@@ -11321,6 +12483,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 33),
     ),
     f(
         "vldr",
@@ -11329,6 +12492,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::VfpMem],
         &[],
+        (17, 14),
     ),
     f(
         "vldr",
@@ -11337,6 +12501,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::VfpMem],
         &[],
+        (17, 33),
     ),
     f(
         "vldr",
@@ -11345,6 +12510,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::VfpMem],
         &[],
+        (14, 14),
     ),
     f(
         "vldr",
@@ -11353,6 +12519,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::VfpMem],
         &[],
+        (14, 33),
     ),
     f(
         "vmax.f32",
@@ -11365,6 +12532,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.f32",
@@ -11376,6 +12544,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.f32",
@@ -11388,6 +12557,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.f32",
@@ -11399,6 +12569,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.s16",
@@ -11411,6 +12582,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.s16",
@@ -11422,6 +12594,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.s16",
@@ -11434,6 +12607,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.s16",
@@ -11445,6 +12619,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.s32",
@@ -11457,6 +12632,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.s32",
@@ -11468,6 +12644,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.s32",
@@ -11480,6 +12657,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.s32",
@@ -11491,6 +12669,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.s8",
@@ -11503,6 +12682,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.s8",
@@ -11514,6 +12694,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.s8",
@@ -11526,6 +12707,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.s8",
@@ -11537,6 +12719,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.u16",
@@ -11549,6 +12732,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.u16",
@@ -11560,6 +12744,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.u16",
@@ -11572,6 +12757,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.u16",
@@ -11583,6 +12769,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.u32",
@@ -11595,6 +12782,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.u32",
@@ -11606,6 +12794,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.u32",
@@ -11618,6 +12807,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.u32",
@@ -11629,6 +12819,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.u8",
@@ -11641,6 +12832,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.u8",
@@ -11652,6 +12844,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmax.u8",
@@ -11664,6 +12857,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmax.u8",
@@ -11675,6 +12869,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.f32",
@@ -11687,6 +12882,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.f32",
@@ -11698,6 +12894,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.f32",
@@ -11710,6 +12907,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.f32",
@@ -11721,6 +12919,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.s16",
@@ -11733,6 +12932,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.s16",
@@ -11744,6 +12944,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.s16",
@@ -11756,6 +12957,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.s16",
@@ -11767,6 +12969,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.s32",
@@ -11779,6 +12982,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.s32",
@@ -11790,6 +12994,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.s32",
@@ -11802,6 +13007,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.s32",
@@ -11813,6 +13019,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.s8",
@@ -11825,6 +13032,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.s8",
@@ -11836,6 +13044,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.s8",
@@ -11848,6 +13057,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.s8",
@@ -11859,6 +13069,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.u16",
@@ -11871,6 +13082,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.u16",
@@ -11882,6 +13094,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.u16",
@@ -11894,6 +13107,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.u16",
@@ -11905,6 +13119,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.u32",
@@ -11917,6 +13132,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.u32",
@@ -11928,6 +13144,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.u32",
@@ -11940,6 +13157,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.u32",
@@ -11951,6 +13169,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.u8",
@@ -11963,6 +13182,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.u8",
@@ -11974,6 +13194,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmin.u8",
@@ -11986,6 +13207,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmin.u8",
@@ -11997,6 +13219,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmla.f32",
@@ -12009,6 +13232,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vmla.f32",
@@ -12020,6 +13244,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vmla.f32",
@@ -12032,6 +13257,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.f32",
@@ -12043,6 +13269,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.f32",
@@ -12055,6 +13282,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.f32",
@@ -12066,6 +13294,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.f32",
@@ -12078,6 +13307,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.f32",
@@ -12089,6 +13319,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.f32",
@@ -12101,6 +13332,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmla.f32",
@@ -12112,6 +13344,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmla.f32",
@@ -12124,6 +13357,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.f32",
@@ -12135,6 +13369,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.f32",
@@ -12147,6 +13382,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.f32",
@@ -12158,6 +13394,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.f32",
@@ -12170,6 +13407,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.f32",
@@ -12181,6 +13419,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.f64",
@@ -12193,6 +13432,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vmla.f64",
@@ -12204,6 +13444,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vmla.f64",
@@ -12216,6 +13457,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmla.f64",
@@ -12227,6 +13469,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmla.i16",
@@ -12239,6 +13482,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i16",
@@ -12250,6 +13494,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i16",
@@ -12262,6 +13507,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i16",
@@ -12273,6 +13519,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i16",
@@ -12285,6 +13532,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i16",
@@ -12296,6 +13544,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i16",
@@ -12308,6 +13557,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i16",
@@ -12319,6 +13569,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i16",
@@ -12331,6 +13582,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i16",
@@ -12342,6 +13594,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i16",
@@ -12354,6 +13607,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i16",
@@ -12365,6 +13619,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i32",
@@ -12377,6 +13632,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i32",
@@ -12388,6 +13644,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i32",
@@ -12400,6 +13657,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i32",
@@ -12411,6 +13669,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i32",
@@ -12423,6 +13682,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i32",
@@ -12434,6 +13694,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i32",
@@ -12446,6 +13707,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i32",
@@ -12457,6 +13719,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i32",
@@ -12469,6 +13732,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i32",
@@ -12480,6 +13744,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i32",
@@ -12492,6 +13757,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i32",
@@ -12503,6 +13769,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i8",
@@ -12515,6 +13782,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i8",
@@ -12526,6 +13794,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmla.i8",
@@ -12538,6 +13807,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmla.i8",
@@ -12549,6 +13819,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmlal.s16",
@@ -12561,6 +13832,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s16",
@@ -12573,6 +13845,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s16",
@@ -12585,6 +13858,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s16",
@@ -12597,6 +13871,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s32",
@@ -12609,6 +13884,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s32",
@@ -12621,6 +13897,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s32",
@@ -12633,6 +13910,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s32",
@@ -12645,6 +13923,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s8",
@@ -12657,6 +13936,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.s8",
@@ -12669,6 +13949,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u16",
@@ -12681,6 +13962,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u16",
@@ -12693,6 +13975,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u16",
@@ -12705,6 +13988,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u16",
@@ -12717,6 +14001,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u32",
@@ -12729,6 +14014,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u32",
@@ -12741,6 +14027,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u32",
@@ -12753,6 +14040,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u32",
@@ -12765,6 +14053,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u8",
@@ -12777,6 +14066,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlal.u8",
@@ -12789,6 +14079,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmls.f32",
@@ -12801,6 +14092,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmls.f32",
@@ -12812,6 +14104,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmls.f32",
@@ -12824,6 +14117,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12835,6 +14129,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12847,6 +14142,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12858,6 +14154,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12870,6 +14167,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12881,6 +14179,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12893,6 +14192,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmls.f32",
@@ -12904,6 +14204,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmls.f32",
@@ -12916,6 +14217,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12927,6 +14229,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12939,6 +14242,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12950,6 +14254,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12962,6 +14267,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f32",
@@ -12973,6 +14279,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.f64",
@@ -12985,6 +14292,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmls.f64",
@@ -12996,6 +14304,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmls.f64",
@@ -13008,6 +14317,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmls.f64",
@@ -13019,6 +14329,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmls.i16",
@@ -13031,6 +14342,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13042,6 +14354,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13054,6 +14367,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13065,6 +14379,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13077,6 +14392,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13088,6 +14404,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13100,6 +14417,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13111,6 +14429,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13123,6 +14442,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13134,6 +14454,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13146,6 +14467,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i16",
@@ -13157,6 +14479,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13169,6 +14492,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13180,6 +14504,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13192,6 +14517,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13203,6 +14529,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13215,6 +14542,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13226,6 +14554,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13238,6 +14567,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13249,6 +14579,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13261,6 +14592,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13272,6 +14604,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13284,6 +14617,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i32",
@@ -13295,6 +14629,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i8",
@@ -13307,6 +14642,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i8",
@@ -13318,6 +14654,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i8",
@@ -13330,6 +14667,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmls.i8",
@@ -13341,6 +14679,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmlsl.s16",
@@ -13353,6 +14692,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s16",
@@ -13365,6 +14705,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s16",
@@ -13377,6 +14718,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s16",
@@ -13389,6 +14731,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s32",
@@ -13401,6 +14744,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s32",
@@ -13413,6 +14757,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s32",
@@ -13425,6 +14770,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s32",
@@ -13437,6 +14783,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s8",
@@ -13449,6 +14796,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.s8",
@@ -13461,6 +14809,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u16",
@@ -13473,6 +14822,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u16",
@@ -13485,6 +14835,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u16",
@@ -13497,6 +14848,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u16",
@@ -13509,6 +14861,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u32",
@@ -13521,6 +14874,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u32",
@@ -13533,6 +14887,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u32",
@@ -13545,6 +14900,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u32",
@@ -13557,6 +14913,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u8",
@@ -13569,6 +14926,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmlsl.u8",
@@ -13581,6 +14939,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmov",
@@ -13594,6 +14953,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
         ],
         &[],
+        (1, 34),
     ),
     f(
         "vmov",
@@ -13606,6 +14966,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
         ],
         &[],
+        (1, 35),
     ),
     f(
         "vmov",
@@ -13619,6 +14980,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpNext,
         ],
         &[],
+        (1, 34),
     ),
     f(
         "vmov",
@@ -13631,6 +14993,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 36),
     ),
     f(
         "vmov",
@@ -13639,6 +15002,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(0, &[(7, 1), (16, 4)]), Op::Reg(12, 4)],
         &[],
+        (1, 14),
     ),
     f(
         "vmov",
@@ -13647,6 +15011,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Vfp(0, &[(7, 1), (16, 4)])],
         &[],
+        (1, 14),
     ),
     f(
         "vmov",
@@ -13658,6 +15023,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vmov",
@@ -13669,6 +15035,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpTwice(3, &[(16, 4), (7, 1)], &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov",
@@ -13682,6 +15049,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
         ],
         &[],
+        (14, 34),
     ),
     f(
         "vmov",
@@ -13694,6 +15062,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(16, 4),
         ],
         &[],
+        (14, 35),
     ),
     f(
         "vmov",
@@ -13707,6 +15076,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpNext,
         ],
         &[],
+        (14, 34),
     ),
     f(
         "vmov",
@@ -13719,6 +15089,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 36),
     ),
     f(
         "vmov",
@@ -13727,6 +15098,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(0, &[(7, 1), (16, 4)]), Op::Reg(12, 4)],
         &[],
+        (14, 14),
     ),
     f(
         "vmov",
@@ -13735,6 +15107,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Vfp(0, &[(7, 1), (16, 4)])],
         &[],
+        (14, 14),
     ),
     f(
         "vmov",
@@ -13746,6 +15119,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmov",
@@ -13757,6 +15131,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpTwice(3, &[(16, 4), (7, 1)], &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.16",
@@ -13768,6 +15143,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.16",
@@ -13779,6 +15155,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.32",
@@ -13790,6 +15167,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
         ],
         &[],
+        (1, 36),
     ),
     f(
         "vmov.32",
@@ -13801,6 +15179,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(21, 1)]),
         ],
         &[],
+        (1, 36),
     ),
     f(
         "vmov.32",
@@ -13812,6 +15191,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
         ],
         &[],
+        (14, 36),
     ),
     f(
         "vmov.32",
@@ -13823,6 +15203,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(21, 1)]),
         ],
         &[],
+        (14, 36),
     ),
     f(
         "vmov.8",
@@ -13834,6 +15215,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.8",
@@ -13845,6 +15227,7 @@ pub static FORMS: &[Form] = &[
             Op::Reg(12, 4),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.f32",
@@ -13856,6 +15239,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpImm(&[(0, 4), (16, 4)]),
         ],
         &[],
+        (1, 28),
     ),
     f(
         "vmov.f32",
@@ -13867,6 +15251,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vmov.f32",
@@ -13878,6 +15263,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpImm(&[(0, 4), (16, 4)]),
         ],
         &[],
+        (14, 28),
     ),
     f(
         "vmov.f32",
@@ -13889,6 +15275,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmov.f64",
@@ -13900,6 +15287,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpImm(&[(0, 4), (16, 4)]),
         ],
         &[],
+        (1, 29),
     ),
     f(
         "vmov.f64",
@@ -13911,6 +15299,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vmov.f64",
@@ -13922,6 +15311,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpImm(&[(0, 4), (16, 4)]),
         ],
         &[],
+        (14, 29),
     ),
     f(
         "vmov.f64",
@@ -13933,6 +15323,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmov.i16",
@@ -13941,6 +15332,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 16)],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.i16",
@@ -13949,6 +15341,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 16)],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.i32",
@@ -13957,6 +15350,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 32)],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.i32",
@@ -13965,6 +15359,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 32)],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.i64",
@@ -13973,6 +15368,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 64)],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.i64",
@@ -13981,6 +15377,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 64)],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.i8",
@@ -13989,6 +15386,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 8)],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.i8",
@@ -13997,6 +15395,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(0, 8)],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.s16",
@@ -14008,6 +15407,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(6, 1), (21, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.s16",
@@ -14019,6 +15419,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(6, 1), (21, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.s8",
@@ -14030,6 +15431,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(5, 1), (6, 1), (21, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.s8",
@@ -14041,6 +15443,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(5, 1), (6, 1), (21, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.u16",
@@ -14052,6 +15455,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(6, 1), (21, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.u16",
@@ -14063,6 +15467,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(6, 1), (21, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmov.u8",
@@ -14074,6 +15479,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(5, 1), (6, 1), (21, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmov.u8",
@@ -14085,6 +15491,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpLane(1, &[(16, 4), (7, 1)], &[(5, 1), (6, 1), (21, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmovl.s16",
@@ -14096,6 +15503,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.s16",
@@ -14107,6 +15515,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.s32",
@@ -14118,6 +15527,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.s32",
@@ -14129,6 +15539,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.s8",
@@ -14140,6 +15551,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.s8",
@@ -14151,6 +15563,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.u16",
@@ -14162,6 +15575,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.u16",
@@ -14173,6 +15587,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.u32",
@@ -14184,6 +15599,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.u32",
@@ -14195,6 +15611,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.u8",
@@ -14206,6 +15623,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovl.u8",
@@ -14217,6 +15635,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovn.i16",
@@ -14228,6 +15647,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovn.i16",
@@ -14239,6 +15659,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovn.i32",
@@ -14250,6 +15671,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovn.i32",
@@ -14261,6 +15683,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovn.i64",
@@ -14272,6 +15695,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmovn.i64",
@@ -14283,6 +15707,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmrs",
@@ -14291,6 +15716,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("fpsid")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14299,6 +15725,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("fpscr")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14307,6 +15734,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::ApsrNzcv, Op::Named("fpscr")],
         &[],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14315,6 +15743,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("mvfr1")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14323,6 +15752,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("mvfr0")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14331,6 +15761,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("fpexc")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14339,6 +15770,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("fpinst")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14347,6 +15779,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Reg(12, 4), Op::Named("fpinst2")],
         &[2, 255],
+        (1, 14),
     ),
     f(
         "vmrs",
@@ -14355,6 +15788,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("fpsid")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14363,6 +15797,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("fpscr")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14371,6 +15806,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::ApsrNzcv, Op::Named("fpscr")],
         &[],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14379,6 +15815,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("mvfr1")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14387,6 +15824,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("mvfr0")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14395,6 +15833,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("fpexc")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14403,6 +15842,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("fpinst")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmrs",
@@ -14411,6 +15851,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Reg(12, 4), Op::Named("fpinst2")],
         &[1, 255],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14419,6 +15860,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("fpsid"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14427,6 +15869,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("fpscr"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14435,6 +15878,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("mvfr1"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14443,6 +15887,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("mvfr0"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14451,6 +15896,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("fpexc"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14459,6 +15905,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("fpinst"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14467,6 +15914,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Named("fpinst2"), Op::Reg(12, 4)],
         &[255, 2],
+        (1, 14),
     ),
     f(
         "vmsr",
@@ -14475,6 +15923,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("fpsid"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14483,6 +15932,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("fpscr"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14491,6 +15941,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("mvfr1"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14499,6 +15950,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("mvfr0"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14507,6 +15959,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("fpexc"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14515,6 +15968,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("fpinst"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmsr",
@@ -14523,6 +15977,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Named("fpinst2"), Op::Reg(12, 4)],
         &[255, 1],
+        (14, 14),
     ),
     f(
         "vmul.f32",
@@ -14535,6 +15990,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vmul.f32",
@@ -14546,6 +16002,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vmul.f32",
@@ -14558,6 +16015,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.f32",
@@ -14569,6 +16027,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.f32",
@@ -14581,6 +16040,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.f32",
@@ -14592,6 +16052,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.f32",
@@ -14604,6 +16065,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.f32",
@@ -14615,6 +16077,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.f32",
@@ -14627,6 +16090,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmul.f32",
@@ -14638,6 +16102,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vmul.f32",
@@ -14650,6 +16115,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.f32",
@@ -14661,6 +16127,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.f32",
@@ -14673,6 +16140,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.f32",
@@ -14684,6 +16152,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.f32",
@@ -14696,6 +16165,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.f32",
@@ -14707,6 +16177,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.f64",
@@ -14719,6 +16190,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vmul.f64",
@@ -14730,6 +16202,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vmul.f64",
@@ -14742,6 +16215,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmul.f64",
@@ -14753,6 +16227,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vmul.i16",
@@ -14765,6 +16240,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i16",
@@ -14776,6 +16252,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i16",
@@ -14788,6 +16265,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i16",
@@ -14799,6 +16277,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i16",
@@ -14811,6 +16290,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i16",
@@ -14822,6 +16302,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i16",
@@ -14834,6 +16315,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i16",
@@ -14845,6 +16327,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i16",
@@ -14857,6 +16340,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i16",
@@ -14868,6 +16352,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i16",
@@ -14880,6 +16365,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i16",
@@ -14891,6 +16377,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i32",
@@ -14903,6 +16390,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i32",
@@ -14914,6 +16402,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i32",
@@ -14926,6 +16415,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i32",
@@ -14937,6 +16427,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i32",
@@ -14949,6 +16440,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i32",
@@ -14960,6 +16452,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i32",
@@ -14972,6 +16465,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i32",
@@ -14983,6 +16477,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i32",
@@ -14995,6 +16490,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i32",
@@ -15006,6 +16502,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i32",
@@ -15018,6 +16515,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i32",
@@ -15029,6 +16527,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i8",
@@ -15041,6 +16540,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i8",
@@ -15052,6 +16552,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.i8",
@@ -15064,6 +16565,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.i8",
@@ -15075,6 +16577,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.p8",
@@ -15087,6 +16590,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.p8",
@@ -15098,6 +16602,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmul.p8",
@@ -15110,6 +16615,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmul.p8",
@@ -15121,6 +16627,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vmull.p8",
@@ -15133,6 +16640,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.p8",
@@ -15145,6 +16653,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s16",
@@ -15157,6 +16666,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s16",
@@ -15169,6 +16679,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s16",
@@ -15181,6 +16692,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s16",
@@ -15193,6 +16705,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s32",
@@ -15205,6 +16718,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s32",
@@ -15217,6 +16731,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s32",
@@ -15229,6 +16744,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s32",
@@ -15241,6 +16757,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s8",
@@ -15253,6 +16770,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.s8",
@@ -15265,6 +16783,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u16",
@@ -15277,6 +16796,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u16",
@@ -15289,6 +16809,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u16",
@@ -15301,6 +16822,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u16",
@@ -15313,6 +16835,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u32",
@@ -15325,6 +16848,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u32",
@@ -15337,6 +16861,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u32",
@@ -15349,6 +16874,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u32",
@@ -15361,6 +16887,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u8",
@@ -15373,6 +16900,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmull.u8",
@@ -15385,6 +16913,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmvn",
@@ -15396,6 +16925,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vmvn",
@@ -15407,6 +16937,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vmvn.i16",
@@ -15415,6 +16946,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 16)],
         &[],
+        (1, 25),
     ),
     f(
         "vmvn.i16",
@@ -15423,6 +16955,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 16)],
         &[],
+        (25, 25),
     ),
     f(
         "vmvn.i32",
@@ -15431,6 +16964,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 32)],
         &[],
+        (1, 25),
     ),
     f(
         "vmvn.i32",
@@ -15439,6 +16973,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 32)],
         &[],
+        (25, 25),
     ),
     f(
         "vmvn.i64",
@@ -15447,6 +16982,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 64)],
         &[],
+        (1, 25),
     ),
     f(
         "vmvn.i64",
@@ -15455,6 +16991,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 64)],
         &[],
+        (25, 25),
     ),
     f(
         "vmvn.i8",
@@ -15463,6 +17000,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 8)],
         &[],
+        (1, 25),
     ),
     f(
         "vmvn.i8",
@@ -15471,6 +17009,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(1, 8)],
         &[],
+        (25, 25),
     ),
     f(
         "vneg.f32",
@@ -15482,6 +17021,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vneg.f32",
@@ -15493,6 +17033,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vneg.f32",
@@ -15504,6 +17045,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vneg.f32",
@@ -15515,6 +17057,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vneg.f64",
@@ -15526,6 +17069,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vneg.f64",
@@ -15537,6 +17081,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vneg.s16",
@@ -15548,6 +17093,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vneg.s16",
@@ -15559,6 +17105,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vneg.s32",
@@ -15570,6 +17117,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vneg.s32",
@@ -15581,6 +17129,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vneg.s8",
@@ -15592,6 +17141,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vneg.s8",
@@ -15603,6 +17153,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vnmla.f32",
@@ -15615,6 +17166,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vnmla.f32",
@@ -15627,6 +17179,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vnmla.f64",
@@ -15639,6 +17192,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vnmla.f64",
@@ -15651,6 +17205,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vnmls.f32",
@@ -15663,6 +17218,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vnmls.f32",
@@ -15675,6 +17231,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vnmls.f64",
@@ -15687,6 +17244,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vnmls.f64",
@@ -15699,6 +17257,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vnmul.f32",
@@ -15711,6 +17270,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vnmul.f32",
@@ -15723,6 +17283,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vnmul.f64",
@@ -15735,6 +17296,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vnmul.f64",
@@ -15747,6 +17309,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vorn",
@@ -15759,6 +17322,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorn",
@@ -15770,6 +17334,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorn",
@@ -15782,6 +17347,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorn",
@@ -15793,6 +17359,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i16",
@@ -15801,6 +17368,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 16)],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i16",
@@ -15813,6 +17381,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 16),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i16",
@@ -15821,6 +17390,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 16)],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i16",
@@ -15833,6 +17403,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 16),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i32",
@@ -15841,6 +17412,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 32)],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i32",
@@ -15853,6 +17425,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 32),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i32",
@@ -15861,6 +17434,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 32)],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i32",
@@ -15873,6 +17447,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 32),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i64",
@@ -15881,6 +17456,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 64)],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i64",
@@ -15893,6 +17469,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 64),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i64",
@@ -15901,6 +17478,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 64)],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i64",
@@ -15913,6 +17491,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 64),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i8",
@@ -15921,6 +17500,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 8)],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i8",
@@ -15933,6 +17513,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 8),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorn.i8",
@@ -15941,6 +17522,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(5, 8)],
         &[],
+        (25, 25),
     ),
     f(
         "vorn.i8",
@@ -15953,6 +17535,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(5, 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorr",
@@ -15965,6 +17548,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorr",
@@ -15976,6 +17560,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorr",
@@ -15988,6 +17573,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorr",
@@ -15999,6 +17585,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i16",
@@ -16007,6 +17594,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 16)],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i16",
@@ -16019,6 +17607,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 16),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i16",
@@ -16027,6 +17616,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 16)],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i16",
@@ -16039,6 +17629,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 16),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i32",
@@ -16047,6 +17638,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 32)],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i32",
@@ -16059,6 +17651,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 32),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i32",
@@ -16067,6 +17660,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 32)],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i32",
@@ -16079,6 +17673,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 32),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i64",
@@ -16087,6 +17682,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 64)],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i64",
@@ -16099,6 +17695,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 64),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i64",
@@ -16107,6 +17704,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 64)],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i64",
@@ -16119,6 +17717,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 64),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i8",
@@ -16127,6 +17726,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 8)],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i8",
@@ -16139,6 +17739,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 8),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vorr.i8",
@@ -16147,6 +17748,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(3, &[(12, 4), (22, 1)]), Op::NeonImm(2, 8)],
         &[],
+        (25, 25),
     ),
     f(
         "vorr.i8",
@@ -16159,6 +17761,7 @@ pub static FORMS: &[Form] = &[
             Op::NeonImm(2, 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.s16",
@@ -16170,6 +17773,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.s16",
@@ -16181,6 +17785,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.s32",
@@ -16192,6 +17797,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.s32",
@@ -16203,6 +17809,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.s8",
@@ -16214,6 +17821,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.s8",
@@ -16225,6 +17833,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.u16",
@@ -16236,6 +17845,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.u16",
@@ -16247,6 +17857,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.u32",
@@ -16258,6 +17869,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.u32",
@@ -16269,6 +17881,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.u8",
@@ -16280,6 +17893,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadal.u8",
@@ -16291,6 +17905,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.f32",
@@ -16303,6 +17918,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.f32",
@@ -16314,6 +17930,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.f32",
@@ -16326,6 +17943,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.f32",
@@ -16337,6 +17955,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i16",
@@ -16349,6 +17968,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i16",
@@ -16360,6 +17980,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i16",
@@ -16372,6 +17993,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i16",
@@ -16383,6 +18005,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i32",
@@ -16395,6 +18018,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i32",
@@ -16406,6 +18030,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i32",
@@ -16418,6 +18043,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i32",
@@ -16429,6 +18055,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i8",
@@ -16441,6 +18068,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i8",
@@ -16452,6 +18080,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i8",
@@ -16464,6 +18093,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpadd.i8",
@@ -16475,6 +18105,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.s16",
@@ -16486,6 +18117,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.s16",
@@ -16497,6 +18129,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.s32",
@@ -16508,6 +18141,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.s32",
@@ -16519,6 +18153,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.s8",
@@ -16530,6 +18165,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.s8",
@@ -16541,6 +18177,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.u16",
@@ -16552,6 +18189,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.u16",
@@ -16563,6 +18201,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.u32",
@@ -16574,6 +18213,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.u32",
@@ -16585,6 +18225,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.u8",
@@ -16596,6 +18237,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpaddl.u8",
@@ -16607,6 +18249,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.f32",
@@ -16619,6 +18262,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.f32",
@@ -16630,6 +18274,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.f32",
@@ -16642,6 +18287,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.f32",
@@ -16653,6 +18299,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s16",
@@ -16665,6 +18312,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s16",
@@ -16676,6 +18324,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s16",
@@ -16688,6 +18337,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s16",
@@ -16699,6 +18349,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s32",
@@ -16711,6 +18362,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s32",
@@ -16722,6 +18374,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s32",
@@ -16734,6 +18387,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s32",
@@ -16745,6 +18399,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s8",
@@ -16757,6 +18412,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s8",
@@ -16768,6 +18424,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s8",
@@ -16780,6 +18437,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.s8",
@@ -16791,6 +18449,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u16",
@@ -16803,6 +18462,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u16",
@@ -16814,6 +18474,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u16",
@@ -16826,6 +18487,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u16",
@@ -16837,6 +18499,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u32",
@@ -16849,6 +18512,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u32",
@@ -16860,6 +18524,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u32",
@@ -16872,6 +18537,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u32",
@@ -16883,6 +18549,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u8",
@@ -16895,6 +18562,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u8",
@@ -16906,6 +18574,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u8",
@@ -16918,6 +18587,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmax.u8",
@@ -16929,6 +18599,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.f32",
@@ -16941,6 +18612,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.f32",
@@ -16952,6 +18624,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.f32",
@@ -16964,6 +18637,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.f32",
@@ -16975,6 +18649,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s16",
@@ -16987,6 +18662,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s16",
@@ -16998,6 +18674,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s16",
@@ -17010,6 +18687,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s16",
@@ -17021,6 +18699,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s32",
@@ -17033,6 +18712,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s32",
@@ -17044,6 +18724,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s32",
@@ -17056,6 +18737,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s32",
@@ -17067,6 +18749,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s8",
@@ -17079,6 +18762,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s8",
@@ -17090,6 +18774,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s8",
@@ -17102,6 +18787,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.s8",
@@ -17113,6 +18799,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u16",
@@ -17125,6 +18812,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u16",
@@ -17136,6 +18824,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u16",
@@ -17148,6 +18837,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u16",
@@ -17159,6 +18849,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u32",
@@ -17171,6 +18862,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u32",
@@ -17182,6 +18874,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u32",
@@ -17194,6 +18887,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u32",
@@ -17205,6 +18899,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u8",
@@ -17217,6 +18912,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u8",
@@ -17228,6 +18924,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u8",
@@ -17240,6 +18937,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpmin.u8",
@@ -17251,6 +18949,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vpop",
@@ -17259,6 +18958,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)])],
         &[],
+        (1, 14),
     ),
     f(
         "vpop",
@@ -17267,6 +18967,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)])],
         &[],
+        (1, 33),
     ),
     f(
         "vpop",
@@ -17275,6 +18976,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)])],
         &[],
+        (14, 14),
     ),
     f(
         "vpop",
@@ -17283,6 +18985,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)])],
         &[],
+        (14, 33),
     ),
     f(
         "vpush",
@@ -17291,6 +18994,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)])],
         &[],
+        (1, 14),
     ),
     f(
         "vpush",
@@ -17299,6 +19003,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)])],
         &[],
+        (1, 33),
     ),
     f(
         "vpush",
@@ -17307,6 +19012,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)])],
         &[],
+        (14, 14),
     ),
     f(
         "vpush",
@@ -17315,6 +19021,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)])],
         &[],
+        (14, 33),
     ),
     f(
         "vqabs.s16",
@@ -17326,6 +19033,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqabs.s16",
@@ -17337,6 +19045,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqabs.s32",
@@ -17348,6 +19057,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqabs.s32",
@@ -17359,6 +19069,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqabs.s8",
@@ -17370,6 +19081,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqabs.s8",
@@ -17381,6 +19093,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s16",
@@ -17393,6 +19106,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s16",
@@ -17404,6 +19118,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s16",
@@ -17416,6 +19131,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s16",
@@ -17427,6 +19143,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s32",
@@ -17439,6 +19156,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s32",
@@ -17450,6 +19168,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s32",
@@ -17462,6 +19181,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s32",
@@ -17473,6 +19193,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s64",
@@ -17485,6 +19206,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s64",
@@ -17496,6 +19218,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s64",
@@ -17508,6 +19231,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s64",
@@ -17519,6 +19243,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s8",
@@ -17531,6 +19256,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s8",
@@ -17542,6 +19268,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.s8",
@@ -17554,6 +19281,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.s8",
@@ -17565,6 +19293,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u16",
@@ -17577,6 +19306,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u16",
@@ -17588,6 +19318,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u16",
@@ -17600,6 +19331,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u16",
@@ -17611,6 +19343,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u32",
@@ -17623,6 +19356,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u32",
@@ -17634,6 +19368,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u32",
@@ -17646,6 +19381,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u32",
@@ -17657,6 +19393,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u64",
@@ -17669,6 +19406,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u64",
@@ -17680,6 +19418,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u64",
@@ -17692,6 +19431,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u64",
@@ -17703,6 +19443,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u8",
@@ -17715,6 +19456,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u8",
@@ -17726,6 +19468,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqadd.u8",
@@ -17738,6 +19481,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqadd.u8",
@@ -17749,6 +19493,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s16",
@@ -17761,6 +19506,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s16",
@@ -17773,6 +19519,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s16",
@@ -17785,6 +19532,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s16",
@@ -17797,6 +19545,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s32",
@@ -17809,6 +19558,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s32",
@@ -17821,6 +19571,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s32",
@@ -17833,6 +19584,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlal.s32",
@@ -17845,6 +19597,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s16",
@@ -17857,6 +19610,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s16",
@@ -17869,6 +19623,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s16",
@@ -17881,6 +19636,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s16",
@@ -17893,6 +19649,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s32",
@@ -17905,6 +19662,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s32",
@@ -17917,6 +19675,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s32",
@@ -17929,6 +19688,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmlsl.s32",
@@ -17941,6 +19701,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -17953,6 +19714,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -17964,6 +19726,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -17976,6 +19739,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -17987,6 +19751,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -17999,6 +19764,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18010,6 +19776,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18022,6 +19789,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18033,6 +19801,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18045,6 +19814,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18056,6 +19826,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18068,6 +19839,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s16",
@@ -18079,6 +19851,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18091,6 +19864,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18102,6 +19876,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18114,6 +19889,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18125,6 +19901,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18137,6 +19914,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18148,6 +19926,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18160,6 +19939,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18171,6 +19951,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18183,6 +19964,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18194,6 +19976,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18206,6 +19989,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmulh.s32",
@@ -18217,6 +20001,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s16",
@@ -18229,6 +20014,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s16",
@@ -18241,6 +20027,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s16",
@@ -18253,6 +20040,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s16",
@@ -18265,6 +20053,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s32",
@@ -18277,6 +20066,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s32",
@@ -18289,6 +20079,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s32",
@@ -18301,6 +20092,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqdmull.s32",
@@ -18313,6 +20105,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.s16",
@@ -18324,6 +20117,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.s16",
@@ -18335,6 +20129,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.s32",
@@ -18346,6 +20141,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.s32",
@@ -18357,6 +20153,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.s64",
@@ -18368,6 +20165,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.s64",
@@ -18379,6 +20177,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.u16",
@@ -18390,6 +20189,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.u16",
@@ -18401,6 +20201,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.u32",
@@ -18412,6 +20213,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.u32",
@@ -18423,6 +20225,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.u64",
@@ -18434,6 +20237,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovn.u64",
@@ -18445,6 +20249,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovun.s16",
@@ -18456,6 +20261,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovun.s16",
@@ -18467,6 +20273,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovun.s32",
@@ -18478,6 +20285,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovun.s32",
@@ -18489,6 +20297,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovun.s64",
@@ -18500,6 +20309,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqmovun.s64",
@@ -18511,6 +20321,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqneg.s16",
@@ -18522,6 +20333,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqneg.s16",
@@ -18533,6 +20345,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqneg.s32",
@@ -18544,6 +20357,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqneg.s32",
@@ -18555,6 +20369,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqneg.s8",
@@ -18566,6 +20381,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqneg.s8",
@@ -18577,6 +20393,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18589,6 +20406,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18600,6 +20418,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18612,6 +20431,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18623,6 +20443,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18635,6 +20456,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18646,6 +20468,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18658,6 +20481,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18669,6 +20493,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18681,6 +20506,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18692,6 +20518,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18704,6 +20531,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s16",
@@ -18715,6 +20543,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18727,6 +20556,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18738,6 +20568,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18750,6 +20581,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18761,6 +20593,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18773,6 +20606,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18784,6 +20618,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18796,6 +20631,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18807,6 +20643,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18819,6 +20656,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18830,6 +20668,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18842,6 +20681,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrdmulh.s32",
@@ -18853,6 +20693,7 @@ pub static FORMS: &[Form] = &[
             Op::Scalar,
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s16",
@@ -18865,6 +20706,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s16",
@@ -18876,6 +20718,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s16",
@@ -18888,6 +20731,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s16",
@@ -18899,6 +20743,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s32",
@@ -18911,6 +20756,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s32",
@@ -18922,6 +20768,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s32",
@@ -18934,6 +20781,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s32",
@@ -18945,6 +20793,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s64",
@@ -18957,6 +20806,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s64",
@@ -18968,6 +20818,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s64",
@@ -18980,6 +20831,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s64",
@@ -18991,6 +20843,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s8",
@@ -19003,6 +20856,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s8",
@@ -19014,6 +20868,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.s8",
@@ -19026,6 +20881,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.s8",
@@ -19037,6 +20893,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u16",
@@ -19049,6 +20906,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u16",
@@ -19060,6 +20918,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u16",
@@ -19072,6 +20931,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u16",
@@ -19083,6 +20943,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u32",
@@ -19095,6 +20956,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u32",
@@ -19106,6 +20968,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u32",
@@ -19118,6 +20981,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u32",
@@ -19129,6 +20993,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u64",
@@ -19141,6 +21006,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u64",
@@ -19152,6 +21018,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u64",
@@ -19164,6 +21031,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u64",
@@ -19175,6 +21043,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u8",
@@ -19187,6 +21056,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u8",
@@ -19198,6 +21068,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqrshl.u8",
@@ -19210,6 +21081,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshl.u8",
@@ -19221,6 +21093,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.s16",
@@ -19233,6 +21106,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.s16",
@@ -19245,6 +21119,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.s32",
@@ -19257,6 +21132,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.s32",
@@ -19269,6 +21145,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.s64",
@@ -19281,6 +21158,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.s64",
@@ -19293,6 +21171,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.u16",
@@ -19305,6 +21184,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.u16",
@@ -19317,6 +21197,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.u32",
@@ -19329,6 +21210,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.u32",
@@ -19341,6 +21223,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.u64",
@@ -19353,6 +21236,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrn.u64",
@@ -19365,6 +21249,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrun.s16",
@@ -19377,6 +21262,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrun.s16",
@@ -19389,6 +21275,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrun.s32",
@@ -19401,6 +21288,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrun.s32",
@@ -19413,6 +21301,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrun.s64",
@@ -19425,6 +21314,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqrshrun.s64",
@@ -19437,6 +21327,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s16",
@@ -19449,6 +21340,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s16",
@@ -19460,6 +21352,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s16",
@@ -19472,6 +21365,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s16",
@@ -19483,6 +21377,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s16",
@@ -19495,6 +21390,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s16",
@@ -19506,6 +21402,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s16",
@@ -19518,6 +21415,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s16",
@@ -19529,6 +21427,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s32",
@@ -19541,6 +21440,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s32",
@@ -19552,6 +21452,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s32",
@@ -19564,6 +21465,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s32",
@@ -19575,6 +21477,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s32",
@@ -19587,6 +21490,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s32",
@@ -19598,6 +21502,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s32",
@@ -19610,6 +21515,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s32",
@@ -19621,6 +21527,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s64",
@@ -19633,6 +21540,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s64",
@@ -19644,6 +21552,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s64",
@@ -19656,6 +21565,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s64",
@@ -19667,6 +21577,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s64",
@@ -19679,6 +21590,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s64",
@@ -19690,6 +21602,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s64",
@@ -19702,6 +21615,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s64",
@@ -19713,6 +21627,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s8",
@@ -19725,6 +21640,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s8",
@@ -19736,6 +21652,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s8",
@@ -19748,6 +21665,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s8",
@@ -19759,6 +21677,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.s8",
@@ -19771,6 +21690,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s8",
@@ -19782,6 +21702,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s8",
@@ -19794,6 +21715,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.s8",
@@ -19805,6 +21727,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u16",
@@ -19817,6 +21740,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u16",
@@ -19828,6 +21752,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u16",
@@ -19840,6 +21765,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u16",
@@ -19851,6 +21777,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u16",
@@ -19863,6 +21790,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u16",
@@ -19874,6 +21802,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u16",
@@ -19886,6 +21815,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u16",
@@ -19897,6 +21827,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u32",
@@ -19909,6 +21840,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u32",
@@ -19920,6 +21852,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u32",
@@ -19932,6 +21865,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u32",
@@ -19943,6 +21877,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u32",
@@ -19955,6 +21890,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u32",
@@ -19966,6 +21902,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u32",
@@ -19978,6 +21915,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u32",
@@ -19989,6 +21927,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u64",
@@ -20001,6 +21940,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u64",
@@ -20012,6 +21952,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u64",
@@ -20024,6 +21965,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u64",
@@ -20035,6 +21977,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u64",
@@ -20047,6 +21990,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u64",
@@ -20058,6 +22002,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u64",
@@ -20070,6 +22015,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u64",
@@ -20081,6 +22027,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u8",
@@ -20093,6 +22040,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u8",
@@ -20104,6 +22052,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u8",
@@ -20116,6 +22065,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u8",
@@ -20127,6 +22077,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshl.u8",
@@ -20139,6 +22090,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u8",
@@ -20150,6 +22102,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u8",
@@ -20162,6 +22115,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshl.u8",
@@ -20173,6 +22127,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s16",
@@ -20185,6 +22140,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s16",
@@ -20196,6 +22152,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s16",
@@ -20208,6 +22165,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s16",
@@ -20219,6 +22177,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s32",
@@ -20231,6 +22190,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s32",
@@ -20242,6 +22202,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s32",
@@ -20254,6 +22215,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s32",
@@ -20265,6 +22227,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s64",
@@ -20277,6 +22240,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s64",
@@ -20288,6 +22252,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s64",
@@ -20300,6 +22265,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s64",
@@ -20311,6 +22277,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s8",
@@ -20323,6 +22290,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s8",
@@ -20334,6 +22302,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqshlu.s8",
@@ -20346,6 +22315,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshlu.s8",
@@ -20357,6 +22327,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.s16",
@@ -20369,6 +22340,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.s16",
@@ -20381,6 +22353,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.s32",
@@ -20393,6 +22366,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.s32",
@@ -20405,6 +22379,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.s64",
@@ -20417,6 +22392,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.s64",
@@ -20429,6 +22405,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.u16",
@@ -20441,6 +22418,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.u16",
@@ -20453,6 +22431,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.u32",
@@ -20465,6 +22444,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.u32",
@@ -20477,6 +22457,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.u64",
@@ -20489,6 +22470,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrn.u64",
@@ -20501,6 +22483,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrun.s16",
@@ -20513,6 +22496,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrun.s16",
@@ -20525,6 +22509,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrun.s32",
@@ -20537,6 +22522,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrun.s32",
@@ -20549,6 +22535,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrun.s64",
@@ -20561,6 +22548,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqshrun.s64",
@@ -20573,6 +22561,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s16",
@@ -20585,6 +22574,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s16",
@@ -20596,6 +22586,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s16",
@@ -20608,6 +22599,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s16",
@@ -20619,6 +22611,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s32",
@@ -20631,6 +22624,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s32",
@@ -20642,6 +22636,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s32",
@@ -20654,6 +22649,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s32",
@@ -20665,6 +22661,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s64",
@@ -20677,6 +22674,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s64",
@@ -20688,6 +22686,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s64",
@@ -20700,6 +22699,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s64",
@@ -20711,6 +22711,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s8",
@@ -20723,6 +22724,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s8",
@@ -20734,6 +22736,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.s8",
@@ -20746,6 +22749,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.s8",
@@ -20757,6 +22761,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u16",
@@ -20769,6 +22774,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u16",
@@ -20780,6 +22786,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u16",
@@ -20792,6 +22799,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u16",
@@ -20803,6 +22811,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u32",
@@ -20815,6 +22824,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u32",
@@ -20826,6 +22836,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u32",
@@ -20838,6 +22849,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u32",
@@ -20849,6 +22861,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u64",
@@ -20861,6 +22874,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u64",
@@ -20872,6 +22886,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u64",
@@ -20884,6 +22899,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u64",
@@ -20895,6 +22911,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u8",
@@ -20907,6 +22924,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u8",
@@ -20918,6 +22936,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vqsub.u8",
@@ -20930,6 +22949,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vqsub.u8",
@@ -20941,6 +22961,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vraddhn.i16",
@@ -20953,6 +22974,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vraddhn.i16",
@@ -20965,6 +22987,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vraddhn.i32",
@@ -20977,6 +23000,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vraddhn.i32",
@@ -20989,6 +23013,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vraddhn.i64",
@@ -21001,6 +23026,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vraddhn.i64",
@@ -21013,6 +23039,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecpe.f32",
@@ -21024,6 +23051,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecpe.f32",
@@ -21035,6 +23063,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecpe.u32",
@@ -21046,6 +23075,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecpe.u32",
@@ -21057,6 +23087,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecps.f32",
@@ -21069,6 +23100,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecps.f32",
@@ -21080,6 +23112,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecps.f32",
@@ -21092,6 +23125,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrecps.f32",
@@ -21103,6 +23137,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrev16.8",
@@ -21114,6 +23149,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrev16.8",
@@ -21125,6 +23161,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrev32.16",
@@ -21136,6 +23173,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrev32.16",
@@ -21147,6 +23185,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrev32.8",
@@ -21158,6 +23197,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrev32.8",
@@ -21169,6 +23209,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrev64.16",
@@ -21180,6 +23221,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrev64.16",
@@ -21191,6 +23233,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrev64.32",
@@ -21202,6 +23245,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrev64.32",
@@ -21213,6 +23257,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrev64.8",
@@ -21224,6 +23269,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrev64.8",
@@ -21235,6 +23281,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.s16",
@@ -21247,6 +23294,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.s16",
@@ -21258,6 +23306,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.s16",
@@ -21270,6 +23319,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.s16",
@@ -21281,6 +23331,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.s32",
@@ -21293,6 +23344,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.s32",
@@ -21304,6 +23356,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.s32",
@@ -21316,6 +23369,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.s32",
@@ -21327,6 +23381,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.s8",
@@ -21339,6 +23394,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.s8",
@@ -21350,6 +23406,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.s8",
@@ -21362,6 +23419,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.s8",
@@ -21373,6 +23431,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.u16",
@@ -21385,6 +23444,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.u16",
@@ -21396,6 +23456,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.u16",
@@ -21408,6 +23469,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.u16",
@@ -21419,6 +23481,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.u32",
@@ -21431,6 +23494,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.u32",
@@ -21442,6 +23506,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.u32",
@@ -21454,6 +23519,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.u32",
@@ -21465,6 +23531,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.u8",
@@ -21477,6 +23544,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.u8",
@@ -21488,6 +23556,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrhadd.u8",
@@ -21500,6 +23569,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrhadd.u8",
@@ -21511,6 +23581,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s16",
@@ -21523,6 +23594,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s16",
@@ -21534,6 +23606,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s16",
@@ -21546,6 +23619,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s16",
@@ -21557,6 +23631,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s32",
@@ -21569,6 +23644,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s32",
@@ -21580,6 +23656,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s32",
@@ -21592,6 +23669,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s32",
@@ -21603,6 +23681,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s64",
@@ -21615,6 +23694,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s64",
@@ -21626,6 +23706,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s64",
@@ -21638,6 +23719,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s64",
@@ -21649,6 +23731,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s8",
@@ -21661,6 +23744,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s8",
@@ -21672,6 +23756,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.s8",
@@ -21684,6 +23769,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.s8",
@@ -21695,6 +23781,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u16",
@@ -21707,6 +23794,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u16",
@@ -21718,6 +23806,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u16",
@@ -21730,6 +23819,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u16",
@@ -21741,6 +23831,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u32",
@@ -21753,6 +23844,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u32",
@@ -21764,6 +23856,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u32",
@@ -21776,6 +23869,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u32",
@@ -21787,6 +23881,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u64",
@@ -21799,6 +23894,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u64",
@@ -21810,6 +23906,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u64",
@@ -21822,6 +23919,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u64",
@@ -21833,6 +23931,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u8",
@@ -21845,6 +23944,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u8",
@@ -21856,6 +23956,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshl.u8",
@@ -21868,6 +23969,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshl.u8",
@@ -21879,6 +23981,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s16",
@@ -21891,6 +23994,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s16",
@@ -21902,6 +24006,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s16",
@@ -21914,6 +24019,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s16",
@@ -21925,6 +24031,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s32",
@@ -21937,6 +24044,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s32",
@@ -21948,6 +24056,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s32",
@@ -21960,6 +24069,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s32",
@@ -21971,6 +24081,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s64",
@@ -21983,6 +24094,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s64",
@@ -21994,6 +24106,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s64",
@@ -22006,6 +24119,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s64",
@@ -22017,6 +24131,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s8",
@@ -22029,6 +24144,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s8",
@@ -22040,6 +24156,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.s8",
@@ -22052,6 +24169,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.s8",
@@ -22063,6 +24181,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u16",
@@ -22075,6 +24194,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u16",
@@ -22086,6 +24206,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u16",
@@ -22098,6 +24219,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u16",
@@ -22109,6 +24231,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u32",
@@ -22121,6 +24244,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u32",
@@ -22132,6 +24256,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u32",
@@ -22144,6 +24269,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u32",
@@ -22155,6 +24281,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u64",
@@ -22167,6 +24294,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u64",
@@ -22178,6 +24306,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u64",
@@ -22190,6 +24319,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u64",
@@ -22201,6 +24331,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u8",
@@ -22213,6 +24344,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u8",
@@ -22224,6 +24356,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vrshr.u8",
@@ -22236,6 +24369,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshr.u8",
@@ -22247,6 +24381,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshrn.i16",
@@ -22259,6 +24394,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshrn.i16",
@@ -22271,6 +24407,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshrn.i32",
@@ -22283,6 +24420,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshrn.i32",
@@ -22295,6 +24433,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshrn.i64",
@@ -22307,6 +24446,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrshrn.i64",
@@ -22319,6 +24459,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrte.f32",
@@ -22330,6 +24471,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrte.f32",
@@ -22341,6 +24483,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrte.u32",
@@ -22352,6 +24495,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrte.u32",
@@ -22363,6 +24507,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrts.f32",
@@ -22375,6 +24520,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrts.f32",
@@ -22386,6 +24532,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrts.f32",
@@ -22398,6 +24545,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsqrts.f32",
@@ -22409,6 +24557,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s16",
@@ -22421,6 +24570,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s16",
@@ -22432,6 +24582,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s16",
@@ -22444,6 +24595,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s16",
@@ -22455,6 +24607,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s32",
@@ -22467,6 +24620,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s32",
@@ -22478,6 +24632,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s32",
@@ -22490,6 +24645,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s32",
@@ -22501,6 +24657,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s64",
@@ -22513,6 +24670,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s64",
@@ -22524,6 +24682,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s64",
@@ -22536,6 +24695,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s64",
@@ -22547,6 +24707,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s8",
@@ -22559,6 +24720,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s8",
@@ -22570,6 +24732,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s8",
@@ -22582,6 +24745,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.s8",
@@ -22593,6 +24757,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u16",
@@ -22605,6 +24770,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u16",
@@ -22616,6 +24782,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u16",
@@ -22628,6 +24795,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u16",
@@ -22639,6 +24807,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u32",
@@ -22651,6 +24820,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u32",
@@ -22662,6 +24832,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u32",
@@ -22674,6 +24845,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u32",
@@ -22685,6 +24857,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u64",
@@ -22697,6 +24870,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u64",
@@ -22708,6 +24882,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u64",
@@ -22720,6 +24895,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u64",
@@ -22731,6 +24907,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u8",
@@ -22743,6 +24920,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u8",
@@ -22754,6 +24932,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u8",
@@ -22766,6 +24945,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsra.u8",
@@ -22777,6 +24957,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsubhn.i16",
@@ -22789,6 +24970,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsubhn.i16",
@@ -22801,6 +24983,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsubhn.i32",
@@ -22813,6 +24996,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsubhn.i32",
@@ -22825,6 +25009,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsubhn.i64",
@@ -22837,6 +25022,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vrsubhn.i64",
@@ -22849,6 +25035,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i16",
@@ -22861,6 +25048,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i16",
@@ -22872,6 +25060,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i16",
@@ -22884,6 +25073,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i16",
@@ -22895,6 +25085,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i32",
@@ -22907,6 +25098,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i32",
@@ -22918,6 +25110,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i32",
@@ -22930,6 +25123,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i32",
@@ -22941,6 +25135,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i64",
@@ -22953,6 +25148,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i64",
@@ -22964,6 +25160,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i64",
@@ -22976,6 +25173,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i64",
@@ -22987,6 +25185,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i8",
@@ -22999,6 +25198,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i8",
@@ -23010,6 +25210,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.i8",
@@ -23022,6 +25223,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.i8",
@@ -23033,6 +25235,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s16",
@@ -23045,6 +25248,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s16",
@@ -23056,6 +25260,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s16",
@@ -23068,6 +25273,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s16",
@@ -23079,6 +25285,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s16",
@@ -23091,6 +25298,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s16",
@@ -23102,6 +25310,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s16",
@@ -23114,6 +25323,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s16",
@@ -23125,6 +25335,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s32",
@@ -23137,6 +25348,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s32",
@@ -23148,6 +25360,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s32",
@@ -23160,6 +25373,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s32",
@@ -23171,6 +25385,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s32",
@@ -23183,6 +25398,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s32",
@@ -23194,6 +25410,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s32",
@@ -23206,6 +25423,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s32",
@@ -23217,6 +25435,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s64",
@@ -23229,6 +25448,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s64",
@@ -23240,6 +25460,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s64",
@@ -23252,6 +25473,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s64",
@@ -23263,6 +25485,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s64",
@@ -23275,6 +25498,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s64",
@@ -23286,6 +25510,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s64",
@@ -23298,6 +25523,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s64",
@@ -23309,6 +25535,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s8",
@@ -23321,6 +25548,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s8",
@@ -23332,6 +25560,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s8",
@@ -23344,6 +25573,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s8",
@@ -23355,6 +25585,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.s8",
@@ -23367,6 +25598,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s8",
@@ -23378,6 +25610,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s8",
@@ -23390,6 +25623,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.s8",
@@ -23401,6 +25635,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u16",
@@ -23413,6 +25648,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u16",
@@ -23424,6 +25660,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u16",
@@ -23436,6 +25673,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u16",
@@ -23447,6 +25685,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u16",
@@ -23459,6 +25698,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u16",
@@ -23470,6 +25710,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u16",
@@ -23482,6 +25723,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u16",
@@ -23493,6 +25735,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u32",
@@ -23505,6 +25748,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u32",
@@ -23516,6 +25760,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u32",
@@ -23528,6 +25773,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u32",
@@ -23539,6 +25785,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u32",
@@ -23551,6 +25798,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u32",
@@ -23562,6 +25810,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u32",
@@ -23574,6 +25823,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u32",
@@ -23585,6 +25835,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u64",
@@ -23597,6 +25848,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u64",
@@ -23608,6 +25860,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u64",
@@ -23620,6 +25873,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u64",
@@ -23631,6 +25885,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u64",
@@ -23643,6 +25898,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u64",
@@ -23654,6 +25910,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u64",
@@ -23666,6 +25923,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u64",
@@ -23677,6 +25935,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u8",
@@ -23689,6 +25948,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u8",
@@ -23700,6 +25960,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u8",
@@ -23712,6 +25973,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u8",
@@ -23723,6 +25985,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshl.u8",
@@ -23735,6 +25998,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u8",
@@ -23746,6 +26010,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u8",
@@ -23758,6 +26023,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshl.u8",
@@ -23769,6 +26035,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(16, 4), (7, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.i16",
@@ -23781,6 +26048,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.i16",
@@ -23793,6 +26061,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.i32",
@@ -23805,6 +26074,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.i32",
@@ -23817,6 +26087,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.i8",
@@ -23829,6 +26100,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.i8",
@@ -23841,6 +26113,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s16",
@@ -23853,6 +26126,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s16",
@@ -23865,6 +26139,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s16",
@@ -23877,6 +26152,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s16",
@@ -23889,6 +26165,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s32",
@@ -23901,6 +26178,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s32",
@@ -23913,6 +26191,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s32",
@@ -23925,6 +26204,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s32",
@@ -23937,6 +26217,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s8",
@@ -23949,6 +26230,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s8",
@@ -23961,6 +26243,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s8",
@@ -23973,6 +26256,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.s8",
@@ -23985,6 +26269,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u16",
@@ -23997,6 +26282,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u16",
@@ -24009,6 +26295,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u16",
@@ -24021,6 +26308,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u16",
@@ -24033,6 +26321,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u32",
@@ -24045,6 +26334,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u32",
@@ -24057,6 +26347,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u32",
@@ -24069,6 +26360,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u32",
@@ -24081,6 +26373,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u8",
@@ -24093,6 +26386,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u8",
@@ -24105,6 +26399,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u8",
@@ -24117,6 +26412,7 @@ pub static FORMS: &[Form] = &[
             Op::PosImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshll.u8",
@@ -24129,6 +26425,7 @@ pub static FORMS: &[Form] = &[
             Op::SizeImm(&[(18, 2)], 8),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s16",
@@ -24141,6 +26438,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s16",
@@ -24152,6 +26450,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s16",
@@ -24164,6 +26463,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s16",
@@ -24175,6 +26475,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s32",
@@ -24187,6 +26488,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s32",
@@ -24198,6 +26500,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s32",
@@ -24210,6 +26513,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s32",
@@ -24221,6 +26525,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s64",
@@ -24233,6 +26538,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s64",
@@ -24244,6 +26550,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s64",
@@ -24256,6 +26563,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s64",
@@ -24267,6 +26575,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s8",
@@ -24279,6 +26588,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s8",
@@ -24290,6 +26600,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.s8",
@@ -24302,6 +26613,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.s8",
@@ -24313,6 +26625,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u16",
@@ -24325,6 +26638,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u16",
@@ -24336,6 +26650,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u16",
@@ -24348,6 +26663,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u16",
@@ -24359,6 +26675,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u32",
@@ -24371,6 +26688,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u32",
@@ -24382,6 +26700,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u32",
@@ -24394,6 +26713,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u32",
@@ -24405,6 +26725,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u64",
@@ -24417,6 +26738,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u64",
@@ -24428,6 +26750,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u64",
@@ -24440,6 +26763,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u64",
@@ -24451,6 +26775,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u8",
@@ -24463,6 +26788,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u8",
@@ -24474,6 +26800,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vshr.u8",
@@ -24486,6 +26813,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshr.u8",
@@ -24497,6 +26825,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshrn.i16",
@@ -24509,6 +26838,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshrn.i16",
@@ -24521,6 +26851,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshrn.i32",
@@ -24533,6 +26864,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshrn.i32",
@@ -24545,6 +26877,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshrn.i64",
@@ -24557,6 +26890,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vshrn.i64",
@@ -24569,6 +26903,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.16",
@@ -24581,6 +26916,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.16",
@@ -24592,6 +26928,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.16",
@@ -24604,6 +26941,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.16",
@@ -24615,6 +26953,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 4)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.32",
@@ -24627,6 +26966,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.32",
@@ -24638,6 +26978,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.32",
@@ -24650,6 +26991,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.32",
@@ -24661,6 +27003,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 5)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.64",
@@ -24673,6 +27016,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.64",
@@ -24684,6 +27028,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.64",
@@ -24696,6 +27041,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.64",
@@ -24707,6 +27053,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 6)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.8",
@@ -24719,6 +27066,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.8",
@@ -24730,6 +27078,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsli.8",
@@ -24742,6 +27091,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsli.8",
@@ -24753,6 +27103,7 @@ pub static FORMS: &[Form] = &[
             Op::Imm(&[(16, 3)], 1, 0),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsqrt.f32",
@@ -24764,6 +27115,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vsqrt.f32",
@@ -24775,6 +27127,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vsqrt.f64",
@@ -24786,6 +27139,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vsqrt.f64",
@@ -24797,6 +27151,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vsra.s16",
@@ -24809,6 +27164,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s16",
@@ -24820,6 +27176,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s16",
@@ -24832,6 +27189,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s16",
@@ -24843,6 +27201,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s32",
@@ -24855,6 +27214,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s32",
@@ -24866,6 +27226,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s32",
@@ -24878,6 +27239,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s32",
@@ -24889,6 +27251,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s64",
@@ -24901,6 +27264,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s64",
@@ -24912,6 +27276,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s64",
@@ -24924,6 +27289,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s64",
@@ -24935,6 +27301,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s8",
@@ -24947,6 +27314,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s8",
@@ -24958,6 +27326,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s8",
@@ -24970,6 +27339,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.s8",
@@ -24981,6 +27351,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u16",
@@ -24993,6 +27364,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u16",
@@ -25004,6 +27376,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u16",
@@ -25016,6 +27389,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u16",
@@ -25027,6 +27401,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u32",
@@ -25039,6 +27414,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u32",
@@ -25050,6 +27426,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u32",
@@ -25062,6 +27439,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u32",
@@ -25073,6 +27451,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u64",
@@ -25085,6 +27464,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u64",
@@ -25096,6 +27476,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u64",
@@ -25108,6 +27489,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u64",
@@ -25119,6 +27501,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u8",
@@ -25131,6 +27514,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u8",
@@ -25142,6 +27526,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u8",
@@ -25154,6 +27539,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsra.u8",
@@ -25165,6 +27551,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.16",
@@ -25177,6 +27564,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.16",
@@ -25188,6 +27576,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.16",
@@ -25200,6 +27589,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.16",
@@ -25211,6 +27601,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 4)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.32",
@@ -25223,6 +27614,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.32",
@@ -25234,6 +27626,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.32",
@@ -25246,6 +27639,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.32",
@@ -25257,6 +27651,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 5)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.64",
@@ -25269,6 +27664,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.64",
@@ -25280,6 +27676,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.64",
@@ -25292,6 +27689,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.64",
@@ -25303,6 +27701,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 6)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.8",
@@ -25315,6 +27714,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.8",
@@ -25326,6 +27726,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsri.8",
@@ -25338,6 +27739,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsri.8",
@@ -25349,6 +27751,7 @@ pub static FORMS: &[Form] = &[
             Op::NegImm(&[(16, 3)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vst1.16",
@@ -25357,6 +27760,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.16",
@@ -25365,6 +27769,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.16",
@@ -25373,6 +27778,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.16",
@@ -25381,6 +27787,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.32",
@@ -25389,6 +27796,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.32",
@@ -25397,6 +27805,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.32",
@@ -25405,6 +27814,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.32",
@@ -25413,6 +27823,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.64",
@@ -25421,6 +27832,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.64",
@@ -25429,6 +27841,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.8",
@@ -25437,6 +27850,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.8",
@@ -25445,6 +27859,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.8",
@@ -25453,6 +27868,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst1.8",
@@ -25461,6 +27877,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 1, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.16",
@@ -25469,6 +27886,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.16",
@@ -25477,6 +27895,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.16",
@@ -25485,6 +27904,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.16",
@@ -25493,6 +27913,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.32",
@@ -25501,6 +27922,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.32",
@@ -25509,6 +27931,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.32",
@@ -25517,6 +27940,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.32",
@@ -25525,6 +27949,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.64",
@@ -25533,6 +27958,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.64",
@@ -25541,6 +27967,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.8",
@@ -25549,6 +27976,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.8",
@@ -25557,6 +27985,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.8",
@@ -25565,6 +27994,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst2.8",
@@ -25573,6 +28003,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 2, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.16",
@@ -25581,6 +28012,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.16",
@@ -25589,6 +28021,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.16",
@@ -25597,6 +28030,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.16",
@@ -25605,6 +28039,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.32",
@@ -25613,6 +28048,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.32",
@@ -25621,6 +28057,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.32",
@@ -25629,6 +28066,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.32",
@@ -25637,6 +28075,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.64",
@@ -25645,6 +28084,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.64",
@@ -25653,6 +28093,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.8",
@@ -25661,6 +28102,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.8",
@@ -25669,6 +28111,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.8",
@@ -25677,6 +28120,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst3.8",
@@ -25685,6 +28129,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 3, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.16",
@@ -25693,6 +28138,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.16",
@@ -25701,6 +28147,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.16",
@@ -25709,6 +28156,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.16",
@@ -25717,6 +28165,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 16)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.32",
@@ -25725,6 +28174,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.32",
@@ -25733,6 +28183,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.32",
@@ -25741,6 +28192,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.32",
@@ -25749,6 +28201,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 32)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.64",
@@ -25757,6 +28210,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.64",
@@ -25765,6 +28219,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 64)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.8",
@@ -25773,6 +28228,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.8",
@@ -25781,6 +28237,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.8",
@@ -25789,6 +28246,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(0, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vst4.8",
@@ -25797,6 +28255,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::NeonStruct(1, 4, 8)],
         &[],
+        (32, 25),
     ),
     f(
         "vstmdb",
@@ -25809,6 +28268,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[1, 255],
+        (1, 14),
     ),
     f(
         "vstmdb",
@@ -25821,6 +28281,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (1, 33),
     ),
     f(
         "vstmdb",
@@ -25833,6 +28294,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "vstmdb",
@@ -25845,6 +28307,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 33),
     ),
     f(
         "vstmia",
@@ -25857,6 +28320,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[1, 255],
+        (1, 14),
     ),
     f(
         "vstmia",
@@ -25869,6 +28333,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[1, 255],
+        (1, 33),
     ),
     f(
         "vstmia",
@@ -25881,6 +28346,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(0, &[(22, 1), (12, 4)], &[(0, 8)]),
         ],
         &[3, 255],
+        (14, 14),
     ),
     f(
         "vstmia",
@@ -25893,6 +28359,7 @@ pub static FORMS: &[Form] = &[
             Op::VfpList(1, &[(12, 4), (22, 1)], &[(1, 7)]),
         ],
         &[3, 255],
+        (14, 33),
     ),
     f(
         "vstr",
@@ -25901,6 +28368,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::VfpMem],
         &[],
+        (17, 14),
     ),
     f(
         "vstr",
@@ -25909,6 +28377,7 @@ pub static FORMS: &[Form] = &[
         false,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::VfpMem],
         &[],
+        (17, 33),
     ),
     f(
         "vstr",
@@ -25917,6 +28386,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(0, &[(22, 1), (12, 4)]), Op::VfpMem],
         &[],
+        (14, 14),
     ),
     f(
         "vstr",
@@ -25925,6 +28395,7 @@ pub static FORMS: &[Form] = &[
         true,
         &[Op::Vfp(1, &[(12, 4), (22, 1)]), Op::VfpMem],
         &[],
+        (14, 33),
     ),
     f(
         "vsub.f32",
@@ -25937,6 +28408,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vsub.f32",
@@ -25948,6 +28420,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (1, 14),
     ),
     f(
         "vsub.f32",
@@ -25960,6 +28433,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.f32",
@@ -25971,6 +28445,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.f32",
@@ -25983,6 +28458,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vsub.f32",
@@ -25994,6 +28470,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(0, &[(5, 1), (0, 4)]),
         ],
         &[],
+        (14, 14),
     ),
     f(
         "vsub.f32",
@@ -26006,6 +28483,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.f32",
@@ -26017,6 +28495,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.f64",
@@ -26029,6 +28508,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vsub.f64",
@@ -26040,6 +28520,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 26),
     ),
     f(
         "vsub.f64",
@@ -26052,6 +28533,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vsub.f64",
@@ -26063,6 +28545,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 26),
     ),
     f(
         "vsub.i16",
@@ -26075,6 +28558,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i16",
@@ -26086,6 +28570,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i16",
@@ -26098,6 +28583,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i16",
@@ -26109,6 +28595,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i32",
@@ -26121,6 +28608,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i32",
@@ -26132,6 +28620,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i32",
@@ -26144,6 +28633,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i32",
@@ -26155,6 +28645,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i64",
@@ -26167,6 +28658,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i64",
@@ -26178,6 +28670,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i64",
@@ -26190,6 +28683,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i64",
@@ -26201,6 +28695,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i8",
@@ -26213,6 +28708,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i8",
@@ -26224,6 +28720,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsub.i8",
@@ -26236,6 +28733,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsub.i8",
@@ -26247,6 +28745,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (14, 25),
     ),
     f(
         "vsubhn.i16",
@@ -26259,6 +28758,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubhn.i16",
@@ -26271,6 +28771,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubhn.i32",
@@ -26283,6 +28784,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubhn.i32",
@@ -26295,6 +28797,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubhn.i64",
@@ -26307,6 +28810,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubhn.i64",
@@ -26319,6 +28823,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(2, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubl.s16",
@@ -26331,6 +28836,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsubl.s16",
@@ -26343,6 +28849,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubl.s32",
@@ -26355,6 +28862,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsubl.s32",
@@ -26367,6 +28875,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubl.s8",
@@ -26379,6 +28888,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsubl.s8",
@@ -26391,6 +28901,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubl.u16",
@@ -26403,6 +28914,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsubl.u16",
@@ -26415,6 +28927,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubl.u32",
@@ -26427,6 +28940,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsubl.u32",
@@ -26439,6 +28953,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubl.u8",
@@ -26451,6 +28966,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (1, 25),
     ),
     f(
         "vsubl.u8",
@@ -26463,6 +28979,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s16",
@@ -26475,6 +28992,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s16",
@@ -26486,6 +29004,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s16",
@@ -26498,6 +29017,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s16",
@@ -26509,6 +29029,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s32",
@@ -26521,6 +29042,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s32",
@@ -26532,6 +29054,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s32",
@@ -26544,6 +29067,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s32",
@@ -26555,6 +29079,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s8",
@@ -26567,6 +29092,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s8",
@@ -26578,6 +29104,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s8",
@@ -26590,6 +29117,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.s8",
@@ -26601,6 +29129,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u16",
@@ -26613,6 +29142,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u16",
@@ -26624,6 +29154,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u16",
@@ -26636,6 +29167,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u16",
@@ -26647,6 +29179,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u32",
@@ -26659,6 +29192,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u32",
@@ -26670,6 +29204,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u32",
@@ -26682,6 +29217,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u32",
@@ -26693,6 +29229,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u8",
@@ -26705,6 +29242,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u8",
@@ -26716,6 +29254,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u8",
@@ -26728,6 +29267,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vsubw.u8",
@@ -26739,6 +29279,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vswp",
@@ -26750,6 +29291,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vswp",
@@ -26761,6 +29303,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtbl.8",
@@ -26773,6 +29316,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtbl.8",
@@ -26785,6 +29329,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtbx.8",
@@ -26797,6 +29342,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtbx.8",
@@ -26809,6 +29355,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtrn.16",
@@ -26820,6 +29367,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtrn.16",
@@ -26831,6 +29379,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtrn.32",
@@ -26842,6 +29391,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtrn.32",
@@ -26853,6 +29403,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtrn.8",
@@ -26864,6 +29415,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtrn.8",
@@ -26875,6 +29427,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.16",
@@ -26887,6 +29440,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.16",
@@ -26898,6 +29452,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.16",
@@ -26910,6 +29465,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.16",
@@ -26921,6 +29477,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.32",
@@ -26933,6 +29490,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.32",
@@ -26944,6 +29502,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.32",
@@ -26956,6 +29515,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.32",
@@ -26967,6 +29527,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.8",
@@ -26979,6 +29540,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.8",
@@ -26990,6 +29552,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.8",
@@ -27002,6 +29565,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vtst.8",
@@ -27013,6 +29577,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.16",
@@ -27024,6 +29589,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.16",
@@ -27035,6 +29601,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.32",
@@ -27046,6 +29613,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.32",
@@ -27057,6 +29625,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.32",
@@ -27068,6 +29637,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.32",
@@ -27079,6 +29649,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.8",
@@ -27090,6 +29661,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vuzp.8",
@@ -27101,6 +29673,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.16",
@@ -27112,6 +29685,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.16",
@@ -27123,6 +29697,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.32",
@@ -27134,6 +29709,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.32",
@@ -27145,6 +29721,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.32",
@@ -27156,6 +29733,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(1, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.32",
@@ -27167,6 +29745,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.8",
@@ -27178,6 +29757,7 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
     f(
         "vzip.8",
@@ -27189,14 +29769,15 @@ pub static FORMS: &[Form] = &[
             Op::Vfp(3, &[(0, 4), (5, 1)]),
         ],
         &[],
+        (25, 25),
     ),
-    f("wfe", Set::T16, 0x0000bf20, true, &[], &[]),
-    f("wfe", Set::T32, 0xf3af8002, true, &[], &[]),
-    f("wfe", Set::Arm, 0x0320f002, true, &[], &[]),
-    f("wfi", Set::T16, 0x0000bf30, true, &[], &[]),
-    f("wfi", Set::T32, 0xf3af8003, true, &[], &[]),
-    f("wfi", Set::Arm, 0x0320f003, true, &[], &[]),
-    f("yield", Set::T16, 0x0000bf10, true, &[], &[]),
-    f("yield", Set::T32, 0xf3af8001, true, &[], &[]),
-    f("yield", Set::Arm, 0x0320f001, true, &[], &[]),
+    f("wfe", Set::T16, 0x0000bf20, true, &[], &[], (7, 0)),
+    f("wfe", Set::T32, 0xf3af8002, true, &[], &[], (7, 0)),
+    f("wfe", Set::Arm, 0x0320f002, true, &[], &[], (7, 0)),
+    f("wfi", Set::T16, 0x0000bf30, true, &[], &[], (7, 0)),
+    f("wfi", Set::T32, 0xf3af8003, true, &[], &[], (7, 0)),
+    f("wfi", Set::Arm, 0x0320f003, true, &[], &[], (7, 0)),
+    f("yield", Set::T16, 0x0000bf10, true, &[], &[], (7, 0)),
+    f("yield", Set::T32, 0xf3af8001, true, &[], &[], (7, 0)),
+    f("yield", Set::Arm, 0x0320f001, true, &[], &[], (7, 0)),
 ];

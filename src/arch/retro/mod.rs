@@ -94,6 +94,7 @@ impl Architecture for Retro {
             // between; `Att` is simply the default the core starts from.
             syntax: Syntax::Att,
             features: 0,
+            cpu_features: [0; 3],
             intel_register_prefix: false,
             used: 0,
             private: 0,

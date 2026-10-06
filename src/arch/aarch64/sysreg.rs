@@ -12,9 +12,16 @@
 use super::operand::Operand;
 use super::sysreg_data as data;
 use crate::arch::AsmCtx;
+use crate::source::Span;
 
-/// The `o0:op1:CRn:CRm:op2` bits of an `mrs`/`msr` word, already shifted into
-/// place, and the restrictions the architecture puts on the register.
+/// The `o0:op1:CRn:CRm:op2` bits of an `mrs`/`msr` word, already shifted
+/// into place, and the restrictions the architecture puts on the register.
+///
+/// Which extension a register name belongs to is in GNU as's table and GNU
+/// as 2.47 never reads it: its `sysreg_checking_p` starts at zero and
+/// nothing turns it on, so every name it knows assembles whatever the
+/// processor is. The named operands of the system instructions are gated;
+/// see [`sys_ins`].
 pub(crate) fn lookup(name: &str) -> Option<(u32, u8)> {
     match data::REGS.binary_search_by(|e| e.0.cmp(name)) {
         Ok(i) => Some((data::REGS[i].1, data::REGS[i].2)),
@@ -125,17 +132,43 @@ pub(crate) enum Xt {
 
 /// A named operand of `dc`, `ic`, `at`, `tlbi` and their friends: the
 /// `op1:CRn:CRm:op2` bits of the `sys` word it stands for.
-pub(crate) fn sys_ins(mnemonic: &str, name: &str) -> Option<(u32, Xt)> {
+///
+/// GNU as refuses a name the selected processor does not have, and asks a
+/// little less of it where the name may take an address register and none
+/// was written: a TLB maintenance name without one is not a `tlbi` of the
+/// TLBID extension. `with_register` says which it is.
+pub(crate) fn sys_ins(
+    cx: &mut AsmCtx<'_>,
+    span: Span,
+    mnemonic: &str,
+    name: &str,
+    with_register: bool,
+) -> Option<(u32, Xt)> {
     let i = data::SYS_INS
         .binary_search_by(|e| (e.0, e.1).cmp(&(mnemonic, name)))
         .ok()?;
-    let (_, _, bits, xt) = data::SYS_INS[i];
+    let (_, _, bits, xt, with, without) = data::SYS_INS[i];
     let takes = match xt {
         data::NO_XT => Xt::None,
         data::NEEDS_XT => Xt::Needs,
         data::OPTIONAL_XT => Xt::Optional,
         _ => return None,
     };
+    // An ARMv8-R core has no EL3, so none of the names that address it is
+    // available there however the rest of the target reads.
+    if name.ends_with("_el3") && super::cpu::supports(cx.state, super::cpu_data::V8R) {
+        cx.error(
+            span,
+            format!("`{name}` addresses EL3, which this target has not"),
+        );
+        return None;
+    }
+    let want = data::FEATS[if with_register { with } else { without } as usize];
+    if !super::cpu::supports(cx.state, want) {
+        let msg = super::cpu::unsupported(cx.state, name, want);
+        cx.error(span, format!("the system-instruction operand {msg}"));
+        return None;
+    }
     Some((bits, takes))
 }
 
@@ -146,16 +179,35 @@ pub(crate) fn is_sys_ins(mnemonic: &str) -> bool {
 
 /// An alias of `hint` or of a barrier: a mnemonic on its own (`esb`, `sb`),
 /// or one with a single named operand (`psb csync`, `dsb ishst`, `bti c`).
-pub(crate) fn hint(mnemonic: &str, option: &str) -> Option<u32> {
+///
+/// A diagnostic names the option rather than the mnemonic where there is
+/// one, since it is the option that names the extension: `dsb ishnxs` and
+/// its three neighbours are the `+xs` barriers and `dsb ish` is not.
+pub(crate) fn hint(cx: &mut AsmCtx<'_>, span: Span, mnemonic: &str, option: &str) -> Option<u32> {
     let i = data::HINTS
         .binary_search_by(|e| (e.0, e.1).cmp(&(mnemonic, option)))
         .ok()?;
-    Some(data::HINTS[i].2)
+    let (_, _, word, feats) = data::HINTS[i];
+    let want = data::FEATS[feats as usize];
+    if !super::cpu::supports(cx.state, want) {
+        let what = if option.is_empty() { mnemonic } else { option };
+        let msg = super::cpu::unsupported(cx.state, what, want);
+        cx.error(span, msg);
+        return None;
+    }
+    Some(word)
 }
 
 /// Whether this mnemonic is one of those aliases.
 pub(crate) fn is_hint(mnemonic: &str) -> bool {
     data::HINTS.iter().any(|e| e.0 == mnemonic)
+}
+
+/// Whether the pair is in the table at all, whatever the target has.
+pub(crate) fn knows_hint(mnemonic: &str, option: &str) -> bool {
+    data::HINTS
+        .binary_search_by(|e| (e.0, e.1).cmp(&(mnemonic, option)))
+        .is_ok()
 }
 
 /// The names this mnemonic accepts, for a diagnostic that lists them.
@@ -195,9 +247,17 @@ mod tests {
         );
         // A name from each table, found the way the encoders find it.
         assert!(lookup("ctr_el0").is_some_and(|(_, f)| f & data::READ_ONLY != 0));
-        assert!(matches!(sys_ins("dc", "civac"), Some((_, Xt::Needs))));
-        assert!(matches!(sys_ins("ic", "ialluis"), Some((_, Xt::None))));
-        assert!(hint("psb", "csync").is_some());
-        assert!(hint("psb", "dsync").is_none());
+        // `dc civac` needs nothing of the target and `dc cgdsw` memory
+        // tagging, which is the gate the last column carries.
+        let feats = |m, n| {
+            data::SYS_INS[data::SYS_INS
+                .binary_search_by(|e| (e.0, e.1).cmp(&(m, n)))
+                .expect("a name from the table")]
+            .4
+        };
+        assert_eq!(data::FEATS[feats("dc", "civac") as usize], [0, 0, 0]);
+        assert_ne!(data::FEATS[feats("dc", "cgdsw") as usize], [0, 0, 0]);
+        assert!(knows_hint("psb", "csync"));
+        assert!(!knows_hint("psb", "dsync"));
     }
 }

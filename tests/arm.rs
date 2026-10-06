@@ -1585,3 +1585,75 @@ fn objects_carry_the_build_attributes_gnu_as_writes() {
         );
     }
 }
+
+/// What the target selected has. Every refusal here is one
+/// `tools/xas-diff/run.sh arm` records as a `refused:` case, and every byte
+/// string one of its `arm-programs.txt` snippets, so GNU as refuses or
+/// assembles each of them the same way under the same directive.
+#[test]
+fn the_architecture_selected_decides_what_assembles() {
+    // The default is `armv7ve` with `neon-vfpv4`, which has all of these.
+    enc("clz r0, r1", "11 0f 6f e1");
+    enc("sdiv r0, r1, r2", "11 f2 10 e7");
+    enc("vadd.i32 q0, q1, q2", "44 08 22 f2");
+    for (src, needle) in [
+        (".arch armv4t\nclz r0, r1", "ARMv5 or later"),
+        (".arch armv4\nbx lr", "needs Thumb, or ARMv5 or later"),
+        (
+            ".arch armv5te\nsdiv r0, r1, r2",
+            "the ARM integer divide extension",
+        ),
+        (
+            ".arch armv7-a\nsdiv r0, r1, r2",
+            "the ARM integer divide extension",
+        ),
+        (".cpu arm7tdmi\nclz r0, r1", "ARMv5 or later"),
+        (
+            ".arch armv7-a\nmrs r0, sp_usr",
+            "the virtualization extension",
+        ),
+        (".arch armv7-a\n.fpu vfpv3\nvadd.i32 q0, q1, q2", "NEON"),
+        (
+            ".arch armv8-a\nswp r0, r1, [r2]",
+            "not an instruction armv8-a has",
+        ),
+        (".arch armv3\nmsr apsr_g, r0", "the ARMv6 DSP instructions"),
+    ] {
+        let e = errors_for("arm", src);
+        assert!(
+            e.contains(needle),
+            "`{src}` should mention `{needle}`:\n{e}"
+        );
+    }
+    // An extension the architecture does not allow, and a name neither table
+    // has at all.
+    assert!(
+        errors_for("arm", ".arch armv7-a\n.arch_extension crc\nnop")
+            .contains("not an extension of armv7-a")
+    );
+    assert!(errors_for("arm", ".arch_extension nosuchextension\nnop").contains("does not know"));
+    assert!(errors_for("arm", ".arch armv42\nnop").contains("unknown architecture"));
+    // `.arch` forgets the extensions added to the architecture before it,
+    // and `.arch_extension` adds them back.
+    assert!(
+        errors_for(
+            "arm",
+            ".arch armv7-a\n.arch_extension idiv\n.arch armv7-a\nsdiv r0, r1, r2"
+        )
+        .contains("integer divide")
+    );
+    enc(
+        ".arch armv7-a\n.arch_extension idiv\nsdiv r0, r1, r2",
+        "11 f2 10 e7",
+    );
+    // The hint encoding of `nop` is ARMv6K's; before it GNU as assembles
+    // `mov r0, r0`, and in Thumb the 16-bit `mov r8, r8`.
+    enc(".arch armv5te\nnop", "00 00 a0 e1");
+    enc(".arch armv6k\nnop", "00 f0 20 e3");
+    tenc(".arch armv4t\nnop", "c0 46");
+    tenc(".arch armv6t2\nnop", "00 bf");
+    // A 32-bit Thumb encoding needs Thumb-2 unless the mnemonic has never
+    // had a narrow one, which `bl` has not.
+    assert!(errors_for("thumb", ".arch armv4t\nand r0, r1, r2").contains("32-bit Thumb encoding"));
+    tenc(".arch armv4t\nbl far\nfar:", "00 f0 00 f8");
+}

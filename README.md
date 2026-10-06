@@ -60,8 +60,8 @@ after the corpora grow; the whole-object, flat, link and fuzzing harnesses in
 | Target | Names | Checked against | Cases |
 |---|---|---|---|
 | x86-64, i386, i8086, with x87, MMX, 3DNow!, SSE–SSE4.2, AVX, AVX2, AVX-512 with every subset and FP16, AVX10.2, FMA4, XOP, BMI, AMX, CET, Key Locker | `x86-64` `i386` `i8086` | GNU as, llvm-mc | 17106 |
-| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the exclusives and the LSE atomics, pointer authentication, memory tagging, the CRC32 checksums, the unprivileged and unscaled accesses, the condition-flag instructions, the 64-byte accesses, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 23569 |
-| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3227 |
+| AArch64, with AdvSIMD (NEON), the cryptographic extensions, SVE and SVE2, the exclusives and the LSE atomics, pointer authentication, memory tagging, the CRC32 checksums, the unprivileged and unscaled accesses, the condition-flag instructions, the 64-byte accesses, the system instructions and literal pools | `aarch64` | llvm-mc, GNU as | 23597 |
+| ARM A32 / Thumb, with the floating-point unit (VFPv4) and NEON | `arm` `thumb` | llvm-mc, GNU as | 3252 |
 | RISC-V RV32/RV64 IMAFDC | `riscv32` `riscv64` | llvm-mc | 582 |
 | PowerPC 32/64, both endians, with AltiVec, VSX and POWER8–10 | `powerpc` `powerpc64` `powerpc64le` | llvm-mc, GNU as | 9545 |
 | MIPS 32/64, both endians | `mips` `mipsel` `mips64` `mips64el` | llvm-mc | 880 |
@@ -270,6 +270,19 @@ form by form and in random whole programs as well.
   `tlbi`, `sys`/`sysl`, 1,619 `mrs`/`msr` registers and the PSTATE fields.
   Mapping symbols are an ELF convention, so a COFF or Mach-O object has none
   of them, and nothing raises a section's alignment for them there
+- what the target selected *has*, on both ARM and AArch64: every
+  architecture, CPU, unit and extension name GNU as knows, through `.arch`,
+  `.cpu`, `.fpu` and `.arch_extension` or `-march=`, `-mcpu=` and `-mfpu=`,
+  deciding which instructions assemble as well as what the object says. An
+  `.arch armv4t` refuses a `clz`, an `.arch armv5te` an `sdiv`, and an
+  `.arch armv8-a+nolse` an AArch64 `casp`, each naming what it would take.
+  Each backend's own feature set and test are GNU as's -- any bit in common
+  on ARM, every bit on AArch64 -- and each instruction's is the one its own
+  row of binutils' tables carries; `src/arch/arm/cpu.rs` and
+  `src/arch/aarch64/cpu.rs` say where every number comes from. With nothing
+  selected the target is what the differential harnesses run the references
+  as: `-march=armv7ve -mfpu=neon-vfpv4` on ARM, and ARMv9.5-A with every
+  extension on AArch64
 - the whole 680x0 family as GNU as knows it: the 68881/68882 FPU with float
   immediates in every size (`#1.5` in Motorola source, `#0r1.5` in GNU's), the
   68851 and on-chip MMUs, `cas2`, `callm`, `move16`, CPU32 and ColdFire,
@@ -448,13 +461,22 @@ form by form and in random whole programs as well.
   global symbol. `.tpreldword` is refused for the same kind of reason: GNU
   as 2.47 stops with an internal error on it, so no reference says what its
   eight bytes hold
-- ARM: `.arch`, `.cpu`, `.fpu` and `.arch_extension` say what the object was
-  built for without changing which instructions this backend accepts, so
-  `.arch armv4t` does not refuse an ARMv7 instruction as GNU as would. A
-  second `.arch_extension`, or one beside an `.fpu`, takes each tag's largest
-  value rather than merging feature bits as GNU as does; one on its own is
-  exactly what GNU as writes, and `tools/tables/arm-attrs.py` checks every
-  such pair
+- ARM: a second `.arch_extension`, or one beside an `.fpu`, takes each build
+  attribute's largest value rather than merging feature bits as GNU as does;
+  one on its own is exactly what GNU as writes, and
+  `tools/tables/arm-attrs.py` checks every such pair. `-mfpu=` leaves the
+  attributes `.fpu` would, where GNU as's option merges the unit into the
+  CPU's own and so can keep a tag the directive replaces. Which instructions
+  the selection has is a separate model and does merge the bits, so the two
+  can disagree about a tag without disagreeing about an instruction
+- ARM's M profile: `.arch armv7-m`, `armv6-m` and the ARMv8-M names select
+  the feature set GNU as gives them, and a core with no ARM state starts in
+  Thumb as GNU as's `-mcpu` does, but the instructions this backend has are
+  an A-profile core's. What it accepts under an M-profile name is therefore
+  wider than GNU as: the M-profile system registers (`ipsr`, `msp`), the
+  narrower immediates and the width rules of the M-profile encodings are not
+  modelled. `tools/tables/arm.py` says which architectures the instruction
+  table claims
 - 6502: the 65C02 and later instruction sets; in ca65 source, cheap local
   (`@loop`) and unnamed (`:`, `:-`) labels, `.proc`/`.scope`, `.struct`, and
   the `ZEROPAGE` segment's zero-page addressing for labels defined in it
@@ -587,6 +609,12 @@ rsasm [options] <input.s>...
                      ccrl (Renesas CC-RL), ccrh (Renesas CC-RH),
                      ccrx (Renesas CC-RX) or 8bit (6502, Z80, 8080, 8051)
                      (default: the architecture's usual one)
+      --march=<name> ARM and AArch64: the architecture to assemble for, which
+                     decides which instructions are accepted -- `armv5te`,
+                     `armv9.5-a+sve2+nolse` -- spelled as GNU as spells it,
+                     `-march=<name>`, as well
+      --mcpu=<name>  the same for a named CPU, which wins over `--march`
+      --mfpu=<name>  ARM: the floating-point and SIMD unit, `neon-vfpv4`
       --mimplicit-it=<m>
                      ARM: when a conditional Thumb instruction with no `it`
                      block of its own gets one made up for it -- never, arm

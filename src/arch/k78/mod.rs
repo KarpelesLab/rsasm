@@ -99,6 +99,7 @@ impl Architecture for K78 {
             // starting value.
             syntax: Syntax::Att,
             features: 0,
+            cpu_features: [0; 3],
             intel_register_prefix: false,
             used: 0,
             private: 0,

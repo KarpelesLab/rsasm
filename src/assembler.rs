@@ -1,7 +1,7 @@
 //! The assembler driver: section state, statement processing, layout and
 //! fixup resolution.
 
-use crate::arch::{ArchState, Architecture, AsmCtx, InsnRequest, Syntax};
+use crate::arch::{ArchState, Architecture, AsmCtx, CpuOption, InsnRequest, Syntax};
 use crate::cursor::Cursor;
 use crate::diag::{DiagBag, Diagnostic};
 use crate::dialect;
@@ -133,6 +133,10 @@ pub struct Options {
     /// Whether a conditional Thumb instruction with no `it` block of its own
     /// gets one made up for it, which only the ARM backend reads.
     pub(crate) implicit_it: ImplicitIt,
+    /// What `-march=`, `-mcpu=` and `-mfpu=` named, which decides what the
+    /// target has before the source says anything. Applied in that order, so
+    /// that a CPU wins over an architecture as it does in GNU as.
+    pub(crate) cpu_options: Vec<(CpuOption, String)>,
 }
 
 impl Default for Options {
@@ -147,6 +151,7 @@ impl Default for Options {
             debug_source: false,
             format: crate::output::Format::Elf,
             implicit_it: ImplicitIt::Arm,
+            cpu_options: Vec::new(),
         }
     }
 }
@@ -227,6 +232,17 @@ impl Options {
     /// gets one made up for it; see [`ImplicitIt`].
     pub fn with_implicit_it(mut self, mode: ImplicitIt) -> Options {
         self.implicit_it = mode;
+        self
+    }
+
+    /// Adds what one `-march=`, `-mcpu=` or `-mfpu=` named, for a backend
+    /// that gates what it assembles on the target selected; see
+    /// [`Architecture::select_option`]. A name the backend refuses makes
+    /// [`Assembler::new`] report it as a diagnostic with no source position.
+    ///
+    /// [`Architecture::select_option`]: crate::arch::Architecture::select_option
+    pub fn with_cpu_option(mut self, opt: CpuOption, name: impl Into<String>) -> Options {
+        self.cpu_options.push((opt, name.into()));
         self
     }
 
@@ -469,10 +485,25 @@ pub struct Assembler {
 impl Assembler {
     pub fn new(arch: Box<dyn Architecture>, options: Options) -> Assembler {
         let mut interner = Interner::new();
+        let mut option_errors = Vec::new();
         let arch_state = {
             let mut st = arch.initial_state();
             if let Some(s) = options.syntax {
                 st.syntax = s;
+            }
+            // `-march=` before `-mcpu=`, so that a CPU named as well wins, as
+            // it does in GNU as; `-mfpu=` is read last whichever way round it
+            // was written.
+            let mut opts: Vec<&(CpuOption, String)> = options.cpu_options.iter().collect();
+            opts.sort_by_key(|(opt, _)| match opt {
+                CpuOption::Arch => 0,
+                CpuOption::Cpu => 1,
+                CpuOption::Fpu => 2,
+            });
+            for (opt, name) in opts {
+                if let Err(msg) = arch.select_option(&mut st, *opt, name) {
+                    option_errors.push(msg);
+                }
             }
             st
         };
@@ -528,6 +559,9 @@ impl Assembler {
             arch_preludes: Vec::new(),
             arch_prelude_text: Vec::new(),
         };
+        for msg in option_errors {
+            asm.diags.error(Span::DUMMY, msg);
+        }
         if asm.options.dialect == Dialect::CcRx {
             // The predefined names CC-RX defines whatever the options
             // (R20UT3248EJ0115 Table 5.36, pages 499-500, note 1), except the
