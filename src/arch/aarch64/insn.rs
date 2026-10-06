@@ -13,6 +13,13 @@
 //! an even one up to `x22` will do; `bfc` computes one immediate from the
 //! other and bounds their sum; `rprfm` reads a name or a number scattered
 //! over six bits of the word; and `udf` has no opcode bits at all.
+//!
+//! Two whole families are here on the same grounds. FEAT_MOPS's 132 memory
+//! copies and sets write an address back with no offset for the `!` to apply
+//! to and a register back with no brackets at all, and both references
+//! refuse any two of their three registers naming one register; FEAT_CMPBR's
+//! thirty compare-and-branches end in a target, which is a fixup, and a
+//! table row has nowhere to put one.
 
 use super::encode::{const_in_range, field, logical_imm, word, word_fixup};
 use super::operand::{ExtendOp, Mem, MemKind, Operand, OperandKind, RelocOp, ShiftOp, TlsLdst};
