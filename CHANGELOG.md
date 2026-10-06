@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- x86: APX -- the registers `r16`-`r31`, the REX2 prefix, the extended EVEX
+  forms with a new destination register and `{nf}`, `ccmp`/`ctest` with
+  `{dfv=...}`, `cfcmov`, `setzu`/`imulzu`, `push2`/`pop2`/`pushp`/`popp` and
+  `jmpabs`
 - ARM: make up the `it` block a conditional Thumb instruction needs, as GNU
   as's `-mimplicit-it` does, with the option spelled the same
 - ARM: read `.thumb_set`, and carry a symbol's Thumb marks onto a `.set`

@@ -27,8 +27,6 @@ batch and a byte difference is attributed to the case that caused it.
     split             the references disagree otherwise. Listed, with which
                       one rsasm follows (gas, mc or neither), for a person to
                       judge.
-    ignored           64-bit instructions both references read as APX, which
-                      rsasm does not implement.
 
 The report groups findings by table row, mutation and prefix, most frequent
 first, and shows the shortest example of each. `--out` writes every listed
@@ -1512,6 +1510,20 @@ def evex_vmovq_load(g, m, ctx):
     return bool(gp and mp and ctx["lines"][0].startswith("vmovq") and b"\x62" in gp[0][:2])
 
 
+def apx_setcc_wide(g, m, ctx):
+    """`setcc` with a register wider than a byte: GNU as reads it as APX's map-4 form,
+    which zeroes the rest of the register; llvm-mc wants `setzucc` spelled out."""
+    return bool(ctx["mnem"].startswith("set") and ok_parts(g) and m[0] == "err"
+                and b"\x62" in ok_parts(g)[0][:2])
+
+
+def apx_shift_ndd(g, m, ctx):
+    """A shift written with two registers and no count: llvm-mc reads it as APX's
+    three-operand form with a count of one, GNU as as a missing count."""
+    return bool(g[0] == "err" and ok_parts(m) and b"\x62" in ok_parts(m)[0][:2]
+                and ctx["mnem"] in ("rol", "ror", "rcl", "rcr", "shl", "sal", "shr", "sar"))
+
+
 # Differences between the two references that are conventions or quirks rather
 # than something to fix. Each is (name, predicate(gas, mc, context), preferred):
 # the context has the case's mode, syntax, mnemonic group and source lines, and
@@ -1543,6 +1555,8 @@ KNOWN_SPLITS = [
     ("distinct-dest", distinct_dest, "gas"),
     ("mc-ymm-rounding", mc_ymm_rounding, "gas"),
     ("evex-vmovq", evex_vmovq_load, None),
+    ("apx-setcc-wide", apx_setcc_wide, "gas"),
+    ("apx-shift-ndd", apx_shift_ndd, "gas"),
 ]
 
 
@@ -1554,20 +1568,10 @@ def key(res):
     return ("ok", data, tuple(relocs))
 
 
-def is_apx(res, ctx):
-    """64-bit GPR instructions that both references read as APX (an EVEX `62` where a
-    legacy opcode belongs): `setb %ebx`, `rol %ecx, %ecx`. rsasm has no APX."""
-    p = ok_parts(res)
-    return bool(p and ctx["mode"] == 64 and not ctx["mnem"].startswith("simd")
-                and p[0][opcode_start(p[0]):][:1] == b"\x62")
-
-
 def classify(g, m, r, ctx):
     """Returns (class, detail); see the module docstring for the classes."""
     if r[0] == "err" and r[1].startswith("PANIC"):
         return "rsasm", "panic"
-    if is_apx(g, ctx) or is_apx(m, ctx):
-        return "ignored", "apx"
     kg, km, kr = key(g), key(m), key(r)
     if kg == km:
         return ("agree", None) if kr == kg else ("rsasm", None)
@@ -1660,7 +1664,7 @@ def report(results, args):
         by_mode[(mode, syntax)][cls] += 1
         if cls == "split":
             follow[detail] += 1
-        if cls.startswith("convention") or cls == "ignored":
+        if cls.startswith("convention"):
             conventions[detail] += 1
         if cls in LISTED:
             by_mnem[cls][mnem] += 1

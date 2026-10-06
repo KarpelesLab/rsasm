@@ -1,0 +1,1960 @@
+# APX, 64-bit mode, Intel syntax.
+#
+# The registers `r16`-`r31` and the forms that need the REX2 prefix or the
+# extended EVEX one: the new destination register, `{nf}`, the conditional
+# compares with their flag mask, the conditionally faulting moves, the paired
+# pushes, and the instructions Intel moved into an EVEX map so that an
+# extended register could reach them.
+#
+# Written by enumerating the APX rows of GNU's opcode table and keeping the
+# forms GNU as 2.47, llvm-mc 22 and rsasm all agree on. The same file is in
+# tools/gas-diff and tools/mc-diff; where the two references disagree the case
+# is in neither, which is why `xchg` with an extended register, two-operand
+# `cfcmov` and `setcc` with a register wider than a byte are missing. Those
+# splits are listed in tools/fuzz/x86.py.
+# ---- `r16`-`r31` through the REX2 prefix -----------------------------------------
+adc bpl, r17b
+adc byte ptr [r22+0x1], r9b
+adc dword ptr [r29+r14*8+0x40], esp
+adc qword ptr [r21+0x8], r22
+adc qword ptr [r29+0x100], r26
+adc r13w, word ptr [r17]
+adc r17b, r22b
+adc r19, r23
+adc r22, qword ptr [r26+0x1]
+adc r22w, r28w
+adc r23w, word ptr [rbx+r21*2+0x1000]
+adc r24, r21
+adc rbx, r22
+adc word ptr [r18+0x100], cx
+adc word ptr [r27+0x100], r28w
+add ax, r16w
+add dl, r19b
+add dl, r22b
+add dword ptr [r19-0x2000], eax
+add eax, r22d
+add edx, r25d
+add qword ptr [r25+0x1], rdx
+add qword ptr [r25-0x2000], rsp
+add qword ptr [r29+0x40], r12
+add r13d, r29d
+add r21b, r29b
+add r23, r19
+add r23d, r22d
+add r26d, r25d
+add r29w, r19w
+add si, r22w
+add word ptr [r16+r30*8-0x80], ax
+and dword ptr [r24+0x0], r25d
+and r14b, r25b
+and r14w, word ptr [r19+0x1000]
+and r15b, r20b
+and r18b, r23b
+and r21, r28
+and r23w, r19w
+and r27b, r27b
+and r28d, dword ptr [r25+0x100]
+and r31b, r25b
+and rdx, r20
+and word ptr [r30*4-0x80], r23w
+bsf dx, r18w
+bsf dx, r26w
+bsf r21w, r30w
+bsf r23, r23
+bsr esi, r18d
+bsr r14w, r18w
+bsr r17w, r17w
+bsr r20, r29
+bsr r21w, r22w
+bsr r22w, r21w
+bsr r23d, r28d
+bsr r25w, r29w
+bsr r26, r26
+bsr r29, r30
+bsr r30w, r18w
+bsr r31d, r25d
+bswap r18
+bswap r19
+bswap r20d
+bswap r22
+bswap r24
+bswap r24d
+bswap r25d
+bswap r26d
+bswap r29
+bt bx, r30w
+bt esp, r25d
+bt r11w, r18w
+bt r20w, r22w
+bt si, r19w
+btc eax, r17d
+btc r21d, r17d
+btc r24, r24
+btc r24w, r30w
+btc r30, r23
+btc rbx, r18
+btr ax, r31w
+btr r22w, r24w
+btr r23w, r24w
+btr r27, r31
+btr r27d, r22d
+btr r29d, r27d
+btr r9, r25
+btr r9d, r18d
+btr rdi, r24
+bts r17, r21
+bts r20d, r22d
+bts r24, r29
+bts r9w, r19w
+clflush [r30+0x100]
+clflushopt [r22+0x40]
+clflushopt [r30+0x1000]
+cmova edi, r29d
+cmova r16w, r23w
+cmova r24, r26
+cmova rsp, r17
+cmovae r20, r19
+cmovae r22, r29
+cmovb rbp, r29
+cmovbe r14w, r19w
+cmovbe r19d, r25d
+cmove r27d, r16d
+cmove r8w, r28w
+cmovg r18d, r29d
+cmovge r11d, r27d
+cmovge r12d, r25d
+cmovge r19, r21
+cmovge r26w, r23w
+cmovl di, r18w
+cmovl r23d, r31d
+cmovl r31w, r30w
+cmovle cx, r25w
+cmovle r9w, r22w
+cmovne esp, r22d
+cmovne r12w, r16w
+cmovne rdx, r27
+cmovno r16d, r19d
+cmovnp ax, r28w
+cmovnp esi, r21d
+cmovnp r28w, r26w
+cmovnp rax, r26
+cmovnp rbp, r18
+cmovnp rsp, r29
+cmovns eax, r16d
+cmovns r26d, r31d
+cmovo rax, r31
+cmovp r14d, r28d
+cmovp r15, r28
+cmovp r29w, r25w
+cmovp rdi, r27
+cmovs r19d, r22d
+cmovs r20d, r20d
+cmp dword ptr [r21+rdi*2+0x0], r25d
+cmp qword ptr [r18+0x1000], r12
+cmp r10w, word ptr [r21+0x1]
+cmp r28w, r22w
+cmp r28w, word ptr [r17-0x80]
+cmp r30w, r19w
+cmp r30w, word ptr [r24+0x0]
+cmp r8w, r21w
+cmp r8w, word ptr [r19+r10*8]
+cmpxchg r15, r25
+cmpxchg r23d, r28d
+cmpxchg r24w, r30w
+cmpxchg r28d, r16d
+cmpxchg r8, r25
+cmpxchg spl, r27b
+dec r17d
+dec r24w
+dec r30d
+div r19b
+div r24b
+div r24d
+div r24w
+div r29
+div r29w
+fistp dword ptr [r29+0x12345]
+fld dword ptr [r16]
+fld dword ptr [r19+r19*2+0x12345]
+fld dword ptr [r22+r21*1+0x1]
+fstp dword ptr [r25-0x2000]
+fstp dword ptr [r29+r10*2+0x2]
+fxrstor [r24+r23*8+0x1000]
+fxsave [rbp+r29*1+0x40]
+idiv r16d
+idiv r21b
+idiv r22
+idiv r22b
+idiv r25
+idiv r26b
+imul r24b
+imul r25d
+imul r26b
+imul r27
+inc r20b
+inc r24
+inc r25w
+inc r31
+lea r16, [rdi+r20*2+0x12345]
+lea r17, [r26+0x7f]
+lea r19, [r16+0x8]
+lea r22, [r16+0x1]
+lea r22, [r31+0x8]
+lea r23, [r20+0x12345]
+lea r25, [r22+0x0]
+lea r29, [r21-0x2000]
+lea r30, [r20+0x2]
+lea r31, [r26+0x40]
+lzcnt bx, r27w
+lzcnt r19, r29
+lzcnt rbx, r31
+mov cl, byte ptr [r30+0x7f]
+mov cr0, r17
+mov cr0, r20
+mov cr3, r20
+mov cr3, r24
+mov cr4, r25
+mov cr4, r28
+mov cr4, r29
+mov cr8, r27
+mov dx, r18w
+mov qword ptr [r10+r27*2+0x7f], r25
+mov r12b, r16b
+mov r13w, r23w
+mov r15, r21
+mov r17, cr3
+mov r17b, byte ptr [r13+r22*2+0x1000]
+mov r17d, dword ptr [r24+0x8]
+mov r18d, dword ptr [r14+r25*2+0x100]
+mov r19, cr3
+mov r21, qword ptr [r26+r23*4+0x1]
+mov r22b, byte ptr [r21+0x7f]
+mov r23w, r21w
+mov r24, cr8
+mov r25w, word ptr [r21-0x2000]
+mov r26, qword ptr [r25+0x12345]
+mov r28, qword ptr [r17-0x2000]
+mov r29d, dword ptr [r12+r31*4-0x2000]
+mov r30b, r16b
+mov r31b, r19b
+mov word ptr [r20+r9*1+0x100], r25w
+mov word ptr [r21+rax*8+0x12345], r27w
+movsx r16d, byte ptr [r16+0x8]
+movsx r18, byte ptr [r9+r22*8-0x80]
+movsx r21w, byte ptr [r17+0x8]
+movsx r22, byte ptr [rsp+r21*2+0x2]
+movsx r23, byte ptr [r16*1+0x100]
+movsx r26, byte ptr [r16]
+movsx r28, byte ptr [r16+0x8]
+movsx r28, byte ptr [r26+0x0]
+movsx r28d, byte ptr [r30+0x2]
+movsx r28w, byte ptr [r21+rcx*8+0x12345]
+movsx r30d, byte ptr [r31+0x1]
+movsx r31, byte ptr [r29+rdx*1-0x80]
+movzx r18, byte ptr [r29+r13*1+0x2]
+movzx r18w, byte ptr [r16+0x2]
+movzx r22d, byte ptr [r23+0x100]
+movzx r24, byte ptr [r19+0x2]
+movzx r24d, byte ptr [r25*2+0x1]
+movzx r25, byte ptr [r31*1+0x100]
+movzx r25w, byte ptr [r10+r29*8+0x1000]
+movzx r25w, byte ptr [r27+rax*8+0x100]
+movzx r28d, byte ptr [r23+0x1000]
+movzx r30w, byte ptr [r26+rcx*8-0x2000]
+movzx r31w, byte ptr [r10+r25*4]
+mul r16d
+mul r17w
+mul r21
+mul r25d
+mul r29
+neg r17
+neg r23w
+neg r25d
+neg r27b
+neg r31w
+not r17b
+not r17w
+not r25d
+not r27d
+not r30b
+or bl, r30b
+or bx, r25w
+or byte ptr [r22*8+0x7f], r22b
+or byte ptr [r22+0x2], sil
+or esp, r18d
+or r15, r30
+or r19w, r26w
+or r20w, r25w
+or r21b, byte ptr [rbx+r28*2+0x2]
+or r27d, r23d
+or r29b, r24b
+or r30, r16
+or r31b, r25b
+or rdx, r31
+or rsi, r25
+pop r16
+pop r17
+pop r19
+pop r22w
+pop r24w
+pop r26
+pop r26w
+pop r27w
+pop r28
+pop r28w
+pop r30
+pop r31
+popcnt ax, r28w
+popcnt di, r27w
+popcnt r11d, r29d
+popcnt r23, r31
+prefetchnta [r17+r10*1+0x2]
+prefetchnta [r23-0x80]
+prefetchnta [r29+0x8]
+push r19
+push r26
+push r29w
+push r31w
+rcl r21d, 7
+rcl r22d, cl
+rcl r24d, 3
+rcl r24w, 3
+rcl r26d
+rcr r16w, 7
+rcr r21d
+rcr r30b
+rol r17b, 1
+rol r25
+rol r30d, 3
+ror r19, 7
+ror r25w, 7
+ror r29w, cl
+sal r18w
+sal r21d, cl
+sal r29d, cl
+sar r18d, 3
+sar r19d, cl
+sar r20d
+sar r23b, 7
+sar r24d
+sar r25, cl
+sar r30d
+sbb byte ptr [r25], r24b
+sbb byte ptr [rsp+r19*1+0x1000], r9b
+sbb edi, dword ptr [r21+r20*1+0x7f]
+sbb r18w, word ptr [r22+r23*8+0x0]
+sbb r28d, dword ptr [r28+0x100]
+sbb r30w, r20w
+sbb r31d, r16d
+sbb r8d, dword ptr [r11+r25*2+0x2]
+sbb r9w, r29w
+sbb sp, r19w
+sbb word ptr [r17-0x2000], r30w
+setae r16b
+setb r30b
+sete r24b
+setg r18b
+setg r24b
+setg r25b
+setg r28b
+setge r31b
+setl r18b
+setl r19b
+setl r20b
+setl r27b
+setle r22b
+setle r25b
+setne r16b
+setne r23b
+setno r17b
+setnp r21b
+setns r29b
+seto r22b
+seto r31b
+setp r16b
+sets r28b
+sets r29b
+shl r18w, cl
+shl r21w, 3
+shl r22, cl
+shl r29b, 3
+shl r30d, 1
+shr r20w, cl
+sub al, r16b
+sub byte ptr [r17+0x40], dl
+sub cx, word ptr [r25+r30*4+0x12345]
+sub qword ptr [r31+r8*8-0x2000], r15
+sub r12b, r19b
+sub r13b, byte ptr [r30+r18*2]
+sub r15, r16
+sub r24, qword ptr [rsp+r20*4+0x8]
+sub r31w, r23w
+sub r9w, r28w
+sub rbp, r19
+sub word ptr [r26+0x1], r27w
+test bpl, byte ptr [r31+0x100]
+test cl, byte ptr [r21+r23*8+0x1]
+test esp, r20d
+test r11d, r28d
+test r14w, r20w
+test r19w, r17w
+test r19w, word ptr [r19+rbx*1+0x1000]
+test r23, qword ptr [r22+0x7f]
+test r23w, r17w
+test r27d, dword ptr [r19+0x1]
+test r27d, r28d
+test r30w, r18w
+test rdx, r26
+test word ptr [r20+0x7f], r17w
+test word ptr [r23+rcx*2+0x2], r24w
+tzcnt r10d, r30d
+tzcnt r24d, r27d
+tzcnt r27w, r25w
+xadd di, r29w
+xadd r18d, r29d
+xadd r20w, r18w
+xadd r28w, r18w
+xadd r31b, r29b
+xadd rsi, r31
+xchg r25, r25
+xchg rax, r16
+xchg rax, r17
+xchg rax, r18
+xchg rax, r21
+xchg rax, r22
+xchg rax, r25
+xchg rax, r26
+xchg rax, r27
+xchg rax, r28
+xchg rax, r30
+xchg rax, r31
+xor byte ptr [r19+0x1000], dl
+xor byte ptr [r31+0x1000], dl
+xor eax, r23d
+xor qword ptr [rbx+r24*4+0x7f], r12
+xor r10b, r27b
+xor r11w, r18w
+xor r13w, r22w
+xor r22w, word ptr [r27+rbx*1+0x1]
+xor r28b, r21b
+xor r29w, word ptr [r28+0x12345]
+xor word ptr [r16+rcx*8+0x1000], r12w
+xor word ptr [r29+r15*8+0x2], r12w
+# ---- the new destination register ------------------------------------------------
+adc al, byte ptr [r8+rdx*1-0x2000], 0x0
+adc bp, r31w, word ptr [r20+0x2]
+adc edx, r29d, 0x0
+adc r20, r31, qword ptr [r14+r27*4+0x2]
+adc r22, r12, 0x1
+adc r22, r29, 0x1
+adc r23w, r29w, 0x3
+adc r26, rcx, r21
+adc r26d, r29d, 0x100
+adc r28d, r27d, r11d
+adc r29b, r14b, byte ptr [r26+r23*1+0x0]
+adc r30d, dword ptr [r31+0x8], 0x7f
+adc r30w, cx, r28w
+adc r8, r17, qword ptr [r30+r15*8+0x7f]
+adc r8d, r20d, r25d
+adc r8w, word ptr [r15+rbx*2+0x12345], 0x100
+adc rdx, r31, 0x7f
+adc sil, dl, 0x3
+add bpl, r28b, 0x7f
+add bx, r21w, 0x0
+add cl, byte ptr [r11], 0x1
+add esi, r24d, dword ptr [r24-0x2000]
+add r14w, r23w, r22w
+add r15d, dword ptr [r20+rcx*2+0x100], -0x80
+add r17, r22, qword ptr [r23+0x8]
+add r17d, r23d, r16d
+add r19b, byte ptr [r14+0x100], -0x1
+add r20d, esi, -0x1000
+add r20w, word ptr [r8+r25*8+0x40], 0x1
+add r22b, r11b, byte ptr [rbp+0x7f]
+add r23w, si, word ptr [rbx+r9*1+0x100]
+add r24d, r26d, dword ptr [r13+r11*4+0x12345]
+add r25w, r20w, 0x1234
+add r28b, r14b, r26b
+add r29d, r11d, dword ptr [r26-0x80]
+add r30w, dx, 0x1
+add r31d, r21d, r20d
+add r31w, r12w, 0x0
+and cx, word ptr [rax+0x100], 0x0
+and dil, r27b, spl
+and r10, r28, qword ptr [r16+r17*2+0x0]
+and r12w, word ptr [r14+0x7f], 0x3
+and r14d, r26d, r9d
+and r15, r26, qword ptr [rdi*2+0x7f]
+and r15w, r25w, word ptr [rbp+r31*1+0x1]
+and r17, r11, qword ptr [r26+0x100]
+and r18b, r12b, byte ptr [rax+r18*8+0x40]
+and r20b, r15b, byte ptr [rax-0x2000]
+and r22d, dword ptr [rax+0x8], 0x1
+and r25b, r23b, byte ptr [r30+r20*1+0x8]
+and r26b, r21b, byte ptr [r18+0x40]
+and r26w, r30w, -0x80
+and r28d, dword ptr [rax+0x12345], -0x1000
+and r31w, r21w, word ptr [r23+rsi*4+0x100]
+and r9b, al, r18b
+and rbx, rsp, -0x80
+and rdi, rdx, 0x100
+and rsp, qword ptr [rdx+r23*2+0x7f], -0x1000
+and rsp, r15, r11
+cmova r16, r18, r27
+cmova r21, r10, qword ptr [rbp*4+0x100]
+cmova r21w, r20w, word ptr [rbp+0x1000]
+cmova rax, rdi, rdi
+cmovae ebx, r26d, esp
+cmovae r23w, r16w, word ptr [rsi+0x0]
+cmovb cx, r25w, cx
+cmovb r19w, r21w, word ptr [r19+r11*2-0x80]
+cmovbe r10d, r28d, dword ptr [rcx+r30*2+0x2]
+cmovbe r18, rdi, qword ptr [r28+r16*8-0x80]
+cmovbe r25, r24, qword ptr [r17+0x7f]
+cmovbe r26d, r16d, dword ptr [r17+0x12345]
+cmovbe r9, r12, rbx
+cmovbe rbx, r14, rdx
+cmovbe rsp, r21, r22
+cmovbe si, r27w, word ptr [r27+0x8]
+cmove ax, r10w, r27w
+cmove ax, r26w, r30w
+cmove eax, r25d, r31d
+cmove r13d, r18d, ebx
+cmove r29w, r13w, r12w
+cmovg r25, rbx, rsi
+cmovg sp, r8w, r24w
+cmovge r24, r12, qword ptr [r30+0x1]
+cmovl r20w, r16w, word ptr [r11+r16*1+0x1000]
+cmovl r9w, ax, sp
+cmovle r11, r28, r23
+cmovle r17, r24, qword ptr [rax+0x2]
+cmovle r24, r17, qword ptr [rdx+0x12345]
+cmovle rdi, r23, r8
+cmovle sp, bx, r26w
+cmovne r28d, r11d, r13d
+cmovne r8d, esi, dword ptr [r19+0x12345]
+cmovno eax, r16d, dword ptr [rax+0x100]
+cmovno ebx, ebp, dword ptr [r19+r19*2-0x2000]
+cmovno esi, r17d, dword ptr [rdx+0x0]
+cmovno r22, rdx, r9
+cmovno r23w, bp, r14w
+cmovno r29, r23, rbx
+cmovno rcx, r29, rsp
+cmovnp ebp, r31d, dword ptr [r8+r9*1+0x1]
+cmovnp r11d, r22d, dword ptr [rbp*4-0x2000]
+cmovnp r15d, r16d, r28d
+cmovnp r26w, r28w, r25w
+cmovns r9, r21, rax
+cmovo r11, r23, qword ptr [r12+r28*8+0x40]
+cmovo r18, rcx, rdx
+cmovo r25, rdx, r11
+cmovo r26w, r12w, r24w
+cmovo r31w, r13w, word ptr [rsp+0x2]
+cmovo rcx, r16, qword ptr [r22+0x8]
+cmovo rcx, r26, qword ptr [r15*2+0x7f]
+cmovo rdx, r20, qword ptr [r28-0x80]
+cmovp r11, r28, rbx
+cmovp r28w, r19w, r22w
+cmovs r13w, di, word ptr [r12+r27*8+0x7f]
+cmovs r19w, r25w, r26w
+cmovs r20d, r29d, dword ptr [r27]
+cmovs r22d, r15d, r29d
+cmovs r28, r29, rdx
+dec dl, byte ptr [r20+r23*8-0x2000]
+dec esp, esi
+dec r11d, r20d
+dec r13, qword ptr [rcx+r30*8+0x8]
+dec r14w, word ptr [rcx+0x8]
+dec r19, r23
+dec r20b, byte ptr [r23+rdx*4]
+dec r28, r16
+dec r28d, r21d
+dec r28w, r15w
+dec r28w, word ptr [r22-0x80]
+dec r8d, dword ptr [rdx+0x8]
+imul bx, r31w, r27w
+imul cx, r29w, r12w
+imul di, r30w, word ptr [rdi+rcx*4+0x7f]
+imul r10d, r20d, esp
+imul r13w, r29w, r21w
+imul r15, r26, r22
+imul r15d, edx, dword ptr [rcx*4+0x0]
+imul r16, r22, rbp
+imul r17d, ebp, r16d
+imul r18w, dx, r28w
+imul r19d, r18d, r31d
+imul r19w, dx, word ptr [r20-0x80]
+imul r20, r20, r14
+imul r20d, r19d, dword ptr [r31+r25*8-0x80]
+imul r20d, r29d, r21d
+imul r21w, r22w, r30w
+imul r22, rbx, r29
+imul r22d, r30d, dword ptr [rdi-0x2000]
+imul r22w, dx, r15w
+imul r22w, si, r9w
+imul r25, r13, r29
+imul r25, r26, r30
+imul r25w, r28w, word ptr [r26-0x2000]
+imul r26d, r27d, r29d
+imul r27d, r8d, r26d
+imul r28w, r30w, sp
+imul r30d, r8d, dword ptr [r28+r9*8-0x80]
+imul r30w, r30w, r19w
+imul r31, r27, r8
+imul r31w, r30w, r26w
+imul r8d, ebp, dword ptr [rsp+0x40]
+imul r8d, esi, dword ptr [rsi+rbp*4]
+imul r8d, esi, esi
+imul r9w, r22w, word ptr [r29+0x2]
+imul rbx, r29, r27
+imul rdx, r25, r18
+imul rsi, r16, r31
+imul rsp, r10, qword ptr [r11+r30*1+0x0]
+imul rsp, r12, r18
+imul si, cx, word ptr [rax+0x7f]
+inc al, r17b
+inc r10, r24
+inc r10d, r11d
+inc r14b, byte ptr [r24+0x40]
+inc r18, r27
+inc r24w, word ptr [r18+0x8]
+inc r25, r29
+inc r27, qword ptr [r21-0x2000]
+inc r30b, byte ptr [r14+0x40]
+inc rcx, qword ptr [rax+0x8]
+inc sil, r29b
+neg bpl, r16b
+neg dil, byte ptr [r8+r20*8+0x12345]
+neg esp, dword ptr [rax+0x100]
+neg r11d, r22d
+neg r12b, sil
+neg r12w, r22w
+neg r13d, r27d
+neg r14w, r30w
+neg r17d, r29d
+neg r18, rax
+neg r18b, r27b
+neg r22d, dword ptr [r21+0x0]
+neg r29d, r23d
+not ax, word ptr [r15+r13*2+0x100]
+not dx, r16w
+not r15d, dword ptr [r31*2+0x2]
+not r17d, esp
+not r19b, byte ptr [rax+0x40]
+not r21b, r29b
+not r21w, di
+not r22d, ebx
+not r23d, dword ptr [r16+r16*2-0x2000]
+not r23w, word ptr [rax+0x12345]
+not r30, qword ptr [r17+0x40]
+not r9, r26
+not rbp, qword ptr [rdi+rcx*1-0x80]
+not rbp, r9
+or r11, rbp, qword ptr [r12+0x0]
+or r15, r15, r22
+or r15, r28, 0x100
+or r18w, word ptr [r20+rdx*1+0x0], 0x1
+or r20d, ecx, r30d
+or r21, r14, 0x100
+or r21, r26, qword ptr [r9+r13*1+0x0]
+or r21d, dword ptr [r24+0x100], 0x100
+or r22w, word ptr [rsi+0x2], 0x7f
+or r25d, r27d, 0x1
+or r27w, r20w, 0x3
+or r28, qword ptr [rdi+0x12345], 0x0
+or r28w, word ptr [rsi+0x1000], 0x7f
+or r29, r31, 0x12345678
+or r29d, dword ptr [r15-0x80], 0x100
+or r30d, r11d, 0x7f
+or r8, r8, -0x80
+or r9d, edx, r22d
+or rcx, r13, r9
+or rdx, r27, qword ptr [rax+r13*8+0x7f]
+or rsi, r22, 0x100
+or sil, byte ptr [r27*2+0x2], 0x1
+rcl r12d, esp, cl
+rcl r13d, eax, 0x7
+rcl r15b, r21b, 0x3
+rcl r15w, r18w, 0x3
+rcl r16b, spl, 0x7
+rcl r27w, bx, 1
+rcl r30b, r25b, 1
+rcr bl, r8b, cl
+rcr dx, r12w, 0x1f
+rcr esi, r21d, 0x7
+rcr r12d, r12d, 0x3
+rcr r15b, r11b, 0x3
+rcr r16w, r14w, cl
+rcr r18b, r24b, 0x1f
+rcr r18b, r29b, cl
+rcr r19w, r21w, cl
+rcr r20w, r18w, cl
+rcr r21w, si, cl
+rcr rdi, r9, 0x3
+rcr rsp, rdx, 1
+rcr sp, r18w, 1
+rol al, r24b, 0x3
+rol bp, r30w, cl
+rol r14b, r18b, cl
+rol r17d, ebp, cl
+rol r20, rcx, cl
+rol r20w, r30w, cl
+rol r21d, r20d, cl
+rol r23d, r18d, 1
+rol r29d, r16d, cl
+ror bx, dx, cl
+ror ebp, ecx, 0x3
+ror ebx, ebx, cl
+ror r14b, r18b, 0x7
+ror r18w, r10w, 1
+ror r20, r25, 0x1f
+ror r25, r14, 0x7
+ror r31b, al, cl
+ror sp, r15w, cl
+ror spl, r27b, 1
+sal esi, r15d, 0x7
+sal esp, r22d, 0x7
+sal r12d, ebx, 0x3
+sal r13, r21, 0x1f
+sal r13w, r22w, 0x3
+sal r18d, r17d, cl
+sal r22, r10, cl
+sal r23, rcx, cl
+sal r29w, sp, 0x3
+sal r30d, ebx, 1
+sal r8b, r8b, 1
+sal r8d, r19d, 1
+sar dil, r10b, cl
+sar r10b, dl, 1
+sar r15, r27, cl
+sar r16, r17, cl
+sar r18d, ecx, 0x3
+sar r21d, r28d, 1
+sar r31d, ebx, 1
+sar r31d, r17d, cl
+sar rax, r24, 1
+sbb bpl, bl, r14b
+sbb dl, byte ptr [r20+rbp*2+0x1], 0x7f
+sbb ecx, dword ptr [r8+r19*8], 0x7f
+sbb ecx, r12d, -0x1000
+sbb r10, rcx, qword ptr [r29+rsi*4+0x40]
+sbb r12w, r16w, 0x7f
+sbb r14, r28, r30
+sbb r14d, dword ptr [r19*2+0x100], -0x80
+sbb r16w, sp, bx
+sbb r19b, byte ptr [rdx+r31*1], 0x7f
+sbb r20w, r24w, r15w
+sbb r21, qword ptr [rsp+0x7f], 0x1
+sbb r21w, r31w, 0x7f
+sbb r24, r15, qword ptr [rsp-0x80]
+sbb r25, r11, qword ptr [r9+r15*8+0x1]
+sbb r26, r16, qword ptr [r20+rax*4+0x12345]
+sbb r27, r8, qword ptr [r12-0x80]
+sbb r27b, r13b, r22b
+sbb r28b, byte ptr [r15+r29*8+0x12345], 0x7f
+sbb r28d, r16d, dword ptr [r17+0x8]
+sbb r9w, r11w, r29w
+sbb rbx, rcx, rsi
+sbb sp, word ptr [rax+0x1000], 0x1
+shl r10w, r19w, 1
+shl r13w, r16w, 1
+shld dx, r17w, r8w, cl
+shld ecx, r14d, r10d, 0x1
+shld r14w, r21w, r16w, cl
+shld r16, rsi, r14, cl
+shld r18w, r8w, r26w, 0x3
+shld r19, r9, r13, cl
+shld r19w, ax, r30w, 0x1f
+shld r20, r24, r12, cl
+shld r20w, r31w, r9w, 0x1
+shld r21d, r23d, r23d, 0x1f
+shld r22, rbp, r29, 0x1
+shld r22d, r26d, r8d, 0x1f
+shld r23w, r13w, r19w, cl
+shld r25, r21, r25, 0x3
+shld r27, r9, rbx, 0x1
+shld r27w, di, r24w, cl
+shld r29, rsi, r13, cl
+shld r29d, r26d, r12d, cl
+shld r31, r27, rbx, cl
+shld r8w, r14w, r27w, cl
+shld rax, r21, r19, 0x1f
+shr edi, r12d, 0x7
+shr r17w, cx, 0x3
+shr r19w, r25w, 0x1f
+shr r20w, ax, cl
+shr r23b, r27b, 0x1f
+shr rax, rcx, 0x3
+shr rbx, r31, cl
+shrd ax, r29w, cx, cl
+shrd di, r8w, r15w, cl
+shrd ebp, r27d, r22d, cl
+shrd ecx, edi, edx, 0x1
+shrd r12d, r13d, r30d, cl
+shrd r12w, r15w, bx, 0x3
+shrd r13, rsi, rdx, cl
+shrd r15d, r16d, r14d, 0x1
+shrd r15d, r24d, r22d, cl
+shrd r18, r25, r23, cl
+shrd r18w, r24w, r26w, 0x1f
+shrd r18w, r8w, r18w, cl
+shrd r19, r8, r10, 0x1
+shrd r19w, r11w, r12w, cl
+shrd r24, r25, rsp, 0x1f
+shrd r28, r13, rbp, 0x1f
+shrd r29w, r9w, cx, 0x1
+shrd r31d, eax, r13d, 0x1
+shrd rsp, r21, r24, 0x1f
+sub ecx, eax, r27d
+sub ecx, ebp, 0x100
+sub ecx, ebx, dword ptr [r25]
+sub edi, dword ptr [r19+0x7f], 0x7f
+sub r11d, dword ptr [rdi-0x80], 0x7f
+sub r13w, r12w, cx
+sub r14, r10, -0x1000
+sub r14, r22, 0x1
+sub r14d, dword ptr [rcx+r28*8+0x12345], 0x3
+sub r15d, r8d, r23d
+sub r15w, r12w, 0x1234
+sub r19d, dword ptr [r26+r24*8+0x8], -0x80
+sub r22, r24, r16
+sub r23, r27, r18
+sub r23b, byte ptr [r31+r9*8+0x7f], -0x80
+sub r27, qword ptr [r25+0x7f], -0x80
+sub r9b, byte ptr [r25+r19*1], 0x1
+sub rdx, r8, 0x0
+sub sp, r28w, r10w
+xor bp, word ptr [r18+0x40], 0x3
+xor r11d, r14d, ebp
+xor r12, rdx, qword ptr [rsi+r19*1+0x0]
+xor r18w, word ptr [rdx], -0x1000
+xor r20w, r31w, word ptr [r22+0x40]
+xor r22b, r15b, 0x7f
+xor r23b, r31b, r28b
+xor r24, r16, r31
+xor r24b, byte ptr [rax*8], -0x1
+xor r26, r16, qword ptr [rcx-0x80]
+xor r26w, word ptr [r23+0x40], 0x7f
+xor r27, r16, r9
+xor r29, qword ptr [rax], 0x100
+xor r30w, r12w, word ptr [rcx+r27*1+0x8]
+xor r8, qword ptr [rdx+rbx*8+0x7f], 0x0
+xor r8, r22, 0x0
+xor r9, rdx, 0x0
+# ---- the conditional compares, with the flags to assume --------------------------
+ccmpa {dfv=sf,cf} word ptr [r15+0x1000], r12w
+ccmpa {dfv=zf,cf} r31b, byte ptr [rdx+r29*8+0x8]
+ccmpae {dfv=of,sf,zf,cf} byte ptr [r16+rax*1+0x1], 0x1
+ccmpae {dfv=of} byte ptr [r22+rbp*8+0x1000], r13b
+ccmpae {dfv=sf,cf} word ptr [rsi+0x40], bx
+ccmpae {dfv=sf} byte ptr [rdi+0x40], 0x0
+ccmpae {dfv=zf,cf} si, 0x100
+ccmpae {dfv=zf} esi, 0x7f
+ccmpb {dfv=zf,cf} r16b, r8b
+ccmpb {dfv=zf,cf} word ptr [rax+0x12345], r20w
+ccmpb {dfv=zf} word ptr [r19+0x100], r14w
+ccmpbe {dfv=cf} qword ptr [r17+r27*4+0x40], r16
+ccmpbe {dfv=of,sf} r18d, 0x1
+ccmpbe {dfv=of} dword ptr [rax+r18*2+0x40], r14d
+ccmpbe {dfv=zf} qword ptr [r26-0x80], 0x1
+ccmpbe {dfv=} qword ptr [rax+r14*4+0x2], r22
+ccmpbe {dfv=} word ptr [r10+0x1], r12w
+ccmpbe {dfv=} word ptr [r15+r17*4+0x8], r15w
+ccmpe {dfv=cf} byte ptr [rax+0x1], -0x80
+ccmpe {dfv=of,sf,zf,cf} r8, r13
+ccmpe {dfv=sf,cf} r17, qword ptr [r27+r29*2+0x1]
+ccmpe {dfv=zf} r26b, byte ptr [r17-0x2000]
+ccmpe {dfv=} r21b, byte ptr [rsp+0x40]
+ccmpf {dfv=of,sf,zf,cf} dl, byte ptr [r10+r22*2+0x0]
+ccmpf {dfv=of,sf} r21d, dword ptr [r15+0x100]
+ccmpf {dfv=of} r21w, r30w
+ccmpg {dfv=cf} dword ptr [r28+r14*1-0x80], r8d
+ccmpg {dfv=cf} word ptr [r12-0x2000], r29w
+ccmpg {dfv=of,sf,zf,cf} r15b, r26b
+ccmpg {dfv=sf,cf} r31d, dword ptr [rax+r31*4+0x40]
+ccmpg {dfv=zf} r11d, edx
+ccmpg {dfv=} r8, -0x80
+ccmpge {dfv=sf} r18w, word ptr [rax+r11*1]
+ccmpl {dfv=of,sf,zf,cf} qword ptr [r9+r10*4+0x1000], rax
+ccmpl {dfv=sf,cf} rdx, r9
+ccmpl {dfv=zf} r17d, r19d
+ccmpl {dfv=} bpl, 0x0
+ccmple {dfv=cf} r22w, r16w
+ccmple {dfv=sf,cf} byte ptr [r16*8+0x2], r9b
+ccmple {dfv=sf,cf} r12, rdi
+ccmple {dfv=sf} bl, r31b
+ccmple {dfv=sf} r15w, r13w
+ccmpne {dfv=sf,cf} rbp, qword ptr [r23+0x1]
+ccmpne {dfv=zf} r13b, 0x7f
+ccmpne {dfv=} r27w, word ptr [r17+r14*4+0x12345]
+ccmpno {dfv=of,sf} r30, r27
+ccmpns {dfv=of,sf} edx, dword ptr [r12+0x0]
+ccmpns {dfv=sf} rsi, r29
+ccmpns {dfv=zf} dword ptr [rax], r11d
+ccmpns {dfv=} r14d, dword ptr [r18+0x100]
+ccmpo {dfv=cf} word ptr [r29+r28*4+0x7f], r15w
+ccmpo {dfv=of,sf,zf,cf} qword ptr [r20-0x2000], rsi
+ccmpo {dfv=} si, -0x80
+ccmps {dfv=of,sf,zf,cf} qword ptr [r22*4+0x7f], r27
+ccmps {dfv=sf} r31w, 0x0
+ccmps {dfv=zf,cf} r9d, r13d
+ccmps {dfv=zf} cx, 0x1
+ccmps {dfv=zf} si, word ptr [rax+0x100]
+ccmpt {dfv=of,sf,zf,cf} r30d, dword ptr [r24+0x8]
+ccmpt {dfv=of,sf} r13, rax
+ccmpt {dfv=sf,cf} qword ptr [r16+r29*8+0x1], r19
+ctesta {dfv=of} byte ptr [r12+0x0], r21b
+ctesta {dfv=of} r13b, byte ptr [r17+r31*2+0x8]
+ctesta {dfv=zf,cf} r22d, r20d
+ctesta {dfv=zf} byte ptr [r23-0x2000], r30b
+ctestae {dfv=zf} byte ptr [r22+r21*1+0x0], 0x0
+ctestae {dfv=} dword ptr [r19+r17*1+0x8], edi
+ctestb {dfv=cf} r11w, word ptr [rsp+rax*4+0x7f]
+ctestb {dfv=cf} r20w, word ptr [r10+r31*4+0x1000]
+ctestb {dfv=of,sf,zf,cf} cx, word ptr [r23+rdx*8+0x1]
+ctestb {dfv=of,sf,zf,cf} r12, r17
+ctestb {dfv=sf} word ptr [rax], r16w
+ctestbe {dfv=cf} word ptr [rax], r15w
+ctestbe {dfv=of,sf} r15b, byte ptr [rdx+rbx*8+0x40]
+ctestbe {dfv=of} dword ptr [rdi+0x40], r25d
+ctestbe {dfv=of} r10, qword ptr [r15+0x100]
+ctestbe {dfv=of} r14w, 0x7f
+ctestbe {dfv=of} word ptr [r25+r15*2+0x1], -0x80
+ctestbe {dfv=zf,cf} bx, r12w
+ctestbe {dfv=zf} qword ptr [r24+0x2], r26
+cteste {dfv=cf} r17, qword ptr [rdx+0x0]
+cteste {dfv=of,sf,zf,cf} di, bx
+cteste {dfv=of,sf} sil, byte ptr [r22+0x100]
+cteste {dfv=of} r12, r26
+cteste {dfv=sf} byte ptr [r23*4+0x2], r23b
+cteste {dfv=zf} word ptr [r19+r31*8+0x2], 0x100
+ctestf {dfv=of,sf} r15, qword ptr [rdx-0x2000]
+ctestf {dfv=zf,cf} r12d, 0x1
+ctestf {dfv=zf} r28d, r28d
+ctestf {dfv=zf} word ptr [rbp+0x8], r30w
+ctestf {dfv=} sil, r15b
+ctestg {dfv=cf} r11b, byte ptr [r20+rbp*8+0x100]
+ctestg {dfv=of,sf} r15d, dword ptr [r12+r21*2+0x8]
+ctestg {dfv=zf,cf} r28, qword ptr [r29+rdi*1-0x80]
+ctestge {dfv=of,sf,zf,cf} sil, 0x1
+ctestge {dfv=of} r24b, r23b
+ctestl {dfv=sf,cf} r14w, r14w
+ctestl {dfv=zf} r30d, dword ptr [r13+0x1000]
+ctestl {dfv=} word ptr [rax+0x40], r23w
+ctestle {dfv=of} byte ptr [r20], r13b
+ctestle {dfv=sf,cf} r25d, dword ptr [r11]
+ctestne {dfv=of,sf,zf,cf} di, r20w
+ctestne {dfv=of,sf,zf,cf} r28b, byte ptr [r10+0x2]
+ctestne {dfv=sf} r24w, word ptr [r24+0x100]
+ctestno {dfv=of,sf} r13w, r14w
+ctestno {dfv=zf,cf} r29b, byte ptr [r10+0x12345]
+ctestns {dfv=of,sf} r9w, r27w
+ctestns {dfv=sf,cf} word ptr [r16+r15*2+0x40], r9w
+ctestns {dfv=} r13w, word ptr [r18+r21*1-0x80]
+ctesto {dfv=sf} r31d, r14d
+ctesto {dfv=} r15b, byte ptr [rbp+0x40]
+ctests {dfv=zf,cf} qword ptr [rsi+0x12345], r19
+ctests {dfv=zf} r8b, byte ptr [r8+0x100]
+ctestt {dfv=cf} bp, 0x1234
+ctestt {dfv=of} ebp, r14d
+ctestt {dfv=of} ebx, dword ptr [rsi*2+0x8]
+ctestt {dfv=of} r30b, byte ptr [r21+rdi*2+0x7f]
+ctestt {dfv=sf,cf} dword ptr [r16+0x1], 0x3
+ctestt {dfv=sf} qword ptr [r30+rax*1-0x2000], 0x3
+ctestt {dfv=zf} r10d, 0x100
+# ---- the conditionally faulting moves --------------------------------------------
+cfcmova qword ptr [r9-0x80], r16
+cfcmova r18, r25, r22
+cfcmova r21w, r13w, r29w
+cfcmova rbp, qword ptr [rax-0x80]
+cfcmovae rcx, r8, r26
+cfcmovb qword ptr [r31+r21*4+0x2], r10
+cfcmovb r19w, r18w, bx
+cfcmovb r8d, dword ptr [rax+0x7f]
+cfcmovb r9d, dword ptr [r29+0x1]
+cfcmovb rbx, qword ptr [rax+0x12345]
+cfcmovbe cx, r13w, r8w
+cfcmovbe qword ptr [r14+0x1000], r18
+cfcmovbe qword ptr [r26], r15
+cfcmovbe r16d, esp, r31d
+cfcmovbe r21, qword ptr [r30]
+cfcmovbe r30w, r9w, r11w
+cfcmovbe r8, qword ptr [rax+0x2]
+cfcmovg r17d, dword ptr [r8+r10*8+0x0]
+cfcmovge r13, qword ptr [rsi+rbp*4+0x1]
+cfcmovge r18, rcx, r26
+cfcmovge r29d, dword ptr [r17+0x1]
+cfcmovge r29d, dword ptr [r19+0x40]
+cfcmovge r31w, r18w, dx
+cfcmovge sp, word ptr [r15+0x100]
+cfcmovl r10w, word ptr [r19+r14*4+0x100]
+cfcmovl rdi, r27, r22
+cfcmovle r17, rdx, r22
+cfcmovle r8d, dword ptr [r20+r14*8+0x8]
+cfcmovne dword ptr [r12+0x100], edx
+cfcmovne qword ptr [r8+0x0], rcx
+cfcmovne r24d, dword ptr [r8+rbx*1-0x80]
+cfcmovne r29w, r8w, r10w
+cfcmovne r30w, word ptr [r23+r11*8+0x12345]
+cfcmovne r8w, word ptr [r28+0x40]
+cfcmovne word ptr [r21+rbp*1+0x100], si
+cfcmovno dword ptr [rax+0x1], edx
+cfcmovno qword ptr [rdi+0x1000], r15
+cfcmovno qword ptr [rdx+rbx*8+0x1], r30
+cfcmovno r23d, dword ptr [r27*4]
+cfcmovno r25d, r15d, r26d
+cfcmovno rdx, r10, r15
+cfcmovno word ptr [r28+0x7f], r31w
+cfcmovns qword ptr [r10+0x7f], rax
+cfcmovns r12w, dx, r26w
+cfcmovns r18w, word ptr [r31+0x7f]
+cfcmovns r21d, dword ptr [r17+0x1000]
+cfcmovns word ptr [r15], r30w
+cfcmovo r15w, word ptr [r16+0x1]
+cfcmovp r19, qword ptr [rdx+0x1000]
+cfcmovp rcx, qword ptr [r23+0x40]
+cfcmovs dword ptr [r24+rcx*4+0x7f], r28d
+cfcmovs qword ptr [rsp+r29*2+0x0], rsp
+cfcmovs r24, r27, r9
+cfcmovs word ptr [rsi+r8*8-0x2000], r17w
+# ---- the forms that zero the upper half of their destination ---------------------
+imulzu ax, r25w, 0x1
+imulzu dx, word ptr [r24+0x100], -0x80
+imulzu dx, word ptr [r26+rdi*8+0x12345], 0x7f
+imulzu r10w, word ptr [r20+rdx*8-0x2000], 0x7f
+imulzu r11w, r23w, 0x1
+imulzu r12w, word ptr [rbp+0x1000], 0x1234
+imulzu r13w, r25w, 0x7f
+imulzu r13w, word ptr [r18+0x7f], 0x1
+imulzu r13w, word ptr [r20+0x12345], 0x7f
+imulzu r16w, r12w, 0x1
+imulzu r18w, word ptr [rsp+r13*2], 0x1
+imulzu r24w, word ptr [r8+0x2], 0x3
+imulzu r24w, word ptr [rsp+0x1], -0x80
+imulzu r25w, word ptr [rax-0x80], 0x1
+imulzu r26w, r30w, -0x80
+imulzu r27w, r8w, 0x7f
+imulzu r28w, r11w, 0x3
+imulzu r30w, word ptr [rdi+rcx*1+0x40], 0x1
+imulzu r31w, r19w, 0x3
+imulzu r31w, word ptr [r18+0x0], 0x1234
+setzua r23b
+setzuae r25b
+setzub r19b
+setzube spl
+setzue r15b
+setzug r8b
+setzuge r27b
+setzul r28b
+setzule r27b
+setzune r8b
+setzuno r11b
+setzunp r17b
+setzuns bl
+setzuo dil
+setzup r25b
+setzus r26b
+# ---- the paired and hinted pushes, and `jmpabs` ----------------------------------
+jmpabs 0x0
+jmpabs 0x1
+jmpabs 0x1234
+jmpabs 0x123456789a
+jmpabs 0x7fffffffffffffff
+pop2 r10, r8
+pop2 r13, rdx
+pop2 r14, r18
+pop2 r15, rbx
+pop2 r16, r15
+pop2 r16, r8
+pop2 r18, r13
+pop2 r18, r21
+pop2 r18, r24
+pop2 r19, r15
+pop2 r21, rdi
+pop2 r22, r13
+pop2 r22, r27
+pop2 r23, r14
+pop2 r24, r16
+pop2 r28, r17
+pop2 r28, r25
+pop2 r29, r17
+pop2 r29, r25
+pop2 r30, r20
+pop2 r30, r29
+pop2 r31, r13
+pop2 r8, r24
+pop2 r9, rbp
+pop2 rax, r18
+pop2 rax, r21
+pop2 rax, rdi
+pop2 rbx, r26
+pop2 rdi, r10
+pop2 rdi, r18
+pop2p r10, r8
+pop2p r13, rdx
+pop2p r14, r18
+pop2p r15, rbx
+pop2p r16, r15
+pop2p r16, r8
+pop2p r18, r13
+pop2p r18, r21
+pop2p r18, r24
+pop2p r19, r15
+pop2p r21, rdi
+pop2p r22, r13
+pop2p r22, r27
+pop2p r23, r14
+pop2p r24, r16
+pop2p r28, r17
+pop2p r28, r25
+pop2p r29, r17
+pop2p r29, r25
+pop2p r30, r20
+pop2p r30, r29
+pop2p r31, r13
+pop2p r8, r24
+pop2p r9, rbp
+pop2p rax, r18
+pop2p rax, r21
+pop2p rax, rdi
+pop2p rbx, r26
+pop2p rdi, r10
+pop2p rdi, r18
+popp r11
+popp r12
+popp r13
+popp r14
+popp r17
+popp r20
+popp r23
+popp r27
+popp r30
+popp r31
+popp r9
+popp rax
+popp rdx
+push2 r10, r8
+push2 r13, rdx
+push2 r14, r18
+push2 r15, rbx
+push2 r16, r15
+push2 r16, r8
+push2 r18, r13
+push2 r18, r21
+push2 r18, r24
+push2 r19, r15
+push2 r21, rdi
+push2 r22, r13
+push2 r22, r27
+push2 r23, r14
+push2 r24, r16
+push2 r28, r17
+push2 r28, r25
+push2 r29, r17
+push2 r29, r25
+push2 r30, r20
+push2 r30, r29
+push2 r31, r13
+push2 r8, r24
+push2 r9, rbp
+push2 rax, r18
+push2 rax, r21
+push2 rax, rdi
+push2 rbx, r26
+push2 rdi, r10
+push2 rdi, r18
+push2p r10, r8
+push2p r13, rdx
+push2p r14, r18
+push2p r15, rbx
+push2p r16, r15
+push2p r16, r8
+push2p r18, r13
+push2p r18, r21
+push2p r18, r24
+push2p r19, r15
+push2p r21, rdi
+push2p r22, r13
+push2p r22, r27
+push2p r23, r14
+push2p r24, r16
+push2p r28, r17
+push2p r28, r25
+push2p r29, r17
+push2p r29, r25
+push2p r30, r20
+push2p r30, r29
+push2p r31, r13
+push2p r8, r24
+push2p r9, rbp
+push2p rax, r18
+push2p rax, r21
+push2p rax, rdi
+push2p rbx, r26
+push2p rdi, r10
+push2p rdi, r18
+pushp r11
+pushp r12
+pushp r13
+pushp r14
+pushp r17
+pushp r20
+pushp r23
+pushp r27
+pushp r30
+pushp r31
+pushp r9
+pushp rax
+pushp rdx
+# ---- the instructions APX moved into map 4, out of REX2's reach ------------------
+aadd dword ptr [r18+0x1], edi
+aadd dword ptr [r22+r8*8+0x1], r22d
+aadd dword ptr [r24*2], r9d
+aadd dword ptr [r30+0x1000], ebx
+aadd dword ptr [r31+0x1], r10d
+aadd qword ptr [r23], rbp
+aadd qword ptr [r28+0x7f], rsi
+aadd qword ptr [rdx+r17*8+0x1], r30
+aand dword ptr [r18-0x2000], r17d
+aand dword ptr [r21+0x100], r18d
+aand dword ptr [r29+0x0], r17d
+aand dword ptr [r9+r24*2+0x1], r31d
+aand qword ptr [rdi+r31*8+0x12345], rdx
+adcx eax, r27d
+adcx esp, r19d
+adcx r11, r18
+adcx r11, r28
+adcx r12, r28
+adcx r19d, r31d
+adcx r21, r22
+adcx r21d, r31d
+adcx r22, r22
+adcx r22d, r23d
+adcx r27d, r23d
+adcx r27d, r31d
+adcx r29d, r24d
+adcx r8d, r25d
+adox eax, r17d
+adox r10d, r22d
+adox r14, r22
+adox r14d, r19d
+adox r17d, r24d
+adox r19d, r17d
+adox r20, r18
+adox r23, r30
+adox r25, r22
+adox r27d, r19d
+adox r28d, r21d
+adox r30d, r19d
+adox r31d, r25d
+adox r9d, r29d
+adox rbp, r21
+adox rdi, r23
+aor dword ptr [r16+rsi*4-0x2000], esp
+aor dword ptr [r30+0x100], esp
+aor qword ptr [r25+0x0], rbp
+axor dword ptr [r19+0x12345], r22d
+axor dword ptr [r28-0x80], r16d
+axor qword ptr [r16+0x8], r19
+axor qword ptr [r17-0x80], r31
+axor qword ptr [r19+0x2], rsi
+axor qword ptr [r20+r18*8+0x2], r19
+axor qword ptr [r22+0x2], r19
+axor qword ptr [r28+0x2], r22
+crc32 ebp, r28d
+crc32 ebx, r21b
+crc32 ecx, r20b
+crc32 edi, r18b
+crc32 edx, r16d
+crc32 esi, r17w
+crc32 esi, r23b
+crc32 r10d, r17b
+crc32 r10d, r24w
+crc32 r11d, r17d
+crc32 r15, r30
+crc32 r15d, r17b
+crc32 r15d, r22d
+crc32 r16d, r27d
+crc32 r17, r23
+crc32 r17d, r17w
+crc32 r17d, r27w
+crc32 r17d, r28w
+crc32 r18d, r28b
+crc32 r19d, r22b
+crc32 r20, r26
+crc32 r20d, r21b
+crc32 r20d, r26w
+crc32 r21d, r23b
+crc32 r24, r30
+crc32 r24d, r27b
+crc32 r27d, r25w
+crc32 r27d, r29d
+crc32 r28, r26
+crc32 r28d, r30w
+crc32 r29d, r24d
+crc32 r30, r25
+crc32 r30d, r31d
+crc32 r31d, r22w
+crc32 r31d, r31d
+crc32 r9, r31
+crc32 rbp, r19
+enqcmd r17, [r23+0x2]
+enqcmds r10, [r22+0x8]
+enqcmds r13, [r13+r17*1-0x80]
+enqcmds r18, [r31+0x1000]
+enqcmds r20, [r20+rdx*2+0x12345]
+enqcmds r25, [r26+0x2]
+enqcmds r27, [r28-0x2000]
+enqcmds r31, [r23+0x12345]
+enqcmds r8, [r25-0x80]
+invpcid r10, [r16+0x12345]
+invpcid r11, [r28+0x0]
+invpcid r17, [r21+r18*4-0x80]
+invpcid r18, [r25+r12*1+0x1000]
+invpcid r26, [r22+rax*2+0x100]
+invpcid r28, [r17+0x0]
+invpcid r31, [r27+0x1]
+movbe ax, word ptr [r24+0x1000]
+movbe dword ptr [r10+r29*4+0x100], r17d
+movbe dword ptr [r15+r20*8+0x40], r29d
+movbe dword ptr [r17+0x7f], r30d
+movbe dword ptr [r20+r15*2+0x12345], esi
+movbe dword ptr [r22+r15*2+0x12345], r26d
+movbe dword ptr [r25-0x80], ebx
+movbe dword ptr [r26+r13*2+0x1], r21d
+movbe dword ptr [r27+0x12345], r19d
+movbe dword ptr [r28+rbx*8-0x2000], r12d
+movbe dword ptr [r30+0x1], r29d
+movbe dword ptr [r8+r28*8+0x40], ecx
+movbe dword ptr [rsi+r21*2-0x80], r10d
+movbe edi, dword ptr [r30+0x2]
+movbe qword ptr [r11+r28*2+0x2], r8
+movbe qword ptr [r17+r8*8-0x80], rsp
+movbe qword ptr [r19+0x0], r27
+movbe qword ptr [r20+0x40], rbp
+movbe qword ptr [r21+0x7f], rcx
+movbe qword ptr [r23+0x1], r16
+movbe qword ptr [r23+0x2], r22
+movbe qword ptr [r26+r19*2], r14
+movbe qword ptr [r27+0x0], r8
+movbe qword ptr [r27+0x12345], r30
+movbe qword ptr [r31+rbx*1+0x8], rdi
+movbe r13, qword ptr [r19+0x8]
+movbe r14d, dword ptr [r30+r18*4+0x0]
+movbe r14w, word ptr [r22+0x1000]
+movbe r15d, dword ptr [r20+rsi*1+0x7f]
+movbe r16, qword ptr [r25*1+0x12345]
+movbe r16, qword ptr [rdx+r25*8+0x7f]
+movbe r16d, dword ptr [r25]
+movbe r19, qword ptr [r27*1+0x1000]
+movbe r24, qword ptr [rbx+r18*8+0x2]
+movbe r24w, word ptr [r30+0x12345]
+movbe r25d, dword ptr [r26-0x80]
+movbe r26d, dword ptr [r20*8+0x8]
+movbe r26w, word ptr [r31+0x2]
+movbe r26w, word ptr [rbx+r25*2+0x0]
+movbe r27d, dword ptr [r26+0x1000]
+movbe r29w, word ptr [r30+0x40]
+movbe r8, qword ptr [r15+r28*8-0x80]
+movbe rbx, qword ptr [r19+0x12345]
+movbe rsp, qword ptr [r30+0x1]
+movbe sp, word ptr [r18*2+0x8]
+movbe word ptr [r17+r12*2+0x1000], bx
+movbe word ptr [r21], r23w
+movbe word ptr [r27+r26*2+0x7f], r27w
+movbe word ptr [r29+0x1000], r26w
+movbe word ptr [rbp+r25*2+0x1000], r12w
+movdir64b r11, [r28+0x1000]
+movdir64b r17, [r16+0x40]
+movdir64b r17, [r16+rsi*2+0x2]
+movdir64b r20, [r23+0x1]
+movdir64b r24, [r27+0x2]
+movdir64b r9, [r23-0x2000]
+movdir64b rax, [r23+0x8]
+movdir64b rcx, [r26+rcx*8+0x7f]
+movdiri dword ptr [r17+0x40], r9d
+movdiri dword ptr [r20+r16*8+0x2], esi
+movdiri dword ptr [r27+r13*2-0x2000], r23d
+movdiri dword ptr [r28+r25*4-0x80], edi
+movdiri dword ptr [r31+rbx*4+0x100], r22d
+movdiri dword ptr [r8+r30*2+0x1000], r19d
+movdiri dword ptr [rbx+r23*4+0x2], r11d
+movdiri dword ptr [rdi+r20*2-0x2000], r12d
+movdiri qword ptr [r18+r21*4], r28
+movdiri qword ptr [r19+rsi*8], r11
+movdiri qword ptr [r24+0x100], rdx
+movdiri qword ptr [r25+r21*1+0x100], r17
+movdiri qword ptr [r9+r28*4-0x2000], rbx
+movrs bl, byte ptr [r31+r19*2+0x1]
+movrs bx, word ptr [r29+r25*4-0x80]
+movrs cl, byte ptr [r26+0x0]
+movrs di, word ptr [r24+r15*2-0x80]
+movrs dx, word ptr [r26+0x7f]
+movrs edi, dword ptr [r25+0x0]
+movrs r10d, dword ptr [r28+rbx*8+0x100]
+movrs r12d, dword ptr [rsp+r23*4+0x2]
+movrs r13, qword ptr [r23+0x12345]
+movrs r14d, dword ptr [r22+0x40]
+movrs r15w, word ptr [r26+rsi*2+0x100]
+movrs r17, qword ptr [r22]
+movrs r17w, word ptr [r30+0x100]
+movrs r19, qword ptr [r27+0x1000]
+movrs r22, qword ptr [r17+r24*1+0x7f]
+movrs r23b, byte ptr [r28+0x2]
+movrs r23w, word ptr [r18+0x7f]
+movrs r25, qword ptr [r17+r12*2]
+movrs r25w, word ptr [r31-0x2000]
+movrs r28b, byte ptr [r29+0x1000]
+movrs r28b, byte ptr [r29+0x7f]
+movrs r31w, word ptr [rax+r29*1+0x1]
+movrs rax, qword ptr [r16-0x80]
+movrs rsi, qword ptr [r29+0x40]
+wrssd dword ptr [r26-0x80], r30d
+wrssd dword ptr [r27-0x2000], r16d
+wrssd dword ptr [rbx+r16*8+0x2], ebx
+wrssq qword ptr [r27+r15*2-0x2000], r23
+wrssq qword ptr [r29+0x1], r30
+wrssq qword ptr [r29+rcx*1+0x2], r15
+wrssq qword ptr [r31+r9*1], r12
+wrussd dword ptr [r17], edi
+wrussd dword ptr [r18+0x8], r15d
+wrussd dword ptr [r18+0x8], r31d
+wrussd dword ptr [r26+0x1], r25d
+wrussq qword ptr [r11+r30*1+0x8], r11
+wrussq qword ptr [r17+0x7f], r27
+wrussq qword ptr [r18*4+0x1], rdi
+wrussq qword ptr [r18+0x100], r8
+wrussq qword ptr [r19], r27
+wrussq qword ptr [rdi+r22*2-0x80], r24
+# ---- the VEX-encoded instructions APX repeated under the extended EVEX prefix ----
+andn ebp, r19d, r24d
+andn r13, rdx, r20
+andn r21d, r31d, r17d
+andn r22, rax, r24
+andn r27d, r10d, r20d
+andn r30d, r10d, r16d
+andn r31d, r24d, r24d
+bextr ebp, r12d, r29d
+bextr ebp, r8d, r21d
+bextr ebx, r26d, r29d
+bextr edi, r23d, r29d
+bextr edi, r25d, r18d
+bextr edx, r16d, r24d
+bextr esp, r17d, r25d
+bextr r15d, edx, r30d
+bextr r18, r17, r20
+bextr r22d, r11d, r19d
+bextr rsp, r26, r26
+blsi ebx, r16d
+blsi ecx, r30d
+blsi r10d, r27d
+blsi r11, r21
+blsi r11d, r19d
+blsi r12, r17
+blsi r8d, r24d
+blsi r8d, r29d
+blsi r9d, r27d
+blsi rdi, r16
+blsi rdx, r16
+blsi rsi, r20
+blsmsk edi, r23d
+blsmsk esp, r18d
+blsmsk r15, r25
+blsmsk r17, r31
+blsmsk r19d, r20d
+blsmsk r23d, r28d
+blsmsk r27d, r29d
+blsmsk rax, r18
+blsr ebx, r28d
+blsr r10, r17
+blsr r11, r19
+blsr r12, r25
+blsr r21d, r17d
+blsr r28d, r24d
+blsr r30d, r23d
+blsr r31d, r22d
+blsr rax, r18
+bzhi r13d, r11d, r30d
+bzhi r16, r28, r20
+bzhi r18, r26, r29
+bzhi r19, r31, r28
+bzhi r20, rax, r18
+bzhi r21, r27, r23
+bzhi r24d, r30d, r30d
+bzhi r28, rax, r29
+bzhi r29d, r27d, r27d
+bzhi rdx, r9, r18
+cmpaexadd [r18+r10*8-0x2000], r15d, r30d
+cmpaexadd [r24+r21*2], r28d, r30d
+cmpaexadd [r26+r31*2+0x1], r26d, r28d
+cmpaxadd [r22+0x12345], r23, rdx
+cmpaxadd [r28-0x80], r11, r29
+cmpbexadd [r27+0x12345], r28, r29
+cmpbexadd [r9+r16*8+0x12345], r11, r17
+cmpbexadd [rax+r22*8+0x40], r17d, r28d
+cmpbxadd [r17+0x12345], rsp, rbx
+cmpbxadd [r21+0x40], r31, r27
+cmpbxadd [r25+rdi*8+0x0], r16, rsi
+cmpexadd [r22+0x7f], r29, rbp
+cmpgexadd [r18+0x40], r25d, ebx
+cmpgexadd [r20], edx, r27d
+cmpgexadd [r28+0x40], r24d, r18d
+cmpgexadd [r29+0x100], r22, r10
+cmpgxadd [r17+0x2], r18, r10
+cmpgxadd [r22*8+0x0], r29, r18
+cmpgxadd [r30+0x1000], r16, r14
+cmpgxadd [rcx+r26*8+0x100], r18d, r27d
+cmplexadd [r16+0x100], r21, r23
+cmplexadd [r18+0x100], r10d, r25d
+cmplxadd [r20+0x40], r18, r31
+cmplxadd [r30+0x1000], r13, r16
+cmplxadd [r30+r10*8+0x7f], r24, r11
+cmplxadd [rbp+r30*1+0x0], eax, r21d
+cmpnexadd [rsi+r23*2+0x100], r30, r10
+cmpnoxadd [r10+r16*1+0x2], r20, r13
+cmpnpxadd [r17+0x8], r23d, r29d
+cmpnpxadd [r21], r17, rsp
+cmpnpxadd [r25+r31*4-0x80], r26, rcx
+cmpnpxadd [r26+rbp*1+0x0], rcx, r17
+cmpnsxadd [r22+rsi*1+0x1000], rsi, r27
+cmpnsxadd [r25+0x1], r26, rax
+cmpnsxadd [r25+r23*1+0x1], r8, rax
+cmpnsxadd [r28*4], r29, r19
+cmpoxadd [r19+0x0], r25d, edi
+cmppxadd [r25+0x0], r14, r23
+cmppxadd [r28+r25*1+0x100], r12d, r14d
+cmpsxadd [r30+0x1000], r12, r12
+kmovb [r21], k0
+kmovb k4, [r23+r28*2+0x8]
+kmovb k6, [r29+0x1000]
+kmovd [r20+r28*8+0x100], k1
+kmovd [r26+0x7f], k7
+kmovd k0, [r21*1+0x1]
+kmovd k0, [r24+r11*4+0x2]
+kmovd k0, r27d
+kmovd k1, r21d
+kmovd k1, r29d
+kmovd k2, r24d
+kmovd k3, r22d
+kmovd k4, [r24+0x40]
+kmovd k5, r24d
+kmovd k6, r20d
+kmovd r22d, k2
+kmovd r24d, k6
+kmovd r27d, k0
+kmovd r27d, k2
+kmovd r30d, k6
+kmovq [r16-0x80], k4
+kmovq [r19+0x8], k1
+kmovq [r25+0x40], k2
+kmovq [r30+0x8], k4
+kmovq k0, r25
+kmovq k1, r25
+kmovq k1, r31
+kmovq k3, r17
+kmovq k3, r26
+kmovq k4, r31
+kmovq k6, r25
+kmovq r16, k5
+kmovq r17, k7
+kmovq r22, k7
+kmovq r26, k0
+kmovq r27, k6
+kmovw [r11+r21*1-0x2000], k2
+kmovw [r19-0x2000], k2
+kmovw [r29+0x1000], k0
+kmovw [r31+0x2], k1
+kmovw [r31+rbp*8], k2
+kmovw k1, [r28-0x2000]
+kmovw k5, [r20]
+kmovw k5, [r26+0x8]
+ldtilecfg [r12+r18*2+0x12345]
+ldtilecfg [r16+0x1000]
+ldtilecfg [r17-0x80]
+ldtilecfg [r20+0x40]
+ldtilecfg [r20+0x7f]
+ldtilecfg [r20]
+ldtilecfg [r24+r17*1+0x100]
+ldtilecfg [r24+rbx*2-0x80]
+ldtilecfg [r26+rbp*1+0x12345]
+ldtilecfg [r29+0x0]
+mulx ebp, r17d, r26d
+mulx r11, r9, r16
+mulx r11d, r26d, r19d
+mulx r14, rbp, r31
+mulx r15, r12, r22
+mulx r16d, r25d, r28d
+mulx r18, r27, r24
+mulx r21d, r19d, r18d
+mulx r23d, r20d, r31d
+mulx r25, r24, r27
+mulx r25, r8, r21
+mulx r28, r30, r24
+mulx r9, rbp, r19
+pdep edx, r17d, r19d
+pdep r19d, ebx, r26d
+pdep r25, r11, r22
+pdep r29d, ebx, r19d
+pdep r8d, ecx, r29d
+pdep r9, r17, r22
+pext r16, r24, r17
+pext r16d, r18d, r21d
+pext r25d, r20d, r27d
+pext r26d, r28d, r18d
+pext r27d, r10d, r29d
+pext r31, r18, r26
+pext rcx, r8, r23
+rorx esi, r30d, 0x1f
+rorx esi, r31d, 0x1f
+rorx r10d, r24d, 0x1f
+rorx r15, r22, 0x3
+rorx r18, r20, 0x1f
+rorx r18, r29, 0x1f
+rorx r20, r17, 0x1
+rorx r20, r25, 0x3
+rorx r20d, r20d, 0x1f
+rorx r20d, r29d, 0x1f
+rorx r22, r20, 0x3
+rorx r22, r21, 0x1f
+rorx r26, r31, 0x1
+rorx r29d, r26d, 0x1f
+rorx r29d, r27d, 0x3
+rorx r30, r30, 0x1f
+rorx r9, r19, 0x1f
+rorx r9d, r18d, 0x3
+rorx rdx, r26, 0x1f
+rorx rsi, r18, 0x1f
+sarx r14, r26, r23
+sarx r19d, r18d, r22d
+sarx r25d, r13d, r21d
+sarx r26, r25, r30
+sarx r31d, edi, r19d
+shlx eax, r29d, r18d
+shlx eax, r9d, r28d
+shlx r10d, esi, r25d
+shlx r10d, r18d, r29d
+shlx r16, r11, r27
+shlx r16d, r8d, r31d
+shlx r21, r11, r20
+shlx r26d, r11d, r25d
+shlx r31, r27, r23
+shlx rcx, r12, r24
+shrx ecx, r29d, r19d
+shrx r12d, r10d, r16d
+shrx r12d, r12d, r31d
+shrx r18, rsi, r26
+shrx r21d, r21d, r27d
+shrx r27, r28, r17
+shrx r27d, edx, r30d
+shrx r28d, ecx, r17d
+shrx r8d, r29d, r25d
+shrx rdx, r9, r20
+shrx rdx, rsi, r25
+sttilecfg [r18+0x1000]
+sttilecfg [r19+r9*8]
+sttilecfg [r21+rsi*4+0x0]
+sttilecfg [r25+0x100]
+sttilecfg [r26]
+sttilecfg [r27+rbp*1+0x8]
+sttilecfg [r28+r25*1-0x80]
+sttilecfg [r31+0x2]
+sttilecfg [r31]
+sttilecfg [r8+r18*4+0x40]
+tileloadd tmm0, [r10+r31*1]
+tileloadd tmm1, [r26+r30*1]
+tileloadd tmm2, [r21+r9*1]
+tileloadd tmm2, [r23+r17*1]
+tileloadd tmm4, [r19+r17*1]
+tileloadd tmm7, [r13+r19*1]
+tileloaddt1 tmm0, [r11+rsi*1]
+tileloaddt1 tmm0, [r20+r22*1]
+tileloaddt1 tmm1, [r10+r28*1]
+tileloaddt1 tmm1, [r18+rdi*1]
+tileloaddt1 tmm3, [r24+r9*1]
+tileloaddt1 tmm4, [r19+r25*1]
+tileloaddt1 tmm5, [r19+r19*1]
+tileloaddt1 tmm5, [r28+r12*1]
+tileloaddt1 tmm7, [r11+r29*1]
+tilestored [r10+r12*1], tmm3
+tilestored [r11+r16*1], tmm1
+tilestored [r15+r27*1], tmm3
+tilestored [r20+r24*1], tmm1
+tilestored [r22+rcx*1], tmm1
+tilestored [r29+r20*1], tmm5
+tilestored [r30+r10*1], tmm6
+tilestored [r30+r15*1], tmm7
+tilestored [r30+r26*1], tmm4
+{evex} mulx ecx, r8d, eax
+{evex} mulx r10d, esi, eax
+{evex} mulx r12, rax, rsp
+{evex} pdep edi, ebp, r14d
+{evex} pext rbp, r11, r11
+{evex} pext rsi, r10, rax
+{evex} pext rsi, r12, r9
+{evex} pext rsi, rbp, r12
+{evex} sarx ebx, r12d, esp
+{evex} sarx r11, rsp, r13
+{evex} sarx r14, rsi, r12
+{evex} sarx rsp, r10, rdi
+{evex} shlx r11, r14, rcx
+{evex} shlx r13d, r9d, r15d
+{evex} shlx rsi, r9, r14
+{evex} shrx ebx, eax, r15d
+{evex} shrx ecx, edx, r15d
+{evex} shrx r11, rsp, r8
+{evex} shrx rcx, rax, rdx
+{nf} andn r15d, eax, ebp
+{nf} andn rbp, rdx, rsp
+{nf} bextr eax, esp, r11d
+{nf} bextr edi, eax, r12d
+{nf} bextr r12d, eax, r12d
+{nf} bextr rsp, r10, rsp
+{nf} bextr rsp, r9, rax
+{nf} blsi edx, r13d
+{nf} blsmsk ebx, ebx
+{nf} bzhi esp, r10d, r11d
+{nf} bzhi rsi, rdx, rcx
+# ---- the pseudo-prefixes `{nf}`, `{evex}` and `{rex2}` ---------------------------
+{evex} adc bx, r29w
+{evex} add bl, r27b
+{evex} add bp, r27w
+{evex} add esp, ebp
+{evex} add r11w, r13w
+{evex} add r17b, r10b
+{evex} add r19w, r12w
+{evex} add r22d, r18d
+{evex} and r19d, r9d
+{evex} and r29b, r24b
+{evex} and r30, r11
+{evex} and rax, rcx
+{evex} lzcnt ebp, r17d
+{evex} lzcnt r12, rbp
+{evex} lzcnt r18d, r21d
+{evex} lzcnt r19, r21
+{evex} lzcnt r20d, r12d
+{evex} lzcnt r21, r30
+{evex} lzcnt r21d, edi
+{evex} lzcnt r22d, edi
+{evex} lzcnt r30, r8
+{evex} lzcnt r9d, r22d
+{evex} or di, r26w
+{evex} or esi, r18d
+{evex} or r14b, r20b
+{evex} or r28w, r25w
+{evex} or rbp, r13
+{evex} popcnt r12d, esi
+{evex} popcnt r15w, r14w
+{evex} popcnt r19, r14
+{evex} popcnt r21d, r12d
+{evex} popcnt r27d, esp
+{evex} popcnt r28, r28
+{evex} sbb ax, r27w
+{evex} sbb r10, r29
+{evex} sbb r11d, r10d
+{evex} sbb r23w, r21w
+{evex} sbb r27w, r25w
+{evex} sbb r31w, cx
+{evex} sub r16, r12
+{evex} sub r17, rsi
+{evex} sub r29b, r31b
+{evex} sub r31d, r13d
+{evex} tzcnt r15, r26
+{evex} tzcnt r9w, si
+{evex} tzcnt si, di
+{evex} xor r26w, r9w
+{evex} xor r30w, r21w
+{nf} add bx, r30w
+{nf} add r13, r21, r18
+{nf} add r13w, sp, r28w
+{nf} add r14w, bx, r30w
+{nf} add r16w, r8w, r10w
+{nf} add r21, r18
+{nf} add r8w, r10w
+{nf} add sp, r28w
+{nf} and bp, r27w, r18w
+{nf} and dil, r26b
+{nf} and r12b, r18b
+{nf} and r20b, r25b, r23b
+{nf} and r25b, r23b
+{nf} and r26b, dil, r26b
+{nf} and r27w, r18w
+{nf} and r9, r30
+{nf} and r9b, r12b, r18b
+{nf} and rbx, r9, r30
+{nf} dec bl
+{nf} dec edi
+{nf} dec r12d
+{nf} dec r23
+{nf} div r19d
+{nf} div rcx
+{nf} idiv r19d
+{nf} idiv r20b
+{nf} idiv r25
+{nf} idiv r30w
+{nf} idiv r31w
+{nf} idiv r9d
+{nf} imul r12b
+{nf} imul r16
+{nf} imul r29d
+{nf} imul r8b
+{nf} lzcnt bp, si
+{nf} lzcnt ecx, ebp
+{nf} lzcnt r14d, esi
+{nf} lzcnt r27, r26
+{nf} lzcnt r27w, r25w
+{nf} lzcnt r29d, r16d
+{nf} lzcnt rsi, rbx
+{nf} mul r18w
+{nf} mul r29b
+{nf} or di, r13w
+{nf} or edi, r24d, r19d
+{nf} or r12, rbx, rsp
+{nf} or r13, r13, r29
+{nf} or r13, r29
+{nf} or r21w, si
+{nf} or r24d, r19d
+{nf} or r27w, r21w, si
+{nf} or rbx, rsp
+{nf} or si, di, r13w
+{nf} popcnt r12d, r16d
+{nf} popcnt r16w, r14w
+{nf} popcnt r18w, r26w
+{nf} popcnt r23d, r29d
+{nf} popcnt r25d, r12d
+{nf} popcnt r25d, r29d
+{nf} popcnt r31, r25
+{nf} popcnt r8, rdx
+{nf} rol cx, r26w, cl
+{nf} rol r11, 1
+{nf} rol r12w, r23w, cl
+{nf} rol r23w, 1
+{nf} rol r26w, 1
+{nf} rol rsi, 1
+{nf} rol rsi, r11, cl
+{nf} rol rsp, rsi, cl
+{nf} ror bl, r31b, cl
+{nf} ror dil, 1
+{nf} ror dil, dil, cl
+{nf} ror edx, 1
+{nf} ror r17w, r27w, cl
+{nf} ror r19d, 1
+{nf} ror r27d, edx, cl
+{nf} ror r27w, 1
+{nf} ror r31b, 1
+{nf} ror r8d, r19d, cl
+{nf} sal r10b, r24b, cl
+{nf} sal r13, rdi, cl
+{nf} sal r16d, r17d, cl
+{nf} sal r17d, 1
+{nf} sal r19, 1
+{nf} sal r24b, 1
+{nf} sal rcx, r19, cl
+{nf} sal rdi, 1
+{nf} sar ax, r24w, cl
+{nf} sar edi, 1
+{nf} sar r11w, r9w, cl
+{nf} sar r15d, edi, cl
+{nf} sar r24w, 1
+{nf} sar r25, 1
+{nf} sar r25, r25, cl
+{nf} sar r9w, 1
+{nf} shl r15w, r8w, cl
+{nf} shl r21, r9, cl
+{nf} shl r8w, 1
+{nf} shl r9, 1
+{nf} shld cx, r18w, 3
+{nf} shld r12d, eax, 3
+{nf} shld r14w, r14w, 3
+{nf} shld r15, rsp, 3
+{nf} shld r16w, bx, 3
+{nf} shld r17w, ax, 3
+{nf} shld r19, r12, 3
+{nf} shld r19, r29, 3
+{nf} shld r19d, esp, 3
+{nf} shld r19w, si, 3
+{nf} shld r21w, r31w, 3
+{nf} shld r25w, r29w, 3
+{nf} shld r26d, r14d, 3
+{nf} shld r26w, r29w, 3
+{nf} shld r28, r18, 3
+{nf} shld r29, rbx, 3
+{nf} shr cl, r21b, cl
+{nf} shr r10b, r27b, cl
+{nf} shr r16w, r19w, cl
+{nf} shr r19w, 1
+{nf} shr r21b, 1
+{nf} shr r24d, r8d, cl
+{nf} shr r27b, 1
+{nf} shr r8b, r9b, cl
+{nf} shr r8d, 1
+{nf} shr r9b, 1
+{nf} shr rbp, rsp, cl
+{nf} shr rsp, 1
+{nf} shrd r11d, esi, 3
+{nf} shrd r15d, r14d, 3
+{nf} shrd r18d, edx, 3
+{nf} shrd r22w, bp, 3
+{nf} shrd r24, r29, 3
+{nf} shrd r24d, ebp, 3
+{nf} shrd r25, rdi, 3
+{nf} shrd r25d, ebx, 3
+{nf} shrd r25d, r18d, 3
+{nf} shrd r28d, r25d, 3
+{nf} shrd r28w, dx, 3
+{nf} shrd rbp, r17, 3
+{nf} shrd rbx, r28, 3
+{nf} shrd rcx, r21, 3
+{nf} sub di, r12w, cx
+{nf} sub edx, r31d
+{nf} sub esi, r19d
+{nf} sub r12w, cx
+{nf} sub r22w, r30w, r20w
+{nf} sub r24d, edx, r31d
+{nf} sub r30d, esi, r19d
+{nf} sub r30w, r20w
+{nf} tzcnt ebx, ebx
+{nf} tzcnt r13, r15
+{nf} tzcnt r15d, edi
+{nf} tzcnt r16w, si
+{nf} tzcnt r21w, r17w
+{nf} tzcnt rsp, rbx
+{nf} xor di, r18w
+{nf} xor ebp, edx
+{nf} xor ebp, r15d, r28d
+{nf} xor r10w, sp
+{nf} xor r15d, r28d
+{nf} xor r18b, cl
+{nf} xor r18b, r18b, cl
+{nf} xor r20w, r27w, r28w
+{nf} xor r23, rsp, r22
+{nf} xor r25w, r18w
+{nf} xor r26w, r10w, sp
+{nf} xor r27w, di, r18w
+{nf} xor r27w, r28w
+{nf} xor r28, r23
+{nf} xor r28w, r25w, r18w
+{nf} xor r29, rax, r12
+{nf} xor r30, r28, r23
+{nf} xor r8d, ebp, edx
+{nf} xor rax, r12
+{nf} xor rsp, r22
+{rex2} adc r11, r8
+{rex2} adc rsi, r10
+{rex2} add ebx, r8d
+{rex2} and r10w, di
+{rex2} and r13w, bp
+{rex2} and r14b, spl
+{rex2} cmp edi, r12d
+{rex2} mov bpl, spl
+{rex2} mov r14, rax
+{rex2} mov rbx, r9
+{rex2} mov rdx, rbx
+{rex2} or eax, r9d
+{rex2} sbb rsp, rdi
+{rex2} sub r15b, spl
+{rex2} sub rdx, r8
+{rex2} test r13w, cx
+{rex2} test r8d, r12d
+{rex2} test rbp, rsi
+{rex2} xor di, r8w
+{rex2} xor edi, edx
