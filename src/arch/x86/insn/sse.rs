@@ -263,7 +263,8 @@ fn install_moves(t: &mut Tbl) {
                 ModRm::Reg,
                 64,
             )
-            .pfx(0x66),
+            .pfx(0x66)
+            .flags(R_IN_RM),
             bin(0xf3, &[0x0f, 0x7e], 8),
             d(
                 vec![Op::Vm(Vk::Xmm, 8), Op::V(Vk::Xmm)],

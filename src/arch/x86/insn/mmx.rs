@@ -166,7 +166,7 @@ pub fn install(t: &mut Tbl) {
         "movq",
         vec![
             d(vec![Op::V(Vk::Mm), Op::R(8)], &[0x0f, 0x6e], ModRm::Reg, 64),
-            d(vec![Op::R(8), Op::V(Vk::Mm)], &[0x0f, 0x7e], ModRm::Reg, 64),
+            d(vec![Op::R(8), Op::V(Vk::Mm)], &[0x0f, 0x7e], ModRm::Reg, 64).flags(R_IN_RM),
             d(
                 vec![Op::V(Vk::Mm), Op::Vm(Vk::Mm, 0)],
                 &[0x0f, 0x6f],

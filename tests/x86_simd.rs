@@ -84,10 +84,12 @@ fn movq_is_mov_with_a_suffix_first_and_the_vector_move_second() {
     enc("movq (%rax), %mm0", "0f 6f 00");
     enc("movq %rax, %mm0", "48 0f 6e c0");
     enc("movq %mm0, %rax", "48 0f 7e c0");
+    enc("movq %mm6, %rdx", "48 0f 7e f2");
     enc("movq %xmm0, %xmm1", "f3 0f 7e c8");
     enc("movq (%rax), %xmm1", "f3 0f 7e 08");
     enc("movq %xmm1, (%rax)", "66 0f d6 08");
     enc("movq %r8, %xmm9", "66 4d 0f 6e c8");
+    enc("movq %xmm6, %rdx", "66 48 0f 7e f2");
 }
 
 /// 3DNow! is `0F 0F /r` followed by a byte that picks the operation, in the
